@@ -60,8 +60,10 @@
 #      flattened, backticks stripped): the ISSUE-read paragraph must carry the
 #      `gh api .../issues/<N>` read with `author_association` and the
 #      `OWNER`/`MEMBER`/`COLLABORATOR` allow-list; the PR-read paragraph must
-#      carry the `gh api .../pulls/<N>` read with `author_association` and the
-#      head/base fork comparison, and must NOT name the allow-list — a PR is
+#      carry the `gh api .../pulls/<N>` read with `title`, `author_association`
+#      and the head/base fork comparison (`title` because §4's preview prints
+#      "issue and PR numbers with titles" and this read is its only source of
+#      the PR title), and must NOT name the allow-list — a PR is
 #      gated by the fork fact alone, because `dependabot[bot]` has association
 #      `NONE` and an allow-list there would make every Dependabot PR
 #      CONFIRM-EACH, against §3's own table. The tree-wide scan covers every
@@ -71,7 +73,7 @@
 #      code spans, fixture transcribed from 5b024e6).
 #      Mutants, all exercised below on scratch copies: the pre-fix paragraph
 #      trips the tree-wide scan; dropping the issue-side allow-list, the pulls
-#      `author_association`, or the fork comparison fails the positive pin;
+#      `title`, the pulls `author_association`, or the fork comparison fails the positive pin;
 #      re-adding the allow-list to the PR paragraph fails the negative pin.
 #
 # Source-level, no `gh`, no network, no Slack.
