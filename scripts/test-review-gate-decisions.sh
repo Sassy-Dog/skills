@@ -33,7 +33,22 @@
 #      an unreported review" -> "and is merged") and in take-it ("Never merge on
 #      a review that was never reported." -> "Merge it anyway."); breaking the
 #      opt-out's printed SKIPPED line in take-it, or its shepherd clearance in
-#      dispatch-ready ("clears" -> "withholds"). Nothing else is claimed pinned.
+#      dispatch-ready ("clears" -> "withholds"). #429 pinned the clauses PR #418
+#      left open, each keyed to its OWN sentence or bullet because the failure
+#      text carries a copy of the SKIPPED line, so keying buys moved-text
+#      protection (clauses relocated past the failure clause): dispatch-ready's opt-out
+#      precondition sentence (printed `review: SKIPPED` line, the
+#      `opt-out (review_agent: skip)` label, the record-for-current-head clause),
+#      take-it's "dispatch nothing" in the opt-out bullet and "(the cause, never
+#      the opt-out)" in the failure bullet, and dispatch-ready's twin "(the
+#      dispatch failure, not the opt-out)". Mutants, each measured to FAIL: the
+#      whole dispatch-ready precondition clause replaced by "proceed."; dropping
+#      its printed SKIPPED line, its label, or its record clause; deleting
+#      either take-it phrase; deleting the dispatch-ready twin; moving the three
+#      precondition clauses after the failure clause (keyed pins FAIL, a
+#      bullet-wide match would not); rewording the precondition's closing
+#      "review was opted out." marker (the slice-marker guard FAILS). Nothing else is
+#      claimed pinned.
 #
 #   2. `review_agent` IS DELIBERATELY NOT PRESENCE-IS-THE-TOGGLE. The config
 #      contract's governing principle is that the presence of a block enables the
@@ -1038,6 +1053,18 @@ else
     assert_in "$takeit_coord" \
         'print `review: SKIPPED — no review_agent resolved \(lint/type/test only\)`, name `opt-out \(review_agent: skip\)`' \
         "take-it's COORDINATOR SITE opt-out prints the SKIPPED line and names the opt-out"
+    # #429: two clauses PR #418 left unpinned, each keyed to ITS OWN bullet. The
+    # failure bullet carries a copy of the SKIPPED line, so a whole-section
+    # match could not tell the two bullets apart. Opt-out bullet = from its
+    # opening to the failure bullet's opening; failure bullet = from there on.
+    takeit_fail_open='**No agent resolved, or the dispatch failed**'
+    takeit_optout="${takeit_coord%%"$takeit_fail_open"*}"
+    takeit_optout="${takeit_optout#*'the explicit opt-out** '}"
+    takeit_failure="$takeit_fail_open${takeit_coord#*"$takeit_fail_open"}"
+    assert_in "$takeit_optout" 'this is known before any dispatch; dispatch nothing, print' \
+        "take-it's COORDINATOR SITE opt-out bullet dispatches nothing"
+    assert_in "$takeit_failure" 'was \(the cause, never the opt-out\)' \
+        "take-it's COORDINATOR SITE failure bullet names the cause, never the opt-out"
 fi
 
 # The `agent` site, where the coordinator section never runs at all,
@@ -1521,6 +1548,30 @@ else
     assert_in "$dispatch_coord" \
         'A PR whose review could not run at all — no agent resolved, or the dispatch failed — reports .*and is held, not merged on an unreported review\.' \
         "dispatch-ready's COORDINATOR bullet still HOLDS a genuine resolution failure"
+    # #429: the printed/recorded clauses, keyed to the PRECONDITION sentence
+    # alone (opening to its closing "opted out."). What the keying buys is
+    # MOVED-TEXT protection: relocate the three clauses after the failure
+    # clause and a bullet-wide match stays green while these fail. (It is not
+    # what catches deleting the clause; the pattern wording does that.)
+    # The slice ends at a literal marker, so assert the marker first: if it is
+    # reworded the %% strip matches nothing and the slice silently widens to
+    # the rest of the bullet after the precondition.
+    assert_has "$dispatch_coord" 'review was opted out.' \
+        "dispatch-ready's opt-out precondition still ends at its slice marker"
+    dispatch_precond="${dispatch_coord#*'Precondition, checked first'}"
+    dispatch_precond="Precondition, checked first${dispatch_precond%%'review was opted out.'*}review was opted out."
+    # A length comparison here was vacuous (a widened slice is still shorter
+    # than the bullet), so exclude the failure clause by a phrase unique to it.
+    assert_not_in "$dispatch_precond" 'could not run at all' \
+        "dispatch-ready's opt-out precondition slice stops before the failure clause"
+    assert_in "$dispatch_precond" 'print the `review: SKIPPED` line below' \
+        "dispatch-ready's opt-out precondition prints the review: SKIPPED line"
+    assert_in "$dispatch_precond" 'name `opt-out \(review_agent: skip\)` on the next line' \
+        "dispatch-ready's opt-out precondition names opt-out (review_agent: skip)"
+    assert_in "$dispatch_precond" "and record that as the PR's outcome for the current head" \
+        "dispatch-ready's opt-out precondition records the outcome for the current head"
+    assert_in "$dispatch_coord" '\(the dispatch failure, not the opt-out\)' \
+        "dispatch-ready's failure clause names the dispatch failure, not the opt-out"
 fi
 takeit_handoff="$(section_slice "$TAKEIT" '## 5. Dispatch sub-agents in parallel')"
 dispatch_budget="$(section_slice "$DISPATCH" '## 2. Reconcile in-flight (always first)')"
