@@ -75,7 +75,8 @@ Look up the bundle ID from the project's iOS config. Common locations:
 | Error | Action |
 |-------|--------|
 | Missing env vars | Tell user to add Apple credentials to Doppler |
-| HTTP 401 | API key may be revoked — regenerate in Apple Developer portal. Also check that PyJWT is installed (`pip3 install pyjwt cryptography`) |
+| Could not sign the JWT | `APPLE_ASC_API_KEY_BASE64` does not decode to a valid `.p8` key — re-encode it (`base64 < AuthKey_<id>.p8`) and update Doppler. No request was sent |
+| HTTP 401 | API key may be revoked — regenerate in Apple Developer portal |
 | HTTP 403 | API key role insufficient — needs App Manager or Admin |
 | No app found | Bundle ID is wrong — try `raw /v1/apps` to list all apps |
 
@@ -87,4 +88,5 @@ Look up the bundle ID from the project's iOS config. Common locations:
 
 ### Scripts
 
-- **`scripts/appstore-connect.sh`** — Bundled query script with JWT generation, multi-command support, and error handling. Prefers `python3` with PyJWT for reliable ES256 JWT signing; falls back to `openssl` with DER-to-raw signature conversion. Requires `curl`, `jq`, and either `python3 + pyjwt` or `openssl + base64 + xxd`.
+- **`scripts/appstore-connect.sh`** — Bundled query script with JWT generation, multi-command support, and error handling. Requires `curl`, `jq`, `openssl`, `base64` and `xxd`; no Python.
+- **`scripts/asc-jwt.sh`** — The ES256 JWT signer the query script sources: `openssl` plus a DER-to-raw signature conversion, and the only signer.

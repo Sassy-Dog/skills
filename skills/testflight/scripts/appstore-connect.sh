@@ -3,7 +3,7 @@
 # App Store Connect API query tool
 # Generates an ES256 JWT and queries TestFlight-related endpoints.
 #
-# Requirements: python3 + PyJWT (preferred) OR openssl, curl, jq, base64
+# Requirements: openssl, xxd, base64, curl, jq
 # Env vars (canonical APPLE_ASC_* names; APPLE_APP_STORE_CONNECT_* still accepted):
 #   APPLE_ASC_API_KEY_ID
 #   APPLE_ASC_ISSUER_ID
@@ -31,12 +31,6 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     exit 1
 fi
 
-# Re-export under canonical names so the Python JWT signer reads one source
-# regardless of which name supplied the value.
-export APPLE_ASC_API_KEY_ID="$KEY_ID"
-export APPLE_ASC_ISSUER_ID="$ISSUER_ID"
-export APPLE_ASC_API_KEY_BASE64="$API_KEY_BASE64"
-
 # --- Decode key to temp file ---
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -45,62 +39,12 @@ API_KEY_FILE="$TEMP_DIR/AuthKey_${KEY_ID}.p8"
 echo "$API_KEY_BASE64" | base64 --decode > "$API_KEY_FILE"
 
 # --- Generate JWT (ES256, 20-min expiry) ---
-# openssl dgst -sign produces DER-encoded ECDSA signatures, but JWT ES256
-# requires raw R||S (two 32-byte integers concatenated). Python's PyJWT
-# handles this correctly, so prefer it when available.
-generate_jwt_python() {
-    python3 -c "
-import jwt, time, os, base64, sys
-key_pem = base64.b64decode(os.environ['APPLE_ASC_API_KEY_BASE64'])
-print(jwt.encode(
-    {'iss': os.environ['APPLE_ASC_ISSUER_ID'],
-     'iat': int(time.time()),
-     'exp': int(time.time()) + 1200,
-     'aud': 'appstoreconnect-v1'},
-    key_pem, algorithm='ES256',
-    headers={'kid': os.environ['APPLE_ASC_API_KEY_ID']}))
-" 2>/dev/null
+# shellcheck source=./asc-jwt.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/asc-jwt.sh"
+JWT=$(asc_jwt "$KEY_ID" "$ISSUER_ID" "$API_KEY_FILE") || {
+    echo "❌ Could not sign the App Store Connect JWT — APPLE_ASC_API_KEY_BASE64 must decode to the .p8 key" >&2
+    exit 1
 }
-
-generate_jwt_openssl() {
-    b64url_encode() { base64 | tr -d '=\n' | tr '/+' '_-'; }
-
-    # DER-to-raw: extract R and S integers from ASN.1 DER, pad/trim to 32 bytes each
-    der_to_raw() {
-        local hex r_len r_hex s_offset s_len s_hex
-        hex=$(xxd -p | tr -d '\n')
-        # DER: 30 <seq_len> 02 <r_len> <r_bytes> 02 <s_len> <s_bytes>
-        r_len=$((16#${hex:6:2}))
-        r_hex=${hex:8:$((r_len * 2))}
-        s_offset=$((8 + r_len * 2 + 2))
-        s_len=$((16#${hex:$s_offset:2}))
-        s_hex=${hex:$((s_offset + 2)):$((s_len * 2))}
-        # Pad to 32 bytes, trim leading zeros if longer
-        while [ ${#r_hex} -lt 64 ]; do r_hex="00$r_hex"; done
-        while [ ${#s_hex} -lt 64 ]; do s_hex="00$s_hex"; done
-        r_hex=${r_hex: -64}
-        s_hex=${s_hex: -64}
-        echo -n "${r_hex}${s_hex}" | xxd -r -p
-    }
-
-    local header payload signing_input signature
-    header=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url_encode)
-    local iat exp
-    iat=$(date +%s)
-    exp=$((iat + 1200))
-    payload=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$ISSUER_ID" "$iat" "$exp" | b64url_encode)
-    signing_input="$header.$payload"
-    signature=$(printf '%s' "$signing_input" | openssl dgst -binary -sha256 -sign "$API_KEY_FILE" | der_to_raw | b64url_encode)
-    echo "$signing_input.$signature"
-}
-
-# Prefer Python (reliable ES256), fall back to openssl with DER conversion
-if python3 -c "import jwt" 2>/dev/null; then
-    JWT=$(generate_jwt_python)
-else
-    echo "⚠️  PyJWT not found, using openssl (install with: pip3 install pyjwt cryptography)" >&2
-    JWT=$(generate_jwt_openssl)
-fi
 
 # --- API helper ---
 API_BASE="https://api.appstoreconnect.apple.com"
