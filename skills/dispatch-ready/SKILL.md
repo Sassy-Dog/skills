@@ -213,7 +213,11 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   an aggregate-only response cannot authorize a second batch. Custom agents retain their existing
   contract. Never change `review_site` or escalate through ancestors. Persist the outcome and
   `recovery_used` in the PR body and issue comment, and hand only reviewed PRs to
-  `sassy-dog:pr-shepherd` this tick. A PR whose review
+  `sassy-dog:pr-shepherd` this tick. Under
+  `review_agent: skip`, the explicit opt-out, no review is owed: dispatch nothing, do not hold the PR
+  on review grounds, and say once in the tick report that review was opted out — holding it would
+  turn the opt-out into the blanket merge freeze the hand-off bullet's carve-out exists to prevent.
+  Otherwise, a PR whose review
   could not run at all — no agent resolved, or the dispatch failed — reports
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause, and is held,
   not merged on an unreported review. Under `review_site: agent` this bullet does not run: the
