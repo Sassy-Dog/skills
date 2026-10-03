@@ -108,7 +108,7 @@ Which skills are expected to run outside Claude Code. Statuses are `expected`, `
 `not supported`. **`untested` is the default**: nothing has been run on [omp](https://omp.sh) yet, so
 no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
-skill's rows are the ones whose reproducing command matches files under that skill. Rows 5
+skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. Rows 5
 (`${CLAUDE_PLUGIN_ROOT}`) and 6 (`` !`...` `` config injection) have no documented omp equivalent,
 and a skill that hits either cannot be assumed to work until the omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reports. Re-check this table when it does.
@@ -146,7 +146,7 @@ in that family and follows it.
 
 Notes on reading it:
 
-- `none` means no inventory mechanism matched under that skill's directory, which is not evidence
+- `none` means no inventory mechanism matched under that skill's directory (row 14 excluded: not a dependency per the inventory), which is not evidence
   it runs on omp. The skill may still use a Claude Code tool that no row covers.
 - `whats-on-fire` hits row 1 only through its cloud-routine fallback, and `pr-shepherd` and
   `repo-cleanup` hit row 3 only to describe worktree teardown. Both are weaker dependencies than

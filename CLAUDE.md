@@ -162,4 +162,4 @@ The plugin version is **monthly-rolling CalVer** (`YYYY.M.<commits-this-month>`,
 bash scripts/stamp-version.sh   # resolves CalVer and writes .claude-plugin/plugin.json
 ```
 
-Commit the stamped manifest in the release PR. Build number: N/A for this repo; tags optional. Full instance doc — including the **one-way ratchet** (no `0.x`/`1.x` may ever follow CalVer): [`docs/VERSIONING.md`](docs/VERSIONING.md). Keep `README.md`'s plugin/skill table and the agent list in sync when skills or reviewer agents are added or removed.
+Commit the stamped manifest in the release PR. Build number: N/A for this repo; tags optional. Full instance doc — including the **one-way ratchet** (no `0.x`/`1.x` may ever follow CalVer): [`docs/VERSIONING.md`](docs/VERSIONING.md). Keep `README.md`'s plugin/skill table, the agent list and the `### Harness support` matrix in sync when skills or reviewer agents are added or removed.
