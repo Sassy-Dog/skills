@@ -1720,6 +1720,18 @@ RVEOF
 # Both sides normalised the same way, by one expression rather than two call
 # sites free to drift: a hard-wrapped copy is the same paragraph, and a
 # line-scoped comparison would call it a different one.
+# THE SHAPE RULE (#411) is the positive half of the envelope contract: the
+# `Return ONLY a JSON object` line says what to avoid, and three consecutive
+# review rounds still ended in a fenced or prefaced envelope that a strict
+# consumer discarded whole. It is its own paragraph, immediately before the
+# delivery paragraph, in `## Output`, and it is compared to a literal held
+# HERE for the same reason RV_DELIVERY is: cross-file identity bounds
+# divergence, not content. It deliberately avoids the tokens the counts below
+# bound (`SendMessage`, `relay`).
+RV_SHAPE="$(cat <<'RSEOF'
+**My final message starts with `{` and ends with `}`. Nothing comes before the object or after it: no code fence, no heading, no "Here are my findings". A completed empty review is exactly `{"findings": []}`, on one line and unfenced.**
+RSEOF
+)"
 norm_para() { tr '\n' ' ' <<<"$1" | tr -s ' ' | sed -E 's/^ +| +$//g'; }
 rv_found=0
 for rv in "${REVIEWERS[@]}"; do
@@ -1842,6 +1854,14 @@ for rv in "${REVIEWERS[@]}"; do
     else
         bad "$rv_name's delivery paragraph differs from the canonical text held in this gate — diff it against RV_DELIVERY; a uniform edit across all nine is caught here and nowhere else"
     fi
+    assert_in "$rv_out" 'starts with `\{` and ends with `\}`' \
+        "$rv_name states the bare-envelope shape in ## Output, not only the prohibition"
+    rv_shape="$(awk '/^\*\*My final message starts with/ { f = 1 } f && /^$/ { exit } f { print }' "$rv")"
+    if [ -n "$rv_shape" ] && [ "$(norm_para "$rv_shape")" = "$(norm_para "$RV_SHAPE")" ]; then
+        ok "$rv_name's shape rule matches the canonical text held in this gate"
+    else
+        bad "$rv_name's shape rule is missing or differs from the canonical text held in this gate — diff it against RV_SHAPE (#411); a uniform edit across all nine is caught here and nowhere else"
+    fi
     n_tok="$(grep -oiF -- "SendMessage" "$rv" | grep -c .)"
     if [ "$n_tok" -eq 1 ]; then
         ok "$rv_name names 'SendMessage' exactly once in the whole file — inside the sentence forbidding it"
@@ -1905,6 +1925,8 @@ else
     # so "you need not restate it" is the first tidy a later reader reaches
     # for, and it defeats #280's acceptance while leaving every other literal
     # here intact. Measured green before these two.
+    assert_has "$brief_region" 'starts with `{` and ends with `}`, nothing comes before the object or after it (no code fence, no heading, no "Here are my findings"), and a completed empty review is exactly `{"findings": []}`, on one line and unfenced' \
+        "the brief carries the positive bare-envelope shape rule (#411)"
     assert_in "$brief_region" 'State it:' \
         "the brief orders the delivery rule stated, not merely describes it"
     assert_in "$brief_region" 'say it in the brief anyway' \
