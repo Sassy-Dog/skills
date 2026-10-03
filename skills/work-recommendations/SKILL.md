@@ -92,13 +92,14 @@ look the title up in the plate section it was drawn from.
 | Blind spot, inherited debt, `Suspected complete` epic | none | not a work item; one line saying so |
 
 **The label check runs on every `#N` before it is DISPATCH**, whichever source the list came
-from: `gh issue view <N> --json title,labels`. `auto-security-watch` → HUMAN-ONLY; `security` →
+from: `gh api repos/<owner>/<name>/issues/<N> --jq '{title, labels: [.labels[].name], author: .user.login, author_association}'`
+(REST, because `gh issue view --json` has no association field). `auto-security-watch` → HUMAN-ONLY; `security` →
 CONFIRM-EACH; **a read that fails or returns no labels field is UNKNOWN → HOLD**, never
 DISPATCH — unknown is not verified, the same shape `take-it` and `file-or-link-issue.sh` use.
 Labels carried on a plate or block line are display only; the live read decides. The live
 title is printed beside each number in the §4 preview, so a steered id is visible before
-approval. On a public repo, `author` and `authorAssociation` are read too and a non-member
-author is CONFIRM-EACH — a cold worker with write access must not take an outsider's body
+approval. On a public repo, `author` and `author_association` from that same read decide it
+and a non-member author is CONFIRM-EACH — a cold worker with write access must not take an outsider's body
 verbatim on a batch approval. Nothing else here reads labels — `take-it` owns the `site:`
 filter and the claim, and a hold it reports is carried into §6 as HOLD.
 
@@ -106,8 +107,9 @@ filter and the claim, and a hold it reports is carried into §6 as HOLD.
 green + `MERGEABLE` + `CLEAN` and has no review-outcome gate; the hold that `take-it` and
 `dispatch-ready` place on a PR with a Blocking finding or `review: NO REPORT` lives only in
 their coordinator never handing it over. So read
-`gh pr view <N> --json title,author,authorAssociation,isCrossRepository,body,comments` and
-HOLD the PR — with the reason — when the body or a comment carries a `review:` outcome line, a
+`gh api repos/<owner>/<name>/pulls/<N>` (`user.login`, `author_association`, and the fork fact
+`head.repo.full_name != base.repo.full_name`) together with
+`gh pr view <N> --json body,comments`, and HOLD the PR — with the reason — when the body or a comment carries a `review:` outcome line, a
 `recovery_used`, a named Blocking finding, or a `take-it-attempt` record, or when the linked
 issue carries the repo's claim label. **A read that fails is UNKNOWN → HOLD.** Only a PR that
 passes clean becomes SHEPHERD; a Dependabot or operator-authored PR passes on the same read.

@@ -48,6 +48,19 @@
 #      post and dispatched yesterday's items. Both homes spell "never page
 #      past", and the old shape must not exist.
 #
+#   5. THE ASSOCIATION READ GOES THROUGH REST. `gh issue view` and `gh pr view`
+#      have no `authorAssociation` JSON field (`Unknown JSON field`), so a §3
+#      that names it there turns its own "a read that fails is UNKNOWN -> HOLD"
+#      rule against every `pr:#N` and, on a public repo, every `#N`. The gate
+#      pins that §3 reads `gh api repos/<owner>/<name>/issues/<N>` and
+#      `.../pulls/<N>` with `author_association`, and that no `gh issue view` /
+#      `gh pr view` command anywhere under `skills/` requests `authorAssociation`
+#      (checked on whitespace-flattened text, so a wrapped command is seen).
+#      Mutants, both exercised below on scratch copies: (a) the pre-fix
+#      `gh issue view ... authorAssociation` (also wrapped across lines, the
+#      `gh pr view` shape) trips the tree-wide check; (b) a §3 with the `gh api`
+#      reads reverted to `gh issue view` fails the positive pin.
+#
 # Source-level, no `gh`, no network, no Slack.
 set -uo pipefail
 
@@ -232,6 +245,56 @@ else
     else
         bad "mutant grammar did not flip the negative vectors — the vector rows are not pinning the class"
     fi
+fi
+
+# --- 5. the association read goes through REST, never gh issue/pr view -------------
+flat_delegate="$(tr '\n' ' ' <"$DELEGATE" | sed 's/  */ /g')"
+has_rest_read() {  # $1 = flattened text
+    grep -qE -- 'gh api repos/<owner>/<name>/issues/<N>[^`]*author_association' <<<"$1" \
+        && grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N>' <<<"$1"
+}
+view_offenders() {  # files naming authorAssociation in a gh issue/pr view command
+    local f flat
+    for f in "$@"; do
+        flat="$(tr '\n' ' ' <"$f" | sed 's/  */ /g')"
+        if grep -qE -- 'gh (issue|pr) view[^`]*authorAssociation' <<<"$flat"; then
+            echo "${f#"$ROOT"/}"
+        fi
+    done
+}
+if has_rest_read "$flat_delegate"; then
+    ok "work-recommendations §3 reads the association via gh api issues/ and pulls/"
+else
+    bad "work-recommendations §3 no longer reads author_association via gh api repos/<owner>/<name>/issues/<N> and pulls/<N>"
+fi
+tree_files=()
+while IFS= read -r f; do tree_files+=("$f"); done < <(find "$ROOT/skills" -type f -name '*.md')
+if [ "${#tree_files[@]}" -eq 0 ]; then
+    bad "no markdown found under skills/ — the tree-wide check would be vacuous"
+else
+    off="$(view_offenders "${tree_files[@]}")"
+    if [ -z "$off" ]; then
+        ok "no gh issue view / gh pr view under skills/ requests authorAssociation"
+    else
+        bad "gh issue/pr view requests authorAssociation (no such field) in: $(echo "$off" | tr '\n' ' ')"
+    fi
+fi
+printf '%s\n' 'read `gh issue view <N> --json title,labels,author,authorAssociation` first' >"$tmp"
+if [ -n "$(view_offenders "$tmp")" ]; then
+    ok "mutant 'gh issue view ... authorAssociation' trips the tree-wide check"
+else
+    bad "mutant 'gh issue view ... authorAssociation' slipped past the tree-wide check"
+fi
+printf '%s\n' 'read `gh pr view <N> --json title,author,authorAssociation,isCrossRepository,' 'body,comments` and HOLD' >"$tmp"
+if [ -n "$(view_offenders "$tmp")" ]; then
+    ok "mutant wrapped 'gh pr view ... authorAssociation' trips the tree-wide check"
+else
+    bad "mutant wrapped 'gh pr view ... authorAssociation' slipped past the tree-wide check"
+fi
+if has_rest_read "read gh issue view <N> --json title,labels,authorAssociation"; then
+    bad "mutant without the gh api reads still satisfies the positive pin"
+else
+    ok "mutant without the gh api reads fails the positive pin"
 fi
 
 if [ "$fail" -eq 0 ]; then
