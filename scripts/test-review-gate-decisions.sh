@@ -28,7 +28,12 @@
 #      The carve-out is pinned in take-it's coordinator subsection and in
 #      dispatch-ready's not-yet-reviewed bullet, with the resolution-failure
 #      hold pinned beside it. Mutants, each measured to FAIL: deleting the
-#      take-it carve-out bullet; deleting the dispatch-ready carve-out sentence.
+#      take-it carve-out bullet; deleting the dispatch-ready carve-out sentence;
+#      negating the failure hold in dispatch-ready ("and is held, not merged on
+#      an unreported review" -> "and is merged") and in take-it ("Never merge on
+#      a review that was never reported." -> "Merge it anyway."); breaking the
+#      opt-out's printed SKIPPED line in take-it, or its shepherd clearance in
+#      dispatch-ready ("clears" -> "withholds"). Nothing else is claimed pinned.
 #
 #   2. `review_agent` IS DELIBERATELY NOT PRESENCE-IS-THE-TOGGLE. The config
 #      contract's governing principle is that the presence of a block enables the
@@ -1024,6 +1029,12 @@ else
     assert_in "$takeit_coord" \
         '\*\*No agent resolved, or the dispatch failed\*\* \(anything other than that explicit opt-out\)' \
         "take-it's COORDINATOR SITE still holds a genuine resolution failure"
+    assert_in "$takeit_coord" \
+        'Never merge on a review that was never reported\.' \
+        "take-it's COORDINATOR SITE still forbids merging on a failure's unreported review"
+    assert_in "$takeit_coord" \
+        'print `review: SKIPPED — no review_agent resolved \(lint/type/test only\)`, name `opt-out \(review_agent: skip\)`' \
+        "take-it's COORDINATOR SITE opt-out prints the SKIPPED line and names the opt-out"
 fi
 
 # The `agent` site, where the coordinator section never runs at all,
@@ -1451,11 +1462,14 @@ if [ -z "$dispatch_coord" ]; then
     bad "dispatch-ready's not-yet-reviewed bullet did not slice — the opt-out pins would pass vacuously"
 else
     assert_in "$dispatch_coord" \
-        'Under `review_agent: skip`, the explicit opt-out, no review is owed: dispatch nothing, do not hold the PR' \
-        "dispatch-ready's COORDINATOR bullet carves out review_agent: skip"
+        '\*\*Precondition, checked first: under `review_agent: skip`, the explicit opt-out, no review is owed\.\*\* Skip the dispatch and the Parent recovery' \
+        "dispatch-ready's COORDINATOR bullet carves out review_agent: skip as a first-checked precondition"
     assert_in "$dispatch_coord" \
-        'Otherwise, a PR whose review could not run at all — no agent resolved, or the dispatch failed — reports' \
-        "dispatch-ready's COORDINATOR bullet still holds a genuine resolution failure"
+        'That recorded outcome clears the PR for the `sassy-dog:pr-shepherd` hand-off' \
+        "dispatch-ready's opt-out outcome clears the PR for the shepherd hand-off"
+    assert_in "$dispatch_coord" \
+        'A PR whose review could not run at all — no agent resolved, or the dispatch failed — reports .*and is held, not merged on an unreported review\.' \
+        "dispatch-ready's COORDINATOR bullet still HOLDS a genuine resolution failure"
 fi
 takeit_handoff="$(section_slice "$TAKEIT" '## 5. Dispatch sub-agents in parallel')"
 dispatch_budget="$(section_slice "$DISPATCH" '## 2. Reconcile in-flight (always first)')"

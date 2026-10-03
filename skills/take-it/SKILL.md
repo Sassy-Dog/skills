@@ -588,13 +588,15 @@ Then:
   outcome rather than the line below wearing a different cause.
 - **`review_agent: skip`, the explicit opt-out** → no review is owed, so the PR is **not held on
   review grounds** and goes to `sassy-dog:pr-shepherd` like any other green PR. §1 already resolved
-  the agent, so this is known before any dispatch; dispatch nothing and say once in the §7 report
-  that review was opted out (`review_agent: skip`). Without this carve-out the bullet below holds
-  every PR under the documented opt-out, the blanket merge freeze the either-site carve-out above
-  exists to prevent. `dispatch-ready` §2 draws the same line.
+  the agent, so this is known before any dispatch; dispatch nothing, print
+  `review: SKIPPED — no review_agent resolved (lint/type/test only)`, name `opt-out
+  (review_agent: skip)` on the next line, and record that as the PR's outcome. Say once in the §7
+  report that review was opted out. Without this carve-out the bullet below holds every PR under the
+  documented opt-out, the blanket merge freeze the either-site carve-out above exists to prevent.
+  `dispatch-ready` §2 draws the same line.
 - **No agent resolved, or the dispatch failed** (anything other than that explicit opt-out) → print
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` and name which of the two it
-  was. Never merge on a review that was never reported.
+  was (the cause, never the opt-out). Never merge on a review that was never reported.
 
 Use the capability skill for ALL polling, merge, and teardown mechanics — do NOT reimplement them
 inline:
