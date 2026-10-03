@@ -25,16 +25,16 @@ were read through a summarizing fetcher, so "not documented" means "not found in
 | 1 | Agent tool dispatch (every site that binds a tier) | 7 | ``git grep -l -F 'tier `' -- skills agents`` |
 | 2 | `subagent_type` plugin-namespaced agent names | 2 | `git grep -l 'subagent_type' -- skills agents` |
 | 3 | `isolation: "worktree"` | 4 | `git grep -l 'isolation: "worktree"' -- skills agents` |
-| 4 | `Skill: sassy-dog:<name>` delegation | 6 | `git grep -l 'Skill: sassy-dog:' -- skills agents` |
+| 4 | Skill delegation by namespaced name (`Skill: sassy-dog:<name>`, "invoke `sassy-dog:<name>`", "delegate to `sassy-dog:<name>`") | 10 | `git grep -l -E -e 'Skill: sassy-dog:' -e '[Ii]nvoke .sassy-dog:' -e '[Dd]elegates? to .sassy-dog:' -- skills agents` |
 | 5 | `${CLAUDE_PLUGIN_ROOT}` | 22 | `git grep -l CLAUDE_PLUGIN_ROOT -- skills agents` |
 | 6 | `` !`...` `` dynamic context injection | 9 | ``git grep -l -E '^!`' -- skills agents`` |
 | 7 | Per-repo config under `.claude/sassy-dog/` | 22 | `git grep -l '\.claude/sassy-dog' -- skills agents` |
-| 8 | Plugin and marketplace declaration in `.claude/settings.json` | 5 | `git grep -l -E 'extraKnownMarketplaces\|enabledPlugins' -- skills agents` |
+| 8 | Plugin and marketplace declaration in `.claude/settings.json` | 5 | `git grep -l -e extraKnownMarketplaces -e enabledPlugins -- skills agents` |
 | 9 | Claude Code settings and hooks generation | 9 settings, 5 hooks | `git grep -l '\.claude/settings' -- skills agents` and `git grep -l '\.claude/hooks' -- skills agents` |
 | 10 | `AskUserQuestion` interview tool | 1 | `git grep -l AskUserQuestion -- skills agents` |
 | 11 | `/loop` driver | 2 | `git grep -l '/loop' -- skills agents` |
 | 12 | Agent frontmatter `color:` | 10 | `git grep -l '^color:' -- agents` |
-| 13 | `claude plugin` CLI and install state | 8 | `git grep -l -E 'claude plugin\|installed_plugins' -- skills agents` |
+| 13 | `claude plugin` CLI and install state | 8 | `git grep -l -e 'claude plugin' -e installed_plugins -- skills agents` |
 | 14 | `mcp__...` tool-id literals | 6 | `git grep -l 'mcp__' -- skills agents` |
 | 15 | `.claude/worktrees` path convention | 4 | `git grep -l '\.claude/worktrees' -- skills agents` |
 
@@ -118,10 +118,16 @@ workspace can do that, and whether `patch` merge is compatible with a worker tha
 branch: **unknown, not documented**. This is the riskiest mechanism in the inventory. The default is
 "none", so a misconfigured run would put parallel workers in one checkout.
 
-### 4. `Skill: sassy-dog:<name>` delegation
+### 4. Skill delegation by namespaced name
 
-**Used for.** Workflow skills delegating to capability skills (`send-it`, `take-it`, `setup-repo`,
-`tidy-repo`, `work-fire-watch`, `work-recommendations`).
+**Used for.** Workflow skills handing work to other skills by name. Ten files do it with one of
+three phrasings: `send-it`, `take-it`, `setup-repo`, `tidy-repo`, `work-fire-watch` and
+`work-recommendations` (`Skill: sassy-dog:<name>`), `dispatch-ready` and `groom-backlog`
+("delegate to `sassy-dog:<name>`"), and `survey-work` and `whats-on-fire` ("invoke
+`sassy-dog:<name>`"). The phrasing is open-ended, so the count is a floor. Other files name a
+skill with other verbs ("via", "route to", "goes through"), which the command does not match. Across `skills/*/SKILL.md`, 19 of the 23 skills contain some
+`sassy-dog:<name>` reference, which also catches self-references, so it is an upper bound and not
+a delegation count (``git grep -l -E 'sassy-dog:[a-z-]+' -- 'skills/*/SKILL.md'``).
 
 **omp.** Skills are `SKILL.md` files with `description` and optional `name` frontmatter, discovered
 under `.claude/skills/` among other paths, and invoked as `/skill:<name>` or by description match
@@ -274,8 +280,12 @@ Resolve the two mechanisms that block everything first, then decide per family.
 
 1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither.
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
-3. Rows 1, 2 and 4 are lower risk. omp documents a dispatch tool, an agent format and skill
-   invocation, and the remaining questions are about call shape.
+3. Rows 1 and 2 are lower risk. omp documents a dispatch tool and an agent format, and the
+   remaining questions are about call shape.
+4. Row 4 is medium risk, not low. omp documents `/skill:<name>` invocation but nothing about a skill
+   body invoking another skill or about plugin namespacing, and ten files, `dispatch-ready` among
+   them, depend on it. If the namespaced name does not resolve, every workflow skill loses its
+   capability skills. The spike should test it early.
 
 ## Recommendation
 
