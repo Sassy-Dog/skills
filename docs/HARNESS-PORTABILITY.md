@@ -22,7 +22,7 @@ were read through a summarizing fetcher, so "not documented" means "not found in
 
 | # | Mechanism | Files | Reproducing command |
 | --- | --- | --- | --- |
-| 1 | Agent tool dispatch | 5 | `git grep -l -E 'Agent tool\|Agent call\|Agent\(' -- skills agents` |
+| 1 | Agent tool dispatch (every site that binds a tier) | 7 | ``git grep -l -F 'tier `' -- skills agents`` |
 | 2 | `subagent_type` plugin-namespaced agent names | 2 | `git grep -l 'subagent_type' -- skills agents` |
 | 3 | `isolation: "worktree"` | 4 | `git grep -l 'isolation: "worktree"' -- skills agents` |
 | 4 | `Skill: sassy-dog:<name>` delegation | 6 | `git grep -l 'Skill: sassy-dog:' -- skills agents` |
@@ -55,9 +55,13 @@ Each entry gives what the plugin uses the mechanism for, then what omp documents
 
 ### 1. Agent tool dispatch
 
-**Used for.** Fan-out. `take-it` dispatches one worker per issue, `assess-it` fans out reviewers,
+**Used for.** Fan-out. `take-it` and `dispatch-ready` dispatch implementation workers and the review
+agent, `send-it` dispatches the review agent, `assess-it` fans out reviewers,
 `pr-review-orchestrator` fans out to the nine reviewers, and `whats-on-fire`'s cloud fallback runs
-org-sweep subagents. The contract is "issue every call in a single message so they run
+org-sweep subagents. The seven files are exactly the sites in `scripts/test-model-tiers.sh`'s
+`required` table. The command keys on the inline tier binding, because the wording around a
+dispatch varies (`Agent tool`, `Agent call`, `Agent(...)`, or none) and a grep for the tool name
+misses `send-it` and `dispatch-ready`. The contract is "issue every call in a single message so they run
 concurrently", with a tier bound inline at each site.
 
 **omp.** `task` is the dispatch tool: "Fan independent work out to specialist subagents,
@@ -69,9 +73,14 @@ several calls: **unknown, not documented**. The subagents page describes delegat
 language ("Use the scout to map...") and names no call syntax.
 
 **Fit.** Partial. The concept exists. The single-message-batch wording and the `Agent(...)` call
-shape in `agents/pr-review-orchestrator.md` have no documented omp counterpart. The recursion cap
-of 2 deserves a check, since coordinator, worker and reviewer is already three levels when a worker
-reviews its own diff (`review_site: agent`). Not verified.
+shape in `agents/pr-review-orchestrator.md` have no documented omp counterpart. Nesting depth is a
+concrete conflict with omp's default `task.maxRecursionDepth` of 2. At the default
+`review_site: coordinator` the chain is coordinator, `pr-review-orchestrator`, reviewer: two nested
+hops, so the default **sits at** the cap. Under `review_site: agent` the worker dispatches the
+orchestrator itself (`skills/take-it/SKILL.md`), giving coordinator, worker, orchestrator, reviewer:
+three nested hops, which **exceeds** the cap. Whether the cap counts hops or levels is **unknown,
+not documented**, so even the default may fail. The setting is configurable, but raising it is a
+consumer-side change this plugin cannot ship.
 
 ### 2. `subagent_type` and plugin-namespaced agent names
 
