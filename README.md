@@ -110,8 +110,9 @@ has been run end to end through a model there, so no omp cell says `expected`. C
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
 skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. The omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
-has a model-resolved equivalent, and row 6 (`` !`...` `` config injection) has none, so a skill that
-hits row 6 reads no repo config on omp. No cell below changed, because the equivalents are not yet
+has a model-resolved equivalent, and row 6 (`` !`...` `` config injection) has no load-time equivalent:
+the `` !`...` `` line reaches the model unexecuted, and whether a model then reads the repo config
+itself is untested. No cell below changed, because the equivalents are not yet
 shown to work through a model.
 
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
