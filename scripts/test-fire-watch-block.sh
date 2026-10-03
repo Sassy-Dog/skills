@@ -56,16 +56,23 @@
 #      `.../pulls/<N>` with `author_association`, and that no `gh issue view` /
 #      `gh pr view` command anywhere under `skills/` requests `authorAssociation`
 #      (checked on whitespace-flattened text, so a wrapped command is seen).
-#      The pulls read must also carry `author_association` and the head/base
-#      fork comparison, and §3 must name the `OWNER`/`MEMBER`/`COLLABORATOR`
-#      allow-list. The tree-wide scan covers every `*.md` and `*.sh` under
-#      `skills/`, strips backticks and looks 200 chars past the command, so a
-#      command and a field in separate code spans are still one hit.
-#      Mutants, all exercised below on scratch copies: (a) the pre-fix
-#      `gh issue view ... authorAssociation`, wrapped and split-span shapes,
-#      trips the tree-wide check; (b) a §3 with the `gh api` reads reverted fails
-#      the positive pin; (c) a §3 that keeps the pulls URL but drops
-#      `author_association`, the fork comparison or the allow-list fails it too.
+#      Scoping, enforced on the two §3 paragraphs (blank-line delimited,
+#      flattened, backticks stripped): the ISSUE-read paragraph must carry the
+#      `gh api .../issues/<N>` read with `author_association` and the
+#      `OWNER`/`MEMBER`/`COLLABORATOR` allow-list; the PR-read paragraph must
+#      carry the `gh api .../pulls/<N>` read with `author_association` and the
+#      head/base fork comparison, and must NOT name the allow-list — a PR is
+#      gated by the fork fact alone, because `dependabot[bot]` has association
+#      `NONE` and an allow-list there would make every Dependabot PR
+#      CONFIRM-EACH, against §3's own table. The tree-wide scan covers every
+#      `*.md` and `*.sh` under `skills/` and flags `authorAssociation` anywhere
+#      in the same paragraph as a `gh issue view` / `gh pr view`, which catches
+#      the real pre-fix shape (command and field ~470 chars apart in separate
+#      code spans, fixture transcribed from 5b024e6).
+#      Mutants, all exercised below on scratch copies: the pre-fix paragraph
+#      trips the tree-wide scan; dropping the issue-side allow-list, the pulls
+#      `author_association`, or the fork comparison fails the positive pin;
+#      re-adding the allow-list to the PR paragraph fails the negative pin.
 #
 # Source-level, no `gh`, no network, no Slack.
 set -uo pipefail
@@ -254,26 +261,36 @@ else
 fi
 
 # --- 5. the association read goes through REST, never gh issue/pr view -------------
-flat_delegate="$(tr '\n' ' ' <"$DELEGATE" | sed 's/  */ /g')"
-has_rest_read() {  # $1 = flattened text
-    grep -qE -- 'gh api repos/<owner>/<name>/issues/<N>[^`]*author_association' <<<"$1" \
-        && grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N>[^`]*author_association[^`]*\.head\.repo[^`]*\.base\.repo' <<<"$1" \
-        && grep -qF -- '`OWNER`, `MEMBER` and `COLLABORATOR`' <<<"$1"
+paragraph() {  # $1 = file, $2 = fixed string opening the wanted paragraph; flattened, backticks stripped
+    awk -v RS='' -v key="$2" 'index($0, key) == 1 { print; exit }' "$1" | tr '\n' ' ' | tr -d '`' | sed 's/  */ /g'
 }
-view_offenders() {  # files naming authorAssociation within 200 chars of a gh issue/pr view
-    local f flat
+issue_para="$(paragraph "$DELEGATE" '**The label check')"
+pr_para="$(paragraph "$DELEGATE" '**The held-PR check')"
+issue_read_ok() {  # $1 = issue-read paragraph
+    grep -qE -- 'gh api repos/<owner>/<name>/issues/<N> --jq [^}]*author_association}' <<<"$1" \
+        && grep -qF -- 'OWNER, MEMBER and COLLABORATOR' <<<"$1"
+}
+pr_read_ok() {  # $1 = PR-read paragraph: fields present, and no allow-list gate
+    grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq [^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
+        && ! grep -qE -- 'OWNER|COLLABORATOR' <<<"$1"
+}
+view_offenders() {  # files with authorAssociation in the same paragraph as a gh issue/pr view
+    local f hit
     for f in "$@"; do
-        # backticks are stripped so a command and a later code span are one run of text
-        flat="$(tr '\n`' '  ' <"$f" | sed 's/  */ /g')"
-        if grep -qE -- 'gh (issue|pr) view.{0,200}authorAssociation' <<<"$flat"; then
-            echo "${f#"$ROOT"/}"
-        fi
+        hit="$(awk -v RS='' '{ gsub(/\n/, " "); gsub(/`/, ""); if ($0 ~ /gh (issue|pr) view/ && $0 ~ /authorAssociation/) { print "hit"; exit } }' "$f")"
+        if [ -n "$hit" ]; then echo "${f#"$ROOT"/}"; fi
     done
+    return 0
 }
-if has_rest_read "$flat_delegate"; then
-    ok "work-recommendations §3 reads the association via gh api issues/ and pulls/"
+if issue_read_ok "$issue_para"; then
+    ok "§3 issue read: gh api issues/<N> with author_association and the member allow-list"
 else
-    bad "work-recommendations §3 no longer reads author_association via gh api repos/<owner>/<name>/issues/<N> and pulls/<N>"
+    bad "§3 issue-read paragraph lost the gh api issues/<N> read, author_association or the OWNER/MEMBER/COLLABORATOR allow-list"
+fi
+if pr_read_ok "$pr_para"; then
+    ok "§3 PR read: gh api pulls/<N> with author_association and the fork comparison, no allow-list gate"
+else
+    bad "§3 PR-read paragraph lost a pulls/<N> field or gates on the allow-list (Dependabot would be CONFIRM-EACH)"
 fi
 tree_files=()
 while IFS= read -r f; do tree_files+=("$f"); done < <(find "$ROOT/skills" -type f \( -name '*.md' -o -name '*.sh' \))
@@ -287,41 +304,44 @@ else
         bad "gh issue/pr view requests authorAssociation (no such field) in: $(echo "$off" | tr '\n' ' ')"
     fi
 fi
-printf '%s\n' 'read `gh issue view <N> --json title,labels,author,authorAssociation` first' >"$tmp"
+# Mutants. The pre-fix paragraph is transcribed from 5b024e6 (git history is not read here).
+printf '%s\n' \
+    'from: `gh issue view <N> --json title,labels`. `auto-security-watch` → HUMAN-ONLY; `security` →' \
+    'CONFIRM-EACH; **a read that fails or returns no labels field is UNKNOWN → HOLD**, never' \
+    'DISPATCH — unknown is not verified, the same shape `take-it` and `file-or-link-issue.sh` use.' \
+    'Labels carried on a plate or block line are display only; the live read decides. The live' \
+    'title is printed beside each number in the §4 preview, so a steered id is visible before' \
+    'approval. On a public repo, `author` and `authorAssociation` are read too and a non-member' \
+    'author is CONFIRM-EACH — a cold worker with write access must not take an outsider body' \
+    'verbatim on a batch approval.' >"$tmp"
 if [ -n "$(view_offenders "$tmp")" ]; then
-    ok "mutant 'gh issue view ... authorAssociation' trips the tree-wide check"
+    ok "mutant: the real pre-fix paragraph (command and field in separate spans) trips the tree-wide scan"
 else
-    bad "mutant 'gh issue view ... authorAssociation' slipped past the tree-wide check"
+    bad "mutant: the real pre-fix paragraph slipped past the tree-wide scan"
 fi
 printf '%s\n' 'read `gh pr view <N> --json title,author,authorAssociation,isCrossRepository,' 'body,comments` and HOLD' >"$tmp"
 if [ -n "$(view_offenders "$tmp")" ]; then
-    ok "mutant wrapped 'gh pr view ... authorAssociation' trips the tree-wide check"
+    ok "mutant: wrapped 'gh pr view ... authorAssociation' trips the tree-wide scan"
 else
-    bad "mutant wrapped 'gh pr view ... authorAssociation' slipped past the tree-wide check"
+    bad "mutant: wrapped 'gh pr view ... authorAssociation' slipped past the tree-wide scan"
 fi
-if has_rest_read "read gh issue view <N> --json title,labels,authorAssociation"; then
-    bad "mutant without the gh api reads still satisfies the positive pin"
-else
-    ok "mutant without the gh api reads fails the positive pin"
-fi
-# Mutants on the real §3: keep the pulls URL but drop author_association / the fork
-# comparison / the allow-list; each must fail the positive pin.
-for pair in 's/author_association, fork:/fork:/' 's/\.head\.repo\.full_name/.head.x/' 's/`OWNER`, `MEMBER` and `COLLABORATOR`/members/'; do
-    flat_m="$(sed "$pair" "$DELEGATE" | tr '\n' ' ' | sed 's/  */ /g')"
-    if [ "$flat_m" = "$flat_delegate" ]; then
-        bad "positive-pin mutant '$pair' did not apply — the §3 literal moved; update this gate"
-    elif has_rest_read "$flat_m"; then
-        bad "positive-pin mutant '$pair' still satisfies the pin"
+mutate() {  # $1 = sed script, $2 = paragraph key, $3 = checker, $4 = label
+    local m
+    sed "$1" "$DELEGATE" >"$tmp"
+    m="$(paragraph "$tmp" "$2")"
+    if cmp -s "$DELEGATE" "$tmp"; then
+        bad "mutant '$4' did not apply — the §3 literal moved; update this gate"
+    elif "$3" "$m"; then
+        bad "mutant '$4' still satisfies the pin"
     else
-        ok "positive-pin mutant '$pair' fails the pin"
+        ok "mutant '$4' fails the pin"
     fi
-done
-printf '%s\n' 'read `gh issue view <N> --json title,labels` and, on a public repo, `authorAssociation` too' >"$tmp"
-if [ -n "$(view_offenders "$tmp")" ]; then
-    ok "split-span mutant (command and authorAssociation in separate code spans) trips the tree-wide check"
-else
-    bad "split-span mutant slipped past the tree-wide check"
-fi
+}
+mutate 's/`OWNER`, `MEMBER` and `COLLABORATOR`/members/' '**The label check' issue_read_ok 'issue-side allow-list dropped'
+mutate 's/author_association}'"'"'`$/author}'"'"'/' '**The label check' issue_read_ok 'issue read drops author_association'
+mutate 's/author_association, fork:/fork:/' '**The held-PR check' pr_read_ok 'pulls read drops author_association'
+mutate 's/\.head\.repo\.full_name/.head.x/' '**The held-PR check' pr_read_ok 'pulls read drops the fork comparison'
+mutate 's/(fail closed)\./(fail closed) and an association outside `OWNER`, `MEMBER`, `COLLABORATOR` is CONFIRM-EACH./' '**The held-PR check' pr_read_ok 'allow-list gate re-added to the PR read'
 
 if [ "$fail" -eq 0 ]; then
     echo "fire-watch block tests: all green"

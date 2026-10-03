@@ -111,9 +111,9 @@ their coordinator never handing it over. So read
 `gh api repos/<owner>/<name>/pulls/<N> --jq '{author: .user.login, author_association, fork: ((.head.repo.full_name // "") != .base.repo.full_name)}'`
 (`<owner>/<name>` is §1's `repo=` value) together with `gh pr view <N> --json body,comments`.
 This one read feeds the "head is a fork" rows of the table above and the §4 preview: a deleted
-fork returns a null `head.repo`, which counts as a fork (fail closed), and an
-`author_association` outside `OWNER`, `MEMBER`, `COLLABORATOR` (null included) is CONFIRM-EACH
-exactly as for an issue. HOLD the PR — with the reason — when the body or a comment carries a `review:` outcome line, a
+fork returns a null `head.repo`, which counts as a fork (fail closed). The fork fact alone gates
+a PR (fork → CONFIRM-EACH); `author` and `author_association` are shown in the §4 preview and
+never gate, so a Dependabot PR (association `NONE`) still passes. HOLD the PR — with the reason — when the body or a comment carries a `review:` outcome line, a
 `recovery_used`, a named Blocking finding, or a `take-it-attempt` record, or when the linked
 issue carries the repo's claim label. **A read that fails is UNKNOWN → HOLD.** Only a PR that
 passes clean becomes SHEPHERD; a Dependabot or operator-authored PR passes on the same read.
