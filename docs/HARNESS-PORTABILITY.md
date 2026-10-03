@@ -221,8 +221,9 @@ unknown key: **unknown, not documented**.
 
 **Used for.** Two things. Five workflow skills (`send-it`, `take-it`, `tidy-repo`, `work-fire-watch`,
 `work-recommendations`) tell a degraded session to run `claude plugin install sassy-dog`, and
-`setup-config`'s contract and `repo-health`'s drift guidance cite `claude plugin update`. `repo-health`'s plugin-drift check reads `claude plugin` output
-and `~/.claude/plugins/installed_plugins.json`.
+`setup-config`'s contract and `repo-health`'s drift guidance cite `claude plugin update`.
+`repo-health`'s plugin-drift script runs no `claude` command. It reads
+`~/.claude/plugins/installed_plugins.json` and the marketplace clone's manifest.
 
 **omp.** The install command differs: `omp plugin install name@marketplace`
 (`https://omp.sh/docs/marketplace`). The drift diagnostic covers a Claude Code cache failure mode
