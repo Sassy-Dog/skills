@@ -2053,14 +2053,19 @@ fi
 # `## Sassy Dog calibration`, so the last text read before answering was stack
 # calibration, not the output contract. The closing section restates the shape
 # as the final instruction. It is additive: the `## Output` paragraph and every
-# pin above stay. Two properties are asserted, and the second is the point of
-# the section existing at all:
-#   1. its text, from its heading to end of file, equals a literal held HERE
-#      (same reason as RV_SHAPE: a uniform edit across all nine passes a
-#      cross-file identity check);
-#   2. it is the LAST `## ` heading of the file. A copy moved above
-#      `## Sassy Dog calibration` has the right text and the wrong position,
-#      which is the defect, so text equality alone cannot catch it.
+# pin above stay. Two assertions per reviewer:
+#   1. the file's tail, from the closing heading to end of file, equals a
+#      literal held HERE (same reason as RV_SHAPE: a uniform edit across all
+#      nine passes a cross-file identity check). This one does all the work:
+#      because the tail runs to EOF and RV_CLOSE holds no other `## ` line,
+#      any position or content defect fails it.
+#   2. the closing heading is the LAST `## ` heading. Redundant with (1) by
+#      construction, kept as a cheap second assertion with its own diagnostic
+#      naming the section that wrongly ends the file.
+# Measured, each failing assertion 1 on its own: section moved above
+# `## Sassy Dog calibration`; duplicated above it; a trailing `## ` section;
+# a trailing `###` subsection; trailing text; a reword in one file; the same
+# reword in all nine (RV_CLOSE is the anchor outside the files under test).
 # The wording avoids the tokens the counts above bound (`SendMessage`, `relay`)
 # and does NOT open with the `**My final message starts with` literal the
 # RV_SHAPE extractor and the adjacency check key on: a second match there
