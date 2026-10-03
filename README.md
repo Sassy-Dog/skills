@@ -102,6 +102,61 @@ both write `.claude/settings.json` (the marketplace/plugin declaration and the `
 each merging surgically into its own keys, so sequential runs compose while a concurrent or
 last-write-wins run drops one of the two with no error anywhere.
 
+### Harness support
+
+Which skills are expected to run outside Claude Code. Statuses are `expected`, `untested` or
+`not supported`. **`untested` is the default**: nothing has been run on [omp](https://omp.sh) yet, so
+no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
+numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
+skill's rows are the ones whose reproducing command matches files under that skill. Rows 5
+(`${CLAUDE_PLUGIN_ROOT}`) and 6 (`` !`...` `` config injection) have no documented omp equivalent,
+and a skill that hits either cannot be assumed to work until the omp spike
+([#424](https://github.com/Sassy-Dog/skills/issues/424)) reports. Re-check this table when it does.
+
+The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
+`isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), which the spike has not
+shown omp can meet. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+in that family and follows it.
+
+| Skill | Family | Claude Code | omp | Inventory rows |
+|-------|--------|-------------|-----|----------------|
+| `take-it` | Dispatch | expected | not supported | 1, 3, 4, 5, 6, 7, 13 |
+| `dispatch-ready` | Dispatch | expected | not supported | 1, 3, 4, 5, 6, 7, 11 |
+| `send-it` | Dispatch | expected | not supported | 1, 4, 5, 6, 7, 13 |
+| `assess-it` | Dispatch | expected | not supported | 1, 2, 5 |
+| `work-recommendations` | Dispatch | expected | not supported | 4, 5, 6, 7, 13 |
+| `work-fire-watch` | Dispatch | expected | not supported | 4, 6, 7, 13 |
+| `survey-work` | Config-driven workflow | expected | untested | 4, 5, 6, 7 |
+| `groom-backlog` | Config-driven workflow | expected | untested | 4, 5, 6, 7 |
+| `tidy-repo` | Config-driven workflow | expected | untested | 4, 6, 7, 13 |
+| `whats-on-fire` | Config-driven workflow | expected | untested | 1, 4, 5, 7 |
+| `setup-repo` | Generator | expected | untested | 4, 7, 8, 9 |
+| `setup-config` | Generator | expected | untested | 5, 6, 7, 8, 9, 10, 13 |
+| `setup-hooks` | Generator | expected | untested | 5, 9 |
+| `setup-deps` | Generator | expected | untested | 5 |
+| `github-issues` | Capability | expected | untested | 5, 7, 11 |
+| `pr-shepherd` | Capability | expected | untested | 3, 5, 15 |
+| `repo-cleanup` | Capability | expected | untested | 3, 5, 15 |
+| `repo-health` | Capability | expected | untested | 5, 8, 9, 13, 15 |
+| `whats-behind` | Capability | expected | untested | 5 |
+| `sentry-triage` | Capability | expected | untested | none |
+| `testflight` | Capability | expected | untested | none |
+| `github-secrets` | Capability | expected | untested | none |
+| `recap` | Session report | expected | untested | none |
+
+Notes on reading it:
+
+- `none` means no inventory mechanism matched under that skill's directory, which is not evidence
+  it runs on omp. The skill may still use a Claude Code tool that no row covers.
+- `whats-on-fire` hits row 1 only through its cloud-routine fallback, and `pr-shepherd` and
+  `repo-cleanup` hit row 3 only to describe worktree teardown. Both are weaker dependencies than
+  the same row in the dispatch family, but neither has been verified on omp.
+- `setup-config` and `setup-hooks` write Claude Code files (`.claude/settings.json`,
+  `.claude/hooks/`), so what they generate is Claude-Code-shaped even where the skill itself runs.
+- The row sets above were derived with the reproducing commands in the inventory scoped to
+  `skills/<name>`. Nothing gates them, so re-run the commands rather than trusting this table when
+  the tree moves.
+
 ### Review agents
 
 Nine domain reviewers ship with the plugin (namespaced `sassy-dog:<name>`):
