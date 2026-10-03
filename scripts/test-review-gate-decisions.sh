@@ -1720,6 +1720,7 @@ RVEOF
 # Both sides normalised the same way, by one expression rather than two call
 # sites free to drift: a hard-wrapped copy is the same paragraph, and a
 # line-scoped comparison would call it a different one.
+norm_para() { tr '\n' ' ' <<<"$1" | tr -s ' ' | sed -E 's/^ +| +$//g'; }
 # THE SHAPE RULE (#411) is the positive half of the envelope contract: the
 # `Return ONLY a JSON object` line says what to avoid, and three consecutive
 # review rounds still ended in a fenced or prefaced envelope that a strict
@@ -1735,7 +1736,6 @@ RV_SHAPE="$(cat <<'RSEOF'
 **My final message starts with `{` and ends with `}`. Nothing comes before the object or after it: no code fence, no heading, no "Here are my findings". A completed empty review is exactly `{"findings": []}`, on one line and unfenced.**
 RSEOF
 )"
-norm_para() { tr '\n' ' ' <<<"$1" | tr -s ' ' | sed -E 's/^ +| +$//g'; }
 rv_found=0
 for rv in "${REVIEWERS[@]}"; do
     rv_name="$(basename "$rv" .md)"
@@ -1933,13 +1933,14 @@ else
         "the brief rules out the file-parking channel too"
     assert_has "$brief_region" '`{"findings": []}` is *returned*' \
         "the brief carries the completed-empty envelope half of the rule"
+    # The positive shape rule (#411) rides in item 6 too, beside the content literals above.
+    assert_has "$brief_region" 'starts with `{` and ends with `}`, nothing comes before the object or after it (no code fence, no heading, no "Here are my findings"), and a completed empty review is exactly `{"findings": []}`, on one line and unfenced' \
+        "the brief carries the positive bare-envelope shape rule (#411)"
     # THE IMPERATIVES, not just the content. Item 6 contains its own
     # counter-argument — "each of the nine carries this rule in its own file" —
     # so "you need not restate it" is the first tidy a later reader reaches
     # for, and it defeats #280's acceptance while leaving every other literal
     # here intact. Measured green before these two.
-    assert_has "$brief_region" 'starts with `{` and ends with `}`, nothing comes before the object or after it (no code fence, no heading, no "Here are my findings"), and a completed empty review is exactly `{"findings": []}`, on one line and unfenced' \
-        "the brief carries the positive bare-envelope shape rule (#411)"
     assert_in "$brief_region" 'State it:' \
         "the brief orders the delivery rule stated, not merely describes it"
     assert_in "$brief_region" 'say it in the brief anyway' \
