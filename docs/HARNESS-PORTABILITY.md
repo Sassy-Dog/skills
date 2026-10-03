@@ -1,7 +1,8 @@
 # Harness portability
 
 An inventory of the Claude-Code-specific mechanisms in `skills/` and `agents/`, what omp offers in
-their place, and the options for the shape of a fix. This is an options document for issue #410.
+their place, and the options for the shape of a fix. This is an options document for issue #410,
+extended with the results of the omp spike (issue #424, [Spike results](#spike-results-424)).
 **It decides nothing and implements nothing.** The shape decision belongs to the operator, and
 implementation issues follow from it.
 
@@ -13,10 +14,14 @@ the dispatch mechanics, the ones that file's "What a tier does not cover" sectio
 Every count is the number of **tracked files** matching the command beside it, under `skills/` and
 `agents/` only. It is a file count, not a site count: a file that uses a mechanism five times counts
 once. The counts are a snapshot of the tree on 2026-10-03. Nothing gates them, so they go stale as
-the tree moves. Re-run the command rather than trusting the number. omp is quoted only from its
-documentation at `https://omp.sh/docs/...`. Where that documentation is silent, the entry says
-**unknown, not documented**. That is a different statement from "omp cannot do it". The omp pages
-were read through a summarizing fetcher, so "not documented" means "not found in the summary".
+the tree moves. Re-run the command rather than trusting the number. omp is quoted from its documentation at
+`https://omp.sh/docs/...` and, since the spike, from what omp 18.5.1 did when run. Where the
+documentation is silent, the entry says **unknown, not documented**. That is a different statement
+from "omp cannot do it". The omp pages were read through a summarizing fetcher, so "not documented"
+means "not found in the summary". Evidence labelled **observed** was produced by running omp 18.5.1
+(commands under [Spike results](#spike-results-424)). Evidence labelled **source** was read from the
+installed package's `src/` and was not run through a model; it is as good as that version and no
+better.
 
 ## Inventory
 
@@ -49,9 +54,227 @@ and, on ten agents, `color`.
 `git grep -l SendMessage -- skills agents` also hits all nine reviewers and the orchestrator, but
 only to say a report is returned and never sent, so it creates no dependency.
 
+## Spike results (#424)
+
+Run on 2026-10-03 on site `mac` against `omp/18.5.1` (`omp --version` printed `omp/18.5.1`, binary
+`~/.bun/bin/omp`). The operator's omp was not installed, upgraded or reconfigured by the spike.
+
+**Isolation method.** omp had no `~/.omp` before the spike. Every omp command ran with
+`OMP_PROFILE=spike424` (or `spike424b`), the documented profile selector
+(`https://omp.sh/docs/env`), which keeps auth, settings, plugins and caches under
+`~/.omp/profiles/<name>/`. Overriding `HOME` was not possible from the worktree sandbox, so the
+profile directory lives outside the worktree. It was the only omp-written location: a search for
+`~/.cache/omp`, `~/.config/omp`, `~/.local/share/omp` and `~/.local/state/omp` found nothing. The
+spike removed `~/.omp` afterwards (it did not exist beforehand), so the operator has nothing to undo.
+Scratch scripts and a throwaway repo were under the worktree's gitignored `tmp/`.
+**No model-backed omp command was run**: the profiles hold no credentials, and everything below came
+from `omp` subcommands that need no model (`plugin`, `read`, `config`) plus scripts that call omp's own
+modules directly. That means no `task` call, `/skill:` invocation or `` !`...` `` load was driven
+end to end by a model. Each answer says which parts were run and which were read from source.
+
+### Q1. Does the plugin install as is? Yes (row 8)
+
+```text
+$ omp plugin marketplace add Sassy-Dog/skills
+✔ Added marketplace: Sassy-Dog/skills
+$ omp plugin install sassy-dog@skills
+✔ Installed sassy-dog from skills (2026.10.5)
+$ omp plugin list
+Marketplace Plugins:
+  sassy-dog@skills (2026.10.5) (user)
+```
+
+The marketplace was read from `.claude-plugin/marketplace.json` and the plugin from
+`.claude-plugin/plugin.json`, with no `package.json` and no `omp` field. omp cloned the whole repo into
+`~/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/`. The skill
+loader then listed 23 skills: the `Available:` list that `omp read` printed for an unknown name holds
+23 bare names, matching the count of `skills/` in the clone. The agent loader returned all 10 agents
+(the `discoverAgents` listing under Q5). `omp plugin doctor` printed one warning, `package_manifest:
+Not created yet`, which is benign. `omp plugin features sassy-dog` printed `Plugin "sassy-dog" not
+found`, because that command looks at npm-style plugins only.
+
+**`CLAUDE_CONFIG_DIR` import, observed.** A Claude-Code-format registry
+(`<dir>/plugins/installed_plugins.json`, copied from the install above) under a temp
+`CLAUDE_CONFIG_DIR` did **not** make the skill appear on its own: `omp read skill://take-it` printed
+`Unknown skill: take-it` / `Available: none`. After `omp config set enabledProviders
+'["claude-plugins"]'` it resolved. omp's source says why: a foreign provider's user-level config is
+opt-in, and `CLAUDE_CONFIG_DIR` only switches on the `claude` provider, not `claude-plugins`
+(**source**, `src/capability/index.ts` `isUserSourceEnabled`). `https://omp.sh/docs/env` says only
+that the variable "Relocates imported Claude Code commands, plugins, MCP configuration, sessions, and
+`.claude.json`", so the opt-in is a docs gap. Row 8's own mechanism does not carry over. `enabledPlugins`
+in `.claude/settings.json` is read, but only as an on/off override for a plugin that some registry
+already lists, and nothing reads `extraKnownMarketplaces` (**source**, `src/discovery/helpers.ts`
+`readClaudeEnabledPlugins`, and a grep of `src/` for `extraKnownMarketplaces` with no hit). A consumer
+repo that declares both keys therefore does **not** get the plugin installed on omp.
+
+### Q2. Plugin root (row 5): equivalent found, model-resolved
+
+Observed, `omp read skill://pr-shepherd` (the `read` tool's own output for a skill):
+
+```text
+[Skill file: ~/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/skills/pr-shepherd/SKILL.md]
+...
+bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/poll-prs.sh --once "$PR"
+```
+
+The token is **not** substituted in a skill body. Two things resolve a path instead:
+
+- `omp read skill://<name>/<path>` works and prints the absolute file path in its header
+  (`omp read skill://pr-shepherd/scripts/teardown.sh` printed `[Skill file: .../skills/pr-shepherd/scripts/teardown.sh]`).
+- A `/skill:<name>` invocation appends `[Skill directory: <absolute path>]` and tells the model to
+  resolve relative paths against it. Observed by calling omp's `buildSkillPromptMessage` directly for
+  `pr-shepherd`: the message ended `[Skill directory: .../skills/pr-shepherd]`, and the body still held the
+  literal token (`literal token kept: true`). A hidden autoloaded skill gets the file path instead
+  (**source**, `src/extensibility/skills.ts`, `src/prompts/skills/*.md`).
+
+So the plugin root is the skill directory's grandparent (`<root>/skills/<name>`), and a model can
+derive it. It is not a mechanical substitution, so the 22 files that write the token still need a
+sentence that tells the model how to resolve it. omp does substitute `${CLAUDE_PLUGIN_ROOT}` and
+`${OMP_PLUGIN_ROOT}`, but only inside a plugin's MCP server config and the env omp passes to plugin
+processes (**source**, `src/discovery/substitute-plugin-root.ts`, used from `claude-plugins.ts` and
+`omp-plugins.ts`). `https://omp.sh/docs/env` and `https://omp.sh/docs/plugins` document neither.
+Whether a model reliably follows the sentence is **unknown**: no model-backed run.
+
+### Q3. Config injection (row 6): none
+
+The same `omp read skill://take-it` output printed the `` !`...` `` line verbatim
+(`` !`root="$(git rev-parse --show-toplevel ...` ``). `buildSkillPromptMessage` reads the file,
+strips frontmatter and renders the body into a template with no substitution or shell step
+(**source**, `src/extensibility/skills.ts`). User arguments are appended as `User: <args>`, so
+there is no positional or `$ARGUMENTS` expansion either (`https://omp.sh/docs/slash` documents none).
+The `@path` include token is documented for context files only (`https://omp.sh/docs/context-files`)
+and was not tried inside a skill. The skill therefore sees an unexecuted command, not the config
+and not `NO_CONFIG`. The command is a one-liner a model could run itself when told to, but that was
+not tried, so "every skill degrades to its `NO_CONFIG` path" is the safe reading and not an
+observation. `take-it` and `dispatch-ready` would block on it.
+
+### Q4. Isolation (row 3): equivalent found, with a default that disables it
+
+The settings in 18.5.1 (`omp config list`): `task.isolation.enabled = false`,
+`task.isolation.apply = true`, `task.isolation.merge = patch (patch|branch)`,
+`task.isolation.commits = generic`, `isolation.backend = auto`, `worktree.clone = true`.
+`https://omp.sh/docs/subagents` still documents the legacy key `task.isolation.mode` (default
+`none`). 18.5.1 migrates that key on load: any value other than `none` becomes
+`task.isolation.enabled: true`, with the backend split out into `isolation.backend` (**source**,
+`src/config/settings.ts`, the "Split the legacy combined isolation setting" block). The page's merge
+values (`patch` rather than branches) match the installed `patch|branch` enum
+(`cfgTaskIsolationMerge` in `src/task/settings.ts`). The only divergence is therefore the legacy
+`mode` spelling, and a config that sets it still works.
+
+Observed, by driving omp's own isolation functions (`ensureIsolation`, `captureIsolationBaseline`,
+`commitToBranch`, `cleanupIsolation` from `src/task/worktree.ts`) against a scratch repo with a local
+bare `origin`, with a worker's commands run inside the isolated directory:
+
+```text
+backend: 0 fellBack: false dir: ~/.omp/profiles/spike424/wt/t61e11e128/m
+$ git rev-parse --git-dir --git-common-dir; git branch --show-current; git remote -v
+.git
+.git
+main
+origin  <abs path>/remote.git (fetch)   (and push)
+$ git checkout -b feat/worker-branch && echo change >> f.txt && git add f.txt && git commit -qm 'worker commit'
+362f80c worker commit
+$ git push -u origin feat/worker-branch
+ * [new branch]      feat/worker-branch -> feat/worker-branch
+commitToBranch: {"branchName":"omp/task/spike424probe","baseSha":"88dc568..."}
+```
+
+- The isolated directory is a full checkout with its **own private `.git`** (`--git-dir` and
+  `--git-common-dir` are both `.git`), not a linked `git worktree`. It keeps the parent's remotes.
+  The worker created its own branch, committed, and **pushed it to `origin`**. A worker that opens its
+  PR from inside the tree can therefore work, which is what `take-it` and `dispatch-ready` need.
+- The parent repo does **not** receive the worker's branch name. After the run it had
+  `omp/task/<task-id>` (a branch omp writes from the worker's commits) and no `feat/worker-branch`.
+  `remotes/origin/` held the pushed branch. The source says omp deliberately detaches the isolation's
+  git metadata so a worker cannot move the parent's HEAD, index or refs (**source**,
+  `src/task/worktree.ts`, `ensureIsolation`).
+- The isolation lives under `<profile>/wt/` (`~/.omp/wt` with no profile, matching `worktree.base`) and
+  `cleanupIsolation` removes it, so there is no `.claude/worktrees` path for row 15's teardown to find
+  and no long-lived tree to tear down.
+- `task.isolation.enabled` defaults to **false**. With it off, parallel workers share one checkout,
+  silently. Nothing in a skill can set it.
+
+Not observed: a model-driven `task` call with `isolated: true`, and how `apply = true` and `merge =
+patch` interact with a worker that already pushed its own branch (patch mode would also apply the same
+change to the parent checkout). That is **unknown**.
+
+### Q5. Dispatch and delegation (rows 1, 2, 4)
+
+**Agents (row 2), observed.** Calling omp's `discoverAgents` with the plugin installed returned all ten
+plugin agents under their **bare** frontmatter names (`pr-review-orchestrator`, `security-reviewer`,
+and so on), source `user`, `model`, `tools` and `spawns` all undefined. Lookup by `sassy-dog:pr-review-orchestrator`
+returned nothing, by `pr-review-orchestrator` returned the agent. omp also bundles `scout`,
+`reviewer`, `task`, `sonic` and its own **`security-reviewer`** (**source**, `src/task/agents.ts`,
+`src/prompts/agents/security-reviewer.md`). That one collides with this plugin's `security-reviewer`.
+`discoverAgents` loads plugin agents first and drops later same-name agents (the `seen` filter in
+`src/task/discovery.ts`), so the plugin's agent silently shadows omp's under the bare name, which is why
+the bundled list printed by the discovery call did not include it. A bare name is first-come, so the
+follow-up for bare agent and skill names must treat a collision as a hazard in both directions: a
+plugin agent can hide a bundled one, and a user or project agent of the same name hides the plugin's. `color:` is not a recognised key and is dropped without error: the
+agent loaded (**source**, `parseAgentFields` in `src/discovery/helpers.ts`, requires only `name` and
+`description`). A Claude marketplace plugin's `model` is ignored by design (`ignoreModel`), which fits
+this repo's model-free agent files.
+
+**`task` call shape (row 1), source.** `src/task/types.ts` defines the parameters: `agent` (a name,
+default `task`), `task` (the prompt), `solutionSpace`, and optional `name`, `model` (string or array,
+**per call**), `outputSchema`, `schemaMode`, `tools` and, when isolation is on, `isolated`. With
+`task.batch` true (the default) the call is instead `{context, tasks: [...]}`, one call carrying an
+array of those items, with no top-level `model`. That batch call is the omp counterpart of "issue
+every call in a single message so they run concurrently". It also answers the per-call model question
+the earlier sections marked unknown: a per-call model exists, per item.
+
+**Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max`, and an agent whose children
+would sit at depth `max` loses its `task` tool (`src/task/types.ts`, `src/task/executor.ts`). With the
+default 2 and the main session at depth 0: coordinator (0) dispatches `pr-review-orchestrator` (1),
+which dispatches the reviewers (2). That chain **works**, and the reviewers need no `task` tool. Under
+`review_site: agent` the worker is at 1 and the orchestrator at 2, so the orchestrator has **no
+`task` tool** and cannot dispatch reviewers. Correction to row 1's earlier "sits at the cap, may
+fail": the default fits exactly and `agent` fails. `task.maxRecursionDepth` set to 3 or -1 fixes the
+second, and the plugin cannot ship that setting.
+
+**Delegation (row 4), observed.** omp has no `Skill` tool. A model loads another skill by reading it,
+`skill://<name>`. `omp read skill://take-it` resolved. `skill://sassy-dog:take-it` printed `Unknown
+skill: sassy-dog:take-it`, and `skill://sassy-dog/take-it` printed `Unknown skill: sassy-dog`, both with
+the list of bare names (`assess-it, dispatch-ready, github-issues, ...`). The `<namespace>/<name>`
+form exists, but only when a bare name is already taken by another skill (**source**,
+`skillNamespace` and collision handling in `src/extensibility/skills.ts`). `/skill:<name>` is the user
+form (`https://omp.sh/docs/slash`). So `Skill: sassy-dog:<name>` as written does not resolve, a bare
+`<name>` does, and a collision with another installed skill of the same name would change what the bare
+name means. Whether a model follows "read `skill://<name>`" reliably: **unknown**.
+
+### Verdicts for rows 3, 4, 5 and 6
+
+| Row | Verdict | Evidence beside it |
+| --- | --- | --- |
+| 3 isolation | equivalent found | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`) |
+| 4 skill delegation | equivalent found (bare name) | `skill://take-it` resolves, `skill://sassy-dog:take-it` does not. Namespace only on collision |
+| 5 plugin root | equivalent found (model-resolved) | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted |
+| 6 config injection | none | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step |
+
+### What omp's remaining pages say
+
+- **env** (`https://omp.sh/docs/env`): `CLAUDE_CONFIG_DIR`, `PI_CONFIG_DIR` (a directory name under
+  home, default `.omp`), `OMP_PROFILE` and the legacy `PI_PROFILE`. No plugin-root variable, and
+  nothing about what is exported to skills, hooks or tools.
+- **hooks** (`https://omp.sh/docs/hooks`): events are named (`tool_call`, `tool_result`,
+  `session_stop`, `session_start`, and others) and hooks are discovered in `.omp/hooks/pre/` and
+  `.omp/hooks/post/` or the profile's `agent/hooks/`. The page never mentions Claude Code or a
+  `settings.json` hooks shape. Row 9: `setup-hooks` output is **not** consumed by omp, so it stays
+  Claude-Code-only. Hook file format and a Stop equivalent are otherwise unknown here.
+- **slash** (`https://omp.sh/docs/slash`): skills appear as `/skill:<name> [arguments]`, with no
+  `$ARGUMENTS` substitution and no shell injection. `/loop [count|duration] [--while|--until '<cmd>']
+  [prompt]` re-submits after every yield (**source**, `src/slash-commands/builtin-modes.ts`). That is
+  not `/loop 5m /dispatch-ready`: the duration bounds the loop and there is no per-tick interval. Row 11
+  is therefore a partial equivalent, and `dispatch-ready`'s tick idempotency is what makes it usable.
+- **custom-tools** (`https://omp.sh/docs/custom-tools`): TypeScript or JavaScript modules, shippable in
+  plugins, discovered in `.omp/tools/<name>/index.ts` and, as a legacy path, `.claude/tools`. The
+  factory host exposes the session working directory as `pi.cwd`. It documents no plugin-root value and
+  no skill-to-skill call.
+
 ## Per-mechanism detail
 
-Each entry gives what the plugin uses the mechanism for, then what omp documents.
+Each entry gives what the plugin uses the mechanism for, then what omp documents, then a
+**Spike** line where #424 observed or read something that settles or corrects it.
 
 ### 1. Agent tool dispatch
 
@@ -82,6 +305,10 @@ three nested hops, which **exceeds** the cap. Whether the cap counts hops or lev
 not documented**, so even the default may fail. The setting is configurable, but raising it is a
 consumer-side change this plugin cannot ship.
 
+**Spike.** The call shape, the batch form and the depth rule are now known (Q5). The default chain
+fits and the `review_site: agent` chain does not, so the two sentences above are corrected: the
+default works at depth 2, and `agent` leaves the orchestrator without a `task` tool.
+
 ### 2. `subagent_type` and plugin-namespaced agent names
 
 **Used for.** Selecting a shipped reviewer by its namespaced name, `sassy-dog:<name>`, from the
@@ -100,6 +327,11 @@ model per call: **unknown, not documented**. omp documents a settings override,
 `task.agentModelOverrides.<agent-name>` (`https://omp.sh/docs/agents-and-roles`), which is per agent,
 not per call.
 
+**Spike.** Plugin agents load, unprefixed: the lookup key is the frontmatter `name`, so
+`sassy-dog:<name>` finds nothing and `<name>` does. `color` is ignored without error, and `task` takes a
+per-call `model` (Q5). Every `subagent_type` site that spells a `sassy-dog:` name needs the bare name
+on omp.
+
 ### 3. `isolation: "worktree"`
 
 **Used for.** Giving each parallel worker its own git worktree, so workers do not collide in one
@@ -107,8 +339,8 @@ checkout. `take-it` and `dispatch-ready` depend on it. The other two files (`rep
 `pr-shepherd`'s teardown reference) handle the cleanup of what it creates.
 
 **omp.** Isolation is a setting, not a call parameter. `task.isolation.mode` is `auto` or a named
-backend and defaults to "none". Related keys are `task.isolation.merge` (`patch` by default, or
-`branches`), `task.isolation.apply` and `worktree.base` (default `~/.omp/wt`)
+backend and defaults to "none" (a legacy key that 18.5.1 migrates to `task.isolation.enabled`). Related
+keys are `task.isolation.merge` (`patch` by default, or `branch`), `task.isolation.apply` and `worktree.base` (default `~/.omp/wt`)
 (`https://omp.sh/docs/subagents`). A prompt can also ask for it ("Use the migration-fixer subagent
 in an isolated worktree..."), and that page says it "requires Git support and configured task
 isolation" (`https://omp.sh/docs/subagent-authoring`). The strategy is "filesystem clone or overlay
@@ -117,6 +349,11 @@ workers create a branch and open a PR from inside the isolated tree. Whether an 
 workspace can do that, and whether `patch` merge is compatible with a worker that pushes its own
 branch: **unknown, not documented**. This is the riskiest mechanism in the inventory. The default is
 "none", so a misconfigured run would put parallel workers in one checkout.
+
+**Spike.** The unknown above is answered for the isolation itself (Q4): a worker gets its own checkout,
+can branch, commit and push, and the parent receives `omp/task/<id>`, not the worker's branch. The
+default stays off, the setting names in the docs differ from 18.5.1, and the model-driven `task` path
+was not run.
 
 ### 4. Skill delegation by namespaced name
 
@@ -135,6 +372,9 @@ under `.claude/skills/` among other paths, and invoked as `/skill:<name>` or by 
 skills are namespaced: **unknown, not documented**. Plugins list `skills/` as a conventional
 directory (`https://omp.sh/docs/plugins`).
 
+**Spike.** A skill is loaded by reading `skill://<name>`; `sassy-dog:<name>` does not resolve and the
+bare name does, with `<namespace>/<name>` only after a collision (Q5). omp has no skill-invoking tool.
+
 ### 5. `${CLAUDE_PLUGIN_ROOT}`
 
 **Used for.** Resolving the absolute path of the plugin's bundled scripts and reference docs. It
@@ -145,8 +385,10 @@ their `PLUGIN_ROOT` preamble (``git grep -l CLAUDE_PLUGIN_ROOT -- 'skills/*/refe
 **omp.** None found. The plugins page documents no path variable or environment variable for a
 plugin's install directory (`https://omp.sh/docs/plugins`), and the skills page documents no
 plugin-root variable (`https://omp.sh/docs/skills`). The environment variable reference
-(`https://omp.sh/docs/env`) was not read for this document. Read it before concluding there is no
-equivalent.
+(`https://omp.sh/docs/env`) has no such variable either.
+
+**Spike.** Not substituted, but resolvable: the skill directory is handed to the model, and its
+grandparent is the plugin root (Q2).
 
 ### 6. `` !`...` `` dynamic context injection
 
@@ -162,6 +404,9 @@ include token in context files, resolved relative to the including file, up to f
 `git rev-parse --show-toplevel`, and it is documented for context files, not skills. Whether it
 works inside a `SKILL.md`: **unknown, not documented**.
 
+**Spike.** Confirmed none: the line reaches the model unexecuted (Q3). The `@path` token was not tried
+inside a skill, so that part stays unknown.
+
 ### 7. Per-repo config under `.claude/sassy-dog/`
 
 **Used for.** The per-repo behaviour of every workflow skill. This is the data half of row 6.
@@ -170,7 +415,7 @@ works inside a `SKILL.md`: **unknown, not documented**.
 (`https://omp.sh/docs/context-files`) and finds skills under `.claude/skills/`
 (`https://omp.sh/docs/skills`), but nothing documented reads `.claude/sassy-dog/`. The files are
 plain Markdown, so any harness that can read a file can read them. The gap is how the content
-reaches the skill (row 6), not the format.
+reaches the skill (row 6), not the format. **Spike:** nothing changed; the row-6 result applies.
 
 ### 8. Plugin and marketplace declaration in `.claude/settings.json`
 
@@ -187,13 +432,20 @@ Claude-compatible `.claude-plugin/marketplace.json` (`https://omp.sh/docs/plugin
 `https://omp.sh/docs/marketplace`). Whether a `.claude-plugin/plugin.json` plugin installs as is:
 **unknown, not documented**. The fallback is documented for catalogs only.
 
+**Spike.** It installs as is (Q1). The `extraKnownMarketplaces`/`enabledPlugins` declaration does
+nothing for omp's install, and importing Claude Code's own registry needs `CLAUDE_CONFIG_DIR` plus
+`enabledProviders` set to `["claude-plugins"]`.
+
 ### 9. Claude Code settings and hooks generation
 
 **Used for.** `setup-hooks` renders a PostToolUse dispatcher, a stray-artifact guard and a `Stop`
 entry into `.claude/hooks/` plus `.claude/settings.json`. It is Claude-Code-specific by purpose.
 
-**omp.** omp has hooks (`https://omp.sh/docs/hooks`). That page was not read, so event names, config
-location and whether the Claude shape is accepted are **unknown, not documented** here.
+**omp.** omp has hooks (`https://omp.sh/docs/hooks`). Before #424 that page had not been read, so event
+names, config location and whether the Claude shape is accepted were unknown.
+
+**Spike.** The hooks page names events and `.omp/hooks/pre/` and `post/` locations and never mentions
+`settings.json`, so `setup-hooks` output is not consumed by omp. It stays Claude-Code-only.
 
 ### 10. `AskUserQuestion`
 
@@ -208,14 +460,17 @@ derive the answer" (`https://omp.sh/docs/tools`). Batching several questions int
 **Used for.** `dispatch-ready` is designed to run as `/loop 5m /dispatch-ready`, each tick idempotent
 and with no memory of the previous one. `verify-issue-refs.sh` also names it.
 
-**omp.** None found in the pages read. The slash-command page (`https://omp.sh/docs/slash`) was not
-read, so omp may have an interval driver: **unknown, not documented**. The skill is already
+**omp.** Before #424 none had been found in the pages read, and the slash-command page
+(`https://omp.sh/docs/slash`) was unread, so an interval driver was **unknown, not documented**. The skill is already
 tick-idempotent, so any external scheduler that re-invokes it would work.
+
+**Spike.** omp has `/loop [count|duration] [--while|--until '<cmd>'] [prompt]`, which re-submits after
+every yield. It has no per-tick interval, so it is a partial equivalent only.
 
 ### 12. Agent frontmatter `color:`
 
 Cosmetic, on ten agents. omp's documented key list (row 2) does not include it. Behaviour on an
-unknown key: **unknown, not documented**.
+unknown key: ignored without error (Q5, **source**).
 
 ### 13. `claude plugin` CLI and install state
 
@@ -227,7 +482,8 @@ unknown key: **unknown, not documented**.
 
 **omp.** The install command differs: `omp plugin install name@marketplace`
 (`https://omp.sh/docs/marketplace`). The drift diagnostic covers a Claude Code cache failure mode
-and has no omp analogue in the pages read.
+and has no omp analogue in the pages read. **Spike:** an omp install writes under
+`~/.omp/` (`plugins/installed_plugins.json` plus a cache clone), so a diagnostic would read there.
 
 ### 14. `mcp__...` tool-id literals
 
@@ -287,36 +543,66 @@ State a support matrix per skill, and port only what is cheap.
 
 Resolve the two mechanisms that block everything first, then decide per family.
 
-1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither.
+1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither. The
+   spike found a model-resolved equivalent for row 5 and none for row 6.
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
 3. Rows 1 and 2 are lower risk. omp documents a dispatch tool and an agent format, and the
    remaining questions are about call shape.
 4. Row 4 is medium risk, not low. omp documents `/skill:<name>` invocation but nothing about a skill
    body invoking another skill or about plugin namespacing, and ten files, `dispatch-ready` among
    them, depend on it. If the namespaced name does not resolve, every workflow skill loses its
-   capability skills. The spike should test it early.
+   capability skills. The spike tested it: the namespaced name does not resolve, the bare name does.
 
 ## Recommendation
 
-Option **D**, with **C** as the stance in the meantime: until a spike shows rows 5 and 6 can be met
-on omp, say in the README that only the harness-neutral capability scripts are expected to run
-there. Do not start with A or B. Both are mechanical rewrites across the rows 1 to 6 files, and for
-rows 5 and 6 they have nothing to bind to.
+Option **D**, with **C** as the stance until a skill family has been run through a model on omp. The
+spike (above) answered the five questions by running omp 18.5.1 and reading its source, with no
+model-backed run. Do not start with A or B. Both are mechanical rewrites across the rows 1 to 6 files,
+and row 6 still has nothing to bind to.
 
-The cheapest next step is a spike on a real omp install, not more reading. It would answer, in
-order: whether the plugin installs, whether a script path can be resolved from inside a skill,
-whether a repo config can be injected, whether `task` isolation yields a branch a worker can push,
-and what a `task` call looks like. The gaps those questions cover are all of that kind. The pages under `## Not read` are a separate, reading-only gap that a spike does not close.
+What the spike changed. The plugin installs and all 23 skills and 10 agents load (Q1). Row 5 has a
+model-resolved equivalent, row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
+has none. The dispatch family still cannot be called supported, because every one of those results
+is untested through a model and the two settings that gate it are off by default or consumer-owned
+(`task.isolation.enabled`, `task.maxRecursionDepth`). The README matrix therefore keeps its `not
+supported` and `untested` cells unchanged. What changed is the reason given for them, and that is
+updated beside the matrix.
+
+**Go/no-go for #425 (plugin root and config injection).** Split. **Go** on the plugin root: omp hands
+the model the skill directory, the grandparent is the plugin root, so the follow-up can add one
+resolution sentence per `SKILL.md` that carries the token (15 files) and per reference-doc preamble,
+keeping the token for Claude Code. **No-go as a mechanical port of config injection**: omp has no
+load-time shell step, so the `` !`...` `` line arrives unexecuted. A follow-up there is a different
+design, an explicit "read `.claude/sassy-dog/<skill>.md` by absolute path" instruction that works in
+both harnesses, and it is **unproven** until a model-backed run shows a cold agent follows it. The
+`take-it` and `dispatch-ready` stop on `NO_CONFIG` is the safe default meanwhile, because an
+unexecuted line must never be read as "no config exists". #425 should start with that model-backed
+check, one trivial call, before rewriting 22 files.
+
+**Go/no-go for #426 (isolation contract).** **Go**, narrowly. The worker-owns-a-branch-and-pushes
+design works inside omp isolation (Q4), and the parent never sees the worker's branch name, which
+suits a worker that opens its own PR. The contract has to state three things the plugin cannot
+set: `task.isolation.enabled` must be true (default false, a silent shared checkout otherwise), a
+skill should read it with `omp config get` and stop when it is off, and `apply`/`merge` must be chosen
+so the parent checkout is not patched with a change the worker already pushed. The last point is
+**unknown** and is the first thing #426 should test through a real `task` call with `isolated: true`.
+Separately, `review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the
+contract should pin `coordinator` for omp.
 
 Candidate follow-up issues, for the operator to accept or drop:
 
-1. Spike: install the plugin on omp and record the answers to the questions above.
-2. Plugin-root and config-injection replacement, if the spike finds none.
-3. Isolation contract for parallel workers on omp.
-4. A README support matrix per skill family.
+1. Done: the omp spike (#424), recorded above.
+2. #425, with the model-backed check first, then the root-resolution sentence.
+3. #426, scoped as above, including the `review_site` pin.
+4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
+   neither #425 nor #426 covers.
+5. A README note that a repo's `.claude/settings.json` declaration does not install the plugin on omp.
 
 ## Not read
 
-These omp pages were not read, and any claim they would settle is marked unknown above:
-`https://omp.sh/docs/env`, `https://omp.sh/docs/hooks`, `https://omp.sh/docs/slash`,
-`https://omp.sh/docs/custom-tools`.
+The four pages the first pass skipped were read in #424 and are summarized under "What omp's remaining
+pages say": `https://omp.sh/docs/env`, `https://omp.sh/docs/hooks`, `https://omp.sh/docs/slash`,
+`https://omp.sh/docs/custom-tools`. `https://omp.sh/docs/subagents` was re-read for the task and
+isolation parameters. What is still **not** read or tried: the `@path` include inside a skill, the
+hook file format, and the other pages of omp's bundled docs index (134 files, listed by
+`omp read omp://`), which hold far more than the website summaries gave.
