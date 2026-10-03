@@ -239,8 +239,10 @@ Not a dependency, as noted under the table. No omp equivalent is needed.
 `repo-health/scripts/pull-plugin-drift.sh`, which tests `"/.claude/worktrees/" in path` to
 recognise worktree paths when checking plugin drift. Claude Code creates agent worktrees there.
 omp defaults to `~/.omp/wt` (`worktree.base`, `https://omp.sh/docs/subagents`), so teardown and
-cleanup would not find omp's worktrees at the Claude path, and the drift check would misclassify
-them as ordinary paths.
+cleanup would not find omp's worktrees at the Claude path. The drift check walks only Claude
+Code's own `installed_plugins.json` (row 13), so omp needs no port of it; if a Claude Code session
+opens one of omp's worktrees, though, the check would list it as an ordinary project path rather
+than prune it.
 
 ## What does not need a port
 
