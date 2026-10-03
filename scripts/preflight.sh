@@ -1435,7 +1435,10 @@
 #      the routine posts through a user-scoped connector, so "bot only" can
 #      never match — and the rendered first line WITHOUT the Markdown `# `),
 #      plus the handle grammar's single home and the slug rule, run against the
-#      org's real workflow names. Source-level, no network.
+#      org's real workflow names, the selection rule (newest post, never page past),
+#      and that work-recommendations reads the author association through
+#      `gh api` (never `gh issue/pr view`, which lacks the field). Source-level,
+#      no network.
 #
 #  47. model-tier tests (scripts/test-model-tiers.sh) — every dispatched agent
 #      runs at a harness-neutral tier (astra/sol/terra/luna) bound inline at its

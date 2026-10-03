@@ -56,10 +56,16 @@
 #      `.../pulls/<N>` with `author_association`, and that no `gh issue view` /
 #      `gh pr view` command anywhere under `skills/` requests `authorAssociation`
 #      (checked on whitespace-flattened text, so a wrapped command is seen).
-#      Mutants, both exercised below on scratch copies: (a) the pre-fix
-#      `gh issue view ... authorAssociation` (also wrapped across lines, the
-#      `gh pr view` shape) trips the tree-wide check; (b) a §3 with the `gh api`
-#      reads reverted to `gh issue view` fails the positive pin.
+#      The pulls read must also carry `author_association` and the head/base
+#      fork comparison, and §3 must name the `OWNER`/`MEMBER`/`COLLABORATOR`
+#      allow-list. The tree-wide scan covers every `*.md` and `*.sh` under
+#      `skills/`, strips backticks and looks 200 chars past the command, so a
+#      command and a field in separate code spans are still one hit.
+#      Mutants, all exercised below on scratch copies: (a) the pre-fix
+#      `gh issue view ... authorAssociation`, wrapped and split-span shapes,
+#      trips the tree-wide check; (b) a §3 with the `gh api` reads reverted fails
+#      the positive pin; (c) a §3 that keeps the pulls URL but drops
+#      `author_association`, the fork comparison or the allow-list fails it too.
 #
 # Source-level, no `gh`, no network, no Slack.
 set -uo pipefail
@@ -251,13 +257,15 @@ fi
 flat_delegate="$(tr '\n' ' ' <"$DELEGATE" | sed 's/  */ /g')"
 has_rest_read() {  # $1 = flattened text
     grep -qE -- 'gh api repos/<owner>/<name>/issues/<N>[^`]*author_association' <<<"$1" \
-        && grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N>' <<<"$1"
+        && grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N>[^`]*author_association[^`]*\.head\.repo[^`]*\.base\.repo' <<<"$1" \
+        && grep -qF -- '`OWNER`, `MEMBER` and `COLLABORATOR`' <<<"$1"
 }
-view_offenders() {  # files naming authorAssociation in a gh issue/pr view command
+view_offenders() {  # files naming authorAssociation within 200 chars of a gh issue/pr view
     local f flat
     for f in "$@"; do
-        flat="$(tr '\n' ' ' <"$f" | sed 's/  */ /g')"
-        if grep -qE -- 'gh (issue|pr) view[^`]*authorAssociation' <<<"$flat"; then
+        # backticks are stripped so a command and a later code span are one run of text
+        flat="$(tr '\n`' '  ' <"$f" | sed 's/  */ /g')"
+        if grep -qE -- 'gh (issue|pr) view.{0,200}authorAssociation' <<<"$flat"; then
             echo "${f#"$ROOT"/}"
         fi
     done
@@ -268,9 +276,9 @@ else
     bad "work-recommendations §3 no longer reads author_association via gh api repos/<owner>/<name>/issues/<N> and pulls/<N>"
 fi
 tree_files=()
-while IFS= read -r f; do tree_files+=("$f"); done < <(find "$ROOT/skills" -type f -name '*.md')
+while IFS= read -r f; do tree_files+=("$f"); done < <(find "$ROOT/skills" -type f \( -name '*.md' -o -name '*.sh' \))
 if [ "${#tree_files[@]}" -eq 0 ]; then
-    bad "no markdown found under skills/ — the tree-wide check would be vacuous"
+    bad "no markdown or shell found under skills/ — the tree-wide check would be vacuous"
 else
     off="$(view_offenders "${tree_files[@]}")"
     if [ -z "$off" ]; then
@@ -295,6 +303,24 @@ if has_rest_read "read gh issue view <N> --json title,labels,authorAssociation";
     bad "mutant without the gh api reads still satisfies the positive pin"
 else
     ok "mutant without the gh api reads fails the positive pin"
+fi
+# Mutants on the real §3: keep the pulls URL but drop author_association / the fork
+# comparison / the allow-list; each must fail the positive pin.
+for pair in 's/author_association, fork:/fork:/' 's/\.head\.repo\.full_name/.head.x/' 's/`OWNER`, `MEMBER` and `COLLABORATOR`/members/'; do
+    flat_m="$(sed "$pair" "$DELEGATE" | tr '\n' ' ' | sed 's/  */ /g')"
+    if [ "$flat_m" = "$flat_delegate" ]; then
+        bad "positive-pin mutant '$pair' did not apply — the §3 literal moved; update this gate"
+    elif has_rest_read "$flat_m"; then
+        bad "positive-pin mutant '$pair' still satisfies the pin"
+    else
+        ok "positive-pin mutant '$pair' fails the pin"
+    fi
+done
+printf '%s\n' 'read `gh issue view <N> --json title,labels` and, on a public repo, `authorAssociation` too' >"$tmp"
+if [ -n "$(view_offenders "$tmp")" ]; then
+    ok "split-span mutant (command and authorAssociation in separate code spans) trips the tree-wide check"
+else
+    bad "split-span mutant slipped past the tree-wide check"
 fi
 
 if [ "$fail" -eq 0 ]; then
