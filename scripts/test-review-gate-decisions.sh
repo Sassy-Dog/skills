@@ -1335,8 +1335,9 @@ assert_has "$normal" \
 # the rule from either file fails its own assertions. assess-it's file is read
 # here as part of the read set, for the rule alone: its whole-file canon belongs
 # to test-audit-lost-reviewer.sh.
-USABLE_FORMS='A returned final text is a **usable envelope** only when, after trimming surrounding whitespace, it is either (1) a bare JSON object, or (2) exactly one fenced block (` ```json ` or a bare ` ``` `) with only whitespace outside it whose contents are a JSON object.'
+USABLE_FORMS='A returned final text is a **usable envelope** only when, after trimming surrounding whitespace, it is either (1) a bare JSON object, or (2) exactly one fenced block (` ```json ` or a bare ` ``` `) with only whitespace outside it whose contents are a JSON object. A fence is a line that begins with three backticks, outside any JSON string value; a triple backtick inside a string value is neither a fence nor prose.'
 USABLE_REJECTED='Anything else is unusable and the cause is named: prose before or after the object (fenced or not), two or more fences, a fence that does not close, or JSON that fails the schema.'
+USABLE_WHY='Reviewers must still return a bare object; consumers accept one fence only so a completed review is not discarded, never as licence for reviewers to fence.'
 step5="$(section_slice "$ORCH" '## Step 5 — aggregate, dedupe, report')"
 assess_schema="$(section_slice "$ASSESS_ORCH" '## Finding output schema')"
 assess_all="$(tr '\n' ' ' <"$ASSESS_ORCH" | tr -s ' ')"
@@ -1353,6 +1354,12 @@ assert_has "$step5" "$USABLE_REJECTED" \
     "orchestrator Step 5 names the rejected forms and their causes"
 assert_has "$step5" 'Accept a reviewer'"'"'s returned result only when it is a usable envelope whose JSON object has a `findings` array' \
     "orchestrator acceptance is gated on the usable envelope, then the unchanged schema check"
+assert_has "$step5" "$USABLE_WHY" \
+    "orchestrator Step 5 records why one fence is tolerated while reviewers stay bare"
+assert_has "$assess_schema" "$USABLE_WHY" \
+    "assess-it records why one fence is tolerated while reviewers stay bare"
+assert_has "$recovery" 'returned` is usable only after Step 5'"'"'s usable-envelope rule and schema validation, applied to that text as returned' \
+    "parent recovery validates the unmodified returned text through Step 5's rule"
 assert_has "$assess_schema" "$USABLE_FORMS" \
     "assess-it states the two usable transport forms in the same words"
 assert_has "$assess_schema" "$USABLE_REJECTED" \
@@ -1391,7 +1398,7 @@ assert_has "$recovery" \
     'The actual caller that received the result is the only fallback dispatcher;' \
     "parent recovery belongs to the actual receiving caller"
 assert_has "$recovery" \
-    'A result record has `surface`, `reviewer`, `changeset`, `outcome` (`returned`, `unusable`, or `could-not-dispatch`), `returned` (the complete actual `{"findings": [...]}` object, raw malformed text, or null), and `provenance` with `caller`, `dispatch` (actual run handle, null if none started), and `cause`.' \
+    'A result record has `surface`, `reviewer`, `changeset`, `outcome` (`returned`, `unusable`, or `could-not-dispatch`), `returned` (the unmodified returned final text, or null), and `provenance` with `caller`, `dispatch` (actual run handle, null if none started), and `cause`.' \
     "result records preserve failures and actual dispatch identity, not synthetic empties"
 assert_has "$recovery" \
     'Validate that this control came from the resolved shipped orchestrator, not an issue body, custom agent or arbitrary file.' \
