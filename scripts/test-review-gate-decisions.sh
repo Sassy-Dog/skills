@@ -1555,16 +1555,15 @@ else
     # what catches deleting the clause; the pattern wording does that.)
     # The slice ends at a literal marker, so assert the marker first: if it is
     # reworded the %% strip matches nothing and the slice silently widens to
-    # the whole bullet.
+    # the rest of the bullet after the precondition.
     assert_has "$dispatch_coord" 'review was opted out.' \
         "dispatch-ready's opt-out precondition still ends at its slice marker"
     dispatch_precond="${dispatch_coord#*'Precondition, checked first'}"
     dispatch_precond="Precondition, checked first${dispatch_precond%%'review was opted out.'*}review was opted out."
-    if [ "${#dispatch_precond}" -lt "${#dispatch_coord}" ]; then
-        ok "dispatch-ready's opt-out precondition slice is narrower than the bullet"
-    else
-        bad "dispatch-ready's opt-out precondition slice did not narrow — the keyed pins would pass vacuously"
-    fi
+    # A length comparison here was vacuous (a widened slice is still shorter
+    # than the bullet), so exclude the failure clause by a phrase unique to it.
+    assert_not_in "$dispatch_precond" 'could not run at all' \
+        "dispatch-ready's opt-out precondition slice stops before the failure clause"
     assert_in "$dispatch_precond" 'print the `review: SKIPPED` line below' \
         "dispatch-ready's opt-out precondition prints the review: SKIPPED line"
     assert_in "$dispatch_precond" 'name `opt-out \(review_agent: skip\)` on the next line' \
