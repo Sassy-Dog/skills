@@ -3,8 +3,9 @@
 An inventory of the Claude-Code-specific mechanisms in `skills/` and `agents/`, what omp offers in
 their place, and the options for the shape of a fix. This is an options document for issue #410,
 extended with the results of the omp spike (issue #424, [Spike results](#spike-results-424)).
-**It decides nothing and implements nothing.** The shape decision belongs to the operator, and
-implementation issues follow from it.
+**It decides no shape option and implements nothing.** Its Recommendation and go/no-go paragraphs
+are recommendations for the operator, who makes the shape decision, and implementation issues follow
+from it.
 
 [`MODEL-TIERS.md`](MODEL-TIERS.md) made *model choice* portable. This document covers the rest of
 the dispatch mechanics, the ones that file's "What a tier does not cover" section names.
