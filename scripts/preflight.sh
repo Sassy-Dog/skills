@@ -1445,6 +1445,17 @@
 #      presence is asserted too. Mutation-proven with a control copy. Source-
 #      level, no network.
 #
+#  48. testflight JWT tests (scripts/test-testflight-jwt.sh) — the App Store
+#      Connect ES256 signer is openssl only and fails closed. The PyJWT branch
+#      it replaced told operators to `pip3 install pyjwt`, which a PEP 668
+#      Python refuses, and made the signing code depend on the machine. Fixed
+#      DER vectors cover the 33-byte and short R and S a random signature
+#      rarely produces; a bad key or malformed DER must return non-zero with no
+#      token; a throwaway P-256 key round-trips tokens through `openssl dgst
+#      -verify`, with a tampered-signature control; source guards keep one
+#      signer and no Python. Mutation-proven (header lists the mutations).
+#      Missing tools SKIP locally and fail in CI. No gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2320,6 +2331,15 @@ if bash scripts/test-model-tiers.sh; then
     pass "model-tier tests (scripts/test-model-tiers.sh)"
 else
     failed "model-tier tests (scripts/test-model-tiers.sh)"
+fi
+
+# --- 48. testflight JWT tests ---------------------------------------------------
+# The App Store Connect signer is openssl only and its ES256 output verifies.
+# Throwaway key, no gh, no network.
+if bash scripts/test-testflight-jwt.sh; then
+    pass "testflight JWT tests (scripts/test-testflight-jwt.sh)"
+else
+    failed "testflight JWT tests (scripts/test-testflight-jwt.sh)"
 fi
 
 # ------------------------------------------------------------------------------
