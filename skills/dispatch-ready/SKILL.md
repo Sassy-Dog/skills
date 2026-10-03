@@ -193,7 +193,14 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   later dispatch tick. A failed reservation write holds this scheduling attempt; it never
   turns an unrecorded retry into spent legacy history or permits an unaccounted dispatch.
 - **Open PRs not yet reviewed, when `review_site: coordinator`** → review before merging, never
-  after. "Reviewed" means this loop's own recorded outcome for the current head. A worker's
+  after. **Precondition, checked first: under `review_agent: skip`, the explicit opt-out, no review
+  is owed.** Skip the dispatch and the Parent recovery below, print the `review: SKIPPED` line
+  below, name `opt-out (review_agent: skip)` on the next line, and record that as the PR's outcome
+  for the current head. That recorded outcome clears the PR for the `sassy-dog:pr-shepherd`
+  hand-off like any other green PR, known before any dispatch; it is never "not reviewed, withhold",
+  which would re-fire every tick and rebuild the blanket merge freeze the hand-off bullet's
+  carve-out exists to prevent. Say once in the tick report that review was opted out.
+  Otherwise "Reviewed" means this loop's own recorded outcome for the current head. A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
   plugin. A PR opened before the site changed is reviewed once more here, which costs a review but
   never merges on none. Dispatch the agent resolved by `send-it`'s order at tier `sol` (Claude Code:
@@ -215,7 +222,8 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `recovery_used` in the PR body and issue comment, and hand only reviewed PRs to
   `sassy-dog:pr-shepherd` this tick. A PR whose review
   could not run at all — no agent resolved, or the dispatch failed — reports
-  `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause, and is held,
+  `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause (the dispatch
+  failure, not the opt-out), and is held,
   not merged on an unreported review. Under `review_site: agent` this bullet does not run: the
   sub-agent reviewed before its PR existed.
   For incomplete returned final text from the shipped orchestrator, apply its **Report-only
