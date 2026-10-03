@@ -46,3 +46,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - Monorepos: Nx, Bun workspaces (qr-ninja), npm workspaces (velovate). Expect clean app/package boundaries; flag cross-package reach-through and circular workspace deps.
 - Contracts: frontends consume C# Web APIs (GraphQL/REST) or Next.js + tRPC (qr-ninja). Flag FE/BE contract drift and untyped boundaries.
 - Stacks: Next.js App Router, .NET, Flutter, Rust (WASM/FFI). Azure-centric backend. Flag a distributed monolith masquerading as services.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.

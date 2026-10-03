@@ -46,3 +46,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - C# (.NET 10, C# 10+): flag swallowed exceptions, blocking on async (`.Result`/`.Wait()`), missing `CancellationToken` plumbing.
 - Rust: expect `thiserror`/`anyhow`, `tokio`, `tracing`; flag `unwrap()`/`expect()` on fallible paths in library code.
 - Dart/Flutter: flag uncaught futures, rebuild storms, business logic in widgets.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.

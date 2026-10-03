@@ -46,3 +46,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - Every resource must carry `environment`, `project`, and `owner` tags; naming uses an environment prefix (e.g. `rg-myapp-dev`). Flag missing tags / off-convention names.
 - Runtime secrets via **managed identity + Key Vault `kv-sassydog`**; Doppler is the source of truth upstream. Flag secrets inlined in IaC.
 - Compute: Azure **Container Apps** and **Functions**. Config mgmt: **Ansible**. Flag snowflake/manual resources.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.

@@ -2048,6 +2048,57 @@ else
     bad "compared only $rv_found of ${#REVIEWERS[@]} reviewers against the canonical paragraph — the rest were never measured"
 fi
 
+# THE CLOSING SHAPE RULE (#436). #411's post-release check failed 8 of 9 with
+# the `## Output` shape paragraph already in every file: all nine ENDED on
+# `## Sassy Dog calibration`, so the last text read before answering was stack
+# calibration, not the output contract. The closing section restates the shape
+# as the final instruction. It is additive: the `## Output` paragraph and every
+# pin above stay. Two assertions per reviewer:
+#   1. the file's tail, from the closing heading to end of file, equals a
+#      literal held HERE (same reason as RV_SHAPE: a uniform edit across all
+#      nine passes a cross-file identity check). This one does all the work:
+#      because the tail runs to EOF and RV_CLOSE holds no other `## ` line,
+#      any position or content defect fails it.
+#   2. the closing heading is the LAST `## ` heading. Redundant with (1) by
+#      construction, kept as a cheap second assertion with its own diagnostic
+#      naming the section that wrongly ends the file.
+# Measured, each failing assertion 1 on its own: section moved above
+# `## Sassy Dog calibration`; duplicated above it; a trailing `## ` section;
+# a trailing `###` subsection; trailing text; a reword in one file; the same
+# reword in all nine (RV_CLOSE is the anchor outside the files under test).
+# The wording avoids the tokens the counts above bound (`SendMessage`, `relay`)
+# and does NOT open with the `**My final message starts with` literal the
+# RV_SHAPE extractor and the adjacency check key on: a second match there
+# would move `s` in the adjacency awk and redden a correct file.
+RV_CLOSE="$(cat <<'RCEOF'
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.
+RCEOF
+)"
+rv_close_checked=0
+for rv in "${REVIEWERS[@]}"; do
+    rv_name="$(basename "$rv" .md)"
+    rv_tail="$(awk '/^## Final instruction: the bare envelope$/ { f = 1 } f { print }' "$rv")"
+    if [ -n "$rv_tail" ] && [ "$(norm_para "$rv_tail")" = "$(norm_para "$RV_CLOSE")" ]; then
+        ok "$rv_name ends with the canonical closing shape section held in this gate"
+    else
+        bad "$rv_name has no closing shape section, or it differs from RV_CLOSE, or text follows it (#436) — diff the file's tail against RV_CLOSE"
+    fi
+    rv_last="$(grep -E '^## ' "$rv" | tail -n 1)"
+    if [ "$rv_last" = "## Final instruction: the bare envelope" ]; then
+        ok "$rv_name's closing shape section is the last section of the file"
+    else
+        bad "$rv_name's last section is '$rv_last', not the closing shape section (#436) — the rule must be the final instruction read"
+    fi
+    rv_close_checked=$((rv_close_checked + 1))
+done
+if [ "$rv_close_checked" -eq "${#REVIEWERS[@]}" ]; then
+    ok "every one of the ${#REVIEWERS[@]} reviewers was checked for the closing shape section"
+else
+    bad "checked only $rv_close_checked of ${#REVIEWERS[@]} reviewers for the closing shape section"
+fi
+
 # --- PART TWO: the fan-out brief has a slot for the rule --------------------
 # SCOPED TO THE BRIEF, and that scope is the whole assertion. The orchestrator
 # states this same contract for its OWN delivery in Step 5, ~30 lines below, so

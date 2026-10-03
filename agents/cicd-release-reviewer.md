@@ -44,3 +44,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - CI/CD is **GitHub Actions**. Canonical workflow names: **`CI`** (required check) and **`Release`** (when applicable). Flag a repo whose required check isn't `CI`, or a release path that isn't a `Release` workflow.
 - Web/Next.js deploys via **Vercel** (preview per PR + prod promotion). Mobile via **Fastlane** to the stores. .NET to **Azure** (Container Apps / Functions).
 - Flag third-party Actions pinned to a tag/branch instead of a commit SHA; flag long-lived cloud creds where OIDC is available.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.
