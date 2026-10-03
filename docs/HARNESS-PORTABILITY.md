@@ -175,7 +175,9 @@ reaches the skill (row 6), not the format.
 ### 8. Plugin and marketplace declaration in `.claude/settings.json`
 
 **Used for.** `setup-config` and `setup-repo` write `extraKnownMarketplaces` and `enabledPlugins`
-into a consumer repo, so a cloud session or routine loads the plugin.
+into a consumer repo, so a cloud session or routine loads the plugin. `repo-health`'s `SKILL.md`
+reads both keys for its plugin-drift guidance. Of the five files, four are the writers' own
+skill and reference docs and one is that reader.
 
 **omp.** A different mechanism. omp installs with `omp plugin install name@marketplace --scope
 project` or `/marketplace install ...`, and no documented command references `.claude/settings.json`
@@ -232,9 +234,13 @@ Not a dependency, as noted under the table. No omp equivalent is needed.
 
 ### 15. `.claude/worktrees` path
 
-**Used for.** Worktree location in teardown and cleanup. Claude Code creates agent worktrees there.
+**Used for.** Worktree location in teardown and cleanup (`pr-shepherd`'s `teardown.sh` and
+`worktree-teardown.md`, `repo-cleanup`'s `SKILL.md`), and path classification in
+`repo-health/scripts/pull-plugin-drift.sh`, which tests `"/.claude/worktrees/" in path` to
+recognise worktree paths when checking plugin drift. Claude Code creates agent worktrees there.
 omp defaults to `~/.omp/wt` (`worktree.base`, `https://omp.sh/docs/subagents`), so teardown and
-cleanup would not find omp's worktrees at the Claude path.
+cleanup would not find omp's worktrees at the Claude path, and the drift check would misclassify
+them as ordinary paths.
 
 ## What does not need a port
 
@@ -297,7 +303,7 @@ rows 5 and 6 they have nothing to bind to.
 The cheapest next step is a spike on a real omp install, not more reading. It would answer, in
 order: whether the plugin installs, whether a script path can be resolved from inside a skill,
 whether a repo config can be injected, whether `task` isolation yields a branch a worker can push,
-and what a `task` call looks like. The gaps in this document are all of that kind.
+and what a `task` call looks like. The gaps those questions cover are all of that kind. The pages under `## Not read` are a separate, reading-only gap that a spike does not close.
 
 Candidate follow-up issues, for the operator to accept or drop:
 
