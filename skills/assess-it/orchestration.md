@@ -29,7 +29,7 @@ Three outcomes belong to the fan-out itself:
 | Outcome | What it means | Reviewed |
 |---|---|---|
 | `returned` | The agent came back with a JSON object containing a `findings` array in the schema below — empty or not | yes |
-| `no report` | The dispatch succeeded but returned no usable envelope: missing final text, malformed JSON, JSON `null`, missing `findings`, null/non-array `findings`, a legacy bare array, or invalid finding entries | **no** |
+| `no report` | The dispatch succeeded but returned no usable envelope (bare JSON object, or exactly one fenced block holding it with only whitespace outside): prose before or after the object (fenced or not), two or more fences, a fence that does not close, missing final text, malformed JSON, JSON `null`, missing `findings`, null/non-array `findings`, a legacy bare array, or invalid finding entries | **no** |
 | `could not dispatch` | The Agent call errored, timed out, or the agent could not be resolved | **no** |
 
 A fourth records a decision taken *before* the fan-out: `not dispatched`, for a domain the Phase-0 stack detection found no signal for. Record it with the reason that skipped it.
@@ -42,7 +42,7 @@ A fourth records a decision taken *before* the fan-out: `not dispatched`, for a 
 
 ## Finding output schema
 
-Each agent returns a JSON object `{"findings": [...]}` in both audit and diff-scoped mode. Accept it only when `findings` is an array and every entry satisfies the existing finding schema; never coerce an unusable result to empty findings or salvage a partial array. Unwrap usable `findings` into Phase 2 verification without changing its fields. Each finding:
+Each agent returns a JSON object `{"findings": [...]}` in both audit and diff-scoped mode. A returned final text is a **usable envelope** only when, after trimming surrounding whitespace, it is either (1) a bare JSON object, or (2) exactly one fenced block (` ```json ` or a bare ` ``` `) with only whitespace outside it whose contents are a JSON object. A fence is a line that begins with three backticks, outside any JSON string value; a triple backtick inside a string value is neither a fence nor prose. Anything else is unusable and the cause is named: prose before or after the object (fenced or not), two or more fences, a fence that does not close, or JSON that fails the schema. Reviewers must still return a bare object; consumers accept one fence only so a completed review is not discarded, never as licence for reviewers to fence. Accept the object only when `findings` is an array and every entry satisfies the existing finding schema; never coerce an unusable result to empty findings or salvage a partial array. Unwrap usable `findings` into Phase 2 verification without changing its fields. Each finding:
 
 ```
 - title:            imperative, PR-sized ("Pin GitHub Actions to commit SHAs")

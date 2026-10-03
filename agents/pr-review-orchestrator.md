@@ -195,13 +195,13 @@ with `kind: "review-fanout-plan"` and these required fields:
 | `results` | Actual result records for attempted work, including successful same-changeset results and failures; an unattempted surface has no result, not an invented empty one. |
 
 A result record has `surface`, `reviewer`, `changeset`, `outcome`
-(`returned`, `unusable`, or `could-not-dispatch`), `returned` (the complete actual
-`{"findings": [...]}` object, raw malformed text, or null), and `provenance` with `caller`,
+(`returned`, `unusable`, or `could-not-dispatch`), `returned` (the unmodified
+returned final text, or null), and `provenance` with `caller`,
 `dispatch` (actual run handle, null if none started), and `cause`. Retain the unmodified
 returned value, not a summary of its findings. `returned` is usable only after Step 5's
-schema validation and an observed completion; a queued request, handle alone, or asserted
+usable-envelope rule and schema validation, applied to that text as returned, and an observed completion; a queued request, handle alone, or asserted
 success without the actual result is not reviewed coverage. Completed-empty still requires
-the actual `{"findings": []}`. A control result is **not a report and never counts as clean**.
+a usable envelope whose object is `{"findings": []}`. A control result is **not a report and never counts as clean**.
 
 **Report-only recovery.** A complete human report is either the normal Step 5 Markdown report —
 its `## PR review` header, Base/changeset context (including an explicit `Base: unresolved
@@ -281,7 +281,7 @@ requires an unused allowance; operator-directed repair remains the operator's de
 current changeset, and re-run Step 2's classification with the original context to check
 the complete selected set, shipped reviewer names and briefs. Do not trust a supplied
 surface list that dropped work or changed the scope. Validate each actual result against
-that surface, its dispatch provenance, identity and Step 5's findings schema; conflicting
+that surface, its dispatch provenance, identity and Step 5's usable-envelope rule and findings schema, applied to `returned` as stored; conflicting
 records with no identifiable successful attempt cannot certify coverage.
 
 If identity/context changed, return a fresh `review-fanout-plan` with **no reusable results**
@@ -309,7 +309,7 @@ Run this yourself, against the **whole** diff. These are the cross-surface conce
 
 ## Step 5 — aggregate, dedupe, report
 
-Accept a reviewer's returned result only when it is a JSON object with a `findings` array whose entries satisfy the reviewer's existing finding schema. Missing final text, malformed JSON, JSON `null`, a missing `findings` key, null/non-array `findings`, a legacy bare array, or invalid finding entries are unusable: mark that surface `!`, name the cause, and never coerce it to empty findings or salvage a partial array. An actually returned `{"findings": []}` is a completed empty review. Unwrap each usable object's `findings` into aggregation without changing its fields, then combine those findings with your own:
+Accept a reviewer's returned result only when it is a usable envelope whose JSON object has a `findings` array whose entries satisfy the reviewer's existing finding schema. A returned final text is a **usable envelope** only when, after trimming surrounding whitespace, it is either (1) a bare JSON object, or (2) exactly one fenced block (` ```json ` or a bare ` ``` `) with only whitespace outside it whose contents are a JSON object. A fence is a line that begins with three backticks, outside any JSON string value; a triple backtick inside a string value is neither a fence nor prose. Anything else is unusable and the cause is named: prose before or after the object (fenced or not), two or more fences, a fence that does not close, or JSON that fails the schema. Reviewers must still return a bare object; consumers accept one fence only so a completed review is not discarded, never as licence for reviewers to fence. Missing final text, malformed JSON, JSON `null`, a missing `findings` key, null/non-array `findings`, a legacy bare array, or invalid finding entries are unusable: mark that surface `!`, name the cause, and never coerce it to empty findings or salvage a partial array. An actually returned `{"findings": []}` is a completed empty review. Unwrap each usable object's `findings` into aggregation without changing its fields, then combine those findings with your own:
 
 - **Dedupe.** Two reviewers flagging the same line from different angles is one finding, keeping the sharper evidence and the higher severity.
 - **Verify the claim and the link — never the location.** Open each cited `file:line`. Drop the finding if the line does not say what the finding claims. Do **not** drop it for sitting outside the diff: blast-radius findings and most of your own integration checks cite untouched lines *by construction* — the caller a rename missed, the config key never provisioned, the doc the change made untrue. What has to hold is a stated causal chain back to a changed hunk. A finding with no such chain is a repo-audit finding that wandered in — drop that one.

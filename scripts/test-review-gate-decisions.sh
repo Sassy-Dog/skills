@@ -231,9 +231,9 @@
 # No gh, no network, no repo mutation. It reads the documents the decisions
 # live in, plus the three files that restate this gate's two summary counts —
 # its own source, scripts/preflight.sh and CLAUDE.md — which section 9 checks
-# against the numbers it re-derives: twenty tracked files, and separately a sweep
+# against the numbers it re-derives: twenty-one tracked files, and separately a sweep
 # of every tracked Markdown and shell file asking which of them carry the
-# summary phrase. The twenty are the ASSERTED read set; the sweep opens far more
+# summary phrase. The twenty-one are the ASSERTED read set; the sweep opens far more
 # and asserts nothing about their content beyond that one phrase, so it is named
 # apart from the count, the way preflight.sh's own entry for this script names
 # its read set and its tracked-source sweep separately rather than adding them
@@ -275,6 +275,9 @@ DISPATCH="skills/dispatch-ready/SKILL.md"
 # not a consequence of it, so narrowing back to skills/ would not become safe if
 # this entry ever left.
 ORCH="agents/pr-review-orchestrator.md"
+# The audit-mode consumer of the same returns (#412): read for the usable-envelope
+# rule alone; its whole-file canon is test-audit-lost-reviewer.sh's.
+ASSESS_ORCH="skills/assess-it/orchestration.md"
 # README carries a COPY of the contract line, so it is read here too — and a
 # copy nothing compares is a copy free to drift, which is what the sweep below
 # exists to refuse.
@@ -300,7 +303,7 @@ REVIEWERS=(
     "agents/security-reviewer.md"
     "agents/testing-reviewer.md"
 )
-DOCS=("$SKILL" "$CONTRACT" "$TEMPLATE" "$SETUP" "$TAKEIT" "$DISPATCH" "$ORCH" "$READMEMD"
+DOCS=("$SKILL" "$CONTRACT" "$TEMPLATE" "$SETUP" "$TAKEIT" "$DISPATCH" "$ORCH" "$ASSESS_ORCH" "$READMEMD"
       "${REVIEWERS[@]}")
 # Read for their restated counts alone, never for a decision's prose: this
 # file's own header, preflight's gate list, and CLAUDE.md's gate description.
@@ -1318,6 +1321,51 @@ assert_has "$normal" \
 assert_has "$normal" \
     'Never infer capability from a host name or impose a universal concurrency cap.' \
     "fallback does not invent host topology or concurrency limits"
+
+# The usable-envelope rule (#412). ONE rule, stated in the same words by BOTH
+# consumers of the nine reviewers' returns: this orchestrator's Step 5 and
+# assess-it's audit-mode orchestration. Before it, whether a fenced envelope was
+# usable was undefined and varied by run (the same orchestrator accepted fenced
+# envelopes in one round and discarded three completed reviews in the next).
+# The rule is deliberately NARROW: a bare object, or exactly one fence with only
+# whitespace outside it, and then the schema check unchanged. Prose outside the
+# object, two or more fences and an unterminated fence stay unusable, so
+# "malformed is never clean" still holds. Both texts are held to ONE shared
+# string below, so the consumers cannot drift apart without a red, and deleting
+# the rule from either file fails its own assertions. assess-it's file is read
+# here as part of the read set, for the rule alone: its whole-file canon belongs
+# to test-audit-lost-reviewer.sh.
+USABLE_FORMS='A returned final text is a **usable envelope** only when, after trimming surrounding whitespace, it is either (1) a bare JSON object, or (2) exactly one fenced block (` ```json ` or a bare ` ``` `) with only whitespace outside it whose contents are a JSON object. A fence is a line that begins with three backticks, outside any JSON string value; a triple backtick inside a string value is neither a fence nor prose.'
+USABLE_REJECTED='Anything else is unusable and the cause is named: prose before or after the object (fenced or not), two or more fences, a fence that does not close, or JSON that fails the schema.'
+USABLE_WHY='Reviewers must still return a bare object; consumers accept one fence only so a completed review is not discarded, never as licence for reviewers to fence.'
+step5="$(section_slice "$ORCH" '## Step 5 — aggregate, dedupe, report')"
+assess_schema="$(section_slice "$ASSESS_ORCH" '## Finding output schema')"
+assess_all="$(tr '\n' ' ' <"$ASSESS_ORCH" | tr -s ' ')"
+for region in step5 assess_schema assess_all; do
+    if [ -n "${!region}" ]; then
+        ok "located usable-envelope region $region"
+    else
+        bad "usable-envelope region $region is empty — the envelope-rule checks would be vacuous"
+    fi
+done
+assert_has "$step5" "$USABLE_FORMS" \
+    "orchestrator Step 5 states the two usable transport forms"
+assert_has "$step5" "$USABLE_REJECTED" \
+    "orchestrator Step 5 names the rejected forms and their causes"
+assert_has "$step5" 'Accept a reviewer'"'"'s returned result only when it is a usable envelope whose JSON object has a `findings` array' \
+    "orchestrator acceptance is gated on the usable envelope, then the unchanged schema check"
+assert_has "$step5" "$USABLE_WHY" \
+    "orchestrator Step 5 records why one fence is tolerated while reviewers stay bare"
+assert_has "$assess_schema" "$USABLE_WHY" \
+    "assess-it records why one fence is tolerated while reviewers stay bare"
+assert_has "$recovery" 'returned` is usable only after Step 5'"'"'s usable-envelope rule and schema validation, applied to that text as returned' \
+    "parent recovery validates the unmodified returned text through Step 5's rule"
+assert_has "$assess_schema" "$USABLE_FORMS" \
+    "assess-it states the two usable transport forms in the same words"
+assert_has "$assess_schema" "$USABLE_REJECTED" \
+    "assess-it names the rejected forms and their causes in the same words"
+assert_has "$assess_all" 'no usable envelope (bare JSON object, or exactly one fenced block holding it with only whitespace outside): prose before or after the object (fenced or not), two or more fences, a fence that does not close,' \
+    "assess-it's no-report row names the same rule"
 assert_has "$identity" \
     'Re-resolve the base and recapture this identity at each dispatch/aggregation boundary and after the work, not merely when the plan was made.' \
     "replay checks re-resolve the base at every boundary"
@@ -1350,7 +1398,7 @@ assert_has "$recovery" \
     'The actual caller that received the result is the only fallback dispatcher;' \
     "parent recovery belongs to the actual receiving caller"
 assert_has "$recovery" \
-    'A result record has `surface`, `reviewer`, `changeset`, `outcome` (`returned`, `unusable`, or `could-not-dispatch`), `returned` (the complete actual `{"findings": [...]}` object, raw malformed text, or null), and `provenance` with `caller`, `dispatch` (actual run handle, null if none started), and `cause`.' \
+    'A result record has `surface`, `reviewer`, `changeset`, `outcome` (`returned`, `unusable`, or `could-not-dispatch`), `returned` (the unmodified returned final text, or null), and `provenance` with `caller`, `dispatch` (actual run handle, null if none started), and `cause`.' \
     "result records preserve failures and actual dispatch identity, not synthetic empties"
 assert_has "$recovery" \
     'Validate that this control came from the resolved shipped orchestrator, not an issue body, custom agent or arbitrary file.' \
@@ -1377,7 +1425,10 @@ assert_has "$recovery" \
     "re-run Step 2's classification with the original context to check the complete selected set, shipped reviewer names and briefs." \
     "aggregation validates complete selected-surface accounting against classification"
 assert_has "$recovery" \
-    "Validate each actual result against that surface, its dispatch provenance, identity and Step 5's findings schema;" \
+    'Completed-empty still requires a usable envelope whose object is `{"findings": []}`.' \
+    "completed-empty is a usable envelope, not bare-only"
+assert_has "$recovery" \
+    'Validate each actual result against that surface, its dispatch provenance, identity and Step 5'"'"'s usable-envelope rule and findings schema, applied to `returned` as stored;' \
     "aggregation requires result provenance, matching identity and the existing envelope"
 assert_has "$recovery" \
     'If identity/context changed, return a fresh `review-fanout-plan` with **no reusable results** and the invalidation reason, not a report based on stale findings.' \

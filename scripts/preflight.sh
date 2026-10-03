@@ -566,7 +566,7 @@
 #      scripts/test-sentry-verification.sh. Its count-re-derivation section
 #      carries its own mutation battery in the PR that added it. Every decision here is
 #      mutation-proved, each battery living in the PR that added it rather than
-#      as a total transcribed here to go stale. Twenty tracked files plus a
+#      as a total transcribed here to go stale. Twenty-one tracked files plus a
 #      tracked-source sweep for a fourth site, no gh, no network.
 #  30. pipefail-grep guard (scripts/test-pipefail-grep.sh) — no script under
 #      `pipefail` may feed an UNBOUNDED writer into `grep -q` (issue #256,
