@@ -86,9 +86,10 @@ Marketplace Plugins:
 
 The marketplace was read from `.claude-plugin/marketplace.json` and the plugin from
 `.claude-plugin/plugin.json`, with no `package.json` and no `omp` field. omp cloned the whole repo into
-`~/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/`. Its loader then
-exposed 23 skills and 10 agents (`ls` of `skills/` and `agents/` in that directory, and the agent
-listing below), matching this repo's counts. `omp plugin doctor` printed one warning, `package_manifest:
+`~/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/`. The skill
+loader then listed 23 skills: the `Available:` list that `omp read` printed for an unknown name holds
+23 bare names, matching the count of `skills/` in the clone. The agent loader returned all 10 agents
+(the `discoverAgents` listing under Q5). `omp plugin doctor` printed one warning, `package_manifest:
 Not created yet`, which is benign. `omp plugin features sassy-dog` printed `Plugin "sassy-dog" not
 found`, because that command looks at npm-style plugins only.
 
@@ -111,7 +112,7 @@ repo that declares both keys therefore does **not** get the plugin installed on 
 Observed, `omp read skill://pr-shepherd` (the `read` tool's own output for a skill):
 
 ```text
-[Skill file: /Users/cmadrid/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/skills/pr-shepherd/SKILL.md]
+[Skill file: ~/.omp/profiles/spike424/plugins/cache/plugins/skills___sassy-dog___2026.10.5/skills/pr-shepherd/SKILL.md]
 ...
 bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/poll-prs.sh --once "$PR"
 ```
@@ -152,9 +153,13 @@ observation. `take-it` and `dispatch-ready` would block on it.
 The settings in 18.5.1 (`omp config list`): `task.isolation.enabled = false`,
 `task.isolation.apply = true`, `task.isolation.merge = patch (patch|branch)`,
 `task.isolation.commits = generic`, `isolation.backend = auto`, `worktree.clone = true`.
-`https://omp.sh/docs/subagents` describes `task.isolation.mode` (default "none") and a merge value
-`branches`. Those names are not in 18.5.1: the on/off switch is the boolean `enabled`, and the merge
-value is `branch`. Record both; trust the installed names for that version.
+`https://omp.sh/docs/subagents` still documents the legacy key `task.isolation.mode` (default
+`none`). 18.5.1 migrates that key on load: any value other than `none` becomes
+`task.isolation.enabled: true`, with the backend split out into `isolation.backend` (**source**,
+`src/config/settings.ts`, the "Split the legacy combined isolation setting" block). The page's merge
+values (`patch` rather than branches) match the installed `patch|branch` enum
+(`cfgTaskIsolationMerge` in `src/task/settings.ts`). The only divergence is therefore the legacy
+`mode` spelling, and a config that sets it still works.
 
 Observed, by driving omp's own isolation functions (`ensureIsolation`, `captureIsolationBaseline`,
 `commitToBranch`, `cleanupIsolation` from `src/task/worktree.ts`) against a scratch repo with a local
@@ -199,7 +204,13 @@ change to the parent checkout). That is **unknown**.
 plugin agents under their **bare** frontmatter names (`pr-review-orchestrator`, `security-reviewer`,
 and so on), source `user`, `model`, `tools` and `spawns` all undefined. Lookup by `sassy-dog:pr-review-orchestrator`
 returned nothing, by `pr-review-orchestrator` returned the agent. omp also bundles `scout`,
-`reviewer`, `task` and `sonic`. `color:` is not a recognised key and is dropped without error: the
+`reviewer`, `task`, `sonic` and its own **`security-reviewer`** (**source**, `src/task/agents.ts`,
+`src/prompts/agents/security-reviewer.md`). That one collides with this plugin's `security-reviewer`.
+`discoverAgents` loads plugin agents first and drops later same-name agents (the `seen` filter in
+`src/task/discovery.ts`), so the plugin's agent silently shadows omp's under the bare name, which is why
+the bundled list printed by the discovery call did not include it. A bare name is first-come, so the
+follow-up for bare agent and skill names must treat a collision as a hazard in both directions: a
+plugin agent can hide a bundled one, and a user or project agent of the same name hides the plugin's. `color:` is not a recognised key and is dropped without error: the
 agent loaded (**source**, `parseAgentFields` in `src/discovery/helpers.ts`, requires only `name` and
 `description`). A Claude marketplace plugin's `model` is ignored by design (`ignoreModel`), which fits
 this repo's model-free agent files.
@@ -328,8 +339,8 @@ checkout. `take-it` and `dispatch-ready` depend on it. The other two files (`rep
 `pr-shepherd`'s teardown reference) handle the cleanup of what it creates.
 
 **omp.** Isolation is a setting, not a call parameter. `task.isolation.mode` is `auto` or a named
-backend and defaults to "none". Related keys are `task.isolation.merge` (`patch` by default, or
-`branches`), `task.isolation.apply` and `worktree.base` (default `~/.omp/wt`)
+backend and defaults to "none" (a legacy key that 18.5.1 migrates to `task.isolation.enabled`). Related
+keys are `task.isolation.merge` (`patch` by default, or `branch`), `task.isolation.apply` and `worktree.base` (default `~/.omp/wt`)
 (`https://omp.sh/docs/subagents`). A prompt can also ask for it ("Use the migration-fixer subagent
 in an isolated worktree..."), and that page says it "requires Git support and configured task
 isolation" (`https://omp.sh/docs/subagent-authoring`). The strategy is "filesystem clone or overlay
@@ -430,8 +441,8 @@ nothing for omp's install, and importing Claude Code's own registry needs `CLAUD
 **Used for.** `setup-hooks` renders a PostToolUse dispatcher, a stray-artifact guard and a `Stop`
 entry into `.claude/hooks/` plus `.claude/settings.json`. It is Claude-Code-specific by purpose.
 
-**omp.** omp has hooks (`https://omp.sh/docs/hooks`). That page had not been read when this section was
-first written, so event names, config location and whether the Claude shape is accepted were unknown when this section was written.
+**omp.** omp has hooks (`https://omp.sh/docs/hooks`). Before #424 that page had not been read, so event
+names, config location and whether the Claude shape is accepted were unknown.
 
 **Spike.** The hooks page names events and `.omp/hooks/pre/` and `post/` locations and never mentions
 `settings.json`, so `setup-hooks` output is not consumed by omp. It stays Claude-Code-only.
@@ -449,8 +460,8 @@ derive the answer" (`https://omp.sh/docs/tools`). Batching several questions int
 **Used for.** `dispatch-ready` is designed to run as `/loop 5m /dispatch-ready`, each tick idempotent
 and with no memory of the previous one. `verify-issue-refs.sh` also names it.
 
-**omp.** None found in the pages read. The slash-command page (`https://omp.sh/docs/slash`) was not
-read, so omp may have an interval driver: **unknown, not documented**. The skill is already
+**omp.** Before #424 none had been found in the pages read, and the slash-command page
+(`https://omp.sh/docs/slash`) was unread, so an interval driver was **unknown, not documented**. The skill is already
 tick-idempotent, so any external scheduler that re-invokes it would work.
 
 **Spike.** omp has `/loop [count|duration] [--while|--until '<cmd>'] [prompt]`, which re-submits after
