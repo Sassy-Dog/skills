@@ -57,7 +57,7 @@ bash scripts/stamp-version.sh
 
 Run it only in a dedicated `chore(release)` PR, never in a feature PR: stamping is release-only (`docs/VERSIONING.md`, "Releasing"). CI validates the *shape*, so a hand-typed number can pass the gate and still be wrong. It is a one-way ratchet — see [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
-**Adding or removing a skill or agent?** Update `README.md`'s plugin/skill table and agent list in the same PR. No gate reads those tables — the one thing any gate reads in the README is the *values* of its `review_surfaces:` example, which must name agents this plugin ships (`scripts/test-review-orchestrator-allowlist.sh`). A stale table stays stale until a human notices.
+**Adding or removing a skill or agent?** Update `README.md`'s plugin/skill table, agent list and `### Harness support` matrix in the same PR. No gate reads those tables — the one thing any gate reads in the README is the *values* of its `review_surfaces:` example, which must name agents this plugin ships (`scripts/test-review-orchestrator-allowlist.sh`). A stale table stays stale until a human notices.
 
 **Conventional commits** — `feat:`, `fix:`, `chore:`, `docs:`. There is no commit-lint; this is convention. PRs go to `main`, which has a merge queue.
 

@@ -14,7 +14,7 @@ review_site: coordinator
 ## subagent-rules
 
 > 4. **README/version sync**: if you add or remove a skill (`skills/*/SKILL.md`) or reviewer agent
->    (`agents/*.md`), update `README.md`'s plugin/skill table and agent list in the same PR. **Do
+>    (`agents/*.md`), update `README.md`'s plugin/skill table, agent list and `### Harness support` matrix in the same PR. **Do
 >    not stamp `version` in `.claude-plugin/plugin.json`.** Stamping is release-only, in a dedicated
 >    `chore(release)` PR (`docs/VERSIONING.md`). A stamp inside a feature PR puts the manifest in
 >    every issue's touch-set and serializes `dispatch-ready` (#296).

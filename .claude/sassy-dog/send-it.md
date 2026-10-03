@@ -26,7 +26,7 @@ composing a body from scratch, and keep the sections in its order:
 **README/version sync gate** — if the diff adds or removes a skill (`skills/*/SKILL.md`) or reviewer
 agent (`agents/*.md`):
 
-- `README.md`'s plugin/skill table and agent list must be updated in the same PR.
+- `README.md`'s plugin/skill table, agent list and `### Harness support` matrix must be updated in the same PR.
 - `.claude-plugin/plugin.json` `version` is **not** stamped in a feature PR. Stamping is
   release-only, in a dedicated `chore(release)` PR when the daily reminder reports **due**
   (`docs/VERSIONING.md`; stamp-in-PR was weighed and rejected in #296 because it would put the
