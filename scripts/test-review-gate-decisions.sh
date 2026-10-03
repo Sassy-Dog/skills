@@ -41,10 +41,12 @@
 #      `opt-out (review_agent: skip)` label, the record-for-current-head clause),
 #      take-it's "dispatch nothing" in the opt-out bullet and "(the cause, never
 #      the opt-out)" in the failure bullet, and dispatch-ready's twin "(the
-#      dispatch failure, not the opt-out)". Mutants, each measured to FAIL: the
+#      dispatch failure, not the opt-out)", keyed (#438) to the text after the
+#      failure clause's `could not run at all` opening, so a twin moved into
+#      the precondition span FAILS (measured). Mutants, each measured to FAIL: the
 #      whole dispatch-ready precondition clause replaced by "proceed."; dropping
 #      its printed SKIPPED line, its label, or its record clause; deleting
-#      either take-it phrase; deleting the dispatch-ready twin; moving the three
+#      either take-it phrase; deleting the dispatch-ready twin; moving the twin into the precondition span; moving the three
 #      precondition clauses after the failure clause (keyed pins FAIL, a
 #      bullet-wide match would not); rewording the precondition's closing
 #      "review was opted out." marker (the slice-marker guard FAILS). Nothing else is
@@ -1570,7 +1572,13 @@ else
         "dispatch-ready's opt-out precondition names opt-out (review_agent: skip)"
     assert_in "$dispatch_precond" "and record that as the PR's outcome for the current head" \
         "dispatch-ready's opt-out precondition records the outcome for the current head"
-    assert_in "$dispatch_coord" '\(the dispatch failure, not the opt-out\)' \
+    # Keyed to the FAILURE clause (from its unique opening phrase to the end of
+    # the bullet), so a twin moved up into the precondition span fails; the
+    # phrase is asserted first so a reword cannot widen the slice silently.
+    assert_has "$dispatch_coord" 'could not run at all' \
+        "dispatch-ready's failure clause still opens at its slice marker"
+    dispatch_failure="${dispatch_coord#*'could not run at all'}"
+    assert_in "$dispatch_failure" '\(the dispatch failure, not the opt-out\)' \
         "dispatch-ready's failure clause names the dispatch failure, not the opt-out"
 fi
 takeit_handoff="$(section_slice "$TAKEIT" '## 5. Dispatch sub-agents in parallel')"

@@ -75,6 +75,28 @@
 #      trips the tree-wide scan; dropping the issue-side allow-list, the pulls
 #      `title`, the pulls `author_association`, or the fork comparison fails the positive pin;
 #      re-adding the allow-list to the PR paragraph fails the negative pin.
+#      #438 hardened three things, each with mutants run below:
+#        a. The PR read's `--jq` filter is EXECUTED, not grepped: extracted from
+#           §3 and run with local `jq` on four fixtures (same-repo, fork, null
+#           `head.repo`, and null `head.repo` plus null `base.repo`) asserting
+#           false/true/true/true. The fourth exists because jq's `null !=
+#           "o/r"` is already true, so only both-null shows whether the
+#           `// ""` fail-closed default is present. Mutants: `// ""` removed,
+#           comparison inverted (the existing fork-comparison mutant also
+#           fails it).
+#        b. Decision sentences are pinned positively, so a paraphrase that
+#           keeps the field names cannot slip past a token-absence check: the
+#           PR read's "(fork → CONFIRM-EACH)", "null head.repo, which counts as
+#           a fork (fail closed)" and "author_association are shown in the §4
+#           preview and never gate", and the issue read's "any other value,
+#           including a null or missing one, is CONFIRM-EACH". Mutants: each
+#           sentence reworded, including a role-name-free "any non-member
+#           author is CONFIRM-EACH" on the PR read (the negative pin cannot see it).
+#        c. The tree-wide scan's `gh (issue|pr) view` tolerates global flags
+#           (`-R o/r`, `--repo o/r`, `--repo=o/r`) and whitespace runs, with
+#           one mutant per spelling and a control that a `gh api` read is not
+#           flagged. Not covered: a global flag whose value is a bare word
+#           beginning with `-`, and a command split across paragraphs.
 #
 # Source-level, no `gh`, no network, no Slack.
 set -uo pipefail
@@ -270,16 +292,39 @@ issue_para="$(paragraph "$DELEGATE" '**The label check')"
 pr_para="$(paragraph "$DELEGATE" '**The held-PR check')"
 issue_read_ok() {  # $1 = issue-read paragraph
     grep -qE -- 'gh api repos/<owner>/<name>/issues/<N> --jq [^}]*author_association}' <<<"$1" \
-        && grep -qF -- 'OWNER, MEMBER and COLLABORATOR' <<<"$1"
+        && grep -qF -- 'OWNER, MEMBER and COLLABORATOR' <<<"$1" \
+        && grep -qE -- 'any other value, including a null or missing one, is CONFIRM-EACH' <<<"$1"
 }
-pr_read_ok() {  # $1 = PR-read paragraph: fields present, and no allow-list gate
+fork_filter() {  # $1 = PR-read paragraph; prints the --jq filter of its pulls/<N> read
+    sed -nE "s/.*pulls\/<N> --jq '([^']*)'.*/\1/p" <<<"$1" | head -n1
+}
+fork_exec_ok() {  # $1 = PR-read paragraph: run the REAL filter with local jq, no gh, no network
+    local f got
+    f="$(fork_filter "$1")"
+    [ -n "$f" ] || return 1
+    local same='{"title":"t","user":{"login":"a"},"author_association":"NONE","head":{"repo":{"full_name":"o/r"}},"base":{"repo":{"full_name":"o/r"}}}'
+    local fork='{"title":"t","user":{"login":"a"},"author_association":"NONE","head":{"repo":{"full_name":"x/r"}},"base":{"repo":{"full_name":"o/r"}}}'
+    local nullhead='{"title":"t","user":{"login":"a"},"author_association":"NONE","head":{"repo":null},"base":{"repo":{"full_name":"o/r"}}}'
+    # Both repos null: the case only the `// ""` default distinguishes, since
+    # jq's null != "o/r" is already true but null != null is not.
+    local bothnull='{"title":"t","user":{"login":"a"},"head":{"repo":null},"base":{"repo":null}}'
+    got="$({ jq -c "$f | .fork" <<<"$same"; jq -c "$f | .fork" <<<"$fork"; jq -c "$f | .fork" <<<"$nullhead"; jq -c "$f | .fork" <<<"$bothnull"; } 2>/dev/null | tr '\n' ' ')"
+    [ "$got" = "false true true true " ]
+}
+pr_read_ok() {  # $1 = PR-read paragraph: fields present, filter behaves, decision sentences, no allow-list gate
     grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq .\{title,[^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
-        && ! grep -qE -- 'OWNER|COLLABORATOR' <<<"$1"
+        && ! grep -qE -- 'OWNER|COLLABORATOR' <<<"$1" \
+        && fork_exec_ok "$1" \
+        && grep -qF -- 'null head.repo, which counts as a fork (fail closed)' <<<"$1" \
+        && grep -qF -- '(fork → CONFIRM-EACH)' <<<"$1" \
+        && grep -qE -- 'author_association are shown in the §4 preview and never gate' <<<"$1"
 }
 view_offenders() {  # files with authorAssociation in the same paragraph as a gh issue/pr view
     local f hit
     for f in "$@"; do
-        hit="$(awk -v RS='' '{ gsub(/\n/, " "); gsub(/`/, ""); if ($0 ~ /gh (issue|pr) view/ && $0 ~ /authorAssociation/) { print "hit"; exit } }' "$f")"
+        # gh may carry global flags (-R o/r, --repo o/r, --repo=o/r) before the
+        # subcommand, and whitespace runs survive flattening.
+        hit="$(awk -v RS='' '{ gsub(/\n/, " "); gsub(/`/, ""); if ($0 ~ /gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(issue|pr)[[:space:]]+view/ && $0 ~ /authorAssociation/) { print "hit"; exit } }' "$f")"
         if [ -n "$hit" ]; then echo "${f#"$ROOT"/}"; fi
     done
     return 0
@@ -327,6 +372,20 @@ if [ -n "$(view_offenders "$tmp")" ]; then
 else
     bad "mutant: wrapped 'gh pr view ... authorAssociation' slipped past the tree-wide scan"
 fi
+for shape in 'gh -R o/r pr view 5 --json authorAssociation' 'gh --repo o/r issue view 5 --json authorAssociation' 'gh --repo=o/r pr view 5 --json authorAssociation' 'gh  pr   view 5 --json authorAssociation'; do
+    printf '%s\n' "read \`$shape\`" >"$tmp"
+    if [ -n "$(view_offenders "$tmp")" ]; then
+        ok "mutant: '$shape' trips the tree-wide scan"
+    else
+        bad "mutant: '$shape' slipped past the tree-wide scan"
+    fi
+done
+printf '%s\n' 'read `gh -R o/r api repos/o/r/pulls/5` for author_association, not authorAssociation' >"$tmp"
+if [ -z "$(view_offenders "$tmp")" ]; then
+    ok "control: a gh api read naming authorAssociation in prose is not flagged"
+else
+    bad "control: the widened scan flags a command that is not gh issue/pr view"
+fi
 mutate() {  # $1 = sed script, $2 = paragraph key, $3 = checker, $4 = label
     local m
     sed "$1" "$DELEGATE" >"$tmp"
@@ -344,6 +403,12 @@ mutate 's/author_association}'"'"'`$/author}'"'"'/' '**The label check' issue_re
 mutate 's/{title, author:/{author:/' '**The held-PR check' pr_read_ok 'pulls read drops the PR title'
 mutate 's/author_association, fork:/fork:/' '**The held-PR check' pr_read_ok 'pulls read drops author_association'
 mutate 's/\.head\.repo\.full_name/.head.x/' '**The held-PR check' pr_read_ok 'pulls read drops the fork comparison'
+mutate 's/ \/\/ "")/)/' '**The held-PR check' pr_read_ok 'fail-closed // "" default removed from the fork filter'
+mutate 's/!= \.base\.repo\.full_name/== .base.repo.full_name/' '**The held-PR check' pr_read_ok 'fork comparison inverted'
+mutate 's/null `head\.repo`, which counts as a fork (fail closed)/null `head.repo`, which is ignored/' '**The held-PR check' pr_read_ok 'null head.repo fail-closed sentence reworded'
+mutate 's/(fork → CONFIRM-EACH)/(fork is fine)/' '**The held-PR check' pr_read_ok 'fork decision sentence reworded'
+mutate 's/`author` and `author_association` are shown in the §4 preview and$/any non-member author is CONFIRM-EACH and is shown in the §4 preview;/;s/^never gate, so/so/' '**The held-PR check' pr_read_ok 'paraphrased allow-list gate on the PR read (no role names)'
+mutate 's/any other value, including a$/any other value is/;s/^null or missing one, is CONFIRM-EACH/CONFIRM-EACH/' '**The label check' issue_read_ok 'issue read null clause dropped'
 mutate 's/(fail closed)\./(fail closed) and an association outside `OWNER`, `MEMBER`, `COLLABORATOR` is CONFIRM-EACH./' '**The held-PR check' pr_read_ok 'allow-list gate re-added to the PR read'
 
 if [ "$fail" -eq 0 ]; then
