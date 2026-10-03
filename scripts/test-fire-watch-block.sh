@@ -271,7 +271,7 @@ issue_read_ok() {  # $1 = issue-read paragraph
         && grep -qF -- 'OWNER, MEMBER and COLLABORATOR' <<<"$1"
 }
 pr_read_ok() {  # $1 = PR-read paragraph: fields present, and no allow-list gate
-    grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq [^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
+    grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq .\{title,[^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
         && ! grep -qE -- 'OWNER|COLLABORATOR' <<<"$1"
 }
 view_offenders() {  # files with authorAssociation in the same paragraph as a gh issue/pr view
@@ -288,7 +288,7 @@ else
     bad "§3 issue-read paragraph lost the gh api issues/<N> read, author_association or the OWNER/MEMBER/COLLABORATOR allow-list"
 fi
 if pr_read_ok "$pr_para"; then
-    ok "§3 PR read: gh api pulls/<N> with author_association and the fork comparison, no allow-list gate"
+    ok "§3 PR read: gh api pulls/<N> with title, author_association and the fork comparison, no allow-list gate"
 else
     bad "§3 PR-read paragraph lost a pulls/<N> field or gates on the allow-list (Dependabot would be CONFIRM-EACH)"
 fi
@@ -339,6 +339,7 @@ mutate() {  # $1 = sed script, $2 = paragraph key, $3 = checker, $4 = label
 }
 mutate 's/`OWNER`, `MEMBER` and `COLLABORATOR`/members/' '**The label check' issue_read_ok 'issue-side allow-list dropped'
 mutate 's/author_association}'"'"'`$/author}'"'"'/' '**The label check' issue_read_ok 'issue read drops author_association'
+mutate 's/{title, author:/{author:/' '**The held-PR check' pr_read_ok 'pulls read drops the PR title'
 mutate 's/author_association, fork:/fork:/' '**The held-PR check' pr_read_ok 'pulls read drops author_association'
 mutate 's/\.head\.repo\.full_name/.head.x/' '**The held-PR check' pr_read_ok 'pulls read drops the fork comparison'
 mutate 's/(fail closed)\./(fail closed) and an association outside `OWNER`, `MEMBER`, `COLLABORATOR` is CONFIRM-EACH./' '**The held-PR check' pr_read_ok 'allow-list gate re-added to the PR read'
