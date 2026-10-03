@@ -49,7 +49,8 @@ left outside a binding, and so does removing a required site's binding.
 
 A tier makes the *model choice* portable. The dispatch mechanics are still Claude-Code-shaped: the
 Agent tool, `isolation: "worktree"`, the Skill tool, and `${CLAUDE_PLUGIN_ROOT}`. A harness that
-runs these skills still has to supply those mechanics.
+runs these skills still has to supply those mechanics. [`HARNESS-PORTABILITY.md`](HARNESS-PORTABILITY.md)
+inventories them, records omp's documented equivalent for each, and sets out the options.
 
 The coordinator itself is not tiered. `take-it` and `dispatch-ready` coordinate from whatever session
 invoked them, and only the agents they dispatch carry a tier.
