@@ -1728,6 +1728,9 @@ RVEOF
 # HERE for the same reason RV_DELIVERY is: cross-file identity bounds
 # divergence, not content. It deliberately avoids the tokens the counts below
 # bound (`SendMessage`, `relay`).
+# Measured: moving the shape paragraph below the delivery paragraph in one
+# reviewer left the gate green until the per-reviewer adjacency check was
+# added; it now reddens.
 RV_SHAPE="$(cat <<'RSEOF'
 **My final message starts with `{` and ends with `}`. Nothing comes before the object or after it: no code fence, no heading, no "Here are my findings". A completed empty review is exactly `{"findings": []}`, on one line and unfenced.**
 RSEOF
@@ -1861,6 +1864,16 @@ for rv in "${REVIEWERS[@]}"; do
         ok "$rv_name's shape rule matches the canonical text held in this gate"
     else
         bad "$rv_name's shape rule is missing or differs from the canonical text held in this gate — diff it against RV_SHAPE (#411); a uniform edit across all nine is caught here and nowhere else"
+    fi
+    # ADJACENCY, asserted rather than only claimed in the RV_SHAPE header: in
+    # paragraph mode the delivery paragraph must be the very next paragraph
+    # after the shape paragraph. Measured: moving the shape paragraph BELOW the
+    # delivery paragraph in one reviewer left the gate green before this check.
+    rv_adj="$(awk -v RS= '/^\*\*My final message starts/ { s = NR } /^\*\*That object is your RETURN VALUE/ { d = NR } END { if (s && d && d == s + 1) print "adjacent" }' "$rv")"
+    if [ "$rv_adj" = "adjacent" ]; then
+        ok "$rv_name's shape paragraph is immediately followed by its delivery paragraph"
+    else
+        bad "$rv_name's shape paragraph is not the paragraph immediately before its delivery paragraph (#411)"
     fi
     n_tok="$(grep -oiF -- "SendMessage" "$rv" | grep -c .)"
     if [ "$n_tok" -eq 1 ]; then
