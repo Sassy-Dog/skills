@@ -44,3 +44,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - Lockfiles by stack: **Bun** (`bun.lock`/`bun.lockb`) for web, NuGet (`packages.lock.json` / `*.csproj`) for .NET, `Cargo.lock` for Rust, `pubspec.lock` for Flutter. Flag a manifest with no committed lockfile.
 - Web stack baselines: Next.js 15, React 19, tRPC v11, Drizzle ORM (qr-ninja → Neon Postgres); velovate uses .NET 10 + SQL Server. Flag major-version drift behind these.
 - Prefer automated updates (Dependabot/Renovate); flag their absence on an actively developed repo.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.

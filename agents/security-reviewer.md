@@ -51,3 +51,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - App Store Connect key lives in Doppler `sources/apple` (`APPLE_ASC_*`); consumer repos must reference it, never store their own copy.
 - Web auth: Better Auth (qr-ninja), Stripe webhooks — flag missing signature verification and unprotected routes.
 - Pin third-party GitHub Actions to a commit SHA; prefer OIDC over long-lived cloud credentials.
+
+## Final instruction: the bare envelope
+
+This is the last instruction in this file and it overrides any urge to explain. Your final message starts with `{` and ends with `}`: the JSON object `{"findings": [...]}` and nothing else. No code fence, no heading, and no sentence before or after it, including an explanation such as "This diff touches no …". A completed empty review is exactly `{"findings": []}`.
