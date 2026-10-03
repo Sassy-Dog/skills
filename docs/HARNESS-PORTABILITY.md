@@ -72,6 +72,9 @@ Scratch scripts and a throwaway repo were under the worktree's gitignored `tmp/`
 from `omp` subcommands that need no model (`plugin`, `read`, `config`) plus scripts that call omp's own
 modules directly. That means no `task` call, `/skill:` invocation or `` !`...` `` load was driven
 end to end by a model. Each answer says which parts were run and which were read from source.
+Those two claims (the `OMP_PROFILE` isolation and "no model-backed command") are scoped to #424. The
+later #440 attempt used the default profile and one model call; see
+[Model-backed checks (#440)](#model-backed-checks-440-could-not-run-no-credentials).
 
 ### Q1. Does the plugin install as is? Yes (row 8)
 
@@ -134,7 +137,8 @@ sentence that tells the model how to resolve it. omp does substitute `${CLAUDE_P
 `${OMP_PLUGIN_ROOT}`, but only inside a plugin's MCP server config and the env omp passes to plugin
 processes (**source**, `src/discovery/substitute-plugin-root.ts`, used from `claude-plugins.ts` and
 `omp-plugins.ts`). `https://omp.sh/docs/env` and `https://omp.sh/docs/plugins` document neither.
-Whether a model reliably follows the sentence is **unknown**: no model-backed run.
+Whether a model reliably follows the sentence is **unknown**: check A of #440 could not run (see
+[Model-backed checks (#440)](#model-backed-checks-440-could-not-run-no-credentials)).
 
 ### Q3. Config injection (row 6): none
 
@@ -197,7 +201,8 @@ commitToBranch: {"branchName":"omp/task/spike424probe","baseSha":"88dc568..."}
 
 Not observed: a model-driven `task` call with `isolated: true`, and how `apply = true` and `merge =
 patch` interact with a worker that already pushed its own branch (patch mode would also apply the same
-change to the parent checkout). That is **unknown**.
+change to the parent checkout). That is **unknown**: check C of #440 was meant to answer it and could
+not run (see [Model-backed checks (#440)](#model-backed-checks-440-could-not-run-no-credentials)).
 
 ### Q5. Dispatch and delegation (rows 1, 2, 4)
 
@@ -242,6 +247,41 @@ form exists, but only when a bare name is already taken by another skill (**sour
 form (`https://omp.sh/docs/slash`). So `Skill: sassy-dog:<name>` as written does not resolve, a bare
 `<name>` does, and a collision with another installed skill of the same name would change what the bare
 name means. Whether a model follows "read `skill://<name>`" reliably: **unknown**.
+
+### Model-backed checks (#440): could not run, no credentials
+
+Issue #440 asked for three model-backed checks on site `mac` with the default omp profile: **A** (row 5,
+a cold agent resolves the plugin root from the skill directory and runs a bundled script), **B** (row 6,
+a cold agent follows an explicit "read `.claude/sassy-dog/<skill>.md` by absolute path" instruction
+instead of falling back to `NO_CONFIG`) and **C** (row 3, one `task` call with isolation on, where the
+worker commits and pushes to a local bare remote, then `apply` and `merge` under the default and under
+`merge=branch`). **None ran.** Each is recorded as "could not run: no omp credentials configured on
+this machine". Run 2026-10-03 against `omp/18.5.1`.
+
+Observed:
+
+- Before the run there was no `~/.omp` at all, so no default profile, and none of `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY` or `OMP_PROFILE` was set. omp created
+  `~/.omp` itself on its first invocation. No login, key or auth flow was run, and no credential was
+  created, copied or looked for.
+- `omp models` listed exactly one usable model: provider `apple`, model `on-device`, context 8.2K. It
+  needs no credential. `omp models find claude` printed `No models matching "claude"`.
+- One model call was attempted, with that model (`omp -p --no-session --model on-device "Reply with
+  exactly the word OK and nothing else."`). It failed before any output: `Prompt is too long: Provided
+  19,579 tokens, but the maximum allowed is 8,192. (context_size_exceeded)`. The prompt omp sent was
+  19,579 tokens (**observed**), including any `CLAUDE.md` it found walking up from the cwd, which is
+  more than the model's 8,192. The error reports only the total, and the cwd was not recorded, so the
+  split between omp's own prompt and repo context is **unknown**. That was call 1 of the 6 that #440
+  authorised, and it was the only one made.
+
+Nothing was installed, upgraded or reconfigured. `omp config` was only read (`task.isolation.enabled =
+false`, `task.isolation.merge = patch`, `task.isolation.apply = true`, `task.maxRecursionDepth = 2`),
+and no setting was changed, so there was nothing to restore. The `~/.omp` that the run created was
+removed afterwards, so the machine ends as it started. To run A, B and C the operator must provide a
+provider credential (a provider env var or an omp login, done by the operator) for a model with a
+context window large enough for omp's prompt. The checks can then run with a per-invocation
+`--config <file>` overlay (**source**, `src/cli/flag-tables.ts`, `src/main.ts`; the flag takes a file
+path, not an inline key) for `task.isolation.enabled`, so no default setting has to change.
 
 ### Verdicts for rows 3, 4, 5 and 6
 
@@ -578,7 +618,9 @@ design, an explicit "read `.claude/sassy-dog/<skill>.md` by absolute path" instr
 both harnesses, and it is **unproven** until a model-backed run shows a cold agent follows it. The
 `take-it` and `dispatch-ready` stop on `NO_CONFIG` is the safe default meanwhile, because an
 unexecuted line must never be read as "no config exists". #425 should start with that model-backed
-check, one trivial call, before rewriting 22 files.
+check, one trivial call, before rewriting 22 files. That check is **still outstanding**: #440 could not
+run it because this machine has no omp credentials (see the #440 section above), so the go on the
+plugin root remains conditional on check A and the config design on check B.
 
 **Go/no-go for #426 (isolation contract).** **Go**, narrowly. The worker-owns-a-branch-and-pushes
 design works inside omp isolation (Q4), and the parent never sees the worker's branch name, which
@@ -587,6 +629,8 @@ set: `task.isolation.enabled` must be true (default false, a silent shared check
 skill should read it with `omp config get` and stop when it is off, and `apply`/`merge` must be chosen
 so the parent checkout is not patched with a change the worker already pushed. The last point is
 **unknown** and is the first thing #426 should test through a real `task` call with `isolated: true`.
+Check C of #440 was meant to answer it and could not run (no omp credentials), so it is still
+outstanding and the go stays narrow.
 Separately, `review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the
 contract should pin `coordinator` for omp.
 
