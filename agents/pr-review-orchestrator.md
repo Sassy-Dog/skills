@@ -201,7 +201,7 @@ returned final text, or null), and `provenance` with `caller`,
 returned value, not a summary of its findings. `returned` is usable only after Step 5's
 usable-envelope rule and schema validation, applied to that text as returned, and an observed completion; a queued request, handle alone, or asserted
 success without the actual result is not reviewed coverage. Completed-empty still requires
-the actual `{"findings": []}`. A control result is **not a report and never counts as clean**.
+a usable envelope whose object is `{"findings": []}`. A control result is **not a report and never counts as clean**.
 
 **Report-only recovery.** A complete human report is either the normal Step 5 Markdown report —
 its `## PR review` header, Base/changeset context (including an explicit `Base: unresolved
@@ -281,7 +281,7 @@ requires an unused allowance; operator-directed repair remains the operator's de
 current changeset, and re-run Step 2's classification with the original context to check
 the complete selected set, shipped reviewer names and briefs. Do not trust a supplied
 surface list that dropped work or changed the scope. Validate each actual result against
-that surface, its dispatch provenance, identity and Step 5's findings schema; conflicting
+that surface, its dispatch provenance, identity and Step 5's usable-envelope rule and findings schema, applied to `returned` as stored; conflicting
 records with no identifiable successful attempt cannot certify coverage.
 
 If identity/context changed, return a fresh `review-fanout-plan` with **no reusable results**

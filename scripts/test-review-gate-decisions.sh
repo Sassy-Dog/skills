@@ -1425,7 +1425,10 @@ assert_has "$recovery" \
     "re-run Step 2's classification with the original context to check the complete selected set, shipped reviewer names and briefs." \
     "aggregation validates complete selected-surface accounting against classification"
 assert_has "$recovery" \
-    "Validate each actual result against that surface, its dispatch provenance, identity and Step 5's findings schema;" \
+    'Completed-empty still requires a usable envelope whose object is `{"findings": []}`.' \
+    "completed-empty is a usable envelope, not bare-only"
+assert_has "$recovery" \
+    'Validate each actual result against that surface, its dispatch provenance, identity and Step 5'"'"'s usable-envelope rule and findings schema, applied to `returned` as stored;' \
     "aggregation requires result provenance, matching identity and the existing envelope"
 assert_has "$recovery" \
     'If identity/context changed, return a fresh `review-fanout-plan` with **no reusable results** and the invalidation reason, not a report based on stale findings.' \
