@@ -60,8 +60,10 @@
 #      flattened, backticks stripped): the ISSUE-read paragraph must carry the
 #      `gh api .../issues/<N>` read with `author_association` and the
 #      `OWNER`/`MEMBER`/`COLLABORATOR` allow-list; the PR-read paragraph must
-#      carry the `gh api .../pulls/<N>` read with `author_association` and the
-#      head/base fork comparison, and must NOT name the allow-list — a PR is
+#      carry the `gh api .../pulls/<N>` read with `title`, `author_association`
+#      and the head/base fork comparison (`title` because §4's preview prints
+#      "issue and PR numbers with titles" and this read is its only source of
+#      the PR title), and must NOT name the allow-list — a PR is
 #      gated by the fork fact alone, because `dependabot[bot]` has association
 #      `NONE` and an allow-list there would make every Dependabot PR
 #      CONFIRM-EACH, against §3's own table. The tree-wide scan covers every
@@ -71,7 +73,7 @@
 #      code spans, fixture transcribed from 5b024e6).
 #      Mutants, all exercised below on scratch copies: the pre-fix paragraph
 #      trips the tree-wide scan; dropping the issue-side allow-list, the pulls
-#      `author_association`, or the fork comparison fails the positive pin;
+#      `title`, the pulls `author_association`, or the fork comparison fails the positive pin;
 #      re-adding the allow-list to the PR paragraph fails the negative pin.
 #
 # Source-level, no `gh`, no network, no Slack.
@@ -271,7 +273,7 @@ issue_read_ok() {  # $1 = issue-read paragraph
         && grep -qF -- 'OWNER, MEMBER and COLLABORATOR' <<<"$1"
 }
 pr_read_ok() {  # $1 = PR-read paragraph: fields present, and no allow-list gate
-    grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq [^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
+    grep -qE -- 'gh api repos/<owner>/<name>/pulls/<N> --jq .\{title,[^}]*author_association[^}]*\.head\.repo.*\.base\.repo' <<<"$1" \
         && ! grep -qE -- 'OWNER|COLLABORATOR' <<<"$1"
 }
 view_offenders() {  # files with authorAssociation in the same paragraph as a gh issue/pr view
@@ -288,7 +290,7 @@ else
     bad "§3 issue-read paragraph lost the gh api issues/<N> read, author_association or the OWNER/MEMBER/COLLABORATOR allow-list"
 fi
 if pr_read_ok "$pr_para"; then
-    ok "§3 PR read: gh api pulls/<N> with author_association and the fork comparison, no allow-list gate"
+    ok "§3 PR read: gh api pulls/<N> with title, author_association and the fork comparison, no allow-list gate"
 else
     bad "§3 PR-read paragraph lost a pulls/<N> field or gates on the allow-list (Dependabot would be CONFIRM-EACH)"
 fi
@@ -339,6 +341,7 @@ mutate() {  # $1 = sed script, $2 = paragraph key, $3 = checker, $4 = label
 }
 mutate 's/`OWNER`, `MEMBER` and `COLLABORATOR`/members/' '**The label check' issue_read_ok 'issue-side allow-list dropped'
 mutate 's/author_association}'"'"'`$/author}'"'"'/' '**The label check' issue_read_ok 'issue read drops author_association'
+mutate 's/{title, author:/{author:/' '**The held-PR check' pr_read_ok 'pulls read drops the PR title'
 mutate 's/author_association, fork:/fork:/' '**The held-PR check' pr_read_ok 'pulls read drops author_association'
 mutate 's/\.head\.repo\.full_name/.head.x/' '**The held-PR check' pr_read_ok 'pulls read drops the fork comparison'
 mutate 's/(fail closed)\./(fail closed) and an association outside `OWNER`, `MEMBER`, `COLLABORATOR` is CONFIRM-EACH./' '**The held-PR check' pr_read_ok 'allow-list gate re-added to the PR read'

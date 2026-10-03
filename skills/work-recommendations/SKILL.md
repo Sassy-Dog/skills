@@ -108,7 +108,7 @@ filter and the claim, and a hold it reports is carried into §6 as HOLD.
 green + `MERGEABLE` + `CLEAN` and has no review-outcome gate; the hold that `take-it` and
 `dispatch-ready` place on a PR with a Blocking finding or `review: NO REPORT` lives only in
 their coordinator never handing it over. So read
-`gh api repos/<owner>/<name>/pulls/<N> --jq '{author: .user.login, author_association, fork: ((.head.repo.full_name // "") != .base.repo.full_name)}'`
+`gh api repos/<owner>/<name>/pulls/<N> --jq '{title, author: .user.login, author_association, fork: ((.head.repo.full_name // "") != .base.repo.full_name)}'`
 (`<owner>/<name>` is §1's `repo=` value) together with `gh pr view <N> --json body,comments`.
 This one read feeds the "head is a fork" rows of the table above and the §4 preview: a deleted
 fork returns a null `head.repo`, which counts as a fork (fail closed). The fork fact alone gates
