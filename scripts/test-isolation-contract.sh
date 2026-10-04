@@ -71,12 +71,16 @@
 #      serial (one claim, one worker, never a stack-chain member) or stop, the
 #      `review_site` override is reported, and the interim "until #452 lands"
 #      stop is gone.
+#   5b (inside property 5) The reference doc requires `isolated: true` on the
+#      probe's `task` entry and on every confirmed worker's, and take-it §5 points
+#      at it. The first dispatch-ready text omitted the parameter and two runs
+#      probed the coordinator's own tree.
 #  14. The terminal-state decision (#452): a stopped tick ends the loop through
 #      DRAIN STALLED, §7's STALLED conjunct names §5's isolation check, §5 states
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against thirty-seven mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against forty-seven mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -119,6 +123,19 @@
 #   M35 §5's Reach paragraph removed                                              -> 14
 #   M36 take-it's Serial variant reverted to "never by `dispatch-ready`"          -> 9
 #   M37 "dispatch-ready does not yet" restored in the design doc                  -> 12
+#   M38 the doc's "task entry without isolated: true runs on the shared tree" removed -> 5
+#   M39 the doc's "every worker carries isolated: true" line removed               -> 5
+#   M40 take-it §5's pointer to the isolated: true rule removed                    -> 5
+#   M41 outstanding serial worker no longer blocks merge-shepherd.sh               -> 13
+#   M42 the manifest read is no longer ahead of §2's merge hand-off                -> 13
+#   M43 outstanding serial worker no longer blocks the fast-forward                -> 13
+#   M44 the stop report no longer names a failed precondition                      -> 13
+#   M45 §5's two-tick confirmation removed                                         -> 14
+#   M46 §5's transient-probe rationale removed                                     -> 14
+#   M47 §7's stall-record hold-root list loses the isolation root                  -> 14
+# Properties 13 and 14 also forbid dispatch-ready §5 from RESTATING the settings,
+# the `merge` pin, `omp config set` or a tier string: the reference doc owns them
+# (#452 item 1 asked for no third copy), so a restatement is a failure, not a bonus.
 # (Property 13 began as dispatch-ready's own interim sentence, nit-added after
 # review: the two dispatching skills must not contradict each other about who
 # confirms. #452 replaced that sentence with the contract itself.)
@@ -269,6 +286,17 @@ need("the probe reports the top level", ref, "git rev-parse --show-toplevel", 5)
 need("the same path means isolation is off", ref, "means isolation is off", 5)
 need("the probe changes nothing", ref, "Change nothing, create no branch, commit nothing and push nothing", 5)
 
+# 5b. the `isolated: true` rule lives in the reference doc and take-it points at it (#452 review)
+need("the probe's task entry carries isolated: true", ref, "with `isolated: true` on its `task` entry", 5)
+need("a task entry without isolated: true runs on the shared tree", ref,
+     "A `task` entry without `isolated: true` runs on the shared tree whatever the settings read", 5)
+need("every confirmed worker carries isolated: true too", ref,
+     "Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well", 5)
+need("take-it §5 points at the isolated: true rule", s5,
+     "On omp the probe's and every worker's `task` entry carries `isolated: true`", 5)
+if "set the `task` tool's isolation parameter when it offers one" in ref:
+    problems.append("property 5: the reference doc still carries the wording whose probe measured the shared tree")
+
 # 6. manifest
 need("the outcome is recorded in the batch manifest", ref, "take-it-batch.json", 6)
 need("a resumed run never reuses `confirmed`", ref, "never reuses `confirmed`", 6)
@@ -389,15 +417,27 @@ elif not i_chk < i_clm:
 need("dispatch-ready's claim sentence still opens with claim →", d5, "verbatim, after the isolation check above: claim →", 13)
 need("dispatch-ready re-derives every tick", d5, "**Re-derive every tick.**", 13)
 need("dispatch-ready never reuses a previous tick's confirmed", d5, "never reuses `confirmed`", 13)
-need("dispatch-ready pins true, false and patch", d5,
-     "(`task.isolation.enabled` `true`, `apply` `false`, `merge` `patch`;", 13)
-need("dispatch-ready never writes the profile", d5, "never `omp config set`", 13)
-need("dispatch-ready's probe is dispatched at tier terra", d5,
-     'tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`)', 13)
-need("dispatch-ready requires isolated: true on omp task entries", d5,
-     "`isolated: true` on every `task` entry", 13)
-need("dispatch-ready verifies each pushed branch with a fresh ls-remote", d5,
-     "a **fresh** `git ls-remote origin <branch>` per pushed branch", 13)
+need("dispatch-ready runs the doc's settings reads and probe rather than restating them", d5,
+     "Run the doc's settings reads on every tick and, on a tick about to dispatch a parallel batch, its probe", 13)
+need("dispatch-ready points at the doc's worker-dispatch rule", d5,
+     "under the doc's worker-dispatch rule (`isolated: true` on every `task` entry)", 13)
+need("dispatch-ready points at the doc's after-every-batch check", d5,
+     "run the doc's after-every-batch check before trusting them", 13)
+for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
+    if copy in d5:
+        problems.append(f"property 13: dispatch-ready §5 restates {copy!r}; the reference doc owns it (#452 item 1)")
+need("dispatch-ready's outstanding-serial-worker rule exists", d5,
+     "**An outstanding serial worker blocks every local-tree step of every tick.**", 13)
+need("dispatch-ready reads the manifest ahead of §2's merge hand-off", d5,
+     "**ahead of §2's merge hand-off**", 13)
+need("an outstanding serial worker blocks the fast-forward", d5, "the default-branch fast-forward; any dispatch", 13)
+need("an outstanding serial worker blocks teardown.sh in any mode", d5, "`teardown.sh` in any mode", 13)
+need("an outstanding serial worker blocks merge-shepherd.sh, which tears down itself", d5,
+     "`merge-shepherd.sh` for any PR", 13)
+need("dispatch-ready defines outstanding as no pr and no terminal failure", d5,
+     "a serial manifest record with neither a `pr` nor a recorded terminal failure", 13)
+need("the stop report names a failed precondition, not only a setting", d5,
+     "a setting, the probe, a dirty tree, only stack-chain candidates, or an outstanding serial worker", 13)
 need("dispatch-ready goes serial or stops, never parallel on a shared tree", d5,
      "**serial or stop, never parallel on a shared tree.**", 13)
 need("dispatch-ready's serial is one claim and one worker per tick", d5,
@@ -420,9 +460,19 @@ need("dispatch-ready §5 records that a stopped tick ends in DRAIN STALLED, not 
      "**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.**", 14)
 need("dispatch-ready §5 names the hold root", d5, "the hold root `isolation unconfirmed`", 14)
 need("dispatch-ready §5 says why it is not DEFERRED", d5, "Not DEFERRED, because", 14)
+need("dispatch-ready §5 keeps the two-tick confirmation", d5,
+     "confirmed across two ticks, then the stop path and its cron self-cancel", 14)
+need("dispatch-ready §5 gives the transient-probe rationale", d5,
+     "The two ticks also keep a transient probe failure from ending a healthy loop.", 14)
+need("§7 lists the isolation hold among holds a human could clear", d7,
+     "an `isolation unconfirmed` hold — any one of them", 14)
+need("§7's stall record carries the isolation hold root", d7,
+     "the decision gate, `isolation unconfirmed`, the Blocking finding", 14)
+need("§5's Reach says an outstanding serial worker defers merges and teardown", d5,
+     "A serial worker outstanding defers the merge hand-off and its teardown", 14)
 need("dispatch-ready §7's STALLED conjunct names §5's isolation check", d7,
      "every Ready item held by a §4 filter or by §5's isolation check", 14)
-need("dispatch-ready §5 states its reach", d5, "**Reach.** The check gates **worker dispatch** and nothing else.", 14)
+need("dispatch-ready §5 states its reach", d5, "**Reach.** The check gates **worker dispatch** and the local-tree steps above, and nothing else.", 14)
 need("dispatch-ready §5 says a §2 redispatch passes the check", d5, "A §2 redispatch is a worker dispatch", 14)
 need("dispatch-ready §5 states the known limitation", d5, "**Known and accepted:**", 14)
 need("the doc records the terminal-state decision", doc,
@@ -631,7 +681,7 @@ expect_fail "M26 re-derive rule dropped" "$d" 'dispatch-ready never reuses a pre
 
 d=$(make_copy m27)
 mutate "$d/skills/dispatch-ready/SKILL.md" '`isolated: true`' '`isolated: false`' all || bad "M27: mutation did not apply"
-expect_fail "M27 isolated: true removed" "$d" 'dispatch-ready requires isolated: true'
+expect_fail "M27 isolated: true removed" "$d" "dispatch-ready points at the doc's worker-dispatch rule"
 
 d=$(make_copy m28)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'for the tick, and the tick ends there**' 'for the tick**' || bad "M28: mutation did not apply"
@@ -656,8 +706,8 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'is unsatisfiable on omp' 'is fine on
 expect_fail "M31 review_site override removed" "$d" 'dispatch-ready reports the review_site override on omp'
 
 d=$(make_copy m32)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'a **fresh** `git ls-remote origin <branch>`' 'a `git ls-remote origin <branch>`' || bad "M32: mutation did not apply"
-expect_fail "M32 fresh ls-remote check removed" "$d" 'dispatch-ready verifies each pushed branch with a fresh ls-remote'
+mutate "$d/skills/dispatch-ready/SKILL.md" 'after-every-batch check before trusting them' 'later check' || bad "M32: mutation did not apply"
+expect_fail "M32 after-every-batch pointer removed" "$d" "dispatch-ready points at the doc's after-every-batch check"
 
 d=$(make_copy m33)
 mutate "$d/skills/dispatch-ready/SKILL.md" '**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.**' '**How a stopped tick ends the loop.**' || bad "M33: mutation did not apply"
@@ -678,6 +728,46 @@ expect_fail "M36 take-it's Serial variant reverted" "$d" 'property 9:'
 d=$(make_copy m37)
 printf '\n`dispatch-ready` does not yet implement it.\n' >>"$d/$DC"
 expect_fail "M37 'does not yet' restored in the design doc" "$d" "still says '\`dispatch-ready\` does not yet'"
+
+d=$(make_copy m38)
+mutate "$d/$RF" 'A `task` entry without `isolated: true` runs on the shared tree whatever the settings read' 'A `task` entry may omit it' || bad "M38: mutation did not apply"
+expect_fail "M38 doc's shared-tree sentence removed" "$d" 'a task entry without isolated: true runs on the shared tree'
+
+d=$(make_copy m39)
+mutate "$d/$RF" 'Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well' 'Workers need nothing more' || bad "M39: mutation did not apply"
+expect_fail "M39 doc's worker line removed" "$d" 'every confirmed worker carries isolated: true too'
+
+d=$(make_copy m40)
+mutate "$d/$SK" "On omp the probe's and every worker's \`task\` entry carries" "On omp the probe's entry carries" || bad "M40: mutation did not apply"
+expect_fail "M40 take-it pointer removed" "$d" 'take-it §5 points at the isolated: true rule'
+
+d=$(make_copy m41)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'and `merge-shepherd.sh` for any PR,' 'and nothing else,' || bad "M41: mutation did not apply"
+expect_fail "M41 merge-shepherd no longer blocked" "$d" 'blocks merge-shepherd.sh'
+
+d=$(make_copy m42)
+mutate "$d/skills/dispatch-ready/SKILL.md" "**ahead of §2's merge hand-off**" "**after §2's merge hand-off**" || bad "M42: mutation did not apply"
+expect_fail "M42 manifest read moved after the hand-off" "$d" "reads the manifest ahead of §2's merge hand-off"
+
+d=$(make_copy m43)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'the default-branch fast-forward; any' 'any' || bad "M43: mutation did not apply"
+expect_fail "M43 fast-forward no longer blocked" "$d" 'blocks the fast-forward'
+
+d=$(make_copy m44)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'a dirty tree, only stack-chain candidates, or an outstanding' 'or an' || bad "M44: mutation did not apply"
+expect_fail "M44 stop report no longer names the precondition" "$d" 'the stop report names a failed precondition'
+
+d=$(make_copy m45)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'confirmed across two ticks, then' 'confirmed at once, then' || bad "M45: mutation did not apply"
+expect_fail "M45 two-tick confirmation removed" "$d" 'keeps the two-tick confirmation'
+
+d=$(make_copy m46)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'The two ticks also keep a transient probe failure from ending a healthy loop.' 'The two ticks add nothing.' || bad "M46: mutation did not apply"
+expect_fail "M46 transient-probe rationale removed" "$d" 'gives the transient-probe rationale'
+
+d=$(make_copy m47)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'the decision gate, `isolation unconfirmed`, the Blocking' 'the decision gate, the Blocking' || bad "M47: mutation did not apply"
+expect_fail "M47 stall record loses the isolation root" "$d" "stall record carries the isolation hold root"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

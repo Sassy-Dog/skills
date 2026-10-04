@@ -883,10 +883,12 @@ Observed, one model, prompted:
 - **The one-claim-per-tick serial rule was followed once it was stated** (runs 2, 3 and 4 claimed both; run 6 claimed one). A serial worker that actually ran was observed
   in runs 2 and 4 only; the Serial variant's own steps were not checked against the worker's commands.
 - **Not shown:** a full tick, a claim through `issue-claim.sh`, the §2 redispatch path, §7 reaching STALLED from this hold (source-pinned, not run), the after-batch
-  `omp-task-<id>` cleanup (no new directory was observed, so none was removed), `review_site: agent` on omp, Claude Code, and any model other than haiku.
+  `omp-task-<id>` cleanup (the system temp directory was not inspected and cleanup was not exercised; the runs used the shell's default `TMPDIR`), `review_site: agent` on omp, Claude Code, and any model other than haiku.
 
 **Operator configuration.** `config.yml` SHA-256 prefix `7b634967911b` before and after; `omp plugin list` `No plugins installed` before and after.
 Only `ls ~/.omp/wt` and that hash were read under `~/.omp`.
+
+**Not re-run after review.** The review fixes (the `isolated: true` rule moved into the reference doc and pointed at from `take-it` §5, the outstanding-serial-worker precondition, the hold-root and stop-report wording) are text and gate changes and were not run through a model. Run 5's push check was the runner's own `git ls-remote`, not the model's after-batch check.
 
 ### Verdicts for rows 3, 4, 5 and 6
 
@@ -1437,7 +1439,7 @@ only, after a fetch and a clean `git status --porcelain`, through `take-it`'s Se
 **Terminal-state decision: a stopped tick ends the loop through DRAIN STALLED, and no fifth state is added.** The interim stop reported the same sentence every tick and
 never cancelled the loop, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. The route that gate's header names is to widen an existing state's
 conjunct, not to add a state, and STALLED is the state whose test is already the right one: in-flight zero, dispatched zero, nothing this loop may advance, a non-empty held
-set. The Ready items §4 would have dispatched are held by the check with the hold root `isolation unconfirmed` (the failed setting or probe is reported detail and is not part
+set. Every Ready item that passed §4's filters is held by the check with the hold root `isolation unconfirmed` (the failed setting, probe or precondition is reported detail and is not part
 of the root, so it cannot churn the two-tick comparison). STALLED's third conjunct now reads "held by a §4 filter or by §5's isolation check", and nothing else in §7 moved.
 Reasoning:
 
@@ -1449,8 +1451,8 @@ Reasoning:
   loop; an identical hold-set on the next tick does.
 - **Serial and confirmed ticks are unaffected**: they dispatch, which deletes any stall record and resets the clock.
 
-**Reach on a stopped or serial tick.** The check gates worker dispatch and nothing else. §2's reconcile, its demotions and comments, `pr-shepherd`'s merges and the
-coordinator-site review dispatch still run, since none of them starts an implementation worker or needs one in its own tree. A §2 redispatch is a worker dispatch: it passes the
+**Reach on a stopped or serial tick.** The check gates worker dispatch and the coordinator's local-tree steps, and nothing else. §2's reconcile, its demotions and comments, `pr-shepherd`'s merges (with their local teardown) and the
+coordinator-site review dispatch still run, unless a serial worker is outstanding. omp `task` workers are asynchronous, so a serial worker can outlive its tick while sharing the coordinator's checkout; `merge-shepherd.sh` tears down and fast-forwards that checkout itself on a merge, `teardown.sh` does in every mode, and neither has an option that separates the GitHub merge from the local step. **A serial manifest record with neither a `pr` nor a recorded terminal failure therefore blocks the fast-forward, any dispatch, `teardown.sh` and `merge-shepherd.sh` for every PR until a later tick**; the tick report says `serial worker outstanding` and the merge waits. Deferring only the teardown would need a `pr-shepherd` script change, which this change does not make. A §2 redispatch is a worker dispatch: it passes the
 same check, goes serial if eligible, and is otherwise held with no budget spent. §5's claims happen only on a confirmed or serial tick. §7 is evaluated every tick. **Known and
 accepted:** a held redispatch keeps its issue in flight, so a PR needing one after isolation is lost is a reported hold that does not end the loop; the operator ends it.
 

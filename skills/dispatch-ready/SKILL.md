@@ -577,57 +577,62 @@ the order below. Claude Code means the dispatch tool is `Agent` and it takes
 `isolation: "worktree"`; that parameter *is* the confirmation, nothing in this paragraph applies,
 and the dispatch below is unchanged — the check costs nothing there. On omp (workers are `task`
 calls), or on any harness you do not recognise, read
-`${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` and run its sequence,
-with these tick-shaped differences:
+`${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` and run its sequence.
+It owns the settings, the probe, the `isolated: true` rule and the after-every-batch check; this
+section restates none of them and states only what a tick changes:
 
 1. **Re-derive every tick.** A tick has no memory, and the doc's own rule holds: a later process
-   never reuses `confirmed`. Re-read the three settings every tick, from the same sources
-   (`task.isolation.enabled` `true`, `apply` `false`, `merge` `patch`; an unset `merge` reads
-   `patch`; a `--config` overlay is invisible to the read, so a committed project `.omp/config.yml`
-   is the route that needs no profile write; never `omp config set`). On a tick about to dispatch a
-   parallel batch, also run the doc's one-worker probe at tier `terra` (Claude Code:
-   `model: "sonnet"` · omp: `model: "@task"`), its `task` entry carrying `isolated: true` — a
-   `task` entry that omits it runs on the shared tree whatever the settings read, and a probe
-   without it measures nothing. Record the outcome beside the batch records in
-   `.git/dispatch-ready-batch.json`, in the doc's `isolation` shape. That record serves this
-   tick's report and its second consumer (§2's redispatch, then this section); the next tick
-   re-derives.
-2. **Confirmed** → dispatch in parallel as below, `isolated: true` on every `task` entry. When a batch's results return, run the doc's
-   after-every-batch check before trusting them: the coordinator's branch, `HEAD` and
-   `git status --porcelain` unchanged, a **fresh** `git ls-remote origin <branch>` per pushed
-   branch, and only after that verification removal of your own `omp-task-<id>` directory. A moved
-   branch or `HEAD`, or a dirty tree, dispatches no further batch.
+   never reuses `confirmed`. Run the doc's settings reads on every tick and, on a tick about to
+   dispatch a parallel batch, its probe. Record the outcome in the doc's `isolation` shape beside
+   the batch records in `.git/dispatch-ready-batch.json`. That record serves this tick's report and
+   its second consumer (§2's redispatch, then this section); the next tick re-derives.
+2. **Confirmed** → dispatch in parallel as below, under the doc's worker-dispatch rule
+   (`isolated: true` on every `task` entry). When a batch's results return, run the doc's
+   after-every-batch check before trusting them.
 3. **Unconfirmed** → **serial or stop, never parallel on a shared tree.** Serial means **one claim and
-   one worker for the tick, and the tick ends there**, through take-it's **Serial variant**, and only when every one of these holds: the
-   candidate is a plain issue, never a stack-chain member; no worker from an earlier tick is still
-   running (every record in the manifest carries a `pr` or a recorded terminal failure);
+   one worker for the tick, and the tick ends there**, through take-it's **Serial variant**, and only
+   when every one of these holds: the
+   candidate is a plain issue, never a stack-chain member; no serial worker is outstanding (below);
    `git fetch origin --quiet`, the default branch fast-forwarded, `git status --porcelain` empty.
    Claim **that one issue only** — every other candidate stays unclaimed in Ready for a later tick —
    send the Serial variant's step 1 in place of the worker template's step 1, record
-   `{issue, pr, branch}`, and verify the push with a fresh `git ls-remote` before removing its
-   `omp-task-<id>` directory. Otherwise **stop**: report `isolation unconfirmed` with the
-   setting or probe that failed, **without claiming a single issue**, so no `in-progress` claim is
-   left behind to count as in-flight and block other sessions.
+   `{issue, pr, branch}` with no `pr` yet, and verify the push with a fresh `git ls-remote` before
+   removing its `omp-task-<id>` directory. Otherwise **stop**: report `isolation unconfirmed` naming
+   what failed — a setting, the probe, a dirty tree, only stack-chain candidates, or an outstanding
+   serial worker — **without claiming a single issue**, so no `in-progress` claim is left behind to
+   count as in-flight and block other sessions.
 4. **`review_site: agent` is unsatisfiable on omp**, so run the tick with `coordinator` and report
    the override on the tick report's `isolation:` line (appended there; §6's shape is unchanged).
    The override is per tick, never silent, and the config is never edited.
 
+**An outstanding serial worker blocks every local-tree step of every tick.** omp `task` workers are
+asynchronous, so a serial worker can outlive its tick, and it shares the coordinator's checkout.
+Outstanding means a serial manifest record with neither a `pr` nor a recorded terminal failure.
+Read the manifest at the start of the tick, **ahead of §2's merge hand-off** even though §2 runs
+first. While one is outstanding the tick does none of these: the default-branch fast-forward; any
+dispatch, confirmed or serial; `teardown.sh` in any mode; and `merge-shepherd.sh` for any PR, because
+it tears down and fast-forwards the coordinator's checkout itself when a PR merges, and has no
+option that separates the GitHub merge from that local step. A PR that is ready therefore waits a
+tick, and the tick report says `serial worker outstanding: #N — merges and local teardown deferred`.
+Reads, §2's comments and demotions, and review dispatch touch no local tree and still run.
+
 **How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
 flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
-shape. The Ready items §4 would have dispatched are held by this check, with the hold root
-`isolation unconfirmed` (the failed setting or probe is reported detail, never part of the root,
-so it cannot churn the stall comparison). They join the held set, and §7 decides: in-flight zero
-AND dispatched zero AND nothing to advance AND a non-empty held set is STALLED, confirmed across
-two ticks, then the stop path and its cron self-cancel. Not DEFERRED, because that state is for a
-hold this checkout can never clear, and an operator can clear this one from here (commit a
-`.omp/config.yml`). Not a fifth state, because it would be STALLED under a different name: the
-same test, the same two-tick confirmation, the same stop path, and one more count to keep honest.
-The two ticks also keep a transient probe failure from ending a healthy loop.
+shape. Every Ready item that passed §4's filters is held by this check, with the hold root
+`isolation unconfirmed` (the failed setting, probe or precondition is reported detail, never part
+of the root, so it cannot churn the stall comparison). They join the held set, and §7 decides:
+in-flight zero AND dispatched zero AND nothing to advance AND a non-empty held set is STALLED,
+confirmed across two ticks, then the stop path and its cron self-cancel. Not DEFERRED, because
+that state is for a hold this checkout can never clear, and an operator can clear this one from
+here (commit a `.omp/config.yml`). Not a fifth state, because it would be STALLED under a
+different name: the same test, the same two-tick confirmation, the same stop path, and one more
+count to keep honest. The two ticks also keep a transient probe failure from ending a healthy loop.
 
-**Reach.** The check gates **worker dispatch** and nothing else. On a stopped or serial tick §2's
-reconcile, its demotions and comments, `pr-shepherd`'s merges and the coordinator-site review
-dispatch all still run, because none of them dispatches an implementation worker or needs one in
-its own tree. A §2 redispatch is a worker dispatch: it passes the same check and goes serial if it
+**Reach.** The check gates **worker dispatch** and the local-tree steps above, and nothing else. On
+a stopped tick, or a serial tick with no serial worker outstanding, §2's reconcile, its demotions
+and comments, `pr-shepherd`'s merges with their local teardown, and the coordinator-site review
+dispatch all still run. A serial worker outstanding defers the merge hand-off and its teardown as
+stated above. A §2 redispatch is a worker dispatch: it passes the same check and goes serial if it
 can, else is held — no budget spent, no demotion — and §6's `holds:` line names it. §5's claims
 happen only on a confirmed or serial tick. §7 is evaluated every tick: with work in flight an
 unconfirmed tick reaches no terminal state; with none, the paragraph above applies. **Known and
@@ -932,7 +937,7 @@ queue that simply finished — must never announce STALLED.
 **A held set of nothing but site holds is DEFERRED, not STALLED**, and that state is evaluated
 first. STALLED's conjuncts match it exactly, so the discrimination is one extra test rather than a
 different one: does the held set contain anything a human could clear? A dependency hold, a
-`blocked` label, a held PR, a collision or migration hold — any one of them and this is STALLED,
+`blocked` label, a held PR, a collision or migration hold, an `isolation unconfirmed` hold — any one of them and this is STALLED,
 with the site holds listed among its reasons. Nothing but site holds, and the loop is on the wrong
 machine rather than blocked, which is a different sentence to print and a different thing to do
 about it.
@@ -1060,8 +1065,7 @@ tick as a whole.
 another session that is about to close a dependency, unblock an issue, or merge a PR. Ticks share
 no memory, so persist the observation next to the §5 batch manifest, in
 `.git/dispatch-ready-stall.json`: the held set — held issue numbers AND held PR numbers — with each
-one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the
-Blocking finding a held PR carries).
+one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, `isolation unconfirmed`, the Blocking finding a held PR carries).
 
 **"Matches exactly" compares the identifiers and each one's hold ROOT, never the rendered
 sentence.** Two honest ticks word the same hold differently, and a comparison over free text never

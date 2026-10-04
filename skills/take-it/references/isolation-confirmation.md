@@ -37,9 +37,11 @@ git rev-parse HEAD
 git status --porcelain
 ```
 
-Then dispatch **one** worker at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), isolated (set the `task` tool's isolation parameter when it offers one; the settings above are what make it effective). Its prompt, self-contained:
+Then dispatch **one** worker at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), with `isolated: true` on its `task` entry. **A `task` entry without `isolated: true` runs on the shared tree whatever the settings read**, so a probe without it measures nothing (#452's runs 3 and 4 probed the coordinator's own tree that way). Its prompt, self-contained:
 
 > Read-only probe. Run `pwd -P` and `git rev-parse --show-toplevel`, then `git branch --show-current`. Change nothing, create no branch, commit nothing and push nothing. Reply with exactly those three outputs.
+
+**Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well**, for the same reason: the settings make isolation available, and only the parameter requests it.
 
 Compare. **The same `pwd -P` or the same top-level path as the coordinator's means isolation is off: unconfirmed.** A reply that is missing, or that is not the three outputs, is unconfirmed too. Then re-run the coordinator's `HEAD`, branch and `git status --porcelain` and require them unchanged from the values just recorded. The probe tests requirement 1 only; requirement 3 rests on the `apply` read and on step 4.
 
