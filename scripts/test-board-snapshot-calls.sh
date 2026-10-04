@@ -44,6 +44,25 @@
 #      on the same logical line is NOT; a trailing-comment mention is NOT; prose naming the script and a
 #      flag is NOT.
 #
+# Known blind spots. These are ACCEPTED LIMITS of the scanner, not guarantees;
+# a green run does not rule out any of them:
+#   (a) `~~~` fences and 4-space indented code blocks are never scanned.
+#   (b) a 4-backtick outer fence wrapping an inner fence inverts the toggle from
+#       the inner fence on (docs/superpowers/plans/2026-08-18-security-scanning-
+#       surface-pr1.md already uses 4-backtick fences).
+#   (c) any `#` before `board-snapshot.sh` on the logical line skips the whole
+#       command, not only a real comment (e.g. `echo "${#A}" && bash
+#       board-snapshot.sh --number 4`).
+#   (d) property 3 looks for `PROJECT_NUMBER=` / `OWNER=` anywhere on the
+#       logical line, not as assignments before the script name, so `bash
+#       board-snapshot.sh PROJECT_NUMBER=4 OWNER=x`, a second call borrowing a
+#       first call's assignments, and `PROJECT_OWNER=x` all pass.
+#   (e) property 4's regex misses `for arg; do case "$arg" in --number=*)`, a
+#       bare `-n|--number)` case label and `${BASH_ARGV[0]}`, and has no
+#       mutation fixture of its own.
+#   (f) a call through a variable (`S=…/board-snapshot.sh; bash "$S" --number
+#       4`) is not seen.
+#
 # Source-level: no gh, no network, no repo mutation. No pipeline feeds
 # `grep -q` (test-pipefail-grep.sh).
 #
@@ -153,7 +172,7 @@ SCRIPT="skills/github-issues/scripts/board-snapshot.sh"
 if grep -Eq 'getopts|"?\$\{?[1-9@*]|^[[:space:]]*shift|^[[:space:]]*--[a-z-]+\)' "$SCRIPT"; then
     bad "$SCRIPT now appears to parse arguments — if it gained flags, rewrite this gate's header and property 2 deliberately rather than letting the docs and script diverge again"
 else
-    ok "$SCRIPT reads only PROJECT_NUMBER / OWNER / PROJECT_LIMIT from the environment"
+    ok "$SCRIPT: no argument-parsing construct matched (getopts, \$1-\$9, \$@, \$*, shift, a --flag) case label)"
 fi
 
 echo "5. mutation proof" >&2
