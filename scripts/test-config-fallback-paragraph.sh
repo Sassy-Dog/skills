@@ -18,7 +18,11 @@
 #
 # Derived vs pinned, stated once so a later edit knows which is which:
 #   - DERIVED: the set of skills with an injected config line (a SKILL.md line
-#     that starts with `!` and a backtick and names CONFIG_SOURCE). It must equal
+#     that starts with `!` and a backtick and names CONFIG_SOURCE; that one
+#     pattern, CFG_RE, is the only definition of "config line" here, so an
+#     unrelated `!` injection elsewhere in a carrier is not a config line and
+#     passes, while the paragraph itself may start no line with `!` plus a
+#     backtick). It must equal
 #     carriers + stoppers, so a ninth skill with such a line fails here until it
 #     is classified. Nothing is assumed about which skills those are.
 #   - PINNED BY NAME: the four carriers and the four stoppers below. The
@@ -37,17 +41,24 @@
 #      a blank line that follows the config line, then a blank line. Directly
 #      under the config line is what makes "the line above" true; it also puts
 #      the paragraph above the CONFIG_SOURCE paragraph.
-#   3. No stopper carries the paragraph (keyed on the opener and on a
-#      distinctive phrase from the body, so a reworded copy is still seen). This
-#      depends on nothing else in a stopper's text.
+#   3. No stopper carries the paragraph, keyed on the opener and on a
+#      distinctive phrase from the body searched in whitespace-collapsed text,
+#      so a copy with a reworded opener is seen even when the phrase is split
+#      across a line break. A copy that rewords the phrase itself is NOT seen:
+#      that is the accepted limit. Nothing else in a stopper's text matters.
 #   4. The derived set equals carriers + stoppers.
 #   5. Mutation proof against scratch fixtures scanned by the SAME functions
 #      that scan the tree: an unmodified copy passes; each of removed, drifted
 #      (one word), moved BELOW the CONFIG_SOURCE paragraph, moved ABOVE the
 #      config line, duplicated, and the hygiene breaches (a line starting with
 #      `!` plus a backtick, a bare positional token, the token) fails; a
-#      paragraph added to a stopper fails, as does a reworded copy there; a
-#      further skill with a config line in neither list fails. Every mutant must
+#      paragraph added to a stopper fails, as does a reworded copy there (opener
+#      changed, phrase split across lines); a reworded second copy in a carrier
+#      fails; an unrelated extra `!` injection in a carrier still passes; a
+#      further skill with a config line in neither list fails. The mutation
+#      section is skipped, with a note, when the tree scan above already failed,
+#      because its fixtures are copies of the live tree and would only blame the
+#      checker for a defect in the tree. Every mutant must
 #      differ from its source, so a mutation that matched nothing cannot read as
 #      caught.
 #
@@ -84,6 +95,14 @@ STOPPERS="take-it dispatch-ready work-recommendations work-fire-watch"
 OPENER='**Unrun config line.**'
 # A phrase from the body that survives a reworded opener.
 BODY_PHRASE='an unrun line as "no config exists"'
+# The one definition of an injected config line.
+CFG_RE='^!`.*CONFIG_SOURCE'
+
+# flat <file> — the file's text with every whitespace run collapsed to one space,
+# so a phrase split across a line break still matches. Callers hold the result in
+# a variable and search it with a here-string (a pipe into grep -q is banned
+# under pipefail by test-pipefail-grep.sh).
+flat() { tr '\n\t' '  ' < "$1" | tr -s ' '; }
 
 # The shipped paragraph, five lines, NAME filled in per skill.
 TEMPLATE='**Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
@@ -112,19 +131,21 @@ para_of() {
 
 # check_carrier <file> <name> — one problem per line, nothing when clean.
 check_carrier() {
-    local f="$1" name="$2" expected cfg n_cfg n_para block
+    local f="$1" name="$2" expected cfg n_cfg n_para n_body block flat_text
     expected="${TEMPLATE//NAME/$name}"
-    n_cfg="$(grep -c '^!`' "$f" || true)"
+    n_cfg="$(grep -c "$CFG_RE" "$f" || true)"
     if [ "$n_cfg" -ne 1 ]; then
         echo "has $n_cfg injected config lines, not exactly one"
         return
     fi
+    flat_text="$(flat "$f")"
     n_para="$(grep -cF "$OPENER" "$f" || true)"
-    if [ "$n_para" -ne 1 ]; then
-        echo "carries the paragraph $n_para times, not exactly once"
+    n_body="$(grep -oF "$BODY_PHRASE" <<<"$flat_text" | grep -c . || true)"
+    if [ "$n_para" -ne 1 ] || [ "$n_body" -ne 1 ]; then
+        echo "carries the paragraph $n_para times by opener and $n_body by body phrase, not exactly once"
         return
     fi
-    cfg="$(grep -n '^!`' "$f" | head -1 | cut -d: -f1)"
+    cfg="$(grep -n "$CFG_RE" "$f" | head -1 | cut -d: -f1)"
     block="$(sed -n "$((cfg + 2)),$((cfg + 6))p" "$f")"
     if ! blank_line "$f" "$((cfg + 1))" || [ "$block" != "$expected" ] || ! blank_line "$f" "$((cfg + 7))"; then
         echo "the paragraph is not the exact five lines directly under the config line at line $cfg (blank, paragraph, blank)"
@@ -134,8 +155,9 @@ check_carrier() {
 
 # check_stopper <file> — one problem when the paragraph is present.
 check_stopper() {
-    local f="$1"
-    if grep -qF "$OPENER" "$f" || grep -qF "$BODY_PHRASE" "$f"; then
+    local f="$1" flat_text
+    flat_text="$(flat "$f")"
+    if grep -qF "$OPENER" "$f" || grep -qF "$BODY_PHRASE" <<<"$flat_text"; then
         echo "carries the unrun-config paragraph, which a NO_CONFIG stopper must not"
     fi
 }
@@ -160,7 +182,7 @@ scan_tree() {
     local f name derived=""
     while IFS= read -r f; do
         name="$(basename "$(dirname "$f")")"
-        if grep -qE '^!`.*CONFIG_SOURCE' "$f"; then
+        if grep -qE "$CFG_RE" "$f"; then
             derived="$derived $name"
         fi
         case " $CARRIERS " in
@@ -201,6 +223,11 @@ dp="$(derived_set_problem "$derived")"
 if [ -z "$dp" ]; then ok "derived set of config-line skills equals the pinned carriers + stoppers"; else bad "$dp"; fi
 
 # --- 5. mutation proof ----------------------------------------------------------
+if [ "$fail" -ne 0 ]; then
+    echo "5. mutation proof SKIPPED: the tree scan above already failed, and these fixtures are copies of the live tree, so they would blame the checker for a defect in the tree. Fix the tree failure first." >&2
+    echo "config-fallback-paragraph tests: FAILURES above" >&2
+    exit 1
+fi
 echo "5. mutation proof" >&2
 
 # differs <source> <mutant> <label> — a mutant identical to its source proves nothing.
@@ -224,6 +251,10 @@ mut_bang() { sed 's|^command, with no|!`command, with no|' "$1" > "$2"; }
 mut_positional() { sed 's|^command, with no|command $1, with no|' "$1" > "$2"; }
 mut_token() { sed "s|^command, with no|command \${${TOKEN}}, with no|" "$1" > "$2"; }
 mut_dup() { { cat "$1"; printf '\n%s\n' "$OPENER a second copy"; } > "$2"; }
+# An unrelated `!` injection elsewhere in a carrier: still a clean carrier.
+mut_extra_inject() { { cat "$1"; printf '\n!`echo unrelated`\n'; } > "$2"; }
+# A second, reworded copy of the paragraph appended to a carrier, phrase split.
+mut_reworded_dup() { { cat "$1"; printf '\nConfig was not run. Never read an unrun line\nas "no config exists".\n'; } > "$2"; }
 # Below the CONFIG_SOURCE paragraph: swap with the block that follows.
 mut_move_below() {
     awk -v O="$OPENER" '
@@ -241,9 +272,9 @@ mut_move_below() {
 }
 # Above the config line: swap with the config line.
 mut_move_above() {
-    awk -v O="$OPENER" '
+    awk -v O="$OPENER" -v CFG="$CFG_RE" '
         { lines[NR] = $0 }
-        /^!`/ && !c { c = NR }
+        $0 ~ CFG && !c { c = NR }
         index($0, O) == 1 { p = NR }
         END {
             e = p; while (e <= NR && lines[e] ~ /[^ \t]/) e++
@@ -271,6 +302,15 @@ run_carrier_mutants() { # <source SKILL.md> <skill name>
     done
     # The hygiene check must catch its three breaches on its own, not only
     # through the exact-text comparison that also fails them.
+    # An extra non-config injection is not a config line and must still pass.
+    mut_extra_inject "$src" "$WORK/extra.md"
+    if differs "$src" "$WORK/extra.md" "extra non-config injection"; then
+        if [ -z "$(check_carrier "$WORK/extra.md" "$name")" ]; then ok "an extra non-config '!' injection still passes"; else bad "an extra non-config '!' injection was wrongly flagged: $(check_carrier "$WORK/extra.md" "$name")"; fi
+    fi
+    mut_reworded_dup "$src" "$WORK/rdup.md"
+    if differs "$src" "$WORK/rdup.md" "reworded second copy"; then
+        if [ -n "$(check_carrier "$WORK/rdup.md" "$name")" ]; then ok "mutant 'reworded second copy in a carrier' is caught"; else bad "mutant 'reworded second copy in a carrier' was NOT caught"; fi
+    fi
     for m in bang positional token; do
         if [ -n "$(para_of "$WORK/$m.md" | hygiene_text)" ]; then
             ok "hygiene alone catches '$m'"
@@ -286,14 +326,14 @@ if [ -f skills/take-it/SKILL.md ]; then
     cp skills/take-it/SKILL.md "$WORK/stop-clean.md"
     if [ -z "$(check_stopper "$WORK/stop-clean.md")" ]; then ok "an unmodified stopper passes"; else bad "an unmodified take-it fails the stopper check"; fi
     printf '%s\n' "${TEMPLATE//NAME/take-it}" > "$WORK/stop-para.txt"
-    awk -v PF="$WORK/stop-para.txt" '{ print } /^!`/ && !d { d = 1; print ""; while ((getline l < PF) > 0) print l }' skills/take-it/SKILL.md > "$WORK/stop-added.md"
+    awk -v PF="$WORK/stop-para.txt" -v CFG="$CFG_RE" '{ print } $0 ~ CFG && !d { d = 1; print ""; while ((getline l < PF) > 0) print l }' skills/take-it/SKILL.md > "$WORK/stop-added.md"
     if differs skills/take-it/SKILL.md "$WORK/stop-added.md" "added to a stopper"; then
         if [ -n "$(check_stopper "$WORK/stop-added.md")" ]; then ok "mutant 'added to a stopper' is caught"; else bad "mutant 'added to a stopper' was NOT caught"; fi
     fi
-    # A copy with the opener reworded is still seen through the body phrase.
-    sed 's|\*\*Unrun config line\.\*\*|**Config not run.**|' "$WORK/stop-added.md" > "$WORK/stop-reworded.md"
+    # A copy with the opener reworded AND the phrase split across a line break.
+    awk '{ gsub(/\*\*Unrun config line\.\*\*/, "**Config not run.**"); gsub(/unrun line as/, "unrun line\nas"); print }' "$WORK/stop-added.md" > "$WORK/stop-reworded.md"
     if differs "$WORK/stop-added.md" "$WORK/stop-reworded.md" "reworded copy in a stopper"; then
-        if [ -n "$(check_stopper "$WORK/stop-reworded.md")" ]; then ok "mutant 'reworded copy in a stopper' is caught"; else bad "mutant 'reworded copy in a stopper' was NOT caught"; fi
+        if [ -n "$(check_stopper "$WORK/stop-reworded.md")" ]; then ok "mutant 'reworded opener, phrase split across lines, in a stopper' is caught"; else bad "mutant 'reworded opener, phrase split across lines, in a stopper' was NOT caught"; fi
     fi
 else
     bad "skills/take-it/SKILL.md is missing, so the stopper fixtures cannot be built"
