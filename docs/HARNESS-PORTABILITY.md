@@ -16,11 +16,11 @@ Every count is the number of **tracked files** matching the command beside it, u
 `agents/` only. It is a file count, not a site count: a file that uses a mechanism five times counts
 once. The counts are a snapshot of the tree on 2026-10-03. Nothing gates them, so they go stale as
 the tree moves. Re-run the command rather than trusting the number. omp is quoted from its documentation at
-`https://omp.sh/docs/...` and, since the spike, from what omp 18.5.1 (the spike) and 18.6.0 (the #440 checks) did when run. Where the
+`https://omp.sh/docs/...` and, since the spike, from what omp 18.5.1 (the spike) and 18.6.0 (the #440, #425 and #426 checks) did when run. Where the
 documentation is silent, the entry says **unknown, not documented**. That is a different statement
 from "omp cannot do it". The omp pages were read through a summarizing fetcher, so "not documented"
 means "not found in the summary". Evidence labelled **observed** was produced by running omp, 18.5.1 unless the entry says 18.6.0
-(commands under [Spike results](#spike-results-424) and [Model-backed checks (#440)](#model-backed-checks-440)). Evidence labelled **source** was read from the
+(commands under [Spike results](#spike-results-424), [Model-backed checks (#440)](#model-backed-checks-440), [Out-of-tree checks (#425)](#out-of-tree-checks-on-shipped-skills-425) and [Isolation checks (#426)](#isolation-checks-426)). Evidence labelled **source** was read from the
 installed package's `src/` and was not run through a model; it is as good as that version and no
 better.
 
@@ -212,13 +212,17 @@ commitToBranch: {"branchName":"omp/task/spike424probe","baseSha":"88dc568..."}
   `cleanupIsolation` removes it, so there is no `.claude/worktrees` path for row 15's teardown to find
   and no long-lived tree to tear down.
 - `task.isolation.enabled` defaults to **false**. With it off, parallel workers share one checkout,
-  silently. Nothing in a skill can set it.
+  silently. Nothing in a skill can set it, and `omp config get` cannot confirm an overlay's value
+  ([#426 results](#isolation-checks-426)).
 
 The model-driven `task` call with `isolated: true`, and how `apply = true` with `merge = patch` or
 `merge = branch` treat a worker that pushed its own branch, are answered by check C of #440 on `omp/18.6.0`
 (see [Check C](#check-c-row-3-apply-patches-the-parent-mergebranch-replays-the-commit-onto-it)): patch mode
 modifies the parent checkout in place, and `merge=branch` commits the worker's change onto the parent's
 current branch as a different commit from the pushed one. The 18.5.1 transcript above is unchanged.
+[Isolation checks (#426)](#isolation-checks-426) then ran `apply = false` (D1: parent untouched, push verified), re-ran the default
+(D2: push verified) and found the isolated checkout gone after both runs on 18.6.0. They also found that
+`omp config get` ignores a `--config` overlay, which matters to the contract.
 
 ### Q5. Dispatch and delegation (rows 1, 2, 4)
 
@@ -245,8 +249,10 @@ array of those items, with no top-level `model`. That batch call is the omp coun
 every call in a single message so they run concurrently". It also answers the per-call model question
 the earlier sections marked unknown: a per-call model exists, per item.
 
-**Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max`, and an agent whose children
-would sit at depth `max` loses its `task` tool (`src/task/types.ts`, `src/task/executor.ts`). With the
+**Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max` on the agent's **own** depth, so an agent
+**at** depth `max` loses its `task` tool (`src/task/types.ts`, applied in `src/tools/index.ts`; children get
+`parentDepth + 1` in `src/task/executor.ts`). Corrected in #426 (18.6.0 source): this sentence earlier said an agent "whose children would
+sit at depth `max`" loses it, which read literally would disqualify the coordinator too. With the
 default 2 and the main session at depth 0: coordinator (0) dispatches `pr-review-orchestrator` (1),
 which dispatches the reviewers (2). That chain **works**, and the reviewers need no `task` tool. Under
 `review_site: agent` the worker is at 1 and the orchestrator at 2, so the orchestrator has **no
@@ -524,10 +530,10 @@ as `37a7e63`, a **different commit** on `main`. The pushed branch and the parent
   push most likely failed or went elsewhere and the worker misreported it. C1's push claim is therefore **unverified**
   (the result text itself says "claimed artifacts unverified"), and C1 supports only the parent-checkout
   observation. C2 used an absolute remote and its push is confirmed by `ls-remote`.
-  The default-mode run was **not repeated** (budget), so "patch mode with a verified push" is observed only as far as the
-  patch side; the push side is the C2 evidence.
-- The isolated checkout was not looked at after the run; where omp kept it, and whether it cleaned it, is not recorded
-  for 18.6.0 (Q4's 18.5.1 account still stands).
+  The default-mode run was **not repeated** in #440 (budget), so "patch mode with a verified push" was observed only as far as the
+  patch side there. **Superseded by [D2](#isolation-checks-426)**, which repeated it with an absolute remote and a verified push.
+- The isolated checkout was not looked at after the run in #440. **Superseded by
+  [Isolation checks (#426)](#isolation-checks-426)**, which listed `~/.omp/wt` before and after.
 - The evidence that the overlay's `task.isolation.enabled: true` took effect is the result text (`Applied patches: yes`
   in C1, `Merged branch: omp/task/WorkerBranchTask` in C2) and the parent-checkout changes above, not the `isolated` field in
   the call, which the prompt asked the model to set. No setting was changed in the default profile.
@@ -536,14 +542,86 @@ as `37a7e63`, a **different commit** on `main`. The pushed branch and the parent
 command and `7b634967911b` after the last. No `omp config set`, login, token, install or update command was run, and every
 setting came from a `--config` overlay in `tmp/`. Nothing needs restoring.
 
+### Isolation checks (#426)
+
+Run on 2026-10-03 on site `mac`, `omp/18.6.0`, the default profile, for #426: two model-backed `task` calls (D1, D2) and
+a no-model `omp config get` check. **2 of the issue's 6 omp runs were used**, both on `anthropic/claude-haiku-4-5`; the
+`omp config get` commands call no model. Each scratch directory came from `mktemp -d` under `/tmp`, outside this
+repository, so this repo's `CLAUDE.md` was not in context (the #440 caveat does not apply). Each had a bare remote at an
+**absolute** path and no GitHub remote. Every setting came from a `--config` overlay in the scratch directory:
+
+```text
+# d1.yml                      # d2.yml
+task:                         task:
+  isolation:                    isolation:
+    enabled: true                 enabled: true
+    apply: false
+```
+
+D2 therefore left `apply` and `merge` at their defaults (`true`, `patch`). Both runs used the form below, from inside the
+scratch repo, with the prompt read from a file by a wrapper script (as in Check C):
+
+```text
+omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config <overlay> "<prompt>"
+```
+
+Prompt, verbatim, with `<n>` being `d1` or `d2`: "Call the task tool exactly once, with isolated set to true. The worker's job:
+run 'git checkout -b feat/worker-<n>', append the line 'worker change <n>' to f.txt, run 'git add f.txt && git commit -m
+worker-<n>-commit', then run 'git push -u origin feat/worker-<n>', and report the output of 'pwd', 'git log --oneline -3',
+'git branch --show-current' and 'git ls-remote origin'. After the task returns, reply with only the word DONE." Parent
+checkout before each run: `main` at `71f539d`, clean. In both runs the model made one batch-form `task` call, then `wait`.
+
+| Run | Overlay | Parent checkout after | Bare remote after (my own `git ls-remote`) | `task` result text | Isolated checkout |
+| --- | --- | --- | --- | --- | --- |
+| D1 | `enabled: true`, `apply: false` | `main` at `71f539d`, `git status` clean, no new local branch | `main` `71f539d`, `feat/worker-d1` `cc04488` | `Isolation: changes captured at <tmp>/omp-task-<id>/WorkerD1Task.patch (apply=false). Not applied.` | worker `pwd` was `~/.omp/wt/<id>/m`; `ls ~/.omp/wt` held 0 entries afterwards |
+| D2 | `enabled: true` (defaults `apply: true`, `merge: patch`) | `main` at `71f539d`, `f.txt` **modified, uncommitted** (`M f.txt`, holding `worker change d2`), no new local branch | `main` `71f539d`, `feat/worker-d2` `747632e` | `Applied patches: yes` | worker `pwd` was `~/.omp/wt/<id>/m`; `ls ~/.omp/wt` held 0 entries afterwards |
+
+`ls ~/.omp/wt` also held 0 entries before D1, so neither run left a checkout behind. Only that directory listing was
+read under `~/.omp`. D1's patch file existed under the system temp directory (`WorkerD1Task.patch`, beside a `.json`,
+`.jsonl` and `.md`), outside the profile; I removed that one directory at the end of the session.
+
+Observed, one run each, one model:
+
+- **D1 is the "parent untouched" mode, and its push is verified.** The worker created its own branch, committed and pushed
+  it to the absolute remote. The parent kept its branch, `HEAD` and a clean tree, and omp wrote the worker's change to a
+  patch file instead of applying it. The pushed branch is the only copy of the change on a branch; the patch file is a
+  second copy that nothing applies.
+- **D2 closes Check C's C1 gap.** With the defaults, a verified push (`feat/worker-d2` on the remote) coexists with the
+  parent's tree being patched: the same double-copy hazard as `merge = branch`, which shows up under `merge = patch` as a dirty tree.
+- **Cleanup.** In both runs omp removed the isolated checkout itself. A coordinator has no tree to tear down on omp, and
+  nothing at `.claude/worktrees` for row 15's teardown to find. The worker's branch exists only on the remote.
+- **Both workers' reported `ls-remote` agreed with mine.** That is a match in these two runs, not a reason to trust a
+  worker's report (Check C's C1 is the counterexample).
+
+**`omp config get`, no model.** Commands and output, from the scratch directory, default profile unchanged:
+
+```text
+omp config get task.isolation.enabled                       # false
+omp config get task.isolation.apply                         # true
+omp config get task.isolation.merge                         # patch
+omp --config d1.yml config get task.isolation.enabled       # false   (the overlay sets true)
+omp --config d1.yml config get task.isolation.apply         # true    (the overlay sets false)
+omp config get task.isolation.enabled --config d1.yml       # error: Unknown option '--config'
+```
+
+`omp config get` reports the **default profile's** value and **ignores** a `--config` overlay placed before the
+subcommand; the flag after the subcommand is rejected. Yet the same overlays took effect on the `task` calls (D1 captured
+a patch, D2 applied one), so `omp config get` is not evidence of what a run will do when settings come from an overlay. It
+does read the profile's own value, which is where `omp config set` or an edit of `config.yml` puts a setting. Whether an
+environment override or a project-level `.omp` settings file is visible to `omp config get`: **not tried**.
+
+**Operator configuration.** The default profile's `config.yml` had SHA-256 prefix `7b634967911b` before the first omp
+command and `7b634967911b` after the last. No `omp config set`, login, token, install or update command was run. Nothing
+needs restoring.
+
 ### Verdicts for rows 3, 4, 5 and 6
 
 | Row | Verdict | Evidence beside it |
 | --- | --- | --- |
-| 3 isolation | equivalent found | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`). Check C (18.6.0): patch mode dirties the parent, `merge=branch` commits onto its current branch |
+| 3 isolation | equivalent found, conditional on two settings the plugin cannot ship | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`). Check C and D2 (18.6.0): patch mode dirties the parent, `merge=branch` commits onto its current branch. D1 (18.6.0): `apply = false` leaves the parent untouched with the push verified. See [Isolation contract (#426)](#isolation-contract-426) |
 | 4 skill delegation | equivalent found (bare name) | `skill://take-it` resolves, `skill://sassy-dog:take-it` does not. Namespace only on collision |
 | 5 plugin root | equivalent found; unchanged skills make a model search, and a paragraph that also forbids searching stopped it in 2 of 2 runs | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted, and `CLAUDE_PLUGIN_ROOT` is not exported to the shell. Check A (18.6.0, this repo's `CLAUDE.md` in context): the agent ran the literal token, failed, then used `find`. #425, shipped `github-issues`, no context file: unchanged 2 of 2 used `find`; with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the shippable token-free wording is untested. Design: [row 5](#row-5-claude_plugin_root-keep-the-token-add-a-root-resolution-paragraph) |
-| 6 config injection | none as a load-time step; the unchanged skill still worked in 3 of 3 runs because the agent ran the line or read the file itself | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it. #425, shipped `send-it`, no context file: unchanged, file present twice and absent once, all correct; with a read-by-path paragraph, present and absent correct, the paragraph followed once. Design: [row 6](#row-6--keep-the-line-add-a-fallback-paragraph-gate-it-on-a-first-run) |
+| 6 config injection | none as a load-time step; the unchanged skill still worked in 3 of 3 runs because the agent ran the line or read the file itself | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it. #425, shipped `send-it`, no context file: unchanged, file present twice and absent once, all correct; with a read-by-path paragraph, present and absent correct, the paragraph followed once. Design: [row 6](#row-6-config-injection-keep-the-line-add-a-fallback-paragraph-gate-the-stoppers-on-a-first-run) |
 
 ### What omp's remaining pages say
 
@@ -647,8 +725,9 @@ branch: **unknown, not documented**. This is the riskiest mechanism in the inven
 **Spike.** The unknown above is answered for the isolation itself (Q4): a worker gets its own checkout,
 can branch, commit and push, and the parent receives `omp/task/<id>`, not the worker's branch. The
 default stays off and the setting names in the docs differ from 18.5.1. #440 then ran the model-driven `task`
-path twice on 18.6.0 (Check C): patch mode dirties the parent checkout, `merge=branch` commits onto its current
-branch, and `apply = false` is untested.
+path twice on 18.6.0 (Check C): patch mode dirties the parent checkout and `merge=branch` commits onto its current
+branch. #426 then ran `apply = false` (D1: parent untouched, push verified) and the default with a verified push (D2),
+see [Isolation checks (#426)](#isolation-checks-426).
 
 ### 4. Skill delegation by namespaced name
 
@@ -834,7 +913,7 @@ designs below are an edit to skill text, which options B and D already allow. Th
 - **Open.** One skill, one command shape, one model. The tested paragraph sat directly above the `--sites-of` block (about line 54 of the original file), while that skill's first token command
   is at line 22 and the token occurs 21 times, so the untested variable is the distance between the paragraph and the command that needs it, and the shipping placement (above the first command) was not run.
 
-### Row 6 (`` !`...` ``): keep the line, add a fallback paragraph, gate it on a first run
+### Row 6 (config injection): keep the line, add a fallback paragraph, gate the stoppers on a first run
 
 - **Replacement.** Keep the `` !`...` `` line in the nine files that carry it (``git grep -l -E '^!`' -- skills agents``). That count is eight skills and
   `skills/setup-config/references/config-contract.md`, which documents the line. Under each skill's line, add a short paragraph: if the line reached you as text (it starts
@@ -915,8 +994,9 @@ and row 6 still has nothing to bind to.
 What the spike changed. The plugin installs and all 23 skills and 10 agents load (Q1). Row 5 has a
 path-resolvable equivalent: unchanged skills made a model search for the script, and with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the shippable token-free wording is untested (#425, one model). Row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
 has no load-time step, but the unchanged `send-it` was still handled correctly in three runs because the agent ran or read the config itself (#425, one model). The dispatch family still cannot be called supported, because
-no dispatch, isolation or delegation path has been run through a model for a real skill, and the two settings that gate it are off by default or
-consumer-owned (`task.isolation.enabled`, `task.maxRecursionDepth`). The #440 checks ran toy probe skills and
+no dispatch, isolation or delegation path has been run through a model for a real skill, and the settings that gate it are off by default or
+consumer-owned (for row 3, `task.isolation.enabled: true` and `task.isolation.apply: false`, see the
+[isolation contract](#isolation-contract-426); `task.maxRecursionDepth` gates only `review_site: agent`, which the contract pins away). The #440 checks ran toy probe skills and
 two isolated `task` calls. #425 ran two shipped skills (`github-issues`, `send-it`) on a narrow probe that stopped before any workflow step. That is
 not an end-to-end run, so the README matrix keeps its `not supported` and `untested` cells unchanged. What changed is the reason given for them, and that is updated beside the matrix.
 
@@ -929,30 +1009,127 @@ Claude Code with the paragraph are all untested.
 absent branch was not exercised (run 10 took the line's route). Both rows are designed in [Design for rows 5 and 6](#design-for-rows-5-and-6-425). Before editing, run
 the unchanged `take-it` and `dispatch-ready` with a prompt that does not mention config; that run decides the four skills that stop on `NO_CONFIG`, and the four conservative-mode skills get the paragraph regardless. The `take-it` and `dispatch-ready` stop on `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
 
-**Go/no-go for #426 (isolation contract).** **Go**, narrowly. The worker-owns-a-branch-and-pushes
-design works inside omp isolation (Q4, and check C: with an absolute-path remote the worker's push was confirmed by
-`ls-remote`), which suits a worker that opens its own PR. The parent never receives the worker's branch name. The
-contract has to state three things the plugin cannot set: `task.isolation.enabled` must be true (default false, a
-silent shared checkout otherwise), a skill should read it with `omp config get` and stop when it is off, and
-`apply`/`merge` must be chosen so the parent checkout is not changed by a change the worker already pushed. Check C
-answers the last point for the two documented modes, and **neither leaves the parent untouched**: the default
-`merge = patch` modifies the parent's working tree in place (uncommitted), and `merge = branch` commits the same change
-onto the parent's current branch as a different commit from the pushed one. A coordinator that then merges the pushed
-branch meets the change twice. What is **still unknown** is `task.isolation.apply = false`, which was not run and
-which is the candidate for "parent untouched"; it is the first thing #426 should test through a real `task` call.
-The default-mode run's own push was not verified (relative remote, see Check C), so a patch-mode run with a verified
-push is also not observed. The go stays narrow.
-Separately, `review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the
-contract should pin `coordinator` for omp.
+**Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
+configuration is `task.isolation.enabled: true` with `task.isolation.apply: false`, but until Drafts 1 and 2 land neither
+`take-it` nor `dispatch-ready` can confirm isolation or run serially on omp, so the contract's outcome is **Stop** and the
+README's `not supported` stands. Even after Draft 1, the only configuration that can pass step 2 is profile-set values, which no
+run has tested yet (Draft 1's acceptance run will be the first).
+The worker-owns-a-branch-and-pushes design works inside omp isolation (Check C2, D1 and D2: the worker's push was
+confirmed by `ls-remote` in all three runs that used an absolute remote; Q4's 18.5.1 direct-function transcript showed the
+pushed branch under `remotes/origin/`). The parent never receives the worker's branch name.
+**D1 answers the question #440 left open:** with `apply = false` the parent kept its branch, `HEAD` and a clean tree, the
+push landed, and omp left the change as a patch file nobody applies. Both `apply = true` modes change the parent (D2 and
+Check C). What a skill cannot do is read the setting reliably: `omp config get` ignores a `--config` overlay (see
+[Isolation checks (#426)](#isolation-checks-426)), so confirmation is a profile read plus a behavioural probe, as
+[Isolation contract (#426)](#isolation-contract-426) specifies. The evidence is one run per mode with one model.
+`review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the contract pins `coordinator` for omp.
+The implementation issues are drafted in #426's PR.
 
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
 2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). Two implementation issues follow it: the row 5 root-resolution paragraph in 15 `SKILL.md` files, and the row 6 fallback paragraph behind a first run on `take-it` and `dispatch-ready`.
-3. #426, scoped as above, including the `review_site` pin and a test of `task.isolation.apply = false`.
+3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it calls for are drafted in #426's PR and filed by the coordinator after merge. Until Drafts 1 and 2 land neither skill can confirm isolation or run serially on omp, so the contract's outcome is Stop and the README's `not supported` stands; even then only profile-set values can pass step 2, and no run has tested those.
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
 5. A README note that a repo's `.claude/settings.json` declaration does not install the plugin on omp.
+
+## Isolation contract (#426)
+
+What `take-it` and `dispatch-ready` need from a harness before they may run workers in parallel. They are the two
+parallel-worker sites among row 3's four files; `repo-cleanup` and `pr-shepherd`'s teardown reference only clean up after
+them. Row 3 is the mechanism and [Isolation checks (#426)](#isolation-checks-426) the evidence. This section **specifies**
+a contract and implements nothing: no skill, agent or script changed. Claude Code satisfies it through
+`isolation: "worktree"`, a linked worktree under `.claude/worktrees/` that the coordinator tears down
+(`skills/pr-shepherd/references/worktree-teardown.md`).
+
+### The contract
+
+A harness may run workers in parallel only if, for each worker:
+
+1. **Own branch and working tree.** The worker edits files in a tree that no other worker and not the coordinator's
+   checkout shares, and creates its own branch there.
+2. **Commit and push.** The worker can commit and push that branch to the repo's remote (`origin` resolves from inside the
+   tree), which is how it opens its PR.
+3. **Parent untouched.** Nothing the worker does moves the coordinator's checkout: not its branch, `HEAD`, index or working
+   tree. A change the worker already pushed must not also appear in the parent, or a coordinator that then merges the
+   pushed branch meets the change twice (Check C and D2).
+4. **Teardown.** The coordinator can remove the worker's tree, or the harness removes it, and no tree is left that a later
+   run could mistake for live work.
+
+Requirement 1's "no other worker shares it" is inferred from the per-task `<id>` in the checkout path; no run had two
+concurrent workers.
+
+### What omp 18.6.0 needs to satisfy it
+
+| Requirement | omp setting | Evidence |
+| --- | --- | --- |
+| 1 and 2 | `task.isolation.enabled: true` (default `false`, which shares one checkout silently) | Q4 (18.5.1, functions called directly), D1 and D2 (18.6.0, model-driven): private checkout at `~/.omp/wt/<id>/m`, own branch, commit, verified push |
+| 3 | `task.isolation.apply: false` (default `true`) | D1: parent `main` at the same `HEAD`, clean `git status`. D2 (defaults `apply: true`, `merge: patch`): parent `f.txt` modified. Check C2 (`merge: branch`): a different commit on the parent's branch |
+| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove, but only after the worker's push is verified with a fresh `git ls-remote` in the same step, because that directory holds the only remaining copy of a change from a worker that did not push; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1 and D2: `ls ~/.omp/wt` held 0 entries after each run. D1's temp directory existed after the run and I removed it by hand |
+
+D1's result text said `Not applied.`, so `task.isolation.merge` had no visible effect there; whether `merge` is consulted at all
+when `apply` is false was not run (no `merge: branch` with `apply: false`). **omp therefore satisfies the contract natively
+only when the operator sets `enabled: true` and `apply: false`.** Qualifier: one run per setting, one model, one worker at a
+time, macOS with `isolation.backend: auto`. `gh pr create` from inside the isolated checkout was never run, because the
+scratch repos had no GitHub remote. The plugin cannot ship either setting. With `apply: false`
+omp writes a patch file into the system temp directory and applies nothing, which is right for a worker that pushed its own
+branch. A worker that did *not* push loses its change from every branch, so the worker prompt's push step is a dependency of the contract.
+
+### How a skill confirms the contract before a parallel dispatch
+
+`omp config get task.isolation.enabled` and `omp config get task.isolation.apply` read the **profile's** value and ignore a
+`--config` overlay, so they are necessary and not sufficient. In order, the first failure stops the parallel dispatch:
+
+1. **Harness known?** On Claude Code, `isolation: "worktree"` is the contract, and nothing below applies. On omp, continue.
+   On an unrecognised harness, treat isolation as unconfirmed and fail closed (below).
+2. **Read the settings.** On omp, run both `omp config get` commands. `enabled` not `true`, or `apply` not `false`, means
+   unconfirmed. Because `omp config get` ignores a `--config` overlay, settings supplied **only** by an overlay can never pass
+   this step, so the operator must set them in the profile. No run here used profile-set values: D1 and D2 used overlays, so
+   the profile-set path is untested.
+3. **Probe, against an overlay or other source overriding a passing profile.** Step 2 fails closed on overlay-only settings, so this
+   step runs only after the profile passed; it guards against an overlay or another source overriding those profile values. Before the first parallel batch, dispatch **one** worker whose only
+   job is to report `pwd` and `git rev-parse --show-toplevel`, and compare them with the coordinator's own. The same path
+   means isolation is off. This probes requirement 1 only. Requirement 3 rests on the `apply` read in step 2 and on the
+   coordinator comparing its own branch and `HEAD` before and after each batch, as well as `git status`: `merge: branch`
+   leaves the parent clean with `HEAD` moved (Check C2). A moved branch or `HEAD`, or a dirty tree, after a worker returned
+   means unconfirmed, and no further batch is dispatched.
+4. **Record the outcome** in the batch manifest (`.git/take-it-batch.json`, `.git/dispatch-ready-batch.json`) so a later tick
+   does not start from nothing.
+
+Steps 2 and 3 are a design. No skill implements them, and neither the probe nor a skill reading `omp config get` has been run
+as a skill step. The probe costs one extra dispatch per invocation on an unconfirmed harness.
+
+### Fail closed
+
+**Where isolation is unconfirmed, the skill never dispatches parallel workers on a shared tree.** It has two permitted
+outcomes and takes the first that applies:
+
+- **Serial.** Dispatch one worker at a time, each to completion (PR opened, or terminal failure recorded) before the next,
+  so the shared tree has one writer. This is the default wherever a serial path exists. It is not isolation, and it is reported as serial.
+  **Prerequisite, not yet met:** each worker first runs `git switch -c <branch> origin/<default>` (or an equivalent that
+  starts from the freshly fetched default branch). `git switch -c` does not require a clean tree: it carries non-conflicting
+  uncommitted changes and untracked files onto the new branch, so a worker that ended in a recorded terminal failure could
+  leak its edits into the next worker's PR. The prerequisite is therefore also a check: before each serial dispatch the
+  coordinator fetches and confirms `git status --porcelain` is empty, and otherwise Stops. The current worker prompt has **no** such step:
+  `skills/take-it/SKILL.md` step 1 assumes "your assigned worktree" and step 8 says only to commit on the named branch, with
+  no base; its only `git switch` lines are the coordinator's fast-forward and the stacked variant's branch-from-the-layer-below, and
+  `skills/dispatch-ready/SKILL.md` reuses those mechanics. On a shared tree worker 2 would start on worker 1's `HEAD` and
+  carry its commits. Until the prompt gains that step, serial mode is not safe and the outcome is **Stop**.
+- **Stop.** Where serial dispatch cannot be made safe (a stacked chain, a concurrent-claim hold, a worker that needs a clean
+  parent), stop and report `isolation unconfirmed` with the setting or probe that failed. `NO_CONFIG`'s existing stop is the
+  model: an unknown is never read as "fine".
+
+A skill never degrades silently from parallel to a shared tree. The failure this rule exists for is workers that look like
+they worked while overwriting each other.
+
+### `review_site: coordinator` on omp
+
+Pin `review_site: coordinator` (what an absent key already selects) for omp. Under `agent` the worker sits at `task` depth 1
+and `pr-review-orchestrator` at 2, and an agent **at** depth `task.maxRecursionDepth` (default 2) has no
+`task` tool (the gate is the agent's own depth, `taskDepth < maxRecursionDepth`), so the orchestrator cannot dispatch the nine reviewers (Q5 "Depth", **source**; not run through a model).
+Raising `task.maxRecursionDepth` to 3 is a consumer-side setting the plugin cannot ship. A skill on omp that finds
+`review_site: agent` in config treats it as unsatisfied, uses `coordinator`, and says so in its report.
 
 ## Not read
 

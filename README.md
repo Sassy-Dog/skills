@@ -125,7 +125,9 @@ has been run end to end through a model.
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
 `isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), whose omp equivalents
 the spike found, and which also need omp settings a plugin cannot ship. #440 probed only row 3, narrowly (two
-isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it). The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it).
+[#426](https://github.com/Sassy-Dog/skills/issues/426) then found that `task.isolation.apply: false` left the parent untouched with a verified push, and its contract requires
+`task.isolation.enabled: true` and `task.isolation.apply: false`. Until the `take-it` and `dispatch-ready` implementation issues land, the contract's outcome on omp is Stop, so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
 in that family and follows it.
 
 | Skill | Family | Claude Code | omp | Inventory rows |
