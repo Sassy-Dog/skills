@@ -829,8 +829,9 @@ paragraph is inert there. The four that stop on `NO_CONFIG` (`take-it`, `dispatc
 their inclusion is #455's decision rule (`take-it`'s runs used as evidence for an identical line in a
 different skill and prompt), not a measurement. The runs were one model, one prompt shape per skill, a
 dummy config and gh unauthenticated, so a skill that stops on `NO_CONFIG` must still never infer "no
-config" from an unrun line. No gate pins the paragraph's text, its placement or its absence from the
-stoppers yet; [#463](https://github.com/Sassy-Dog/skills/issues/463) tracks the gate. The paragraph is
+config" from an unrun line. `scripts/test-config-fallback-paragraph.sh` pins the paragraph's text, its placement
+directly under the line and its absence from the stoppers ([#463](https://github.com/Sassy-Dog/skills/issues/463));
+this prose description is not pinned. The paragraph is
 not part of the config format, and `setup-config` neither writes nor checks it.
 
 ### `CONFIG_SOURCE` — why the block announces where it read from
