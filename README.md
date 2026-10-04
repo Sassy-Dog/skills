@@ -105,20 +105,22 @@ last-write-wins run drops one of the two with no error anywhere.
 ### Harness support
 
 Which skills are expected to run outside Claude Code. Statuses are `expected`, `untested` or
-`not supported`. **`untested` is the default**: the plugin installs and loads on [omp](https://omp.sh), but no skill
-has been run end to end through a model there, so no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
+`not supported`. **`untested` is the default**: the plugin installs and loads on [omp](https://omp.sh), but no shipped skill
+has been run end to end through a model there (only toy probe skills, see below), so no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
 skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. The omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
 has a model-resolved equivalent, and row 6 (`` !`...` `` config injection) has no load-time equivalent:
-the `` !`...` `` line reaches the model unexecuted, and whether a model then reads the repo config
-itself is untested. No cell below changed, because the equivalents are not yet
-shown to work through a model.
+the `` !`...` `` line reaches the model unexecuted. The model-backed checks of
+[#440](https://github.com/Sassy-Dog/skills/issues/440) then ran toy probe skills on omp 18.6.0: a cold agent
+ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and a cold agent told to
+read the repo config by absolute path did so and used its value. No cell below changed, because no shipped skill
+has been run through a model.
 
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
 `isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), whose omp equivalents
-the spike found but did not run through a model, and which also need omp settings a plugin cannot
-ship. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+the spike found and #440 probed only narrowly (one isolated `task` call: its patch or branch merge changes the
+parent checkout), and which also need omp settings a plugin cannot ship. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
 in that family and follows it.
 
 | Skill | Family | Claude Code | omp | Inventory rows |
