@@ -822,12 +822,16 @@ text. The four skills that degrade silently on a missed config — `send-it`, `s
 reached the agent as text (it starts with `!` and has no `CONFIG_SOURCE:` output beneath it), read
 `<repo root>/.claude/sassy-dog/<skill>.md` by absolute path, treat a missing file as `NO_CONFIG`, and
 never read an unrun line as "no config exists". On Claude Code the condition is false, so the
-paragraph is inert there. The four that stop on `NO_CONFIG` (`take-it`, `dispatch-ready` and the two
-front-ends that read `take-it.md`) do not carry it, because the unchanged `take-it` and
+paragraph is inert there. The four that stop on `NO_CONFIG` (`take-it`, `dispatch-ready`,
+`work-recommendations` and `work-fire-watch`) do not carry it, because the unchanged `take-it` and
 `dispatch-ready` were right in 12 of 12 omp runs ([`docs/HARNESS-PORTABILITY.md`](../../../docs/HARNESS-PORTABILITY.md),
-"Config-fallback paragraph (#455)"). That is one model and a dummy config, so a skill that stops on
-`NO_CONFIG` must still never infer "no config" from an unrun line. The paragraph is not part of the
-config format, and `setup-config` neither writes nor checks it.
+"Config-fallback paragraph (#455)"). `work-recommendations` and `work-fire-watch` were **never run**:
+their inclusion is #455's decision rule (`take-it`'s runs used as evidence for an identical line in a
+different skill and prompt), not a measurement. The runs were one model, one prompt shape per skill, a
+dummy config and gh unauthenticated, so a skill that stops on `NO_CONFIG` must still never infer "no
+config" from an unrun line. No gate pins the paragraph's text, its placement or its absence from the
+stoppers yet; [#463](https://github.com/Sassy-Dog/skills/issues/463) tracks the gate. The paragraph is
+not part of the config format, and `setup-config` neither writes nor checks it.
 
 ### `CONFIG_SOURCE` — why the block announces where it read from
 
