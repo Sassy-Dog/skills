@@ -22,9 +22,9 @@
 #     pattern, CFG_RE, is the only definition of "config line" here, so an
 #     unrelated `!` injection elsewhere in a carrier is not a config line and
 #     passes, while the paragraph itself may start no line with `!` plus a
-#     backtick). It must equal
-#     carriers + stoppers, so a ninth skill with such a line fails here until it
-#     is classified. Nothing is assumed about which skills those are.
+#     backtick). It must equal carriers + stoppers, so a ninth skill with such
+#     a line fails here until it is classified. Nothing is assumed about which
+#     skills those are.
 #   - PINNED BY NAME: the four carriers and the four stoppers below. The
 #     classification is a decision, not a property of the text, so it is
 #     written down rather than inferred; changing it is a deliberate edit here.
@@ -300,8 +300,6 @@ run_carrier_mutants() { # <source SKILL.md> <skill name>
         differs "$src" "$WORK/$m.md" "$m" || continue
         if [ -n "$(check_carrier "$WORK/$m.md" "$name")" ]; then ok "mutant '$m' is caught"; else bad "mutant '$m' was NOT caught"; fi
     done
-    # The hygiene check must catch its three breaches on its own, not only
-    # through the exact-text comparison that also fails them.
     # An extra non-config injection is not a config line and must still pass.
     mut_extra_inject "$src" "$WORK/extra.md"
     if differs "$src" "$WORK/extra.md" "extra non-config injection"; then
@@ -311,6 +309,8 @@ run_carrier_mutants() { # <source SKILL.md> <skill name>
     if differs "$src" "$WORK/rdup.md" "reworded second copy"; then
         if [ -n "$(check_carrier "$WORK/rdup.md" "$name")" ]; then ok "mutant 'reworded second copy in a carrier' is caught"; else bad "mutant 'reworded second copy in a carrier' was NOT caught"; fi
     fi
+    # The hygiene check must catch its three breaches on its own, not only
+    # through the exact-text comparison that also fails them.
     for m in bang positional token; do
         if [ -n "$(para_of "$WORK/$m.md" | hygiene_text)" ]; then
             ok "hygiene alone catches '$m'"
