@@ -112,15 +112,16 @@ skill's rows are the ones whose reproducing command matches files under that ski
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
 has a model-resolved equivalent, and row 6 (`` !`...` `` config injection) has no load-time equivalent:
 the `` !`...` `` line reaches the model unexecuted. The model-backed checks of
-[#440](https://github.com/Sassy-Dog/skills/issues/440) then ran toy probe skills on omp 18.6.0: a cold agent
-ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and a cold agent told to
-read the repo config by absolute path did so and used its value. No cell below changed, because no shipped skill
+[#440](https://github.com/Sassy-Dog/skills/issues/440) then ran toy probe skills on omp 18.6.0, with this repo's own
+`CLAUDE.md` in the model's context (omp walks up past a nested repository's root), one run each with one model: the agent
+ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and an agent told to
+read the repo config by absolute path did so and used its value. Neither result is evidence about a consumer repo. No cell below changed, because no shipped skill
 has been run through a model.
 
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
 `isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), whose omp equivalents
-the spike found and #440 probed only narrowly (one isolated `task` call: its patch or branch merge changes the
-parent checkout), and which also need omp settings a plugin cannot ship. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+the spike found, and which also need omp settings a plugin cannot ship. #440 probed only row 3, narrowly (two
+isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it). The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
 in that family and follows it.
 
 | Skill | Family | Claude Code | omp | Inventory rows |

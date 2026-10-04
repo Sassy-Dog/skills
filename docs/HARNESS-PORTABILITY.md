@@ -111,7 +111,7 @@ already lists, and nothing reads `extraKnownMarketplaces` (**source**, `src/disc
 `readClaudeEnabledPlugins`, and a grep of `src/` for `extraKnownMarketplaces` with no hit). A consumer
 repo that declares both keys therefore does **not** get the plugin installed on omp.
 
-### Q2. Plugin root (row 5): equivalent found, model-resolved
+### Q2. Plugin root (row 5): equivalent found; a model recovered by searching (#440)
 
 Observed, `omp read skill://pr-shepherd` (the `read` tool's own output for a skill):
 
@@ -138,8 +138,9 @@ sentence that tells the model how to resolve it. omp does substitute `${CLAUDE_P
 processes (**source**, `src/discovery/substitute-plugin-root.ts`, used from `claude-plugins.ts` and
 `omp-plugins.ts`). `https://omp.sh/docs/env` and `https://omp.sh/docs/plugins` document neither.
 Check A of #440 then ran a model against it (`omp/18.6.0`, see
-[Check A](#check-a-row-5-the-model-does-not-derive-the-plugin-root-it-recovers-by-searching)): the cold
-agent ran the literal token first, failed with exit 127, found the script with `find` and ran it. It did
+[Check A](#check-a-row-5-the-model-does-not-derive-the-plugin-root-it-recovers-by-searching)): in one traced
+run with one model, with this repo's `CLAUDE.md` in context (see the #440 Setup caveat), the agent
+ran the literal token first, failed with exit 127, found the script with `find` and ran it. It did
 not derive the grandparent. Print mode also did not expand `/skill:`, so the `[Skill directory: ...]` line above
 was not seen under a model. Whether a sentence naming the rule makes the first command succeed is **unknown**.
 
@@ -153,8 +154,9 @@ there is no positional or `$ARGUMENTS` expansion either (`https://omp.sh/docs/sl
 The `@path` include token is documented for context files only (`https://omp.sh/docs/context-files`)
 and was not tried inside a skill. The skill therefore sees an unexecuted command, not the config
 and not `NO_CONFIG`. Check B of #440 (`omp/18.6.0`, see [Check B](#check-b-row-6-the-model-follows-an-explicit-read-the-config-instruction))
-then showed that a cold agent told to read `.claude/sassy-dog/<skill>.md` by absolute path does so and acts
-on the value, in one run with one model. That instruction was not combined with the `` !`...` `` line, so
+then showed that an agent told to read `.claude/sassy-dog/<skill>.md` by absolute path did so and acted
+on the value, in one run with one model, **with this repo's `CLAUDE.md` in context**, which documents that
+mechanism. That is not evidence about a consumer repo. That instruction was not combined with the `` !`...` `` line, so
 "every skill degrades to its `NO_CONFIG` path" is still the safe reading for a skill left unchanged. `take-it`
 and `dispatch-ready` would block on it.
 
@@ -259,7 +261,7 @@ name means. Whether a model follows "read `skill://<name>`" reliably: **unknown*
 Issue #440 asked for three model-backed checks on site `mac` with the default omp profile: **A** (row 5,
 a cold agent resolves the plugin root and runs a bundled script), **B** (row 6, a cold agent follows an
 explicit "read `.claude/sassy-dog/<skill>.md` by absolute path" instruction instead of falling back to
-`NO_CONFIG`) and **C** (row 3, one `task` call with isolation on, where the worker commits and pushes to a
+`NO_CONFIG`) and **C** (row 3, two `task` calls with isolation on, one per merge mode, where the worker commits and pushes to a
 local bare remote, then what `apply` and `merge` do to the parent checkout under the default and under
 `merge=branch`). History: a first attempt on 2026-10-03 against `omp/18.5.1` could not run any of them
 (no credentials, and the only model, the on-device `apple` one, has an 8,192-token window against omp's
@@ -275,8 +277,19 @@ call of A omitted `--mode json`) and the default profile. This attempt made **5*
 lived under the worktree's gitignored `tmp/`, each with a local bare remote and no GitHub remote.
 `omp plugin list` printed `No plugins installed` for the default profile and the attempt installed
 nothing, so **A and B ran repo-local skills** (`.claude/skills/<name>/SKILL.md` in a scratch repo,
-laid out like a plugin skill), not the shipped `sassy-dog` plugin. What they test is how a model treats the
-text, which does not depend on where the skill came from, but they are not a run of a real plugin skill.
+laid out like a plugin skill), not the shipped `sassy-dog` plugin. They are not a run of a real plugin skill.
+
+**Caveat: this repo's `CLAUDE.md` was in context for A and B.** The scratch repos sit under this repo's worktree, and
+omp 18.6.0 walks up from the cwd past a nested repository's own root, collecting context files up to but not including the
+home directory: `loadStandaloneContextFiles` in `src/discovery/helpers.ts` ("continue past the Git root to discover
+workspace-level files"), keeping one project-level file per depth (`src/capability/context-file.ts`, the `key` of
+`contextFileCapability`). Read from that source, not observed in the model's prompt (the JSON event stream does not carry
+the system prompt), the run therefore loaded this repo's `CLAUDE.md` (about 43.6 KB) from the worktree root and from the
+main checkout above it. That file documents both mechanisms under test, `${CLAUDE_PLUGIN_ROOT}` with the `PLUGIN_ROOT`
+preamble and `.claude/sassy-dog/<skill>.md` with `NO_CONFIG`, and names `~/Repos/sassy-dog/skills`, the directory Check A's
+recovery `find` searched. The first #440 attempt recorded this same caveat for its own call. "Cold" in A and B therefore
+means no skill-specific instruction beyond the skill text, not no knowledge of the mechanisms. A and B must be repeated from a
+repository outside this tree before they say anything about a consumer repo.
 
 ### Check A (row 5): the model does not derive the plugin root, it recovers by searching
 
@@ -299,7 +312,7 @@ bash   bash <scratch>/tmp/a-repo/.claude/skills/probe-root/scripts/probe.sh -> P
 
 Observed, 18.6.0:
 
-- The script **did run**, and the answer was correct, but the cold agent **ran the literal token first**
+- The script **did run**, and the answer was correct, but the agent (with this repo's `CLAUDE.md` in context, see Setup) **ran the literal token first**
   and failed, then found the script with `find` over a parent directory. It did not take the skill
   directory's grandparent as the root. The path that worked was the skill directory itself, an absolute
   path under `.claude/skills/probe-root/`.
@@ -330,7 +343,7 @@ read   path=<scratch>/tmp/b-repo/.claude/sassy-dog/probe-config.md
 MARKER=violet-walrus-93
 ```
 
-Observed: the cold agent **read the file by absolute path and acted on its value**. It did not fall back to
+Observed: the agent **read the file by absolute path and acted on its value**, with this repo's `CLAUDE.md` in context (see Setup). It did not fall back to
 `NO_CONFIG`. One call, one run, one model: it shows the instruction can work, not that it is reliable. The
 `NO_CONFIG` branch (file absent) was not exercised, and neither was a skill that still carries the `` !`...` `` line
 next to the instruction.
@@ -339,7 +352,18 @@ next to the instruction.
 
 Overlays under `tmp/` (never the default profile's `config.yml`), passed as `--config <file>`: one with
 `task.isolation.enabled: true`, one adding `task.isolation.merge: branch`. `task.isolation.apply` stayed at its
-default of `true`. The prompt told the model to call `task` once with `isolated` true, with a worker that runs
+default of `true`. Commands (run through a wrapper that `cd`s into the scratch repo; the prompt is the file's text):
+
+```text
+omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config tmp/iso-patch.yml  "<prompt>"   # C1
+omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config tmp/iso-branch.yml "<prompt>"   # C2
+```
+
+The prompt, with C1's wording first and C2's addition in brackets: "Call the task tool exactly once, with isolated set to true.
+The worker's job: run 'git checkout -b feat/worker-branch', append the line 'worker change' to f.txt, run 'git add f.txt &&
+git commit -m worker-commit', then run 'git push -u origin feat/worker-branch', and report the output of 'git log --oneline -3'
+and 'git branch --show-current' [, 'git branch --show-current' and 'git ls-remote origin']. After the task returns, reply with
+only the word DONE." It told the model to call `task` once with `isolated` true, with a worker that runs
 `git checkout -b feat/worker-branch`, appends a line to `f.txt`, commits, pushes `-u origin feat/worker-branch`
 and reports `git log`, `git branch --show-current` and (second run only) `git ls-remote origin`. The model's call
 used the batch form (`tasks: [{name, agent: "task", task, solutionSpace, isolated: true}]`, plus `context`), spawned
@@ -355,8 +379,8 @@ as `37a7e63`, a **different commit** on `main`. The pushed branch and the parent
 
 - **Default (patch):** the parent checkout is patched in place, with no commit and no branch. A worker that has
   already pushed its own branch therefore leaves the parent dirty with the same change.
-- **`merge=branch`:** omp merges the worker's commits into the parent's **current branch** (it did not create or keep a
-  branch for them), so the parent's `main` advanced by a commit that is not the pushed one. A coordinator that then pushes
+- **`merge=branch`:** omp merges the worker's commits into the parent's **current branch** (the result text names `omp/task/WorkerBranchTask`,
+  but no new local branch remained afterwards), so the parent's `main` advanced by a commit that is not the pushed one. A coordinator that then pushes
   or merges the real branch would meet the change twice.
 - **Caveat on C1.** The worker said it pushed, but the bare remote held only `main` afterwards. The scratch remote
   URL was relative (`../c1-remote.git`), which does not resolve from omp's isolated checkout outside the repo, so the
@@ -380,8 +404,8 @@ setting came from a `--config` overlay in `tmp/`. Nothing needs restoring.
 | --- | --- | --- |
 | 3 isolation | equivalent found | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`). Check C (18.6.0): patch mode dirties the parent, `merge=branch` commits onto its current branch |
 | 4 skill delegation | equivalent found (bare name) | `skill://take-it` resolves, `skill://sassy-dog:take-it` does not. Namespace only on collision |
-| 5 plugin root | equivalent found, but a model recovers by searching | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted. Check A (18.6.0): the cold agent ran the literal token, failed, then used `find` |
-| 6 config injection | none as a load-time step; an explicit read instruction worked once | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0): a cold agent read the config by absolute path and acted on it |
+| 5 plugin root | equivalent found, but in one run a model recovered by searching | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted. Check A (18.6.0, this repo's `CLAUDE.md` in context): the agent ran the literal token, failed, then used `find` |
+| 6 config injection | none as a load-time step; an explicit read instruction worked once | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it |
 
 ### What omp's remaining pages say
 
@@ -484,8 +508,9 @@ branch: **unknown, not documented**. This is the riskiest mechanism in the inven
 
 **Spike.** The unknown above is answered for the isolation itself (Q4): a worker gets its own checkout,
 can branch, commit and push, and the parent receives `omp/task/<id>`, not the worker's branch. The
-default stays off, the setting names in the docs differ from 18.5.1, and the model-driven `task` path
-was not run.
+default stays off and the setting names in the docs differ from 18.5.1. #440 then ran the model-driven `task`
+path twice on 18.6.0 (Check C): patch mode dirties the parent checkout, `merge=branch` commits onto its current
+branch, and `apply = false` is untested.
 
 ### 4. Skill delegation by namespaced name
 
@@ -520,7 +545,9 @@ plugin-root variable (`https://omp.sh/docs/skills`). The environment variable re
 (`https://omp.sh/docs/env`) has no such variable either.
 
 **Spike.** Not substituted, but resolvable: the skill directory is handed to the model, and its
-grandparent is the plugin root (Q2).
+grandparent is the plugin root (Q2). #440 (Check A, print mode, 18.6.0) found that `/skill:` was not expanded
+there and `[Skill directory: ...]` was never delivered: the model got a `[Skill file: ...]` header from
+`read skill://<name>` and recovered by searching.
 
 ### 6. `` !`...` `` dynamic context injection
 
@@ -676,7 +703,7 @@ State a support matrix per skill, and port only what is cheap.
 Resolve the two mechanisms that block everything first, then decide per family.
 
 1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither. The
-   spike found a model-resolved equivalent for row 5 and none for row 6.
+   spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440) and none for row 6.
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
 3. Rows 1 and 2 are lower risk. omp documents a dispatch tool and an agent format, and the
    remaining questions are about call shape.
@@ -693,28 +720,29 @@ model-backed run, and the #440 checks then ran three narrow probes through a mod
 and row 6 still has nothing to bind to.
 
 What the spike changed. The plugin installs and all 23 skills and 10 agents load (Q1). Row 5 has a
-model-resolved equivalent, row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
+path-resolvable equivalent that a model reached only by searching, row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
 has none. The dispatch family still cannot be called supported, because every one of those results
 is untested through a model for a real skill and the two settings that gate it are off by default or
 consumer-owned (`task.isolation.enabled`, `task.maxRecursionDepth`). The #440 checks ran toy probe skills and
-one `task` call, not a shipped skill, so the README matrix keeps its `not supported` and `untested` cells
+two isolated `task` calls, not a shipped skill, so the README matrix keeps its `not supported` and `untested` cells
 unchanged. What changed is the reason given for them, and that is updated beside the matrix.
 
-**Go/no-go for #425 (plugin root and config injection).** Split. **Go, with a corrected expectation, on the
-plugin root.** Check A (18.6.0) shows the token is not substituted and a cold agent does **not** take the
-skill directory's grandparent unprompted: it ran the literal token, got exit 127, then searched with `find` and
-recovered. So the follow-up should add one resolution sentence per `SKILL.md` that carries the token (15 files)
-and per reference-doc preamble, keeping the token for Claude Code, and it should treat "the first command
-succeeds" as the thing to prove, not assume. The omp `/skill:` message was not expanded in print mode, so the
-sentence must not rely on a `[Skill directory: ...]` line that print mode never delivered (the model got a
-`[Skill file: ...]` header from `read skill://<name>` instead). **No-go as a mechanical port of config injection**:
-omp has no load-time shell step, so the `` !`...` `` line arrives unexecuted. **Go on the different design.** Check B
-(18.6.0) shows a cold agent given an explicit "read `.claude/sassy-dog/<skill>.md` by absolute path" instruction
-read the file and acted on its value, with no `NO_CONFIG` fallback, so an instruction that works in both
-harnesses is viable. It is one run with one model on a toy skill, so #425 should still check it on one shipped
-skill before rewriting 22 files. The `take-it` and `dispatch-ready` stop on `NO_CONFIG` remains the safe default
-meanwhile, because an unexecuted line must never be read as "no config exists". Neither check has been run
-against the installed `sassy-dog` plugin (the default profile had none), only against repo-local probe skills.
+**Go/no-go for #425 (plugin root and config injection).** Split, and weaker than the first draft of #440 said. Both
+model-backed checks ran with this repo's `CLAUDE.md` in context (see the #440 Setup caveat), a file that documents
+both mechanisms, from a probe skill and not the installed plugin, in one run each with one model. They show what
+can happen, not what a cold consumer-repo agent does. **Go on the plugin root, conditionally.** The token is
+not substituted, and in the one traced run the agent ran the literal token, got exit 127, then searched with `find` and
+recovered. That run did not show the grandparent being derived. The follow-up should add one resolution sentence per
+`SKILL.md` that carries the token (15 files) and per reference-doc preamble, keeping the token for Claude Code, and
+should treat "the first command succeeds" as the thing to prove. Print mode did not expand `/skill:`, so the sentence
+must not rely on a `[Skill directory: ...]` line that print mode never delivered (the model got a `[Skill file: ...]`
+header from `read skill://<name>`). **No-go as a mechanical port of config injection**: omp has no load-time shell
+step, so the `` !`...` `` line arrives unexecuted. **A different design is plausible, not proven.** An explicit "read
+`.claude/sassy-dog/<skill>.md` by absolute path" instruction was followed once, with no `NO_CONFIG` fallback, but with a
+context file in the prompt that explains that very path and fallback, so the result may owe as much to that file as to the
+skill's own sentence. #425 should not rewrite 22 files on this evidence: first repeat A and B on one shipped skill
+installed from the plugin, run from a repository outside this tree. The `take-it` and `dispatch-ready` stop on
+`NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
 
 **Go/no-go for #426 (isolation contract).** **Go**, narrowly. The worker-owns-a-branch-and-pushes
 design works inside omp isolation (Q4, and check C: with an absolute-path remote the worker's push was confirmed by
@@ -735,7 +763,7 @@ contract should pin `coordinator` for omp.
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
-2. #425: the model-backed checks are done (#440), so start with the root-resolution sentence and prove the first command succeeds.
+2. #425: #440's checks ran with this repo's `CLAUDE.md` in context, so start by repeating A and B on one shipped skill installed from the plugin, run from a repository outside this tree, then add the root-resolution sentence and prove the first command succeeds.
 3. #426, scoped as above, including the `review_site` pin and a test of `task.isolation.apply = false`.
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
