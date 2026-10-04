@@ -47,8 +47,7 @@
 #      uncommitted edits onto the new branch), and the worker prompt carries a
 #      serial-mode step that branches with `git switch -c <branch>
 #      origin/<default_branch>`, inside §5's dispatched blockquote. The Serial
-#      variant says dispatch-ready sends it only on omp, on a tick whose own check
-#      chose serial (#452); it used to say "never by dispatch-ready".
+#      variant says it is never sent by dispatch-ready (#452 keeps it so).
 #  10. `review_site: agent` on omp is overridden to `coordinator` for the run,
 #      and the override is REPORTED, never silent and never written to config.
 #      This is a per-run override, not the config-derived flip decision 4 of
@@ -66,21 +65,20 @@
 #      "claim →" sentence: the check is before the claim, not merely present
 #      (a stop AFTER the claim leaves an `in-progress` claim that counts as
 #      in-flight and blocks other sessions). On Claude Code it is inert; on omp
-#      each tick re-derives (three reads, probe, `isolated: true`), a confirmed
-#      batch is verified by a fresh `git ls-remote`, an unconfirmed tick is
-#      serial (one claim, one worker, never a stack-chain member) or stop, the
-#      `review_site` override is reported, and the interim "until #452 lands"
-#      stop is gone.
-#   5b (inside property 5) The reference doc requires `isolated: true` on the
-#      probe's `task` entry and on every confirmed worker's, and take-it §5 points
-#      at it. The first dispatch-ready text omitted the parameter and two runs
-#      probed the coordinator's own tree.
+#      each tick re-derives, a confirmed batch is checked after it returns, the
+#      `review_site` override is reported, and an unconfirmed tick STOPS and
+#      claims nothing. There is NO serial mode here: §5 says why (take-it waits
+#      for each serial worker inside one invocation; a tick-driven loop would
+#      track a worker sharing the coordinator's checkout across ticks, and three
+#      Blocking findings in one review came from that one root cause), and the
+#      property forbids a serial path inside §5's slice. The interim "until #452
+#      lands" stop is gone.
 #  14. The terminal-state decision (#452): a stopped tick ends the loop through
 #      DRAIN STALLED, §7's STALLED conjunct names §5's isolation check, §5 states
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against fifty-three mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against forty-seven mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -113,32 +111,29 @@
 #   M25 dispatch-ready's "nothing in this paragraph applies" dropped              -> 13
 #   M26 dispatch-ready's "never reuses `confirmed`" re-derive rule dropped        -> 13
 #   M27 `isolated: true` removed from dispatch-ready (every occurrence)           -> 13
-#   M28 serial's "one claim and one worker for the tick" dropped                  -> 13
-#   M29 serial's "never a stack-chain member" dropped                             -> 13
 #   M30 the interim "until #452 lands" stop restored                              -> 13 (the negative)
 #   M31 dispatch-ready's review_site override sentence removed                    -> 13
 #   M32 dispatch-ready's fresh `git ls-remote` after-batch check removed          -> 13
 #   M33 §5's "DRAIN STALLED, not a fifth state" decision removed                  -> 14
 #   M34 §7's STALLED conjunct no longer names §5's isolation check                -> 14
 #   M35 §5's Reach paragraph removed                                              -> 14
-#   M36 take-it's Serial variant reverted to "never by `dispatch-ready`"          -> 9
 #   M37 "dispatch-ready does not yet" restored in the design doc                  -> 12
 #   M38 the doc's "task entry without isolated: true runs on the shared tree" removed -> 5
 #   M39 the doc's "every worker carries isolated: true" line removed               -> 5
 #   M40 take-it §5's pointer to the isolated: true rule removed                    -> 5
-#   M41 outstanding serial worker no longer blocks merge-shepherd.sh               -> 13
-#   M42 the manifest read is no longer ahead of §2's merge hand-off                -> 13
-#   M43 outstanding serial worker no longer blocks the fast-forward                -> 13
-#   M44 the stop report no longer names a failed precondition                      -> 13
 #   M45 §5's two-tick confirmation removed                                         -> 14
 #   M46 §5's transient-probe rationale removed                                     -> 14
 #   M47 §7's stall-record hold-root list loses the isolation root                  -> 14
-#   M48 "Close each serial record from live state first" removed                   -> 13
-#   M49 the explicit `"mode": "serial"` marker removed                             -> 13
-#   M50 "any claim" removed from the outstanding-worker block list                 -> 13
-#   M51 the confirmed branch no longer waits on the block                          -> 13
-#   M52 the coordinator-site review is no longer deferred under the block          -> 13
 #   M53 a forbidden restatement (`task.isolation.enabled`) injected into §5        -> 13
+#   M54 a `"mode": "serial"` serial record restored inside §5                      -> 13
+#   M55 "serial or stop" restored in §5's unconfirmed outcome                      -> 13
+#   M56 the why-no-serial-mode paragraph's heading removed                         -> 13
+#   M57 "claim **nothing**" replaced                                               -> 13
+#   M58 Reach's "claims happen only on a confirmed tick" removed                   -> 14
+#   M59 the confirmed path's "dispatches no further batch" halt removed            -> 13
+# New in the stop-only round: M54 a serial path restored, M55 "serial or stop"
+# restored, M56 the why-paragraph removed, M57 the unconfirmed-means-stop sentence
+# replaced, M58 the Reach claim sentence removed, M59 the after-batch halt removed.
 # Property 13 also fails if dispatch-ready §5 contains `task.isolation.enabled`,
 # `omp config set` or the `merge` `patch` pin, which the reference doc owns
 # (#452 item 1 asked for no third copy); M53 injects one. No tier string is
@@ -354,10 +349,8 @@ need("the serial step pushes with -u at push time", sv,
 need("the serial step also checks for a clean tree", sv, "confirm `git status --porcelain` is empty", 9)
 need("the serial step carries the stash guard", sv, "**Never `git stash`**", 9)
 need("the serial step carries the editable-install guard", sv, "never run an editable or dev install", 9)
-need("the serial variant says it is never sent on Claude Code, and dispatch-ready sends it only on omp", sv,
-     "never sent on Claude Code, and `dispatch-ready` sends it only on omp, on a tick whose own isolation check chose serial", 9)
-if "never by `dispatch-ready`" in sv:
-    problems.append("property 9: the Serial variant still says dispatch-ready never sends it (#452 does, on omp)")
+need("the serial variant says it is never sent on Claude Code or by dispatch-ready", sv,
+     "never sent on Claude Code and never by `dispatch-ready`", 9)
 if "> **Serial-variant step 1.**" not in sv_raw:
     problems.append("property 9: the serial step is not a blockquote inside the Serial variant subsection")
 # The shared worker template (also reused by dispatch-ready) must not carry it.
@@ -434,40 +427,22 @@ need("dispatch-ready points at the doc's after-every-batch check", d5,
 for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
     if copy in d5:
         problems.append(f"property 13: dispatch-ready §5 restates {copy!r}; the reference doc owns it (#452 item 1)")
-need("dispatch-ready's outstanding-serial-worker rule exists", d5,
-     "**An outstanding serial worker blocks every local-tree step of every tick.**", 13)
-need("dispatch-ready reads the manifest ahead of §2's merge hand-off", d5,
-     "ahead of §2's merge hand-off even though §2 runs first", 13)
-need("an outstanding serial worker blocks any claim and the fast-forward", d5,
-     "any claim; the default-branch fast-forward; any dispatch", 13)
-need("the confirmed branch waits on the outstanding-worker block", d5,
-     "once the outstanding-serial-worker block below is clear (claim, fast-forward and dispatch all wait on it)", 13)
-need("serial records are marked mode serial explicitly", d5,
-     'A serial record carries `"mode": "serial"` explicitly, never inferred from an absent `worktreePath`', 13)
-need("dispatch-ready closes serial records from live state first", d5,
-     "**Close each serial record from live state first.**", 13)
-need("a serial record closes on a PR plus a clean default-branch checkout", d5,
-     "finds a PR on the record's branch **and** the coordinator's checkout is back on the default branch", 13)
-need("a terminal failure record or blocked closes a serial record", d5,
-     "`take-it-terminal-failure` for the active attempt) exists for the issue, or the issue carries `blocked`", 13)
-need("the operator step for a worker that died is documented", d5,
-     "**A worker that died with neither** leaves a record only the operator can close", 13)
-need("an outstanding serial worker defers the coordinator-site review", d5,
-     "dispatch, whose orchestrator diffs the working tree it runs in", 13)
-need("an outstanding serial worker blocks teardown.sh in any mode", d5, "`teardown.sh` in any mode", 13)
-need("an outstanding serial worker blocks merge-shepherd.sh, which tears down itself", d5,
-     "`merge-shepherd.sh` for any PR", 13)
-need("dispatch-ready defines outstanding as no pr and no terminal failure", d5,
-     "Outstanding means a serial record with neither a `pr` nor a recorded terminal failure", 13)
-need("the stop report names a failed precondition, not only a setting", d5,
-     "a setting, the probe, a dirty tree, only stack-chain candidates, or an outstanding serial worker", 13)
-need("dispatch-ready goes serial or stops, never parallel on a shared tree", d5,
-     "**serial or stop, never parallel on a shared tree.**", 13)
-need("dispatch-ready's serial is one claim and one worker per tick", d5,
-     "**one claim and one worker for the tick, and the tick ends there**", 13)
-need("dispatch-ready's serial never takes a stack-chain member", d5, "never a stack-chain member", 13)
-need("dispatch-ready's serial checks a clean tree", d5, "`git status --porcelain` empty", 13)
-need("dispatch-ready claims only that one issue when serial", d5, "**that one issue only**", 13)
+need("dispatch-ready's unconfirmed outcome is stop, never parallel on a shared tree", d5,
+     "**Unconfirmed** → **stop, never parallel on a shared tree.**", 13)
+need("dispatch-ready claims nothing when unconfirmed", d5, "claim **nothing**", 13)
+need("dispatch-ready says why it has no serial mode while take-it does", d5,
+     "**Why dispatch-ready has no serial mode while take-it does.**", 13)
+need("the reason is take-it waiting inside one invocation", d5,
+     "take-it waits for each serial worker to finish inside one invocation", 13)
+need("the reason cites #452 item 2's or stop", d5, '#452 item 2 permits "or stop"', 13)
+need("a confirmed batch that fails the after-batch check dispatches no further batch", d5,
+     "a moved branch or `HEAD`, or a dirty tree, dispatches no further batch", 13)
+# no serial path may exist inside dispatch-ready §5
+for forbidden in ('"mode": "serial"', "outstanding serial", "outstanding-serial", "serial or stop",
+                  "Serial-variant step", "that one issue only", "Close each serial record",
+                  "serial and not isolated"):
+    if forbidden in d5:
+        problems.append(f"property 13: dispatch-ready §5 offers a serial path ({forbidden!r}); an unconfirmed tick stops")
 need("dispatch-ready claims nothing on the stop", d5, "without claiming a single issue", 13)
 need("dispatch-ready reports the review_site override on omp", d5,
      "`review_site: agent` is unsatisfiable on omp", 13)
@@ -491,11 +466,13 @@ need("§7 lists the isolation hold among holds a human could clear", d7,
      "an `isolation unconfirmed` hold — any one of them", 14)
 need("§7's stall record carries the isolation hold root", d7,
      "the decision gate, `isolation unconfirmed`, the Blocking finding", 14)
-need("§5's Reach says an outstanding serial worker defers merges and teardown", d5,
-     "A serial worker outstanding defers the merge hand-off and its teardown", 14)
+need("§5's Reach says claims happen only on a confirmed tick", d5,
+     "claims happen only on a confirmed tick", 14)
+need("§5's Reach says no worker shares the coordinator's checkout", d5,
+     "because no worker shares the coordinator's checkout", 14)
 need("dispatch-ready §7's STALLED conjunct names §5's isolation check", d7,
      "every Ready item held by a §4 filter or by §5's isolation check", 14)
-need("dispatch-ready §5 states its reach", d5, "**Reach.** The check gates **worker dispatch** and the local-tree steps above, and nothing else.", 14)
+need("dispatch-ready §5 states its reach", d5, "**Reach.** The check gates **worker dispatch** and nothing else", 14)
 need("dispatch-ready §5 says a §2 redispatch passes the check", d5, "A §2 redispatch is a worker dispatch", 14)
 need("dispatch-ready §5 states the known limitation", d5, "**Known and accepted:**", 14)
 need("the doc records the terminal-state decision", doc,
@@ -706,14 +683,6 @@ d=$(make_copy m27)
 mutate "$d/skills/dispatch-ready/SKILL.md" '`isolated: true`' '`isolated: false`' all || bad "M27: mutation did not apply"
 expect_fail "M27 isolated: true removed" "$d" "dispatch-ready points at the doc's worker-dispatch rule"
 
-d=$(make_copy m28)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'for the tick, and the tick ends there**' 'for the tick**' || bad "M28: mutation did not apply"
-expect_fail "M28 one claim and one worker dropped" "$d" 'dispatch-ready'"'"'s serial is one claim and one worker per tick'
-
-d=$(make_copy m29)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'never a stack-chain member' 'any candidate' || bad "M29: mutation did not apply"
-expect_fail "M29 stack-chain exclusion dropped" "$d" 'dispatch-ready'"'"'s serial never takes a stack-chain member'
-
 d=$(make_copy m30)
 mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
 
@@ -744,10 +713,6 @@ d=$(make_copy m35)
 mutate "$d/skills/dispatch-ready/SKILL.md" '**Reach.** The check gates' '**Scope.** The check gates' || bad "M35: mutation did not apply"
 expect_fail "M35 Reach paragraph removed" "$d" 'dispatch-ready §5 states its reach'
 
-d=$(make_copy m36)
-mutate "$d/$SK" 'never sent on Claude Code, and `dispatch-ready` sends it only on omp,' 'never sent on Claude Code and never by `dispatch-ready`,' || bad "M36: mutation did not apply"
-expect_fail "M36 take-it's Serial variant reverted" "$d" 'property 9:'
-
 d=$(make_copy m37)
 printf '\n`dispatch-ready` does not yet implement it.\n' >>"$d/$DC"
 expect_fail "M37 'does not yet' restored in the design doc" "$d" "still says '\`dispatch-ready\` does not yet'"
@@ -764,22 +729,6 @@ d=$(make_copy m40)
 mutate "$d/$SK" "On omp the probe's and every worker's \`task\` entry carries" "On omp the probe's entry carries" || bad "M40: mutation did not apply"
 expect_fail "M40 take-it pointer removed" "$d" 'take-it §5 points at the isolated: true rule'
 
-d=$(make_copy m41)
-mutate "$d/skills/dispatch-ready/SKILL.md" '`merge-shepherd.sh` for any PR,' 'nothing else,' || bad "M41: mutation did not apply"
-expect_fail "M41 merge-shepherd no longer blocked" "$d" 'blocks merge-shepherd.sh'
-
-d=$(make_copy m42)
-mutate "$d/skills/dispatch-ready/SKILL.md" "ahead of §2's merge hand-off" "after §2's merge hand-off" || bad "M42: mutation did not apply"
-expect_fail "M42 manifest read moved after the hand-off" "$d" "reads the manifest ahead of §2's merge hand-off"
-
-d=$(make_copy m43)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'the default-branch fast-forward; any' 'any' || bad "M43: mutation did not apply"
-expect_fail "M43 fast-forward no longer blocked" "$d" 'blocks any claim and the fast-forward'
-
-d=$(make_copy m44)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'a dirty tree, only stack-chain candidates, or an outstanding' 'or an' || bad "M44: mutation did not apply"
-expect_fail "M44 stop report no longer names the precondition" "$d" 'the stop report names a failed precondition'
-
 d=$(make_copy m45)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'confirmed across two ticks, then' 'confirmed at once, then' || bad "M45: mutation did not apply"
 expect_fail "M45 two-tick confirmation removed" "$d" 'keeps the two-tick confirmation'
@@ -792,26 +741,6 @@ d=$(make_copy m47)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'the decision gate, `isolation unconfirmed`, the Blocking' 'the decision gate, the Blocking' || bad "M47: mutation did not apply"
 expect_fail "M47 stall record loses the isolation root" "$d" "stall record carries the isolation hold root"
 
-d=$(make_copy m48)
-mutate "$d/skills/dispatch-ready/SKILL.md" '**Close each serial record from live state first.**' '**Records.**' || bad "M48: mutation did not apply"
-expect_fail "M48 close-from-live-state removed" "$d" 'closes serial records from live state first'
-
-d=$(make_copy m49)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'A serial record carries `"mode": "serial"` explicitly' 'A serial record carries nothing explicit' || bad "M49: mutation did not apply"
-expect_fail "M49 explicit serial marker removed" "$d" 'serial records are marked mode serial explicitly'
-
-d=$(make_copy m50)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'any claim; the default-branch' 'the default-branch' || bad "M50: mutation did not apply"
-expect_fail "M50 claim no longer blocked" "$d" 'blocks any claim and the fast-forward'
-
-d=$(make_copy m51)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'once the outstanding-serial-worker block below is clear (claim, fast-forward and' 'immediately (claim, fast-forward and' || bad "M51: mutation did not apply"
-expect_fail "M51 confirmed branch no longer gated" "$d" 'the confirmed branch waits on the outstanding-worker block'
-
-d=$(make_copy m52)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'whose orchestrator diffs the working tree it runs in' 'which is harmless' || bad "M52: mutation did not apply"
-expect_fail "M52 review no longer deferred" "$d" 'defers the coordinator-site review'
-
 d=$(make_copy m53)
 mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
 
@@ -821,6 +750,36 @@ Read task.isolation.enabled here.
 
 ' || bad "M53: mutation did not apply"
 expect_fail "M53 forbidden restatement injected" "$d" "restates 'task.isolation.enabled'"
+
+d=$(make_copy m54)
+mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
+
+' '## 5. Dispatch
+
+Record `{issue, pr, branch, "mode": "serial"}`.
+
+' || bad "M54: mutation did not apply"
+expect_fail "M54 serial record restored" "$d" 'offers a serial path'
+
+d=$(make_copy m55)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Unconfirmed** → **stop, never' '**Unconfirmed** → **serial or stop, never' || bad "M55: mutation did not apply"
+expect_fail "M55 serial or stop restored" "$d" 'offers a serial path'
+
+d=$(make_copy m56)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Why dispatch-ready has no serial mode while take-it does.**' '**Notes.**' || bad "M56: mutation did not apply"
+expect_fail "M56 why-paragraph removed" "$d" 'says why it has no serial mode while take-it does'
+
+d=$(make_copy m57)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'claim **nothing**' 'claim what fits' || bad "M57: mutation did not apply"
+expect_fail "M57 claims-nothing replaced" "$d" 'claims nothing when unconfirmed'
+
+d=$(make_copy m58)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'claims happen only on a confirmed' 'claims happen on any' || bad "M58: mutation did not apply"
+expect_fail "M58 Reach claim sentence removed" "$d" 'Reach says claims happen only on a confirmed tick'
+
+d=$(make_copy m59)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'dispatches no further batch.' 'carries on.' || bad "M59: mutation did not apply"
+expect_fail "M59 after-batch halt removed" "$d" 'dispatches no further batch'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

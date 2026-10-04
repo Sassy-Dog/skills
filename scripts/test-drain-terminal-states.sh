@@ -139,7 +139,7 @@
 # AN ISOLATION-UNCONFIRMED STOP IS STALLED, NOT A FIFTH STATE (issue #452).
 # dispatch-ready §5's isolation check (take-it's contract, re-derived every tick)
 # can leave a tick with candidates it will not claim: on omp with isolation off
-# and no serial-safe candidate. With nothing in flight that is #282's shape
+# (there is no serial mode; an unconfirmed tick stops). With nothing in flight that is #282's shape
 # again - claim nothing, report the same sentence, never self-cancel. The
 # decision, made by the route this header names (extend an existing state's
 # conjunct rather than add one): those candidates are held by the check with the

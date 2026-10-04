@@ -1483,7 +1483,9 @@
 #      on omp it reads three settings, probes one worker, records the outcome,
 #      verifies pushes with a fresh ls-remote, and goes serial (with a
 #      branch-from-default worker step) or stops with `isolation unconfirmed`,
-#      never parallel on a shared tree (issue #451). Also pins the design
+#      never parallel on a shared tree (issue #451). dispatch-ready §5 does the
+#      same per tick but is stop-only (no serial mode) and ends a stopped loop
+#      through STALLED (issue #452). Also pins the design
 #      doc's corrected claims. Mutation-proven (header lists the mutants).
 #      Source-level, no omp, no gh, no network.
 #
