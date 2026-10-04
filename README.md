@@ -117,7 +117,7 @@ the `` !`...` `` line reaches the model unexecuted. The model-backed checks of
 ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and an agent told to
 read the repo config by absolute path did so and used its value. Neither result is evidence about a consumer repo.
 [#425](https://github.com/Sassy-Dog/skills/issues/425) then repeated both out of tree on shipped skills with no context file loaded, again one model, ten runs: with
-`github-issues` unchanged the agent searched for the script, and with one added root-resolution paragraph it used the right root and did not search; the unchanged `send-it`
+`github-issues` unchanged the agent searched for the script, and with a root-resolution paragraph that also forbids searching it used the right root and did not search in 2 of 2 runs, a wording without that clause searched in its one run, and the shippable token-free wording is untested; the unchanged `send-it`
 was handled correctly in three runs even though its `` !`...` `` line arrives unexecuted, because the agent ran or read the config itself. The designs for both rows are in
 [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and nothing has been edited in a skill yet. No cell below changed, because no shipped skill
 has been run end to end through a model.
