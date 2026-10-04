@@ -130,7 +130,7 @@ The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-ou
 the spike found, and which also need omp settings a plugin cannot ship. #440 probed only row 3, narrowly (two
 isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it).
 [#426](https://github.com/Sassy-Dog/skills/issues/426) then found that `task.isolation.apply: false` left the parent untouched with a verified push, and its contract requires
-`task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms that contract before a parallel dispatch ([#451](https://github.com/Sassy-Dog/skills/issues/451)) and goes serial or stops where it is unconfirmed, but no full `take-it` invocation has run on omp, and `dispatch-ready` has no confirmation yet ([#452](https://github.com/Sassy-Dog/skills/issues/452)), so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+`task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms that contract before a parallel dispatch ([#451](https://github.com/Sassy-Dog/skills/issues/451)) and is written to go serial or stop where it is unconfirmed (the Stop branch was not run), but no full `take-it` invocation has run on omp, and `dispatch-ready` has no confirmation yet ([#452](https://github.com/Sassy-Dog/skills/issues/452)), so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
 in that family and follows it.
 
 | Skill | Family | Claude Code | omp | Inventory rows |

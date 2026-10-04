@@ -60,7 +60,7 @@
 #      settings", step 3's "rests on the `apply` read", "all set").
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against twenty-one mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against twenty-two mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -85,6 +85,7 @@
 #   M19 serial-step text leaked into the shared worker template                   -> 9
 #   M20 dispatch-ready's "does not apply" sentence removed                        -> 13
 #   M21 the reference doc's name for the serial step diverges from §5's           -> 9
+#   M22 dispatch-ready's stop no longer claims nothing (the claim-before-stop bug) -> 13
 # (Property 13 is dispatch-ready's own sentence, nit-added after review: the
 # two dispatching skills must not contradict each other about who confirms.)
 #
@@ -326,6 +327,12 @@ need("dispatch-ready says take-it's confirmation, Serial variant and override do
      "take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override do **not** apply here", 13)
 need("dispatch-ready reports isolation unconfirmed off Claude Code and dispatches nothing", dr,
      "on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands", 13)
+need("dispatch-ready defines Claude Code as the Agent tool taking isolation: worktree", dr,
+     'Claude Code means the dispatch tool is `Agent` and it takes `isolation: "worktree"`', 13)
+need("dispatch-ready checks the harness before this tick claims anything", dr,
+     "Check that **before this tick claims anything**", 13)
+need("dispatch-ready claims nothing on the stop", dr, "without claiming a single issue", 13)
+need("dispatch-ready's stop is not a new terminal state", dr, "not a fifth terminal state", 13)
 
 for p in problems:
     print(p)
@@ -491,6 +498,10 @@ expect_fail "M20 dispatch-ready sentence removed" "$d" 'property 13:'
 d=$(make_copy m21)
 mutate "$d/$RF" 'Serial variant (its step 1)' 'serial-mode step 0' || bad "M21: mutation did not apply"
 expect_fail "M21 the one name for the serial step diverges" "$d" "the reference doc names the Serial variant and its step 1"
+
+d=$(make_copy m22)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'without claiming a single issue' 'after claiming up to capacity' || bad "M22: mutation did not apply"
+expect_fail "M22 dispatch-ready's stop no longer precedes the claim" "$d" 'dispatch-ready claims nothing on the stop'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

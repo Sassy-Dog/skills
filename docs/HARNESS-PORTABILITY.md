@@ -789,8 +789,8 @@ Observed, two runs, one model:
 - **The disabled case went serial rather than stopping**, which the contract permits for a plain list. It is the
   weaker outcome to evaluate: the model's own coordinator never ran the pre-dispatch `git status --porcelain` check, it only told
   the workers to. Nothing was dirty, so nothing leaked; the run does not show the check is followed.
-- **The project-file case dispatched in parallel with the parent untouched**, the same result as P1 with two concurrent workers
-  instead of one: the first run with two workers in one `task` call. Their overlap in time was not measured. Both pushes were verified by my own `git ls-remote`.
+- **The project-file case dispatched in parallel with the parent untouched**, the same result as P1 with two workers in one `task` call (overlap not measured)
+  instead of one. Both pushes were verified by my own `git ls-remote`.
 - **The after-batch cleanup step was not followed in run 2.** The model compared branch, `HEAD` and status and ran a fresh
   `ls-remote`, but did not remove the `<tmp>/omp-task-<id>/` directories (three, one per `task`, each with a `.patch`). I verified
   both pushes and removed my own three by hand; four older directories from other sessions were not touched. Run 1 left two
@@ -798,7 +798,7 @@ Observed, two runs, one model:
   guarantee, so the temp-directory cleanup is stated, not shown.
 - **No `review_site` override was exercised**: neither scratch repo configured `review_site`, so the report line was not tested.
 - **Not shown:** a full `take-it` invocation on omp (the claim, attempt-record and PR steps were deliberately out of scope), a probe
-  that finds isolation off under a passing read, `review_site: agent` on omp, and any model other than haiku.
+  that finds isolation off under a passing read, `review_site: agent` on omp, the Stop branch (not run), and any model other than haiku.
 
 **Operator configuration.** `config.yml` SHA-256 prefix `7b634967911b` before and after; `omp plugin list` `No plugins installed`
 before and after. Only `ls ~/.omp/wt` and that hash were read under `~/.omp`.
@@ -1200,10 +1200,10 @@ the unchanged `take-it` and `dispatch-ready` with a prompt that does not mention
 
 **Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
 configuration is `task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms
-it and goes serial or stops where it is unconfirmed (#451, [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)); `dispatch-ready` cannot
+it and is written to go serial or stop where it is unconfirmed (#451, [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)); `dispatch-ready` cannot
 yet (#452), so the README's `not supported` stands for it, and for `take-it` the matrix cell stays because no full `take-it` invocation was run on omp.
 The configurations that can pass step 2 are a project-level file, `PI_CONFIG_FILES` and
-profile-set values; of those only a committed `.omp/config.yml` has driven a run (P1, #453; again in #451 with two concurrent workers), and profile-set values have not.
+profile-set values; of those only a committed `.omp/config.yml` has driven a run (P1, #453; again in #451 with two workers in one `task` call, overlap not measured), and profile-set values have not.
 The worker-owns-a-branch-and-pushes design works inside omp isolation (Check C2, D1 and D2: the worker's push was
 confirmed by `ls-remote` in all three runs that used an absolute remote; Q4's 18.5.1 direct-function transcript showed the
 pushed branch under `remotes/origin/`). The parent never receives the worker's branch name.
@@ -1252,7 +1252,7 @@ A harness may run workers in parallel only if, for each worker:
    run could mistake for live work.
 
 Requirement 1's "no other worker shares it" is inferred from the per-task `<id>` in the checkout path; no run had two
-concurrent workers.
+concurrent workers (#451 dispatched two in one `task` call; their overlap was not measured).
 
 ### What omp 18.6.0 needs to satisfy it
 
