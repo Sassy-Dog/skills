@@ -223,6 +223,18 @@ git switch "$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name)"
   && git pull --ff-only
 ```
 
+**Confirm isolation before any parallel dispatch, and before the attempt record below is
+created.** On Claude Code `isolation: "worktree"` *is* the confirmation: nothing in this paragraph
+applies and the dispatch below is unchanged. On omp (workers are `task` calls), or on any harness
+you do not recognise, read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md`
+and run its sequence first — the settings read (`task.isolation.enabled` `true`, `apply` `false`,
+`merge` `patch`), one probe worker, the outcome recorded in the batch manifest, and the
+after-every-batch check. Where isolation is unconfirmed, never dispatch in parallel on a shared
+tree: either run **serial** (plain independent list only, using the serial-mode step 1 in the
+template below) or Stop and report `isolation unconfirmed`. On omp a configured
+`review_site: agent` is unsatisfiable, so use `coordinator` for this invocation and **report the
+override in §7**; the config itself is never edited, and the override is never silent.
+
 **Issue ALL Agent calls in a single message** with `isolation: "worktree"`. **Record the batch
 manifest** as results return — `{issue, pr, worktreePath, worktreeBranch}` — somewhere durable such
 as `.git/take-it-batch.json`, so a crashed coordinator's worktrees stay reclaimable.
@@ -434,6 +446,17 @@ behind in coordinator-only context.
 >    merges. Put `review: deferred to coordinator` in the PR body and `review=deferred` on your
 >    RESULT line.
 >
+> **Serial-mode step 1** — only when §5's isolation confirmation ended in **serial**: the
+> coordinator substitutes this for step 1 above, and otherwise deletes this block. A serial worker
+> shares the coordinator's checkout, so it must not assume a private worktree. First run
+> `git fetch origin --quiet` and confirm `git status --porcelain` is empty; if it is not, stop and
+> report `status=failed` with the status output. Then start your branch from the freshly fetched
+> default branch, never from whatever `HEAD` holds: `git switch -c <branch> origin/<default_branch>`
+> (`git switch -c` does not require a clean tree, which is why the check comes first). Verify
+> `git branch --show-current` names your branch. Never `git stash`. Whatever happens, end with the
+> tree clean: commit WIP to your own branch or discard it explicitly, push, and
+> `git switch <default_branch>`; edits left behind would ride into the next worker's PR.
+>
 > 7. **Reconcile the docs against the repo before you commit.** Re-read the docs describing what
 > you touched — `CLAUDE.md`, the relevant `README.md`, anything in `docs/` — and fix every claim
 > your change just made untrue, in this same PR. A stale doc is a defect in your change, not
@@ -640,6 +663,10 @@ When no board is configured, clear the claim label for every MERGED row via
 `sassy-dog:github-issues`' `issue-claim.sh release N1 N2` — `Closes #N` closed the issue but
 does not strip labels, and a stale claim label misleads the next loop's in-flight reconcile.
 
+State the isolation outcome in the report (confirmed, **serial and not isolated**, or stopped with
+the setting or probe that failed), and any `review_site` override, so a reader can tell parallel
+isolated workers from workers that took turns on one tree.
+
 Always end with: claims to unwind by hand (assignments, plus board cards or `in-progress` labels
 for unshipped issues) and a next-action one-liner per failure.
 
@@ -653,6 +680,9 @@ for unshipped issues) and a next-action one-liner per failure.
 - **Never auto-rebase a CONFLICTING PR** — surface it. Expect an upper stack layer to go
   `CONFLICTING` after the layer below squash-merges; that is the normal shape, not a fault.
 - Cap parallelism at 5. Don't dispatch on stubs or `blocked` issues.
+- **Never dispatch parallel workers on a shared tree.** Isolation unconfirmed means serial or
+  Stop (§5), never a silent fall-back; on Claude Code `isolation: "worktree"` is the confirmation
+  and this rule changes nothing.
 - **Never split a stack across parallel agents**, and never dispatch a partially-named chain. One
   chain = one agent = one worktree, layers built in order.
 
