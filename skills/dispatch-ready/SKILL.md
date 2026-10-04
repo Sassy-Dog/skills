@@ -584,7 +584,8 @@ section restates none of them and states only what a tick changes:
 
 1. **Re-derive every tick.** A tick has no memory, and the doc's own rule holds: a later process
    never reuses `confirmed`. Run the doc's settings reads on every tick and, on a tick about to
-   dispatch a parallel batch, its probe. Record the outcome in the doc's `isolation` shape beside
+   dispatch a parallel batch, its probe; a single in-§2 omp redispatch counts as a batch for that
+   trigger, so the probe runs before it, alongside the settings reads. Record the outcome in the doc's `isolation` shape beside
    the batch records in `.git/dispatch-ready-batch.json`. That record serves this tick's report and
    its second consumer (§2's redispatch, then this section); the next tick re-derives.
 2. **Confirmed** → capture the baseline the doc's after-every-batch check compares against (the
@@ -620,9 +621,8 @@ If confirmed, it captures its own baseline (the coordinator's branch, `HEAD` and
 `git status --porcelain`) immediately before the dispatch, dispatches under the doc's
 worker-dispatch rule (`isolated: true`), waits for its result (the batch-form `task` call followed
 by `wait`), and runs the doc's after-every-batch check (its §4) against that baseline. Nothing that
-moves the coordinator's `HEAD` or tree runs between that baseline and that check: the redispatch is
-dispatched, awaited and checked ahead of §2's merge hand-off and its teardown, which follow it
-within the tick. The same timeout caveat applies. If unconfirmed it is held — no budget spent, no
+moves the coordinator's `HEAD` or tree runs between this redispatch's baseline and its
+after-batch check; §2 is not reordered, and the baseline is taken after any earlier §2 step has run. The same timeout caveat applies. If unconfirmed it is held — no budget spent, no
 demotion — and §6's `holds:` line names it. On Claude Code it is dispatched in §2 as before.
 
 **How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in

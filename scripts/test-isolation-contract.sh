@@ -78,7 +78,7 @@
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against fifty-four mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against fifty-six mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -136,11 +136,15 @@
 #   M62 Reach's wait sentence loses its "On omp" scope                             -> 14
 #   M63 the in-§2 omp redispatch paragraph (own baseline, wait, check) removed    -> 13
 #   M64 the Claude Code "nothing here waits" carve-out removed                    -> 13
-#   M65 §2's two pointers to the in-§2 dispatch removed                            -> 13
+#   M65 §2's failed-check bullet's pointer to the in-§2 dispatch removed           -> 13
+#   M67 §2's review-finding bullet's pointer removed                               -> 13
+#   M68 the in-§2 redispatch no longer counts as a batch for the probe trigger     -> 13
 #   M66 the redispatch's own-baseline sentence removed                             -> 13
-# New in the stop-only round (M60 to M63 came later, in review rounds): M60 the
+# New in the stop-only round (M60 to M68 came later, in review rounds): M60 the
 # wait removed, M61 the timeout caveat removed, M62 Reach's omp scope removed, M63
-# the redispatch placement removed; and M54 a serial path restored, M55 "serial or stop"
+# the in-§2 omp redispatch paragraph removed, M64 the Claude Code carve-out removed,
+# M65/M67 one §2 pointer each removed, M66 the own-baseline sentence removed, M68 the
+# probe-trigger sentence removed; and M54 a serial path restored, M55 "serial or stop"
 # restored, M56 the why-paragraph removed, M57 the unconfirmed-means-stop sentence
 # replaced, M58 the Reach claim sentence removed, M59 the after-batch halt removed.
 # Property 13 also fails if dispatch-ready §5 contains `task.isolation.enabled`,
@@ -442,15 +446,24 @@ need("a §2 redispatch on omp is dispatched within §2, not deferred", d5,
 need("the in-§2 redispatch captures its own baseline before dispatching", d5,
      "it captures its own baseline (the coordinator's branch, `HEAD` and `git status --porcelain`) immediately before the dispatch", 13)
 need("nothing moving HEAD runs between the redispatch baseline and its check", d5,
-     "Nothing that moves the coordinator's `HEAD` or tree runs between that baseline and that check", 13)
+     "Nothing that moves the coordinator's `HEAD` or tree runs between this redispatch's baseline and its after-batch check", 13)
 need("an unconfirmed in-§2 redispatch is held with no budget spent", d5,
      "If unconfirmed it is held — no budget spent, no demotion", 13)
 need("Claude Code waits for nothing", d5,
      "On Claude Code nothing here waits: the background `Agent` batch is issued as before", 13)
-need("§2's redispatch bullets point at §5's in-§2 dispatch", dr,
+d2 = flatten(section(DR_RAW, "## 2. Reconcile in-flight (always first)"))
+if not d2:
+    problems.append("dispatch-ready §2 did not slice")
+need("§2's failed-check bullet points at §5's in-§2 dispatch", d2,
      "On omp the redispatch goes through §5's isolation check and its in-§2 dispatch.", 13)
-need("§2's review-finding bullet points at §5's in-§2 dispatch", dr,
+need("§2's review-finding bullet points at §5's in-§2 dispatch", d2,
      "On omp it goes through §5's isolation check and its in-§2 dispatch.", 13)
+need("an in-§2 omp redispatch counts as a batch for the probe trigger", d5,
+     "a single in-§2 omp redispatch counts as a batch for that trigger, so the probe runs before it", 13)
+need("the in-§2 redispatch states the invariant rather than a §2 ordering", d5,
+     "§2 is not reordered, and the baseline is taken after any earlier §2 step has run", 13)
+if "ahead of §2's merge hand-off and its teardown" in d5:
+    problems.append("property 13: §5 claims the redispatch runs ahead of §2's merge hand-off, which contradicts §2's bullet order")
 need("Reach scopes the wait sentence to omp", d5,
      "On omp, a confirmed tick waits for its own batch and runs the after-batch check itself; only a timed-out `wait` leaves it owed", 14)
 need("no later tick runs the after-batch check", d5, "No later tick runs it, because nothing persists a baseline", 13)
@@ -833,12 +846,20 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'nothing here waits' 'everything here
 expect_fail "M64 Claude Code carve-out removed" "$d" 'Claude Code waits for nothing'
 
 d=$(make_copy m65)
-mutate "$d/skills/dispatch-ready/SKILL.md" "goes through §5's isolation check and its in-§2 dispatch" "waits for a later tick" all || bad "M65: mutation did not apply"
-expect_fail "M65 §2 pointers removed" "$d" "bullets point at §5's in-§2 dispatch"
+mutate "$d/skills/dispatch-ready/SKILL.md" "On omp the redispatch goes through" "The redispatch waits for" || bad "M65: mutation did not apply"
+expect_fail "M65 failed-check pointer removed" "$d" "failed-check bullet points at §5's in-§2 dispatch"
+
+d=$(make_copy m67)
+mutate "$d/skills/dispatch-ready/SKILL.md" "On omp it goes through" "It waits for" || bad "M67: mutation did not apply"
+expect_fail "M67 review-finding pointer removed" "$d" "review-finding bullet points at §5's in-§2 dispatch"
 
 d=$(make_copy m66)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'it captures its own baseline' 'it uses the tick baseline' || bad "M66: mutation did not apply"
 expect_fail "M66 own-baseline sentence removed" "$d" 'captures its own baseline before dispatching'
+
+d=$(make_copy m68)
+mutate "$d/skills/dispatch-ready/SKILL.md" "a single in-§2 omp redispatch counts as a batch for that" "an in-§2 omp redispatch needs no probe for that" || bad "M68: mutation did not apply"
+expect_fail "M68 probe-trigger sentence removed" "$d" 'counts as a batch for the probe trigger'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2
