@@ -106,7 +106,7 @@ last-write-wins run drops one of the two with no error anywhere.
 
 Which skills are expected to run outside Claude Code. Statuses are `expected`, `untested` or
 `not supported`. **`untested` is the default**: the plugin installs and loads on [omp](https://omp.sh), but no shipped skill
-has been run end to end through a model there (only toy probe skills, see below), so no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
+has been run end to end through a model there (only narrow probes: toy skills, and two shipped skills stopped before any workflow step, see below), so no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
 skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. The omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
@@ -115,8 +115,12 @@ the `` !`...` `` line reaches the model unexecuted. The model-backed checks of
 [#440](https://github.com/Sassy-Dog/skills/issues/440) then ran toy probe skills on omp 18.6.0, with this repo's own
 `CLAUDE.md` in the model's context per omp's source (it walks up past a nested repository's root), one run each with one model: the agent
 ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and an agent told to
-read the repo config by absolute path did so and used its value. Neither result is evidence about a consumer repo. No cell below changed, because no shipped skill
-has been run through a model.
+read the repo config by absolute path did so and used its value. Neither result is evidence about a consumer repo.
+[#425](https://github.com/Sassy-Dog/skills/issues/425) then repeated both out of tree on shipped skills with no context file loaded, again one model, ten runs: with
+`github-issues` unchanged the agent searched for the script, and with one added root-resolution paragraph it used the right root and did not search; the unchanged `send-it`
+was handled correctly in three runs even though its `` !`...` `` line arrives unexecuted, because the agent ran or read the config itself. The designs for both rows are in
+[`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and nothing has been edited in a skill yet. No cell below changed, because no shipped skill
+has been run end to end through a model.
 
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
 `isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), whose omp equivalents
