@@ -214,8 +214,8 @@ jq -c '[.[] | select(.number == 1712) | .labels[].name]' <<<"$CANDIDATES" |
   bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/queue-snapshot.sh --sites-of
 
 # board mode: `board-snapshot.sh` already carries each card's labels
-BOARD_SNAPSHOT=$(bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-snapshot.sh \
-  --number <board.number> --owner <board.owner>)
+BOARD_SNAPSHOT=$(PROJECT_NUMBER=<board.number> OWNER=<board.owner> \
+  bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-snapshot.sh)
 jq -c '[.items[] | select(.number == 1712) | .labels[]]' <<<"$BOARD_SNAPSHOT" |
   bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/queue-snapshot.sh --sites-of
 ```

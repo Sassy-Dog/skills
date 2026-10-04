@@ -120,9 +120,9 @@ read the repo config by absolute path did so and used its value. Neither result 
 `github-issues` unchanged the agent searched for the script, and with a root-resolution paragraph that also forbids searching it used the right root and did not search in 2 of 2 runs, and a wording without that clause searched in its one run; the unchanged `send-it`
 was handled correctly in three runs even though its `` !`...` `` line arrives unexecuted, because the agent ran or read the config itself. The designs for both rows are in
 [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md). Row 5's paragraph has since shipped
-([#454](https://github.com/Sassy-Dog/skills/issues/454)): all 15 `SKILL.md` files that carry `${CLAUDE_PLUGIN_ROOT}` now carry one token-free paragraph before their first command,
+([#454](https://github.com/Sassy-Dog/skills/issues/454)): every `SKILL.md` that carries `${CLAUDE_PLUGIN_ROOT}` now carries one token-free paragraph before the first fenced command that uses it,
 which tells an agent whose harness leaves the placeholder unexpanded to take the plugin root from the skill's own path line and not to search. On omp it was run out of tree, five runs with one model: on `github-issues` the first command used the right
-root with no search in 3 of 3 runs, and a reference-doc command did too in 2 of 2. It is inert in Claude Code, which was checked once. Row 6 has no edit yet. No cell below changed, because no shipped skill
+root with no search in 3 of 3 runs, and a reference-doc command did too in 2 of 2, but not through the `PLUGIN_ROOT` preamble (see A‴ in the doc). It is inert in Claude Code, which was checked once. Row 6 has no edit yet. No cell below changed, because no shipped skill
 has been run end to end through a model.
 
 The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
@@ -130,7 +130,7 @@ The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-ou
 the spike found, and which also need omp settings a plugin cannot ship. #440 probed only row 3, narrowly (two
 isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it).
 [#426](https://github.com/Sassy-Dog/skills/issues/426) then found that `task.isolation.apply: false` left the parent untouched with a verified push, and its contract requires
-`task.isolation.enabled: true` and `task.isolation.apply: false`. Until the `take-it` and `dispatch-ready` implementation issues land, the contract's outcome on omp is Stop, so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
+`task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. Until the `take-it` and `dispatch-ready` implementation issues land, the contract's outcome on omp is Stop, so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
 in that family and follows it.
 
 | Skill | Family | Claude Code | omp | Inventory rows |

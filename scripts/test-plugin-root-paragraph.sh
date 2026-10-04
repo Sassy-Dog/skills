@@ -37,10 +37,20 @@
 #      so a drifted variant is caught even when it no longer matches the
 #      template.
 #   5. Mutation proof against scratch fixtures scanned by the SAME function that
-#      scans the tree: removing the paragraph fails, spelling the token inside
-#      it fails, moving it away from its command fails, and an unmodified
-#      fixture passes. Without this a checker that matched nothing would sit
+#      scans the tree, on a fenced-anchor skill (github-issues) AND the
+#      prose-anchored one (send-it): an unmodified copy passes; removing the
+#      paragraph, spelling the token inside it, moving it to the end and moving
+#      it ONE block up (the near miss) each fail; every mutant must differ from
+#      its source, so a mutation that matched nothing cannot read as caught.
+#      The derived set is proved too: a scratch tree with a further SKILL.md
+#      that carries the token but no paragraph must fail. Without this a checker that matched nothing would sit
 #      green forever.
+#
+# Accepted limit: placement is keyed on the first FENCED command that uses the token
+# (or, for a file with no fenced use, the block holding the first use). A prose
+# load of a token path that precedes that fence is not covered. `dispatch-ready`
+# section 2 is the known case; `send-it` is the prose-anchored exception the
+# gate does handle.
 #
 # Neighbouring pins: the paragraph is a new block in `skills/assess-it/SKILL.md`
 # and in `skills/dispatch-ready/SKILL.md` §4, whose paragraph inventories
@@ -114,26 +124,42 @@ case "$TEMPLATE" in
     *) ok "template is token-free" ;;
 esac
 
+# scan_files — reads SKILL.md paths (relative to the cwd) on stdin, keeps those
+# that carry the token, and prints `<path>: <problem>` per defect. Prints
+# `CHECKED <n>` last. The real tree and every fixture go through this ONE
+# function, so the derived set (property 2) is itself under mutation proof.
+scan_files() {
+    local f name problems n=0
+    while IFS= read -r f; do
+        grep -qF "$TOKEN" "$f" || continue
+        n=$((n + 1))
+        name="$(basename "$(dirname "$f")")"
+        problems="$(check_file "$f" "$name")"
+        [ -z "$problems" ] && continue
+        while IFS= read -r p; do
+            echo "$f: $p"
+        done <<<"$problems"
+    done
+    echo "CHECKED $n"
+}
+
 # --- 2 and 3. every token-carrying SKILL.md has the paragraph, well placed -----
 echo "2. every SKILL.md that carries the token carries the paragraph, placed before its first command" >&2
-mapfile -t TOKEN_FILES < <(git ls-files 'skills/*/SKILL.md' | while IFS= read -r f; do grep -qF "$TOKEN" "$f" && echo "$f"; done)
-if [ "${#TOKEN_FILES[@]}" -eq 0 ]; then
+tree_out="$(git ls-files 'skills/*/SKILL.md' | scan_files)"
+n_checked="$(sed -n 's/^CHECKED //p' <<<"$tree_out")"
+if [ "${n_checked:-0}" -eq 0 ]; then
     bad "no tracked skills/*/SKILL.md carries the token — the pathspec or the grep matches nothing, so this gate would pass vacuously"
     echo "plugin-root-paragraph tests: FAILURES above" >&2
     exit 1
 fi
-for f in "${TOKEN_FILES[@]}"; do
-    name="$(basename "$(dirname "$f")")"
-    problems="$(check_file "$f" "$name")"
-    if [ -z "$problems" ]; then
-        ok "  $f"
-    else
-        while IFS= read -r p; do
-            bad "  $f: $p"
-        done <<<"$problems"
-    fi
-done
-ok "checked ${#TOKEN_FILES[@]} token-carrying SKILL.md files"
+problems_out="$(grep -v '^CHECKED ' <<<"$tree_out" || true)"
+if [ -z "$problems_out" ]; then
+    ok "all $n_checked token-carrying SKILL.md files carry the paragraph, placed before their first command"
+else
+    while IFS= read -r p; do
+        bad "  $p"
+    done <<<"$problems_out"
+fi
 
 # --- 4. no paragraph, in any form, spells the token ----------------------------
 echo "4. no **Plugin root.** line spells the token" >&2
@@ -149,47 +175,105 @@ done < <(git ls-files 'skills/*/SKILL.md')
 
 # --- 5. mutation proof, against scratch fixtures --------------------------------
 echo "5. mutation proof" >&2
-SRC="skills/github-issues/SKILL.md"
-if [ ! -f "$SRC" ]; then
-    bad "$SRC is missing, so the mutation fixtures cannot be built"
-else
-    clean="$WORK/clean.md"
-    cp "$SRC" "$clean"
-    if [ -z "$(check_file "$clean" github-issues)" ]; then
-        ok "an unmodified copy passes"
-    else
-        bad "an unmodified copy of $SRC fails — the checker is broken"
-    fi
 
-    removed="$WORK/removed.md"
-    grep -vF '**Plugin root.**' "$SRC" > "$removed"
-    if [ -n "$(check_file "$removed" github-issues)" ]; then
-        ok "removing the paragraph is caught"
-    else
-        bad "removing the paragraph was NOT caught"
+# differs <source> <mutant> <label> — a mutant identical to its source proves
+# nothing (a sed that matches nothing used to look like a caught mutation).
+differs() {
+    if cmp -s "$1" "$2"; then
+        bad "mutant '$3' is identical to its source — the mutation did nothing, so its result proves nothing"
+        return 1
     fi
+    return 0
+}
 
-    spelled="$WORK/spelled.md"
-    sed "s|in the plugin-root placeholder|in the \${${TOKEN}} placeholder|; s|If the plugin-root placeholder|If \${${TOKEN}}|" "$SRC" > "$spelled"
-    spelled_lines="$(grep -E '^[[:space:]]*\*\*Plugin root\.\*\*' "$spelled" || true)"
-    if [ -n "$(check_file "$spelled" github-issues)" ] && grep -qF "$TOKEN" <<<"$spelled_lines"; then
-        ok "spelling the token inside the paragraph is caught (properties 2 and 4)"
-    else
-        bad "spelling the token inside the paragraph was NOT caught"
-    fi
-
-    moved="$WORK/moved.md"
+# Mutators. Each reads a SKILL.md on $1 and writes the mutant to $2.
+mut_remove() { grep -vF '**Plugin root.**' "$1" > "$2"; }
+mut_spell() { sed "s|If the plugin-root placeholder|If \${${TOKEN}}|" "$1" > "$2"; }
+mut_move_end() {
     awk '
-        /^\*\*Plugin root\.\*\*/ { held = $0; skip_blank = 1; next }
+        /^[ \t]*\*\*Plugin root\.\*\*/ { held = $0; skip_blank = 1; next }
         skip_blank && $0 !~ /[^ \t]/ { skip_blank = 0; next }
         { print }
         END { print ""; print held }
-    ' "$SRC" > "$moved"
-    if [ -n "$(check_file "$moved" github-issues)" ]; then
-        ok "moving the paragraph away from its command is caught"
+    ' "$1" > "$2"
+}
+# One block up: the paragraph swaps places with the block directly above it, so
+# it is a near miss, adjacent to its command but not immediately before it.
+mut_move_up() {
+    awk '
+        { lines[NR] = $0 }
+        /^[ \t]*\*\*Plugin root\.\*\*/ { p = NR }
+        END {
+            s = p - 2
+            while (s > 1 && lines[s - 1] ~ /[^ \t]/) s--
+            for (i = 1; i < s; i++) print lines[i]
+            print lines[p]; print ""
+            for (i = s; i < p - 1; i++) print lines[i]
+            print ""
+            for (i = p + 2; i <= NR; i++) print lines[i]
+        }
+    ' "$1" > "$2"
+}
+
+# expect_caught <fixture> <name> <label>
+expect_caught() {
+    if [ -n "$(check_file "$1" "$2")" ]; then
+        ok "$3 is caught"
     else
-        bad "moving the paragraph away from its command was NOT caught"
+        bad "$3 was NOT caught"
     fi
+}
+
+run_mutants() { # <source SKILL.md> <skill name> <tag>
+    local src="$1" name="$2" tag="$3" m
+    if [ ! -f "$src" ]; then
+        bad "$src is missing, so the $tag fixtures cannot be built"
+        return
+    fi
+    cp "$src" "$WORK/$tag-clean.md"
+    if [ -z "$(check_file "$WORK/$tag-clean.md" "$name")" ]; then
+        ok "$tag: an unmodified copy passes"
+    else
+        bad "$tag: an unmodified copy of $src fails — the checker is broken"
+    fi
+    for m in remove spell move_end move_up; do
+        "mut_$m" "$src" "$WORK/$tag-$m.md"
+        differs "$src" "$WORK/$tag-$m.md" "$tag $m" || continue
+        case "$m" in
+            spell)
+                local sl
+                sl="$(grep -E '^[[:space:]]*\*\*Plugin root\.\*\*' "$WORK/$tag-$m.md" || true)"
+                if [ -n "$(check_file "$WORK/$tag-$m.md" "$name")" ] && grep -qF "$TOKEN" <<<"$sl"; then
+                    ok "$tag: spelling the token inside the paragraph is caught (properties 2 and 4)"
+                else
+                    bad "$tag: spelling the token inside the paragraph was NOT caught"
+                fi ;;
+            *) expect_caught "$WORK/$tag-$m.md" "$name" "$tag: mutant '$m'" ;;
+        esac
+    done
+}
+
+# A fenced-anchor skill and the prose-anchored one (no fenced use of the token).
+run_mutants skills/github-issues/SKILL.md github-issues fenced
+run_mutants skills/send-it/SKILL.md send-it prose
+
+# The derived set: a clean tree passes, and a further SKILL.md that carries the
+# token but no paragraph fails. A fixed-list gate would stay green on it.
+fx="$WORK/tree"
+mkdir -p "$fx/skills/github-issues" "$fx/skills/extra-skill"
+cp skills/github-issues/SKILL.md "$fx/skills/github-issues/SKILL.md"
+clean_tree="$(cd "$fx" && find skills -name SKILL.md | sort | scan_files)"
+if [ "$(grep -vc '^CHECKED ' <<<"$clean_tree" || true)" -eq 0 ] && grep -q '^CHECKED 1$' <<<"$clean_tree"; then
+    ok "derived set: a one-skill scratch tree passes"
+else
+    bad "derived set: a clean one-skill scratch tree did not pass"
+fi
+printf -- '---\nname: extra-skill\ndescription: x\n---\n\n```bash\nbash ${%s}/skills/extra-skill/scripts/x.sh\n```\n' "$TOKEN" > "$fx/skills/extra-skill/SKILL.md"
+extra_out="$(cd "$fx" && find skills -name SKILL.md | sort | scan_files)"
+if grep -q '^skills/extra-skill/SKILL.md: ' <<<"$extra_out" && grep -q '^CHECKED 2$' <<<"$extra_out"; then
+    ok "derived set: an added token-carrying SKILL.md with no paragraph is caught"
+else
+    bad "derived set: an added token-carrying SKILL.md with no paragraph was NOT caught"
 fi
 
 if [ "$fail" -eq 0 ]; then

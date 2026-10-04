@@ -1459,10 +1459,18 @@
 #      signer and no Python. Mutation-proven (header lists the mutations).
 #      Missing tools SKIP locally and fail in CI. No gh, no network.
 #
-#  49. plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh) —
+#  49. board-snapshot call tests (scripts/test-board-snapshot-calls.sh) — every
+#      `board-snapshot.sh` command in a fenced block of tracked Markdown uses
+#      the script's one interface, PROJECT_NUMBER= and OWNER= in the
+#      environment, and passes no flag (it parses none; three SKILL.md snippets
+#      passed --number/--owner and board mode failed closed on every card,
+#      issue #448). Header defines "any flag" and lists the mutants. Source-
+#      level, no gh, no network.
+#
+#  50. plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh) —
 #      omp neither substitutes the plugin-root token in a skill body nor exports
 #      it, so every SKILL.md that carries the token also carries one paragraph
-#      before its first command telling the agent to derive the root from the
+#      before the first fenced command that uses it telling the agent to derive the root from the
 #      `[Skill file: ...]` line and not to search (issue #454). The paragraph
 #      must never spell the token: Claude Code substitutes it anywhere in a
 #      SKILL.md, garbling the paragraph. The gate derives the checked set, pins
@@ -2355,9 +2363,18 @@ else
     failed "testflight JWT tests (scripts/test-testflight-jwt.sh)"
 fi
 
-# --- 49. plugin-root-paragraph tests --------------------------------------------
+# --- 49. board-snapshot call tests ----------------------------------------------
+# Fenced board-snapshot.sh commands use the environment form and pass no flag.
+# Source-level, no network.
+if bash scripts/test-board-snapshot-calls.sh; then
+    pass "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
+else
+    failed "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
+fi
+
+# --- 50. plugin-root-paragraph tests --------------------------------------------
 # Every SKILL.md carrying the plugin-root token carries the root-resolution
-# paragraph before its first command, and no paragraph spells the token.
+# paragraph before the first fenced command, and no paragraph spells the token.
 # Source-level, no network.
 if bash scripts/test-plugin-root-paragraph.sh; then
     pass "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
