@@ -689,7 +689,7 @@ Result text: ``Isolation: changes captured on branch `omp/task/IsolatedGitWorker
   one commit rather than the two copies of a change that `merge: branch` with `apply: true` left (Check C2).
 - **Requirement 3 still held**: the parent's checked-out branch, `HEAD` and working tree did not move. A new local ref
   appeared, which a before-and-after check of the current branch, `HEAD` and `git status` does not see and a check of
-  `git branch` does.
+  `git branch` does. The contract therefore pins `merge: patch` rather than relying on a coordinator to look.
 - **The temp directory was left**: `<tmp>/omp-task-<id>/` held `IsolatedGitWorker.patch` beside a `.json`, `.jsonl` and
   `.md`, with the branch **and** a patch both present. I verified the push with the `ls-remote` in the wrapper, then removed
   my own directory. Older `omp-task-*` directories from other sessions were in the same place and were not touched.
@@ -1118,7 +1118,7 @@ absent branch was not exercised (run 10 took the line's route). Both rows are de
 the unchanged `take-it` and `dispatch-ready` with a prompt that does not mention config; that run decides the four skills that stop on `NO_CONFIG`, and the four conservative-mode skills get the paragraph regardless. The `take-it` and `dispatch-ready` stop on `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
 
 **Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
-configuration is `task.isolation.enabled: true` with `task.isolation.apply: false`, but until Drafts 1 and 2 land neither
+configuration is `task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`, but until Drafts 1 and 2 land neither
 `take-it` nor `dispatch-ready` can confirm isolation or run serially on omp, so the contract's outcome is **Stop** and the
 README's `not supported` stands. Even after Draft 1, the configurations that can pass step 2 are a project-level file, `PI_CONFIG_FILES` and
 profile-set values; of those only a committed `.omp/config.yml` has driven a run (P1, #453), and profile-set values have not.
@@ -1175,34 +1175,39 @@ concurrent workers.
 | Requirement | omp setting | Evidence |
 | --- | --- | --- |
 | 1 and 2 | `task.isolation.enabled: true` (default `false`, which shares one checkout silently) | Q4 (18.5.1, functions called directly), D1 and D2 (18.6.0, model-driven): private checkout at `~/.omp/wt/<id>/m`, own branch, commit, verified push |
-| 3 | `task.isolation.apply: false` (default `true`) | D1 and P1 (`merge: patch`): parent `main` at the same `HEAD`, clean `git status`. E1 (`merge: branch`): the same, plus a new local branch `omp/task/<Name>` in the parent. D2 (defaults `apply: true`, `merge: patch`): parent `f.txt` modified. Check C2 (`apply: true`, `merge: branch`): a different commit on the parent's branch |
-| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove, but only after the worker's push is verified with a fresh `git ls-remote` in the same step, because that directory holds the only remaining copy of a change from a worker that did not push; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1, D2, E1 and P1: `ls ~/.omp/wt` held 0 entries after each run. With `apply: false` the temp directory existed after D1, E1 and P1 and I removed each by hand. E1 (`merge: branch`) left a `.patch` there too |
+| 3 | `task.isolation.apply: false` (default `true`) and `task.isolation.merge: patch` (the default) | D1 and P1 (`merge: patch`): parent `main` at the same `HEAD`, clean `git status`. E1 (`merge: branch`): the same, plus a new local branch `omp/task/<Name>` in the parent. D2 (defaults `apply: true`, `merge: patch`): parent `f.txt` modified. Check C2 (`apply: true`, `merge: branch`): a different commit on the parent's branch |
+| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove, but only after the worker's push is verified with a fresh `git ls-remote` in the same step, because that directory holds the only remaining copy of a change from a worker that did not push; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1, D2, E1 and P1: `ls ~/.omp/wt` held 0 entries after each run. With `apply: false` the temp directory existed after D1, E1 and P1 and I removed each by hand. E1 (`merge: branch`) left a `.patch` there too, and a local `omp/task/<Name>` ref in the parent that nothing removes (see below) |
 
 `merge` is consulted when `apply` is false (E1, [#453](#isolation-settings-sources-453)), but only to pick the artifact:
 `merge: patch` leaves a patch file (D1, P1) and `merge: branch` leaves the worker's commits on a new local branch
-`omp/task/<Name>` in the parent, at the pushed commit, **not merged**. Neither moved the parent's current branch, `HEAD` or tree,
-so requirement 3 holds under both; a coordinator that compares `git branch` as well as `HEAD` will see the extra ref, and
-one that does not is unaffected. **omp therefore satisfies the contract natively only when `enabled: true` and `apply: false` are
-set**, in the profile or, per P1, in a project-level file. Qualifier: one run per setting, one model, one worker at a
+`omp/task/<Name>` in the parent, at the pushed commit, **not merged**. Neither moved the parent's current branch, `HEAD` or tree.
+**The contract pins `merge: patch`.** Under `merge: branch` omp's `commitToBranch` (**source**, `src/task/worktree.ts`) fetches
+the worker's commits into the parent as a local `refs/heads/omp/task/<id>` ref with a `+HEAD:` force refspec (the source
+comment says it overwrites a stale branch from a prior run). That is one extra ref in the coordinator's repo per worker
+name, left behind (E1), that no step of the contract or of omp's cleanup removes, and the step 3 comparison of branch, `HEAD`
+and `git status` does not see it. `merge: patch` left no ref (D1, P1). **omp therefore satisfies the contract natively only
+when `enabled: true`, `apply: false` and `merge: patch` are all set**, in the profile or, per P1, in a project-level file. Qualifier: one run per setting, one model, one worker at a
 time, macOS with `isolation.backend: auto`. `gh pr create` from inside the isolated checkout was never run, because the
-scratch repos had no GitHub remote. The plugin cannot ship either setting; a consumer repo can, in a committed `.omp/config.yml` (P1). With `apply: false`
+scratch repos had no GitHub remote. The plugin cannot ship these settings. A consumer repo can set them in a committed `.omp/config.yml`, which is the only
+non-profile source that has driven a run (P1, one run, one worker; see "What this does not show" in
+[#453](#isolation-settings-sources-453)). With `apply: false`
 omp writes a patch file into the system temp directory and applies nothing, which is right for a worker that pushed its own
 branch. A worker that did *not* push loses its change from every branch, so the worker prompt's push step is a dependency of the contract.
 
 ### How a skill confirms the contract before a parallel dispatch
 
-`omp config get task.isolation.enabled` and `omp config get task.isolation.apply` read the merged value of the profile,
+`omp config get task.isolation.enabled`, `omp config get task.isolation.apply` and `omp config get task.isolation.merge` read the merged value of the profile,
 a project-level file (`.omp/config.yml`, `.omp/settings.json`, `.claude/settings.json`) and `PI_CONFIG_FILES`, and ignore the
 `--config` flag ([#453](#isolation-settings-sources-453)), so they are necessary and not sufficient. In order, the first failure stops the parallel dispatch:
 
 1. **Harness known?** On Claude Code, `isolation: "worktree"` is the contract, and nothing below applies. On omp, continue.
    On an unrecognised harness, treat isolation as unconfirmed and fail closed (below).
-2. **Read the settings.** On omp, run both `omp config get` commands from inside the repo. `enabled` not `true`, or `apply`
-   not `false`, means unconfirmed. Because `omp config get` ignores the `--config` flag, settings supplied **only** by that
+2. **Read the settings.** On omp, run the three `omp config get` commands from inside the repo. `enabled` not `true`, `apply`
+   not `false`, or `merge` not `patch`, means unconfirmed (an unset `merge` reads `patch`, and P1 ran that way). Because `omp config get` ignores the `--config` flag, settings supplied **only** by that
    flag can never pass this step; the passing sources are a committed project-level file, `PI_CONFIG_FILES` or the profile.
    **A committed `.omp/config.yml` with `task.isolation.enabled: true` and `apply: false` passed this step and drove a run
-   (P1) with no profile write**, so it is the source to prefer. Profile-set values were not run, and neither was a project
-   file that disagrees with the profile. A passing read can still be overridden at run time by a `--config` flag, hence
+   (P1) with no profile write**; that is the only non-profile source that has driven a run (one run, one worker). Not run:
+   profile-set values, a project file that disagrees with the profile, an untracked project file, and concurrent workers. A passing read can still be overridden at run time by a `--config` flag, hence
    step 3.
 3. **Probe, against a `--config` flag or other source overriding a passing read.** Step 2 fails closed on flag-only settings, so this
    step runs only after step 2 passed; it guards against a `--config` flag or another source overriding those values. Before the first parallel batch, dispatch **one** worker whose only
