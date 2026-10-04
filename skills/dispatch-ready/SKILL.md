@@ -192,6 +192,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   verified attempt comment and mirror it in the PR body **before this tick ends**, not on the
   later dispatch tick. A failed reservation write holds this scheduling attempt; it never
   turns an unrecorded retry into spent legacy history or permits an unaccounted dispatch.
+  On omp the redispatch goes through §5's isolation check and its in-§2 dispatch.
 - **Open PRs not yet reviewed, when `review_site: coordinator`** → review before merging, never
   after. **Precondition, checked first: under `review_agent: skip`, the explicit opt-out, no review
   is owed.** Skip the dispatch and the Parent recovery below, print the `review: SKIPPED` line
@@ -252,7 +253,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   failure path, not new machinery: surface it in the tick report with the finding named, comment
   `dispatch-ready: attempt 1 failed — review: <finding>` on the issue, and allow ONE redispatch
   carrying that finding as context on a later tick — the same single-redispatch budget a failed
-  check gets. A second failure demotes to `blocked` the same way, with the finding in the comment,
+  check gets. On omp it goes through §5's isolation check and its in-§2 dispatch. A second failure demotes to `blocked` the same way, with the finding in the comment,
   and a human decides. **Never park it back in Ready**: Ready must stay synonymous with
   dispatchable. On the `agent` site this rarely fires, because findings were fixed before the PR
   existed — but it still fires when a sub-agent could not resolve a reviewer at all, and equally
@@ -571,17 +572,87 @@ catches less, not nothing.
 
 ## 5. Dispatch
 
-Use take-it's mechanics verbatim: claim → fast-forward the local default branch → one sub-agent per
+**Confirm isolation before this tick claims anything.** take-it's isolation contract applies here,
+adapted to a tick that remembers nothing. Check it **before this tick claims anything**, ahead of
+the order below. Claude Code means the dispatch tool is `Agent` and it takes
+`isolation: "worktree"`; that parameter *is* the confirmation, nothing in this paragraph applies,
+and the dispatch below is unchanged — the check costs nothing there. On omp (workers are `task`
+calls), or on any harness you do not recognise, read
+`${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` and run its sequence.
+It owns the settings, the probe, the `isolated: true` rule and the after-every-batch check; this
+section restates none of them and states only what a tick changes:
+
+1. **Re-derive every tick.** A tick has no memory, and the doc's own rule holds: a later process
+   never reuses `confirmed`. Run the doc's settings reads on every tick and, on a tick about to
+   dispatch a parallel batch, its probe; a single in-§2 omp redispatch counts as a batch for that
+   trigger, so the probe runs before it, alongside the settings reads. Record the outcome in the doc's `isolation` shape beside
+   the batch records in `.git/dispatch-ready-batch.json`. That record serves this tick's report and
+   its second consumer (§2's redispatch, then this section); the next tick re-derives.
+2. **Confirmed** → capture the baseline the doc's after-every-batch check compares against (the
+   coordinator's branch, `HEAD` and `git status --porcelain`), dispatch in parallel as below under
+   the doc's worker-dispatch rule (`isolated: true` on every `task` entry), and **on omp, wait for
+   that batch's `task` results before this tick ends** — the batch-form `task` call followed by
+   `wait`, as the design doc's "Check C (row 3)" and "Isolation checks (#426)" sections record. Then
+   run the doc's after-every-batch check (its §4) against this tick's baseline. No later tick runs
+   it, because nothing persists a baseline and §2's merges move `HEAD`. A moved branch or `HEAD`, or
+   a dirty tree, dispatches no further batch. What this cannot guarantee: a `wait` that times out,
+   or a worker that never returns, ends the tick without the check; the tick report says so and the
+   batch's issues stay in flight. On Claude Code nothing here waits: the background `Agent` batch is
+   issued as before ("a tick that waits is a loop that stopped").
+3. **Unconfirmed** → **stop, never parallel on a shared tree.** Report `isolation unconfirmed` with
+   the setting or probe that failed, claim **nothing** — **without claiming a single issue**, so no
+   `in-progress` claim is left behind to count as in-flight and block other sessions — and
+   dispatch nothing.
+4. **`review_site: agent` is unsatisfiable on omp**, so run the tick with `coordinator` and report
+   the override on the tick report's `isolation:` line (appended there; §6's shape is unchanged).
+   The override is per tick, never silent, and the config is never edited.
+
+**Why dispatch-ready has no serial mode while take-it does.** take-it waits for each serial worker
+to finish inside one invocation, so the worker never outlives the checkout it shares. A tick-driven
+loop remembers nothing and would have to track, across ticks, a worker sharing the coordinator's
+checkout while later ticks fast-forward, merge and tear down in that same checkout. #452 item 2
+permits "or stop", and stop is what ships; take-it's Serial variant is never sent from here.
+
+**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.** §3's capacity stop
+ends a tick before this section whenever every slot is held, and a pending redispatch's issue already
+holds one, so deferring it here would starve it with its budget unspent and nothing reporting it.
+So on omp the redispatch first passes this section's isolation check (item 1's record serves it).
+If confirmed, it captures its own baseline (the coordinator's branch, `HEAD` and
+`git status --porcelain`) immediately before the dispatch, dispatches under the doc's
+worker-dispatch rule (`isolated: true`), waits for its result (the batch-form `task` call followed
+by `wait`), and runs the doc's after-every-batch check (its §4) against that baseline. Nothing that
+moves the coordinator's `HEAD` or tree runs between this redispatch's baseline and its
+after-batch check; §2 is not reordered, and the baseline is taken after any earlier §2 step has run. The same timeout caveat applies. If unconfirmed it is held — no budget spent, no
+demotion — and §6's `holds:` line names it. On Claude Code it is dispatched in §2 as before.
+
+**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
+flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
+shape. Every Ready item that passed §4's filters is held by this check, with the hold root
+`isolation unconfirmed` (the failed setting or probe is reported detail, never part of the root,
+so it cannot churn the stall comparison). They join the held set, and §7 decides:
+in-flight zero AND dispatched zero AND nothing to advance AND a non-empty held set is STALLED,
+confirmed across two ticks, then the stop path and its cron self-cancel. Not DEFERRED, because
+that state is for a hold this checkout can never clear, and an operator can clear this one from
+here (commit a `.omp/config.yml`). Not a fifth state, because it would be STALLED under a
+different name: the same test, the same two-tick confirmation, the same stop path, and one more
+count to keep honest. The two ticks also keep a transient probe failure from ending a healthy loop.
+
+**Reach.** The check gates **worker dispatch** and nothing else: claims happen only on a confirmed
+tick. On a stopped tick §2's reconcile, its comments and demotions, `pr-shepherd`'s merges with
+their local teardown, and the coordinator-site review dispatch all still run, because no worker
+shares the coordinator's checkout (confirmed workers run in omp's isolated checkouts). A §2
+redispatch is a worker dispatch: it passes the same check, and is dispatched if confirmed (on omp,
+within §2, with its own baseline, wait and check) and otherwise held — no budget spent, no demotion —
+and §6's `holds:` line names it. On omp, a confirmed tick waits for its own batch and runs the
+after-batch check itself; only a timed-out `wait` leaves it owed, and the tick report says so. §7
+is evaluated every tick: with work in flight an unconfirmed tick reaches no terminal state; with none, the
+paragraph above applies. **Known and accepted:** a held redispatch keeps its issue in flight, so a
+PR needing one when isolation is lost sits as a reported hold rather than ending the loop; the
+operator ends it.
+
+Use take-it's mechanics verbatim, after the isolation check above: claim → fast-forward the local default branch → one sub-agent per
 issue, `isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
 take-it's self-contained sub-agent prompt.
-
-take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override
-do **not** apply here. Claude Code means the dispatch tool is `Agent` and it takes
-`isolation: "worktree"`. Check that **before this tick claims anything**, ahead of the order above:
-on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands,
-**without claiming a single issue**, so no `in-progress` claim is left behind to count as in-flight and block other
-sessions. That is a stop, not a fifth terminal state (§7's four are unchanged; whether to add one is #452's decision),
-so the loop does not self-cancel on it: the operator ends the `/loop`.
 
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
@@ -848,7 +919,7 @@ moment the checkout it names ticks — subject there to the §4 filters this tic
 ### DRAIN STALLED
 
 In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**,
-over a **non-empty** held set — every Ready item held by a §4 filter, and every open PR held by the
+over a **non-empty** held set — every Ready item held by a §4 filter or by §5's isolation check, and every open PR held by the
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
 reason COMPLETE's condition now states all of its own. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents
@@ -877,7 +948,7 @@ queue that simply finished — must never announce STALLED.
 **A held set of nothing but site holds is DEFERRED, not STALLED**, and that state is evaluated
 first. STALLED's conjuncts match it exactly, so the discrimination is one extra test rather than a
 different one: does the held set contain anything a human could clear? A dependency hold, a
-`blocked` label, a held PR, a collision or migration hold — any one of them and this is STALLED,
+`blocked` label, a held PR, a collision or migration hold, an `isolation unconfirmed` hold — any one of them and this is STALLED,
 with the site holds listed among its reasons. Nothing but site holds, and the loop is on the wrong
 machine rather than blocked, which is a different sentence to print and a different thing to do
 about it.
@@ -1005,8 +1076,7 @@ tick as a whole.
 another session that is about to close a dependency, unblock an issue, or merge a PR. Ticks share
 no memory, so persist the observation next to the §5 batch manifest, in
 `.git/dispatch-ready-stall.json`: the held set — held issue numbers AND held PR numbers — with each
-one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the
-Blocking finding a held PR carries).
+one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, `isolation unconfirmed`, the Blocking finding a held PR carries).
 
 **"Matches exactly" compares the identifiers and each one's hold ROOT, never the rendered
 sentence.** Two honest ticks word the same hold differently, and a comparison over free text never

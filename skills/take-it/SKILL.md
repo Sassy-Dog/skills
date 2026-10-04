@@ -229,7 +229,8 @@ applies and the dispatch below is unchanged. On omp (workers are `task` calls), 
 you do not recognise, read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md`
 and run its sequence first — the settings read (`task.isolation.enabled` `true`, `apply` `false`,
 `merge` `patch`), one probe worker, the outcome recorded in the batch manifest, and the
-after-every-batch check. Where isolation is unconfirmed, never dispatch in parallel on a shared
+after-every-batch check. On omp the probe's and every worker's `task` entry carries
+`isolated: true` (the doc says why). Where isolation is unconfirmed, never dispatch in parallel on a shared
 tree: either run **serial** (plain independent list only, using the **Serial variant** below) or Stop and report `isolation unconfirmed`. On omp a configured
 `review_site: agent` is unsatisfiable, so use `coordinator` for this invocation and **report the
 override in §7**; the config itself is never edited, and the override is never silent.
@@ -468,7 +469,7 @@ behind in coordinator-only context.
 ### Serial variant (ONLY when §5's isolation confirmation chose serial mode)
 
 Kept out of the template above on purpose, the way the stacked variant is: the template is shared
-with `dispatch-ready`, which never runs the confirmation, and a worker on Claude Code that received
+with `dispatch-ready`, which confirms isolation every tick but never goes serial, and a worker on Claude Code that received
 this step would fail at its closing `git switch` (a linked worktree cannot switch to a branch
 checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is never
 sent on Claude Code and never by `dispatch-ready`.** A serial worker shares the coordinator's

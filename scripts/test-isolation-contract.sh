@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# test-isolation-contract.sh — take-it confirms the isolation contract before a
-# parallel dispatch, and the design doc says what is and is not implemented
-# (issue #451, following #426's contract and #453's settings-source evidence).
+# test-isolation-contract.sh — take-it and dispatch-ready confirm the isolation
+# contract before a parallel dispatch, and the design doc says what is and is not
+# implemented (issues #451 and #452, following #426's contract and #453's
+# settings-source evidence).
 #
 # Why this exists: `take-it` dispatched every worker with `isolation: "worktree"`
 # and nothing else. That parameter is the whole contract on Claude Code, but on
@@ -45,7 +46,8 @@
 #      is empty before each dispatch (`git switch -c` carries a prior worker's
 #      uncommitted edits onto the new branch), and the worker prompt carries a
 #      serial-mode step that branches with `git switch -c <branch>
-#      origin/<default_branch>`, inside §5's dispatched blockquote.
+#      origin/<default_branch>`, inside §5's dispatched blockquote. The Serial
+#      variant says it is never sent by dispatch-ready (#452 keeps it so).
 #  10. `review_site: agent` on omp is overridden to `coordinator` for the run,
 #      and the override is REPORTED, never silent and never written to config.
 #      This is a per-run override, not the config-derived flip decision 4 of
@@ -57,10 +59,26 @@
 #      nothing" or that "No skill implements" it, no longer says "Drafts 1 and
 #      2", cites the filed issues #451 and #452, and the summary lines that
 #      predate the `merge: patch` pin are corrected (the row 3 verdict's "two
-#      settings", step 3's "rests on the `apply` read", "all set").
+#      settings", step 3's "rests on the `apply` read", "all set"), and the
+#      sentences saying dispatch-ready does not yet implement it are gone.
+#  13. dispatch-ready §5 carries the contract per tick (#452), AHEAD of its
+#      "claim →" sentence: the check is before the claim, not merely present
+#      (a stop AFTER the claim leaves an `in-progress` claim that counts as
+#      in-flight and blocks other sessions). On Claude Code it is inert; on omp
+#      each tick re-derives, a confirmed batch is checked after it returns, the
+#      `review_site` override is reported, and an unconfirmed tick STOPS and
+#      claims nothing. There is NO serial mode here: §5 says why (take-it waits
+#      for each serial worker inside one invocation; a tick-driven loop would
+#      track a worker sharing the coordinator's checkout across ticks, and three
+#      Blocking findings in one review came from that one root cause), and the
+#      property forbids a serial path inside §5's slice. The interim "until #452
+#      lands" stop is gone.
+#  14. The terminal-state decision (#452): a stopped tick ends the loop through
+#      DRAIN STALLED, §7's STALLED conjunct names §5's isolation check, §5 states
+#      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against twenty-two mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against fifty-six mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -83,15 +101,65 @@
 #   M17 §7's isolation-outcome line removed                                       -> 11
 #   M18 the `true`/`false`/`patch` pin's apply value flipped                      -> 3
 #   M19 serial-step text leaked into the shared worker template                   -> 9
-#   M20 dispatch-ready's "does not apply" sentence removed                        -> 13
+#   M20 dispatch-ready's "isolation contract applies here" sentence removed       -> 13
 #   M21 the reference doc's name for the serial step diverges from §5's           -> 9
-#   M22 dispatch-ready's stop no longer claims nothing (the claim-before-stop bug) -> 13
-# (Property 13 is dispatch-ready's own sentence, nit-added after review: the
-# two dispatching skills must not contradict each other about who confirms.)
+#   M22 dispatch-ready's "without claiming a single issue" phrase swapped. This
+#       proves the PHRASE only; it is NOT placement, which is M23 (its label
+#       once claimed placement, and the swap proves nothing about order)  -> 13
+#   M23 the confirmation paragraph moved BELOW the "claim →" sentence             -> 13 (the ordering branch)
+#   M24 dispatch-ready's Claude Code definition (Agent + isolation) changed       -> 13
+#   M25 dispatch-ready's "nothing in this paragraph applies" dropped              -> 13
+#   M26 dispatch-ready's "never reuses `confirmed`" re-derive rule dropped        -> 13
+#   M27 `isolated: true` removed from dispatch-ready (every occurrence)           -> 13
+#   M30 the interim "until #452 lands" stop restored                              -> 13 (the negative)
+#   M31 dispatch-ready's review_site override sentence removed                    -> 13
+#   M32 dispatch-ready's pointer to the doc's after-every-batch check changed      -> 13
+#   M33 §5's "DRAIN STALLED, not a fifth state" decision removed                  -> 14
+#   M34 §7's STALLED conjunct no longer names §5's isolation check                -> 14
+#   M35 §5's Reach paragraph removed                                              -> 14
+#   M37 "dispatch-ready does not yet" restored in the design doc                  -> 12
+#   M38 the doc's "task entry without isolated: true runs on the shared tree" removed -> 5
+#   M39 the doc's "every worker carries isolated: true" line removed               -> 5
+#   M40 take-it §5's pointer to the isolated: true rule removed                    -> 5
+#   M45 §5's two-tick confirmation removed                                         -> 14
+#   M46 §5's transient-probe rationale removed                                     -> 14
+#   M47 §7's stall-record hold-root list loses the isolation root                  -> 14
+#   M53 a forbidden restatement (`task.isolation.enabled`) injected into §5        -> 13
+#   M54 a `"mode": "serial"` serial record restored inside §5                      -> 13
+#   M55 "serial or stop" restored in §5's unconfirmed outcome                      -> 13
+#   M56 the why-no-serial-mode paragraph's heading removed                         -> 13
+#   M57 "claim **nothing**" replaced                                               -> 13
+#   M58 Reach's "claims happen only on a confirmed tick" removed                   -> 14
+#   M59 the confirmed path's "dispatches no further batch" halt removed            -> 13
+#   M60 the confirmed tick no longer waits for its batch before ending             -> 13
+#   M61 the timeout caveat removed                                                 -> 13
+#   M62 Reach's wait sentence loses its "On omp" scope                             -> 14
+#   M63 the in-§2 omp redispatch paragraph (own baseline, wait, check) removed    -> 13
+#   M64 the Claude Code "nothing here waits" carve-out removed                    -> 13
+#   M65 §2's failed-check bullet's pointer to the in-§2 dispatch removed           -> 13
+#   M67 §2's review-finding bullet's pointer removed                               -> 13
+#   M68 the in-§2 redispatch no longer counts as a batch for the probe trigger     -> 13
+#   M66 the redispatch's own-baseline sentence removed                             -> 13
+# New in the stop-only round (M60 to M68 came later, in review rounds): M60 the
+# wait removed, M61 the timeout caveat removed, M62 Reach's omp scope removed, M63
+# the in-§2 omp redispatch paragraph removed, M64 the Claude Code carve-out removed,
+# M65/M67 one §2 pointer each removed, M66 the own-baseline sentence removed, M68 the
+# probe-trigger sentence removed; and M54 a serial path restored, M55 "serial or stop"
+# restored, M56 the why-paragraph removed, M57 the unconfirmed-means-stop sentence
+# replaced, M58 the Reach claim sentence removed, M59 the after-batch halt removed.
+# Property 13 also fails if dispatch-ready §5 contains `task.isolation.enabled`,
+# `omp config set` or the `merge` `patch` pin, which the reference doc owns
+# (#452 item 1 asked for no third copy); M53 injects one. No tier string is
+# checked: §5 legitimately carries the worker's tier binding, so a ban would be
+# wrong, and no property-14 text carries such a check.
+# (Property 13 began as dispatch-ready's own interim sentence, nit-added after
+# review: the two dispatching skills must not contradict each other about who
+# confirms. #452 replaced that sentence with the contract itself.)
 #
 # Source-level: python3 stdlib, no gh, no omp, no network. This gate does NOT
 # run omp; the model-driven evidence that the sequence works is recorded in
-# docs/HARNESS-PORTABILITY.md ("Isolation confirmation runs (#451)").
+# docs/HARNESS-PORTABILITY.md ("Isolation confirmation runs (#451)" for
+# take-it, "(#452)" for dispatch-ready).
 set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -234,6 +302,17 @@ need("the probe reports the top level", ref, "git rev-parse --show-toplevel", 5)
 need("the same path means isolation is off", ref, "means isolation is off", 5)
 need("the probe changes nothing", ref, "Change nothing, create no branch, commit nothing and push nothing", 5)
 
+# 5b. the `isolated: true` rule lives in the reference doc and take-it points at it (#452 review)
+need("the probe's task entry carries isolated: true", ref, "with `isolated: true` on its `task` entry", 5)
+need("a task entry without isolated: true runs on the shared tree", ref,
+     "A `task` entry without `isolated: true` runs on the shared tree whatever the settings read", 5)
+need("every confirmed worker carries isolated: true too", ref,
+     "Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well", 5)
+need("take-it §5 points at the isolated: true rule", s5,
+     "On omp the probe's and every worker's `task` entry carries `isolated: true`", 5)
+if "set the `task` tool's isolation parameter when it offers one" in ref:
+    problems.append("property 5: the reference doc still carries the wording whose probe measured the shared tree")
+
 # 6. manifest
 need("the outcome is recorded in the batch manifest", ref, "take-it-batch.json", 6)
 need("a resumed run never reuses `confirmed`", ref, "never reuses `confirmed`", 6)
@@ -311,7 +390,9 @@ need("§7 names the serial-and-not-isolated outcome", s7, "serial and not isolat
 # 12. the design doc
 for stale in ("implements nothing", "No skill implements them", "Drafts 1 and 2",
               "until Drafts 1 and 2", "Even after Draft 1", "conditional on two settings",
-              "Requirement 3 rests on the `apply` read in step 2", "are all set"):
+              "Requirement 3 rests on the `apply` read in step 2", "are all set",
+              "`dispatch-ready` does not yet", "`dispatch-ready` cannot yet", "has neither yet (#452)",
+              "Until #452 lands", "(`dispatch-ready`, open)"):
     if stale in doc:
         problems.append(f"property 12: docs/HARNESS-PORTABILITY.md still says {stale!r}")
 need("the doc cites #451 (take-it)", doc, "#451", 12)
@@ -321,18 +402,128 @@ need("the doc says all read", doc, "are all read", 12)
 need_re("the doc has the recorded #451 runs section", DOC_RAW,
         r"(?m)^### Isolation confirmation runs \(#451\)$", 12)
 
-# 13. dispatch-ready does not inherit take-it's confirmation, and says so
-dr = flatten(read("skills/dispatch-ready/SKILL.md"))
-need("dispatch-ready says take-it's confirmation, Serial variant and override do not apply", dr,
-     "take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override do **not** apply here", 13)
-need("dispatch-ready reports isolation unconfirmed off Claude Code and dispatches nothing", dr,
-     "on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands", 13)
-need("dispatch-ready defines Claude Code as the Agent tool taking isolation: worktree", dr,
+# 13. dispatch-ready carries the contract per tick, ahead of its claim
+DR_RAW = read("skills/dispatch-ready/SKILL.md")
+dr = flatten(DR_RAW)
+d5_raw = section(DR_RAW, "## 5. Dispatch")
+d5 = flatten(d5_raw)
+d7_raw = section(DR_RAW, "## 7. Terminal states — drain complete, drain deferred, drain stalled, drain degraded")
+d7 = flatten(d7_raw)
+if not d5:
+    problems.append("dispatch-ready §5 did not slice — every property 13 assertion would pass vacuously")
+if not d7:
+    problems.append("dispatch-ready §7 did not slice")
+need("dispatch-ready says take-it's isolation contract applies, adapted to a tick", d5,
+     "take-it's isolation contract applies here, adapted to a tick that remembers nothing", 13)
+need("dispatch-ready defines Claude Code as the Agent tool taking isolation: worktree", d5,
      'Claude Code means the dispatch tool is `Agent` and it takes `isolation: "worktree"`', 13)
-need("dispatch-ready checks the harness before this tick claims anything", dr,
-     "Check that **before this tick claims anything**", 13)
-need("dispatch-ready claims nothing on the stop", dr, "without claiming a single issue", 13)
-need("dispatch-ready's stop is not a new terminal state", dr, "not a fifth terminal state", 13)
+need("dispatch-ready says nothing applies on Claude Code and the dispatch is unchanged", d5,
+     "that parameter *is* the confirmation, nothing in this paragraph applies, and the dispatch below is unchanged", 13)
+need("dispatch-ready checks before this tick claims anything", d5,
+     "Check it **before this tick claims anything**", 13)
+# ORDER, not presence: a check placed after the claim leaves an `in-progress` claim behind.
+i_chk = d5_raw.find("**Confirm isolation before this tick claims anything.**")
+i_clm = d5_raw.find("Use take-it's mechanics verbatim")
+if min(i_chk, i_clm) < 0:
+    problems.append("property 13: the isolation check or §5's 'claim →' sentence was not found in dispatch-ready §5")
+elif not i_chk < i_clm:
+    problems.append("property 13: the isolation check must precede §5's 'claim →' sentence, or a stop leaves a claim behind")
+need("dispatch-ready's claim sentence still opens with claim →", d5, "verbatim, after the isolation check above: claim →", 13)
+need("dispatch-ready re-derives every tick", d5, "**Re-derive every tick.**", 13)
+need("dispatch-ready never reuses a previous tick's confirmed", d5, "never reuses `confirmed`", 13)
+need("dispatch-ready runs the doc's settings reads and probe rather than restating them", d5,
+     "Run the doc's settings reads on every tick and, on a tick about to dispatch a parallel batch, its probe", 13)
+need("dispatch-ready points at the doc's worker-dispatch rule", d5,
+     "under the doc's worker-dispatch rule (`isolated: true` on every `task` entry)", 13)
+need("dispatch-ready points at the doc's after-every-batch check", d5,
+     "run the doc's after-every-batch check (its §4) against this tick's baseline", 13)
+need("a confirmed tick waits for its batch's task results before it ends", d5,
+     "**on omp, wait for that batch's `task` results before this tick ends**", 13)
+need("the timeout caveat is stated", d5,
+     "a `wait` that times out, or a worker that never returns, ends the tick without the check", 13)
+need("a §2 redispatch on omp is dispatched within §2, not deferred", d5,
+     "**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.**", 13)
+need("the in-§2 redispatch captures its own baseline before dispatching", d5,
+     "it captures its own baseline (the coordinator's branch, `HEAD` and `git status --porcelain`) immediately before the dispatch", 13)
+need("nothing moving HEAD runs between the redispatch baseline and its check", d5,
+     "Nothing that moves the coordinator's `HEAD` or tree runs between this redispatch's baseline and its after-batch check", 13)
+need("an unconfirmed in-§2 redispatch is held with no budget spent", d5,
+     "If unconfirmed it is held — no budget spent, no demotion", 13)
+need("Claude Code waits for nothing", d5,
+     "On Claude Code nothing here waits: the background `Agent` batch is issued as before", 13)
+d2 = flatten(section(DR_RAW, "## 2. Reconcile in-flight (always first)"))
+if not d2:
+    problems.append("dispatch-ready §2 did not slice")
+need("§2's failed-check bullet points at §5's in-§2 dispatch", d2,
+     "On omp the redispatch goes through §5's isolation check and its in-§2 dispatch.", 13)
+need("§2's review-finding bullet points at §5's in-§2 dispatch", d2,
+     "On omp it goes through §5's isolation check and its in-§2 dispatch.", 13)
+need("an in-§2 omp redispatch counts as a batch for the probe trigger", d5,
+     "a single in-§2 omp redispatch counts as a batch for that trigger, so the probe runs before it", 13)
+need("the in-§2 redispatch states the invariant rather than a §2 ordering", d5,
+     "§2 is not reordered, and the baseline is taken after any earlier §2 step has run", 13)
+if "ahead of §2's merge hand-off and its teardown" in d5:
+    problems.append("property 13: §5 claims the redispatch runs ahead of §2's merge hand-off, which contradicts §2's bullet order")
+need("Reach scopes the wait sentence to omp", d5,
+     "On omp, a confirmed tick waits for its own batch and runs the after-batch check itself; only a timed-out `wait` leaves it owed", 14)
+need("no later tick runs the after-batch check", d5, "No later tick runs it, because nothing persists a baseline", 13)
+for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
+    if copy in d5:
+        problems.append(f"property 13: dispatch-ready §5 restates {copy!r}; the reference doc owns it (#452 item 1)")
+need("dispatch-ready's unconfirmed outcome is stop, never parallel on a shared tree", d5,
+     "**Unconfirmed** → **stop, never parallel on a shared tree.**", 13)
+need("dispatch-ready claims nothing when unconfirmed", d5, "claim **nothing**", 13)
+need("dispatch-ready says why it has no serial mode while take-it does", d5,
+     "**Why dispatch-ready has no serial mode while take-it does.**", 13)
+need("the reason is take-it waiting inside one invocation", d5,
+     "take-it waits for each serial worker to finish inside one invocation", 13)
+need("the reason cites #452 item 2's or stop", d5, '#452 item 2 permits "or stop"', 13)
+need("a confirmed batch that fails the after-batch check dispatches no further batch", d5,
+     "A moved branch or `HEAD`, or a dirty tree, dispatches no further batch", 13)
+# no serial path may exist inside dispatch-ready §5
+for forbidden in ('"mode": "serial"', "outstanding serial", "outstanding-serial", "serial or stop",
+                  "Serial-variant step", "that one issue only", "Close each serial record",
+                  "serial and not isolated"):
+    if forbidden in d5:
+        problems.append(f"property 13: dispatch-ready §5 offers a serial path ({forbidden!r}); an unconfirmed tick stops")
+need("dispatch-ready claims nothing on the stop", d5, "without claiming a single issue", 13)
+need("dispatch-ready reports the review_site override on omp", d5,
+     "`review_site: agent` is unsatisfiable on omp", 13)
+need("dispatch-ready's override is never silent and never edits config", d5,
+     "never silent, and the config is never edited", 13)
+for stale in ("until #452 lands", "do **not** apply here", "the operator ends the `/loop`",
+              "whether to add one is #452's decision"):
+    if stale in d5:
+        problems.append(f"property 13: dispatch-ready §5 still carries the interim stop ({stale!r})")
+
+# 14. the terminal-state decision (#452), its reach, and the design doc's record of it
+need("dispatch-ready §5 records that a stopped tick ends in DRAIN STALLED, not a fifth state", d5,
+     "**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.**", 14)
+need("dispatch-ready §5 names the hold root", d5, "the hold root `isolation unconfirmed`", 14)
+need("dispatch-ready §5 says why it is not DEFERRED", d5, "Not DEFERRED, because", 14)
+need("dispatch-ready §5 keeps the two-tick confirmation", d5,
+     "confirmed across two ticks, then the stop path and its cron self-cancel", 14)
+need("dispatch-ready §5 gives the transient-probe rationale", d5,
+     "The two ticks also keep a transient probe failure from ending a healthy loop.", 14)
+need("§7 lists the isolation hold among holds a human could clear", d7,
+     "an `isolation unconfirmed` hold — any one of them", 14)
+need("§7's stall record carries the isolation hold root", d7,
+     "the decision gate, `isolation unconfirmed`, the Blocking finding", 14)
+need("§5's Reach says claims happen only on a confirmed tick", d5,
+     "claims happen only on a confirmed tick", 14)
+need("§5's Reach says no worker shares the coordinator's checkout", d5,
+     "because no worker shares the coordinator's checkout", 14)
+need("dispatch-ready §7's STALLED conjunct names §5's isolation check", d7,
+     "every Ready item held by a §4 filter or by §5's isolation check", 14)
+need("dispatch-ready §5 states its reach", d5, "**Reach.** The check gates **worker dispatch** and nothing else", 14)
+need("dispatch-ready §5 says a §2 redispatch passes the check", d5, "A §2 redispatch is a worker dispatch", 14)
+need("dispatch-ready §5 states the known limitation", d5, "**Known and accepted:**", 14)
+need("the doc records the terminal-state decision", doc,
+     "a stopped tick ends the loop through DRAIN STALLED, and no fifth state is added", 14)
+need_re("the doc has the recorded #452 runs section", DOC_RAW,
+        r"(?m)^### Isolation confirmation runs \(#452\)$", 14)
+need_re("the doc has the #452 terminal-state section", DOC_RAW,
+        r"(?m)^### `dispatch-ready`: the tick, its terminal state and its reach \(#452\)$", 14)
 
 for p in problems:
     print(p)
@@ -341,7 +532,7 @@ PY
 
 # --- the real tree ------------------------------------------------------------
 if out=$(python3 "$CHECKER" "$ROOT" 2>&1); then
-    ok "take-it confirms isolation before a parallel dispatch; the design doc agrees (13 properties)"
+    ok "take-it and dispatch-ready confirm isolation before a parallel dispatch; the design doc agrees (14 properties)"
 else
     printf '%s\n' "$out" | while IFS= read -r line; do bad "$line"; done
 fi
@@ -492,8 +683,8 @@ mutate "$d/$SK" '### Serial variant (ONLY' '> git switch -c leak
 expect_fail "M19 serial step leaked into the shared template" "$d" 'the shared worker template carries'
 
 d=$(make_copy m20)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'do **not** apply here' 'apply here' || bad "M20: mutation did not apply"
-expect_fail "M20 dispatch-ready sentence removed" "$d" 'property 13:'
+mutate "$d/skills/dispatch-ready/SKILL.md" "take-it's isolation contract applies here," "take-it's isolation contract is background," || bad "M20: mutation did not apply"
+expect_fail "M20 dispatch-ready's contract sentence removed" "$d" 'isolation contract applies, adapted to a tick'
 
 d=$(make_copy m21)
 mutate "$d/$RF" 'Serial variant (its step 1)' 'serial-mode step 0' || bad "M21: mutation did not apply"
@@ -501,7 +692,174 @@ expect_fail "M21 the one name for the serial step diverges" "$d" "the reference 
 
 d=$(make_copy m22)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'without claiming a single issue' 'after claiming up to capacity' || bad "M22: mutation did not apply"
-expect_fail "M22 dispatch-ready's stop no longer precedes the claim" "$d" 'dispatch-ready claims nothing on the stop'
+expect_fail "M22 dispatch-ready's stop phrase swapped (phrase only; placement is M23)" "$d" 'dispatch-ready claims nothing on the stop'
+
+# M23: the confirmation paragraph moved BELOW the "claim →" paragraph, still inside §5,
+# so the "not found" branch cannot be what fires; only the ordering branch can.
+d=$(make_copy m23)
+python3 - "$d/skills/dispatch-ready/SKILL.md" <<'PY' || bad "M23: mutation did not apply"
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+a = s.index("**Confirm isolation before this tick claims anything.**")
+b = s.index("Use take-it's mechanics verbatim")
+para = s[a:b]
+s = s[:a] + s[b:]
+anchor = "A stack chain uses take-it's **stacked variant**"
+i = s.index(anchor)
+p.write_text(s[:i] + para + s[i:])
+PY
+expect_fail "M23 confirmation moved below the claim sentence" "$d" 'must precede §5'"'"'s '"'"'claim →'"'"' sentence'
+
+d=$(make_copy m24)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'Claude Code means the dispatch tool is `Agent`' 'Claude Code means the dispatch tool is `Task`' || bad "M24: mutation did not apply"
+expect_fail "M24 Claude Code definition changed" "$d" 'dispatch-ready defines Claude Code as the Agent tool'
+
+d=$(make_copy m25)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'nothing in this paragraph applies,' 'something in this paragraph applies,' || bad "M25: mutation did not apply"
+expect_fail "M25 'nothing applies' dropped" "$d" 'dispatch-ready says nothing applies on Claude Code'
+
+d=$(make_copy m26)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'never reuses `confirmed`' 'reuses `confirmed`' || bad "M26: mutation did not apply"
+expect_fail "M26 re-derive rule dropped" "$d" 'dispatch-ready never reuses a previous tick'"'"'s confirmed'
+
+d=$(make_copy m27)
+mutate "$d/skills/dispatch-ready/SKILL.md" '`isolated: true`' '`isolated: false`' all || bad "M27: mutation did not apply"
+expect_fail "M27 isolated: true removed" "$d" "dispatch-ready points at the doc's worker-dispatch rule"
+
+d=$(make_copy m30)
+mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
+
+' '## 5. Dispatch
+
+Dispatches nothing until #452 lands.
+
+' || bad "M30: mutation did not apply"
+expect_fail "M30 interim stop restored" "$d" 'still carries the interim stop'
+
+d=$(make_copy m31)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'is unsatisfiable on omp' 'is fine on omp' || bad "M31: mutation did not apply"
+expect_fail "M31 review_site override removed" "$d" 'dispatch-ready reports the review_site override on omp'
+
+d=$(make_copy m32)
+mutate "$d/skills/dispatch-ready/SKILL.md" "(its §4) against this tick's baseline" "(its §4) against the last tick's baseline" || bad "M32: mutation did not apply"
+expect_fail "M32 after-every-batch pointer removed" "$d" "dispatch-ready points at the doc's after-every-batch check"
+
+d=$(make_copy m33)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.**' '**How a stopped tick ends the loop.**' || bad "M33: mutation did not apply"
+expect_fail "M33 terminal-state decision removed" "$d" 'a stopped tick ends in DRAIN STALLED'
+
+d=$(make_copy m34)
+mutate "$d/skills/dispatch-ready/SKILL.md" "held by a §4 filter or by §5's isolation check" 'held by a §4 filter' || bad "M34: mutation did not apply"
+expect_fail "M34 STALLED conjunct no longer names the check" "$d" "STALLED conjunct names"
+
+d=$(make_copy m35)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Reach.** The check gates' '**Scope.** The check gates' || bad "M35: mutation did not apply"
+expect_fail "M35 Reach paragraph removed" "$d" 'dispatch-ready §5 states its reach'
+
+d=$(make_copy m37)
+printf '\n`dispatch-ready` does not yet implement it.\n' >>"$d/$DC"
+expect_fail "M37 'does not yet' restored in the design doc" "$d" "still says '\`dispatch-ready\` does not yet'"
+
+d=$(make_copy m38)
+mutate "$d/$RF" 'A `task` entry without `isolated: true` runs on the shared tree whatever the settings read' 'A `task` entry may omit it' || bad "M38: mutation did not apply"
+expect_fail "M38 doc's shared-tree sentence removed" "$d" 'a task entry without isolated: true runs on the shared tree'
+
+d=$(make_copy m39)
+mutate "$d/$RF" 'Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well' 'Workers need nothing more' || bad "M39: mutation did not apply"
+expect_fail "M39 doc's worker line removed" "$d" 'every confirmed worker carries isolated: true too'
+
+d=$(make_copy m40)
+mutate "$d/$SK" "On omp the probe's and every worker's \`task\` entry carries" "On omp the probe's entry carries" || bad "M40: mutation did not apply"
+expect_fail "M40 take-it pointer removed" "$d" 'take-it §5 points at the isolated: true rule'
+
+d=$(make_copy m45)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'confirmed across two ticks, then' 'confirmed at once, then' || bad "M45: mutation did not apply"
+expect_fail "M45 two-tick confirmation removed" "$d" 'keeps the two-tick confirmation'
+
+d=$(make_copy m46)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'The two ticks also keep a transient probe failure from ending a healthy loop.' 'The two ticks add nothing.' || bad "M46: mutation did not apply"
+expect_fail "M46 transient-probe rationale removed" "$d" 'gives the transient-probe rationale'
+
+d=$(make_copy m47)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'the decision gate, `isolation unconfirmed`, the Blocking' 'the decision gate, the Blocking' || bad "M47: mutation did not apply"
+expect_fail "M47 stall record loses the isolation root" "$d" "stall record carries the isolation hold root"
+
+d=$(make_copy m53)
+mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
+
+' '## 5. Dispatch
+
+Read task.isolation.enabled here.
+
+' || bad "M53: mutation did not apply"
+expect_fail "M53 forbidden restatement injected" "$d" "restates 'task.isolation.enabled'"
+
+d=$(make_copy m54)
+mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
+
+' '## 5. Dispatch
+
+Record `{issue, pr, branch, "mode": "serial"}`.
+
+' || bad "M54: mutation did not apply"
+expect_fail "M54 serial record restored" "$d" 'offers a serial path'
+
+d=$(make_copy m55)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Unconfirmed** → **stop, never' '**Unconfirmed** → **serial or stop, never' || bad "M55: mutation did not apply"
+expect_fail "M55 serial or stop restored" "$d" 'offers a serial path'
+
+d=$(make_copy m56)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Why dispatch-ready has no serial mode while take-it does.**' '**Notes.**' || bad "M56: mutation did not apply"
+expect_fail "M56 why-paragraph removed" "$d" 'says why it has no serial mode while take-it does'
+
+d=$(make_copy m57)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'claim **nothing**' 'claim what fits' || bad "M57: mutation did not apply"
+expect_fail "M57 claims-nothing replaced" "$d" 'claims nothing when unconfirmed'
+
+d=$(make_copy m58)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'claims happen only on a confirmed' 'claims happen on any' || bad "M58: mutation did not apply"
+expect_fail "M58 Reach claim sentence removed" "$d" 'Reach says claims happen only on a confirmed tick'
+
+d=$(make_copy m59)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'A moved branch or `HEAD`, or' 'Nothing happens, or' || bad "M59: mutation did not apply"
+expect_fail "M59 after-batch halt removed" "$d" 'dispatches no further batch'
+
+d=$(make_copy m60)
+mutate "$d/skills/dispatch-ready/SKILL.md" "wait for
+   that batch's \`task\` results" "carry on" || bad "M60: mutation did not apply"
+expect_fail "M60 confirmed tick no longer waits" "$d" 'a confirmed tick waits for its batch'
+
+d=$(make_copy m61)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'a `wait` that times out,' 'a `wait` that always returns,' || bad "M61: mutation did not apply"
+expect_fail "M61 timeout caveat removed" "$d" 'the timeout caveat is stated'
+
+d=$(make_copy m62)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'On omp, a confirmed tick waits for its own batch' 'A confirmed tick waits for its own batch' || bad "M62: mutation did not apply"
+expect_fail "M62 Reach omp scope removed" "$d" 'Reach scopes the wait sentence to omp'
+
+d=$(make_copy m63)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.**' '**Redispatch.**' || bad "M63: mutation did not apply"
+expect_fail "M63 in-§2 redispatch paragraph removed" "$d" 'a §2 redispatch on omp is dispatched within §2'
+
+d=$(make_copy m64)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'nothing here waits' 'everything here waits' || bad "M64: mutation did not apply"
+expect_fail "M64 Claude Code carve-out removed" "$d" 'Claude Code waits for nothing'
+
+d=$(make_copy m65)
+mutate "$d/skills/dispatch-ready/SKILL.md" "On omp the redispatch goes through" "The redispatch waits for" || bad "M65: mutation did not apply"
+expect_fail "M65 failed-check pointer removed" "$d" "failed-check bullet points at §5's in-§2 dispatch"
+
+d=$(make_copy m67)
+mutate "$d/skills/dispatch-ready/SKILL.md" "On omp it goes through" "It waits for" || bad "M67: mutation did not apply"
+expect_fail "M67 review-finding pointer removed" "$d" "review-finding bullet points at §5's in-§2 dispatch"
+
+d=$(make_copy m66)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'it captures its own baseline' 'it uses the tick baseline' || bad "M66: mutation did not apply"
+expect_fail "M66 own-baseline sentence removed" "$d" 'captures its own baseline before dispatching'
+
+d=$(make_copy m68)
+mutate "$d/skills/dispatch-ready/SKILL.md" "a single in-§2 omp redispatch counts as a batch for that" "an in-§2 omp redispatch needs no probe for that" || bad "M68: mutation did not apply"
+expect_fail "M68 probe-trigger sentence removed" "$d" 'counts as a batch for the probe trigger'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

@@ -1,6 +1,6 @@
 # Isolation confirmation before a parallel dispatch
 
-`take-it` §5 reads this file on any harness that is not Claude Code, before it creates an attempt record or issues a single worker call. It implements the contract in the plugin's `docs/HARNESS-PORTABILITY.md`, "Isolation contract (#426)" and "Isolation settings sources (#453)". Four requirements make parallel workers safe: each worker has its own branch and working tree; it can commit and push; nothing it does moves the coordinator's checkout; and its tree is removable. A harness that cannot show all four runs no parallel batch.
+`take-it` §5 reads this file on any harness that is not Claude Code, before it creates an attempt record or issues a single worker call; `dispatch-ready` §5 reads it every tick, before it claims anything, and re-derives the outcome rather than reusing a recorded `confirmed`, and stops on an unconfirmed outcome instead of going serial (its tick-shaped differences are stated there). It implements the contract in the plugin's `docs/HARNESS-PORTABILITY.md`, "Isolation contract (#426)" and "Isolation settings sources (#453)". Four requirements make parallel workers safe: each worker has its own branch and working tree; it can commit and push; nothing it does moves the coordinator's checkout; and its tree is removable. A harness that cannot show all four runs no parallel batch.
 
 Nothing in this file runs a bundled script, so it needs no plugin-root preamble. Every command below runs from inside the repo being worked.
 
@@ -37,9 +37,11 @@ git rev-parse HEAD
 git status --porcelain
 ```
 
-Then dispatch **one** worker at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), isolated (set the `task` tool's isolation parameter when it offers one; the settings above are what make it effective). Its prompt, self-contained:
+Then dispatch **one** worker at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), with `isolated: true` on its `task` entry. **A `task` entry without `isolated: true` runs on the shared tree whatever the settings read**, so a probe without it measures nothing (#452's runs 3 and 4 probed the coordinator's own tree that way). Its prompt, self-contained:
 
 > Read-only probe. Run `pwd -P` and `git rev-parse --show-toplevel`, then `git branch --show-current`. Change nothing, create no branch, commit nothing and push nothing. Reply with exactly those three outputs.
+
+**Every worker dispatched after a confirmed outcome carries `isolated: true` on its `task` entry as well**, for the same reason: the settings make isolation available, and only the parameter requests it.
 
 Compare. **The same `pwd -P` or the same top-level path as the coordinator's means isolation is off: unconfirmed.** A reply that is missing, or that is not the three outputs, is unconfirmed too. Then re-run the coordinator's `HEAD`, branch and `git status --porcelain` and require them unchanged from the values just recorded. The probe tests requirement 1 only; requirement 3 rests on the `apply` read and on step 4.
 
@@ -60,6 +62,8 @@ A resumed run re-reads the settings; it never reuses `confirmed` from a previous
 3. Under `apply: false` omp leaves `<tmp>/omp-task-<id>/` (a patch plus a `.json`, `.jsonl` and `.md`) holding the **only** copy of a change a worker did not push. The worker's result text names the directory. Remove **only that directory, only after step 2 showed the branch on the remote in the same step**, and only your own. If the push is not verified, leave the directory, name its path in the §7 report, and treat the issue as unshipped. Never sweep other `omp-task-*` directories: they belong to other sessions.
 
 ## Fail closed
+
+A caller without a serial mode, such as `dispatch-ready`, takes **Stop** only and unwinds nothing it has not claimed; the serial and unwind wording below is `take-it`'s.
 
 **Where isolation is unconfirmed, never dispatch parallel workers on a shared tree.** Take the first outcome that applies:
 
