@@ -78,7 +78,7 @@
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against fifty-one mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against fifty-four mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -134,7 +134,10 @@
 #   M60 the confirmed tick no longer waits for its batch before ending             -> 13
 #   M61 the timeout caveat removed                                                 -> 13
 #   M62 Reach's wait sentence loses its "On omp" scope                             -> 14
-#   M63 the §2-redispatch-joins-the-batch sentence removed                         -> 13
+#   M63 the in-§2 omp redispatch paragraph (own baseline, wait, check) removed    -> 13
+#   M64 the Claude Code "nothing here waits" carve-out removed                    -> 13
+#   M65 §2's two pointers to the in-§2 dispatch removed                            -> 13
+#   M66 the redispatch's own-baseline sentence removed                             -> 13
 # New in the stop-only round (M60 to M63 came later, in review rounds): M60 the
 # wait removed, M61 the timeout caveat removed, M62 Reach's omp scope removed, M63
 # the redispatch placement removed; and M54 a serial path restored, M55 "serial or stop"
@@ -434,8 +437,20 @@ need("a confirmed tick waits for its batch's task results before it ends", d5,
      "**on omp, wait for that batch's `task` results before this tick ends**", 13)
 need("the timeout caveat is stated", d5,
      "a `wait` that times out, or a worker that never returns, ends the tick without the check", 13)
-need("a §2 redispatch on omp joins the tick's batch after the baseline", d5,
-     "A §2 redispatch on omp is held by §2 and dispatched in this batch after the baseline is captured", 13)
+need("a §2 redispatch on omp is dispatched within §2, not deferred", d5,
+     "**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.**", 13)
+need("the in-§2 redispatch captures its own baseline before dispatching", d5,
+     "it captures its own baseline (the coordinator's branch, `HEAD` and `git status --porcelain`) immediately before the dispatch", 13)
+need("nothing moving HEAD runs between the redispatch baseline and its check", d5,
+     "Nothing that moves the coordinator's `HEAD` or tree runs between that baseline and that check", 13)
+need("an unconfirmed in-§2 redispatch is held with no budget spent", d5,
+     "If unconfirmed it is held — no budget spent, no demotion", 13)
+need("Claude Code waits for nothing", d5,
+     "On Claude Code nothing here waits: the background `Agent` batch is issued as before", 13)
+need("§2's redispatch bullets point at §5's in-§2 dispatch", dr,
+     "On omp the redispatch goes through §5's isolation check and its in-§2 dispatch.", 13)
+need("§2's review-finding bullet points at §5's in-§2 dispatch", dr,
+     "On omp it goes through §5's isolation check and its in-§2 dispatch.", 13)
 need("Reach scopes the wait sentence to omp", d5,
      "On omp, a confirmed tick waits for its own batch and runs the after-batch check itself; only a timed-out `wait` leaves it owed", 14)
 need("no later tick runs the after-batch check", d5, "No later tick runs it, because nothing persists a baseline", 13)
@@ -810,8 +825,20 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'On omp, a confirmed tick waits for i
 expect_fail "M62 Reach omp scope removed" "$d" 'Reach scopes the wait sentence to omp'
 
 d=$(make_copy m63)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'A §2 redispatch on omp is held by' 'A §2 redispatch is dispatched by' || bad "M63: mutation did not apply"
-expect_fail "M63 redispatch placement removed" "$d" "a §2 redispatch on omp joins the tick's batch after the baseline"
+mutate "$d/skills/dispatch-ready/SKILL.md" '**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.**' '**Redispatch.**' || bad "M63: mutation did not apply"
+expect_fail "M63 in-§2 redispatch paragraph removed" "$d" 'a §2 redispatch on omp is dispatched within §2'
+
+d=$(make_copy m64)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'nothing here waits' 'everything here waits' || bad "M64: mutation did not apply"
+expect_fail "M64 Claude Code carve-out removed" "$d" 'Claude Code waits for nothing'
+
+d=$(make_copy m65)
+mutate "$d/skills/dispatch-ready/SKILL.md" "goes through §5's isolation check and its in-§2 dispatch" "waits for a later tick" all || bad "M65: mutation did not apply"
+expect_fail "M65 §2 pointers removed" "$d" "bullets point at §5's in-§2 dispatch"
+
+d=$(make_copy m66)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'it captures its own baseline' 'it uses the tick baseline' || bad "M66: mutation did not apply"
+expect_fail "M66 own-baseline sentence removed" "$d" 'captures its own baseline before dispatching'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

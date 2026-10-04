@@ -192,6 +192,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   verified attempt comment and mirror it in the PR body **before this tick ends**, not on the
   later dispatch tick. A failed reservation write holds this scheduling attempt; it never
   turns an unrecorded retry into spent legacy history or permits an unaccounted dispatch.
+  On omp the redispatch goes through §5's isolation check and its in-§2 dispatch.
 - **Open PRs not yet reviewed, when `review_site: coordinator`** → review before merging, never
   after. **Precondition, checked first: under `review_agent: skip`, the explicit opt-out, no review
   is owed.** Skip the dispatch and the Parent recovery below, print the `review: SKIPPED` line
@@ -252,7 +253,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   failure path, not new machinery: surface it in the tick report with the finding named, comment
   `dispatch-ready: attempt 1 failed — review: <finding>` on the issue, and allow ONE redispatch
   carrying that finding as context on a later tick — the same single-redispatch budget a failed
-  check gets. A second failure demotes to `blocked` the same way, with the finding in the comment,
+  check gets. On omp it goes through §5's isolation check and its in-§2 dispatch. A second failure demotes to `blocked` the same way, with the finding in the comment,
   and a human decides. **Never park it back in Ready**: Ready must stay synonymous with
   dispatchable. On the `agent` site this rarely fires, because findings were fixed before the PR
   existed — but it still fires when a sub-agent could not resolve a reviewer at all, and equally
@@ -596,9 +597,7 @@ section restates none of them and states only what a tick changes:
    a dirty tree, dispatches no further batch. What this cannot guarantee: a `wait` that times out,
    or a worker that never returns, ends the tick without the check; the tick report says so and the
    batch's issues stay in flight. On Claude Code nothing here waits: the background `Agent` batch is
-   issued as before ("a tick that waits is a loop that stopped"). A §2 redispatch on omp is held by
-   §2 and dispatched in this batch after the baseline is captured, so it joins the wait and the
-   check.
+   issued as before ("a tick that waits is a loop that stopped").
 3. **Unconfirmed** → **stop, never parallel on a shared tree.** Report `isolation unconfirmed` with
    the setting or probe that failed, claim **nothing** — **without claiming a single issue**, so no
    `in-progress` claim is left behind to count as in-flight and block other sessions — and
@@ -612,6 +611,19 @@ to finish inside one invocation, so the worker never outlives the checkout it sh
 loop remembers nothing and would have to track, across ticks, a worker sharing the coordinator's
 checkout while later ticks fast-forward, merge and tear down in that same checkout. #452 item 2
 permits "or stop", and stop is what ships; take-it's Serial variant is never sent from here.
+
+**A §2 redispatch on omp is dispatched within §2, not deferred to this batch.** §3's capacity stop
+ends a tick before this section whenever every slot is held, and a pending redispatch's issue already
+holds one, so deferring it here would starve it with its budget unspent and nothing reporting it.
+So on omp the redispatch first passes this section's isolation check (item 1's record serves it).
+If confirmed, it captures its own baseline (the coordinator's branch, `HEAD` and
+`git status --porcelain`) immediately before the dispatch, dispatches under the doc's
+worker-dispatch rule (`isolated: true`), waits for its result (the batch-form `task` call followed
+by `wait`), and runs the doc's after-every-batch check (its §4) against that baseline. Nothing that
+moves the coordinator's `HEAD` or tree runs between that baseline and that check: the redispatch is
+dispatched, awaited and checked ahead of §2's merge hand-off and its teardown, which follow it
+within the tick. The same timeout caveat applies. If unconfirmed it is held — no budget spent, no
+demotion — and §6's `holds:` line names it. On Claude Code it is dispatched in §2 as before.
 
 **How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
 flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
@@ -630,7 +642,7 @@ tick. On a stopped tick §2's reconcile, its comments and demotions, `pr-shepher
 their local teardown, and the coordinator-site review dispatch all still run, because no worker
 shares the coordinator's checkout (confirmed workers run in omp's isolated checkouts). A §2
 redispatch is a worker dispatch: it passes the same check, and is dispatched if confirmed (on omp,
-in §5's batch, after the baseline is captured) and otherwise held — no budget spent, no demotion —
+within §2, with its own baseline, wait and check) and otherwise held — no budget spent, no demotion —
 and §6's `holds:` line names it. On omp, a confirmed tick waits for its own batch and runs the
 after-batch check itself; only a timed-out `wait` leaves it owed, and the tick report says so. §7
 is evaluated every tick: with work in flight an unconfirmed tick reaches no terminal state; with none, the
