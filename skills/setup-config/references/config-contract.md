@@ -816,6 +816,23 @@ Each skill inlines its config at load time with dynamic context injection:
 placeholder expansion and shell execution is not specified, and every one of these skills requires
 a git repo regardless. The command is safe outside a repo — it yields `NO_CONFIG` with no stderr.
 
+**Where the harness never runs the line.** Claude Code runs it at load time; omp renders it as
+text. The four skills that degrade silently on a missed config — `send-it`, `survey-work`,
+`groom-backlog` and `tidy-repo` — therefore carry one paragraph directly under the line: if the line
+reached the agent as text (it starts with `!` and has no `CONFIG_SOURCE:` output beneath it), read
+`<repo root>/.claude/sassy-dog/<skill>.md` by absolute path, treat a missing file as `NO_CONFIG`, and
+never read an unrun line as "no config exists". On Claude Code the condition is false, so the
+paragraph is inert there. The four that stop on `NO_CONFIG` (`take-it`, `dispatch-ready`,
+`work-recommendations` and `work-fire-watch`) do not carry it, because the unchanged `take-it` and
+`dispatch-ready` were right in 12 of 12 omp runs ([`docs/HARNESS-PORTABILITY.md`](../../../docs/HARNESS-PORTABILITY.md),
+"Config-fallback paragraph (#455)"). `work-recommendations` and `work-fire-watch` were **never run**:
+their inclusion is #455's decision rule (`take-it`'s runs used as evidence for an identical line in a
+different skill and prompt), not a measurement. The runs were one model, one prompt shape per skill, a
+dummy config and gh unauthenticated, so a skill that stops on `NO_CONFIG` must still never infer "no
+config" from an unrun line. No gate pins the paragraph's text, its placement or its absence from the
+stoppers yet; [#463](https://github.com/Sassy-Dog/skills/issues/463) tracks the gate. The paragraph is
+not part of the config format, and `setup-config` neither writes nor checks it.
+
 ### `CONFIG_SOURCE` — why the block announces where it read from
 
 **The block resolves against the SESSION's working directory, not the repo being acted on**, and

@@ -37,6 +37,12 @@ gh repo view --json nameWithOwner,defaultBranchRef,deleteBranchOnMerge \
 
 !`root="$(git rev-parse --show-toplevel 2>/dev/null)"; echo "CONFIG_SOURCE: ${root:-<not a git repo>}"; cat "$root/.claude/sassy-dog/tidy-repo.md" 2>/dev/null || echo "NO_CONFIG"`
 
+**Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
+command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
+`git rev-parse --show-toplevel` and read `<repo root>/.claude/sassy-dog/tidy-repo.md` by absolute path.
+If that file does not exist the config is `NO_CONFIG`, handled as that state already is. Never read
+an unrun line as "no config exists".
+
 **Check `CONFIG_SOURCE` before using any of this.** It is the repo root resolved from the
 **session's** working directory at skill-load time — not necessarily the repo you are about to act
 on — and cwd resets between Bash calls, so you cannot influence it. If it names a repo other than

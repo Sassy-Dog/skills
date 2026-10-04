@@ -168,6 +168,7 @@ or ran the line's own shell command itself (once), and with the file absent it r
 degrades to `NO_CONFIG`" was **not** what happened in three runs with one model, but the prompts named the config, and the
 agent chose to run an unrun line. That is a model choice, not a mechanism, so `take-it` and `dispatch-ready`, which block on
 `NO_CONFIG`, should not rely on it. A copy with an explicit read-by-absolute-path instruction also worked, present and absent.
+Issue #455 then ran the unchanged `take-it` and `dispatch-ready` on prompts that do not mention config, six runs each, and every run was right; the paragraph shipped to the four conservative-mode skills only ([Config-fallback paragraph (#455)](#config-fallback-paragraph-455)).
 
 ### Q4. Isolation (row 3): equivalent found, with a default that disables it
 
@@ -537,6 +538,58 @@ Prompt for runs 1 to 3 (the same as #425's A prompt, except that run 1 kept its 
 **Operator configuration.** `shasum -a 256` of the default profile's `config.yml` began `7b634967911b` before the first omp command and `7b634967911b` after the last, and `omp plugin list` printed `No plugins installed` both times. No `omp config set`, login, token, install or update was run.
 The scratch tree was removed afterwards.
 
+### Config-fallback paragraph (#455)
+
+Issue #455 gated the paragraph for the four skills that stop on `NO_CONFIG`, then shipped it to the four conservative-mode skills and ran its absent branch. It used **13** model-backed
+runs of its cap of 14, all `omp/18.6.0` with `--model anthropic/claude-haiku-4-5`, loaded per invocation as in #425 and #454 (a temporary `CLAUDE_CONFIG_DIR` registry holding one
+`installed_plugins.json`, and a `--config` overlay with `enabledProviders: [claude-plugins]`; no `omp plugin install`, no `omp config set`). Runs 1 to 12 used a `git archive HEAD` copy of `main` with no edit; run 13 used a copy of the edited tree.
+Two scratch repos under a `mktemp -d` directory in `/tmp`, each a bare `git init` with no commits and no remote: one with dummy `.claude/sassy-dog/take-it.md` and `dispatch-ready.md` files (a distinctive `claim_label` value),
+one with no `.claude` directory. `find` over the scratch tree and over `/tmp` to depth 2 found no `CLAUDE.md` or `AGENTS.md`, and a plugin's root `CLAUDE.md` is not loaded as context (#425's source read), so no context file was in play.
+
+**No GitHub side effects.** Every invocation ran with `GH_CONFIG_DIR` pointing at an empty temporary directory and `GH_TOKEN` and `GITHUB_TOKEN` unset, from a scratch repo with no remote, so `gh` was unauthenticated and could not write. No run was
+pointed at a real repository. The runs' own tool calls confirm it: `gh issue view` and `gh repo view` failed for lack of authentication and the agents stopped there. Some agents also made `web_search` calls about `gh` authentication, and two ran a `task` sub-agent; neither touched GitHub.
+
+**Prompts, neither of which mentions config or `NO_CONFIG`.** `take-it`: "Use the take-it skill. take #1". `dispatch-ready`: "Use the dispatch-ready skill. Drain the ready queue." Run 13 reused #425's B prompt ("Use the send-it skill, but only to report which pr_template_path value the repo's
+send-it config sets, and say where that value came from (the config file, NO_CONFIG, or something else). Stop there: do not commit, push, create a PR, run gh, or perform any other workflow step."), which names the config. A run is **correct** if, with the file present, the agent used it
+(read it or ran the line's command), and with the file absent, it reported `NO_CONFIG` and stopped.
+
+| Run | Skill | Config file | Route to the config | Verdict |
+| --- | --- | --- | --- | --- |
+| 1 | `take-it`, unchanged | present | `git rev-parse`, then `read <root>/.claude/sassy-dog/take-it.md` (absolute) | correct; then stopped on `gh` authentication |
+| 2 | `take-it`, unchanged | present | one `bash`: `git rev-parse` and `cat ./.claude/sassy-dog/take-it.md` | correct; same later stop |
+| 3 | `take-it`, unchanged | present | the `!` line's own command, verbatim | correct; same later stop |
+| 4 | `take-it`, unchanged | absent | `git rev-parse`, then the line's own command | `NO_CONFIG`, stopped, offered `setup-config` |
+| 5 | `take-it`, unchanged | absent | `git rev-parse` and `ls` of the file | `NO_CONFIG`, stopped, offered `setup-config` |
+| 6 | `take-it`, unchanged | absent | `git rev-parse` and `cat` of the file | `NO_CONFIG`, stopped, offered `setup-config` |
+| 7 | `dispatch-ready`, unchanged | present | the line's own command, verbatim | correct; passed the config values to a `task` sub-agent |
+| 8 | `dispatch-ready`, unchanged | present | the line's own command, verbatim | correct; later stopped on missing GitHub access |
+| 9 | `dispatch-ready`, unchanged | present | the line's own command, verbatim | correct; passed the config values to a `task` sub-agent |
+| 10 | `dispatch-ready`, unchanged | absent | `git rev-parse`, then `read <root>/.claude/sassy-dog/dispatch-ready.md` (absolute, missing) | `NO_CONFIG`, stopped, offered `setup-config` |
+| 11 | `dispatch-ready`, unchanged | absent | the line's own command | `NO_CONFIG`, stopped, offered `setup-config` |
+| 12 | `dispatch-ready`, unchanged | absent | the line's own command | `NO_CONFIG`, stopped, offered `setup-config` |
+| 13 | `send-it`, with the paragraph | absent | `read .claude/sassy-dog/send-it.md` (repo-relative, missing), `git rev-parse`, then `read <root>/.claude/sassy-dog/send-it.md` (absolute, missing) | reported `NO_CONFIG`, naming the file as absent |
+
+**Decision for the four stoppers: the paragraph is not added** to `take-it`, `dispatch-ready`, `work-recommendations` or `work-fire-watch`. All 12 unchanged runs were right, in six runs per skill, with the config both present and absent, on a prompt that never named the config, and in no run did
+an agent read the unrun line as "no config exists". `work-recommendations` and `work-fire-watch` were not run. Each has its own `!` line that the agent handles before `take-it` runs, and each stops on `NO_CONFIG` before filing anything; their inclusion is #455's decision rule (`take-it`'s runs used as evidence for an identical line in a different skill and prompt), not inheritance and not a measurement. The limit of that evidence is the same as every other omp check here: one model, one prompt shape per skill, gh unauthenticated (so the runs ended at a GitHub failure rather than at a full dispatch), a dummy config, three runs per cell. It shows the
+failure was not seen, not that it cannot happen. `NO_CONFIG` stays first-class and `take-it` and `dispatch-ready` still stop on it.
+
+**Absent branch (run 13).** With the paragraph in `send-it` and the file absent, the agent tried a repo-relative read first, then derived the root with `git rev-parse --show-toplevel`, read the absolute path, found it missing and reported `NO_CONFIG`. It did not read the unrun line as "no config exists".
+One run cannot say the paragraph caused the absolute-path read: #425's unchanged `send-it` also reached `NO_CONFIG` in its absent run, by running the line. What run 13 shows is that the paragraph's absent route ends in `NO_CONFIG` and not in a silent proceed. The present branch was followed once in #425 (B″, run 9) and not re-run here.
+
+The paragraph, verbatim, for `send-it` (every other skill has its own name in the path; the four are `send-it`, `survey-work`, `groom-backlog` and `tidy-repo`):
+
+```text
+**Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
+command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
+`git rev-parse --show-toplevel` and read `<repo root>/.claude/sassy-dog/send-it.md` by absolute path.
+If that file does not exist the config is `NO_CONFIG`, handled as that state already is. Never read
+an unrun line as "no config exists".
+```
+
+It sits directly under the injected line. It is inert in Claude Code, where the line runs and its output carries `CONFIG_SOURCE:`; the paragraph's condition is false there, and this was not run in Claude Code beyond reading the text. It starts no line with `!` plus a backtick, uses no positional token and does not spell the plugin-root token.
+
+**Operator configuration.** `shasum -a 256` of the default profile's `config.yml` began `7b634967911b` before the first run and after the last; `omp plugin list` printed `No plugins installed` both times. The scratch tree was removed afterwards.
+
 ### Check C (row 3): `apply` patches the parent, `merge=branch` replays the commit onto it
 
 Overlays under `tmp/` (never the default profile's `config.yml`), passed as `--config <file>`: one with
@@ -810,7 +863,7 @@ before and after. Only `ls ~/.omp/wt` and that hash were read under `~/.omp`.
 | 3 isolation | equivalent found, conditional on three settings the plugin cannot ship (`enabled: true`, `apply: false`, `merge: patch`) | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`). Check C and D2 (18.6.0): patch mode dirties the parent, `merge=branch` commits onto its current branch. D1 (18.6.0): `apply = false` leaves the parent untouched with the push verified. E1 (#453): `merge` is consulted under `apply = false`, and `branch` leaves a local branch `omp/task/<Name>` in the parent. P1 (#453): a committed `.omp/config.yml` that `omp config get` reflects drove the same untouched-parent run, with no profile write. See [Isolation contract (#426)](#isolation-contract-426) |
 | 4 skill delegation | equivalent found (bare name) | `skill://take-it` resolves, `skill://sassy-dog:take-it` does not. Namespace only on collision |
 | 5 plugin root | equivalent found; unchanged skills make a model search, and the shipped token-free paragraph stopped it in 3 of 3 runs on `github-issues` | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted, and `CLAUDE_PLUGIN_ROOT` is not exported to the shell. Check A (18.6.0, this repo's `CLAUDE.md` in context): the agent ran the literal token, failed, then used `find`. #425, shipped `github-issues`, no context file: unchanged 2 of 2 used `find`; with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run. #454, the token-free wording that ships, at the shipping placement: 3 of 3 runs used the right root with no token run and no `find` (first command succeeded in 2 of 3), and 2 of 2 runs of a reference-doc command did too, but not through the `PLUGIN_ROOT` preamble ([A‴](#token-free-paragraph-at-the-shipping-placement-454)). Design: [row 5](#row-5-claude_plugin_root-keep-the-token-add-a-root-resolution-paragraph) |
-| 6 config injection | none as a load-time step; the unchanged skill still worked in 3 of 3 runs because the agent ran the line or read the file itself | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it. #425, shipped `send-it`, no context file: unchanged, file present twice and absent once, all correct; with a read-by-path paragraph, present and absent correct, the paragraph followed once. Design: [row 6](#row-6-config-injection-keep-the-line-add-a-fallback-paragraph-gate-the-stoppers-on-a-first-run) |
+| 6 config injection | none as a load-time step; the unchanged skill still worked in 3 of 3 runs because the agent ran the line or read the file itself, and #455: unchanged `take-it` and `dispatch-ready` right in 12 of 12 runs, so the fallback paragraph shipped only in the four conservative-mode skills, absent branch run once | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it. #425, shipped `send-it`, no context file: unchanged, file present twice and absent once, all correct; with a read-by-path paragraph, present and absent correct, the paragraph followed once. #455 (`take-it` and `dispatch-ready` unchanged, prompts that do not mention config, gh unauthenticated, dummy config): config present 6 of 6 used, config absent 6 of 6 `NO_CONFIG` and stop; the paragraph's absent branch on `send-it` reached `NO_CONFIG` once ([Config-fallback paragraph (#455)](#config-fallback-paragraph-455)). Design: [row 6](#row-6-config-injection-keep-the-line-add-a-fallback-paragraph-gate-the-stoppers-on-a-first-run) |
 
 ### What omp's remaining pages say
 
@@ -972,7 +1025,7 @@ works inside a `SKILL.md`: **unknown, not documented**.
 
 **Spike.** Confirmed none: the line reaches the model unexecuted (Q3). The `@path` token was not tried
 inside a skill, so that part stays unknown. #425 (shipped `send-it`, one model) found the unchanged skill still handled correctly in 3 of 3 runs, with the agent
-running the line's command or reading the file itself; the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
+running the line's command or reading the file itself; the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425). #455 shipped the fallback paragraph in `send-it`, `survey-work`, `groom-backlog` and `tidy-repo`, and not in the four skills that stop on `NO_CONFIG`, after 12 of 12 unchanged runs of `take-it` and `dispatch-ready` were right ([Config-fallback paragraph (#455)](#config-fallback-paragraph-455)).
 
 ### 7. Per-repo config under `.claude/sassy-dog/`
 
@@ -1122,6 +1175,7 @@ designs below are an edit to skill text, which options B and D already allow. Th
   front-ends that read `take-it.md` (`work-recommendations`, `work-fire-watch`). Run the unchanged `take-it` and `dispatch-ready` out of tree with a prompt that does **not** mention config, with the
   file present and absent, three runs each if the budget allows. If every unchanged run is right, the paragraph is dropped for those four. The four conservative-mode skills (`send-it`, `survey-work`,
   `groom-backlog`, `tidy-repo`) get it whatever that run shows, because their failure is the silent one above and no first run on a different skill shows it absent.
+- **Status (#455).** Done as designed, narrowly: the paragraph is in the four conservative-mode skills (`send-it`, `survey-work`, `groom-backlog`, `tidy-repo`) and not in the four stoppers, because the first run the gate asks for came back right 12 of 12 (six unchanged runs each of `take-it` and `dispatch-ready`, config present and absent, prompts that do not mention config). Its absent branch was run once on `send-it` and ended in `NO_CONFIG`. Runs, wording and limits: [Config-fallback paragraph (#455)](#config-fallback-paragraph-455). `work-recommendations` and `work-fire-watch` were not run (their inclusion is the decision rule applied to `take-it`'s runs, not a measurement), and a different model or prompt could still skip an unrun line, which is why the stoppers' stop on `NO_CONFIG` is left as it was.
 - **Rules kept.** The paragraph must not start a line with `` !` ``, since the row 6 grep counts such lines. It must not use a bare `$1` to `$9`, `$@` or `$*` in a `SKILL.md` body. It must not spell
   the plugin-root token. `config-contract.md`'s description of the injected line is updated in the same change, and the gates that read it (`test-doc-reconciliation.sh`,
   `test-gotcha-claims.sh`, per the table in `CLAUDE.md`) must stay green.
@@ -1163,7 +1217,7 @@ Resolve the two mechanisms that block everything first, then decide per family.
 
 1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither. The
    spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440, and, in #425, used the right root in 2 of 2 runs with a paragraph that also forbids searching (v2; v1 searched), and #454 shipped a token-free paragraph and used the right root in 3 of 3 runs) and no
-   load-time step for row 6 (a model ran the line or read the file itself, #425). The designs are
+   load-time step for row 6 (a model ran the line or read the file itself, #425, and #455 shipped a fallback paragraph in the four conservative-mode skills after the four stoppers' first run was right 12 of 12). The designs are
    in [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
 3. Rows 1 and 2 are lower risk. omp documents a dispatch tool and an agent format, and the
@@ -1194,9 +1248,7 @@ out of tree on shipped skills, with no context file in the prompt (see the #425 
 literal token first in 1 of 2. With a paragraph that resolves the root from the `[Skill file: ...]` header and also forbids searching (v2), the root was right on the first try in 2 of 2 runs and nothing
 searched; a wording without that clause (v1) searched in its one run. The paragraph must not spell the token, because Claude Code would substitute it inside the paragraph. #454 ran that token-free wording at the shipping placement (3 of 3 runs on `github-issues` used the right root with no token run and no `find`) and
 checked once in Claude Code that the paragraph is inert there; the paragraph's placement in every token-carrying file other than `github-issues` and `pr-shepherd` was not run through a model, and `scripts/test-plugin-root-paragraph.sh` pins its text and placement.
-**Row 6: go, narrowly.** There is no load-time step, but the unchanged skill was right in 3 of 3 runs, so the data do not show the fallback paragraph is needed. It was followed once with the file present; its own
-absent branch was not exercised (run 10 took the line's route). Both rows are designed in [Design for rows 5 and 6](#design-for-rows-5-and-6-425). Before editing, run
-the unchanged `take-it` and `dispatch-ready` with a prompt that does not mention config; that run decides the four skills that stop on `NO_CONFIG`, and the four conservative-mode skills get the paragraph regardless. The `take-it` and `dispatch-ready` stop on `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
+**Row 6: go, narrowly, and done by #455.** There is no load-time step, but the unchanged skill was right in 3 of 3 runs (#425), so the data did not show the fallback paragraph is needed. #455 then ran the unchanged `take-it` and `dispatch-ready` on prompts that do not mention config, 12 runs, config present and absent, and every run was right, so the paragraph is **not** in the four skills that stop on `NO_CONFIG` (`take-it`, `dispatch-ready`, `work-recommendations`, `work-fire-watch`). The four conservative-mode skills (`send-it`, `survey-work`, `groom-backlog`, `tidy-repo`) carry it regardless, because their failure is silent, and its absent branch was run once on `send-it`: `NO_CONFIG`. One model, three runs per cell, gh unauthenticated: see [Config-fallback paragraph (#455)](#config-fallback-paragraph-455). An unexecuted line must still never be read as "no config exists", and `NO_CONFIG` stays first-class.
 
 **Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
 configuration is `task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms
@@ -1220,7 +1272,7 @@ The implementation issues are #451 (`take-it`) and #452 (`dispatch-ready`).
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
-2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). The row 5 root-resolution paragraph is done (#454, every `SKILL.md` that carries the token, plus `scripts/test-plugin-root-paragraph.sh`). The row 6 fallback paragraph, behind a first run on `take-it` and `dispatch-ready`, remains an implementation issue.
+2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). The row 5 root-resolution paragraph is done (#454, every `SKILL.md` that carries the token, plus `scripts/test-plugin-root-paragraph.sh`). The row 6 fallback paragraph is done (#455: the four conservative-mode skills, after a first run on `take-it` and `dispatch-ready` showed the four stoppers did not need it).
 3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it called for are #451 (`take-it`, implemented; 2 prompted omp runs on one model, see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)) and #452 (`dispatch-ready`, open). Until #452 lands `dispatch-ready` cannot confirm isolation or run serially on omp, so for it the contract's outcome is Stop and the README's `not supported` stands; step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453; #451).
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
