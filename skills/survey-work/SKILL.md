@@ -177,6 +177,8 @@ the `strip()`. This backlog read is not a `queue-snapshot.sh` bucket (those are 
 pull already returned** — both forms above carry them, and a re-fetch would cost one API call per
 issue and read a tree that has moved since the pull:
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/survey-work`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 # Capture in the SAME Bash call as the read below — shell state does not survive between
 # calls, and empty stdin makes `--sites-of` exit 64 rather than print `[]`.

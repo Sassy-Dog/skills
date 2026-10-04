@@ -18,6 +18,8 @@ Issue and ProjectV2 board operations for any GitHub repo: board snapshots, backl
 
 ### Board snapshot (grouped by status column)
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/github-issues`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 PROJECT_NUMBER=<n> OWNER=<org> bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-snapshot.sh
 ```

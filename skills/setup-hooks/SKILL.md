@@ -86,6 +86,8 @@ global hook because a global one fires uselessly in repos whose stack it doesn't
 
 Run the read-only probe from the repo root and treat its output as evidence:
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/setup-hooks`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-hooks/scripts/detect-hook-stack.sh
 ```

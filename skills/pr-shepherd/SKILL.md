@@ -41,6 +41,8 @@ gh pr view "$PR" --repo "$REPO" --json mergeable,mergeStateStatus --jq '"\(.merg
 
 For more than one PR — or a "where does everything stand" probe — prefer the scripted snapshot over hand-rolled `--jq` variants; it reuses the poller's type-aware pending predicate and prints the same table + JSON as a watch tick:
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/pr-shepherd`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 REPO="$REPO" bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/poll-prs.sh --once "$PR"   # zero PR args = every open PR
 ```

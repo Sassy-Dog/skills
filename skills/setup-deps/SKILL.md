@@ -63,6 +63,8 @@ Before rendering anything, classify each target file: marker matching the wide p
 Never narrow that probe to the current producer name — skipping a repo's own generated files
 because they carry a superseded name is the silent-failure path this contract exists to prevent.
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/setup-deps`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/detect-ecosystems.sh
 ```

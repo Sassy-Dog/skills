@@ -1459,6 +1459,16 @@
 #      signer and no Python. Mutation-proven (header lists the mutations).
 #      Missing tools SKIP locally and fail in CI. No gh, no network.
 #
+#  49. plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh) —
+#      omp neither substitutes the plugin-root token in a skill body nor exports
+#      it, so every SKILL.md that carries the token also carries one paragraph
+#      before its first command telling the agent to derive the root from the
+#      `[Skill file: ...]` line and not to search (issue #454). The paragraph
+#      must never spell the token: Claude Code substitutes it anywhere in a
+#      SKILL.md, garbling the paragraph. The gate derives the checked set, pins
+#      the paragraph text, its placement and its token-freedom, and is
+#      mutation-proven against scratch fixtures. No gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2343,6 +2353,16 @@ if bash scripts/test-testflight-jwt.sh; then
     pass "testflight JWT tests (scripts/test-testflight-jwt.sh)"
 else
     failed "testflight JWT tests (scripts/test-testflight-jwt.sh)"
+fi
+
+# --- 49. plugin-root-paragraph tests --------------------------------------------
+# Every SKILL.md carrying the plugin-root token carries the root-resolution
+# paragraph before its first command, and no paragraph spells the token.
+# Source-level, no network.
+if bash scripts/test-plugin-root-paragraph.sh; then
+    pass "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
+else
+    failed "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
 fi
 
 # ------------------------------------------------------------------------------

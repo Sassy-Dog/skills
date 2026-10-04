@@ -376,6 +376,8 @@ opted in** — #322's wrong dispatch under
 prose that reads as protected. Feed the card's own labels through the emitter rather than reading
 them yourself:
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/dispatch-ready`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 # `board-snapshot.sh`'s output, captured in the SAME Bash call — shell state does not
 # survive between calls, and empty stdin makes `--sites-of` exit 64, not print `[]`.

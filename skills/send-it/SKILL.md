@@ -181,6 +181,8 @@ that are not this skill, and a check written in two places drifts into a check i
 | a repo's own agent | **not** forwarded; say so on the run — the map has no contract outside the shipped orchestrator |
 | none (`review_agent: skip`, or a dispatch failure) | nothing is dispatched, so nothing is forwarded |
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/send-it`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 **Shipped orchestrator only — load the Parent recovery protocol** from
 `${CLAUDE_PLUGIN_ROOT}/agents/pr-review-orchestrator.md` (Step 3) before dispatch, and pass that
 resolved absolute path, the original scope statement, optional verbatim `review_surfaces:`, and
