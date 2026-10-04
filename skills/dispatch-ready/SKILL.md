@@ -586,7 +586,8 @@ section restates none of them and states only what a tick changes:
    dispatch a parallel batch, its probe. Record the outcome in the doc's `isolation` shape beside
    the batch records in `.git/dispatch-ready-batch.json`. That record serves this tick's report and
    its second consumer (§2's redispatch, then this section); the next tick re-derives.
-2. **Confirmed** → dispatch in parallel as below, under the doc's worker-dispatch rule
+2. **Confirmed** → once the outstanding-serial-worker block below is clear (claim, fast-forward and
+   dispatch all wait on it), dispatch in parallel as below, under the doc's worker-dispatch rule
    (`isolated: true` on every `task` entry). When a batch's results return, run the doc's
    after-every-batch check before trusting them.
 3. **Unconfirmed** → **serial or stop, never parallel on a shared tree.** Serial means **one claim and
@@ -596,7 +597,7 @@ section restates none of them and states only what a tick changes:
    `git fetch origin --quiet`, the default branch fast-forwarded, `git status --porcelain` empty.
    Claim **that one issue only** — every other candidate stays unclaimed in Ready for a later tick —
    send the Serial variant's step 1 in place of the worker template's step 1, record
-   `{issue, pr, branch}` with no `pr` yet, and verify the push with a fresh `git ls-remote` before
+   `{issue, pr, branch, "mode": "serial"}` with no `pr` yet, and verify the push with a fresh `git ls-remote` before
    removing its `omp-task-<id>` directory. Otherwise **stop**: report `isolation unconfirmed` naming
    what failed — a setting, the probe, a dirty tree, only stack-chain candidates, or an outstanding
    serial worker — **without claiming a single issue**, so no `in-progress` claim is left behind to
@@ -607,14 +608,38 @@ section restates none of them and states only what a tick changes:
 
 **An outstanding serial worker blocks every local-tree step of every tick.** omp `task` workers are
 asynchronous, so a serial worker can outlive its tick, and it shares the coordinator's checkout.
-Outstanding means a serial manifest record with neither a `pr` nor a recorded terminal failure.
-Read the manifest at the start of the tick, **ahead of §2's merge hand-off** even though §2 runs
-first. While one is outstanding the tick does none of these: the default-branch fast-forward; any
-dispatch, confirmed or serial; `teardown.sh` in any mode; and `merge-shepherd.sh` for any PR, because
+A serial record carries `"mode": "serial"` explicitly, never inferred from an absent `worktreePath`,
+so a Claude Code record that has no `pr` yet is never read as serial. Outstanding means a serial
+record with neither a `pr` nor a recorded terminal failure.
+
+**Close each serial record from live state first.** At the start of the tick, before the
+outstanding test and ahead of §2's merge hand-off even though §2 runs first, close every serial
+record. A tick reads no RESULT lines and is a different session from the one that dispatched, so
+it learns only from GitHub and the checkout. Set its `pr` when §2's issue→PR mapping finds a PR on
+the record's branch **and** the coordinator's checkout is back on the default branch with
+`git status --porcelain` empty — the Serial variant's closing `git switch` has run, so the worker is
+done with the tree. Record a terminal failure when take-it §5's authenticated issue-only terminal
+record (`take-it-terminal-failure` for the active attempt) exists for the issue, or the issue
+carries `blocked`. A record neither rule closes is outstanding.
+
+**A worker that died with neither** leaves a record only the operator can close, and the step is
+this one. Check `git branch --show-current`, `git status --porcelain` and
+`git ls-remote origin <branch>`. If the checkout is on the default branch and clean and the branch
+is on the remote, open its PR by hand (the next tick then closes the record), or demote the issue
+with `issue-claim.sh block N --comment "<why>"`. If the tree is dirty or on the worker's branch,
+rescue or discard the edits yourself, `git switch` back to the default branch, and either
+`issue-claim.sh block` the issue or release its claim. Then delete that one `"mode": "serial"` entry
+from `.git/dispatch-ready-batch.json` and run the next tick. Nothing in the loop does this for you,
+by design: guessing whether a worker is dead is how a tree gets switched under a live one.
+
+While one is outstanding the tick does none of these: any claim; the default-branch fast-forward; any
+dispatch, confirmed or serial; `teardown.sh` in any mode; `merge-shepherd.sh` for any PR, because
 it tears down and fast-forwards the coordinator's checkout itself when a PR merges, and has no
-option that separates the GitHub merge from that local step. A PR that is ready therefore waits a
-tick, and the tick report says `serial worker outstanding: #N — merges and local teardown deferred`.
-Reads, §2's comments and demotions, and review dispatch touch no local tree and still run.
+option that separates the GitHub merge from that local step; or the coordinator-site review
+dispatch, whose orchestrator diffs the working tree it runs in and would switch it or review the
+worker's in-progress edits. A PR that is ready therefore waits a tick, and the tick report says
+`serial worker outstanding: #N — merges, local teardown and review deferred`. Reads and §2's
+comments and demotions touch no local tree and still run.
 
 **How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
 flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
@@ -631,8 +656,8 @@ count to keep honest. The two ticks also keep a transient probe failure from end
 **Reach.** The check gates **worker dispatch** and the local-tree steps above, and nothing else. On
 a stopped tick, or a serial tick with no serial worker outstanding, §2's reconcile, its demotions
 and comments, `pr-shepherd`'s merges with their local teardown, and the coordinator-site review
-dispatch all still run. A serial worker outstanding defers the merge hand-off and its teardown as
-stated above. A §2 redispatch is a worker dispatch: it passes the same check and goes serial if it
+dispatch all still run. A serial worker outstanding defers the merge hand-off and its teardown and
+the coordinator-site review dispatch as stated above, and claims nothing. A §2 redispatch is a worker dispatch: it passes the same check and goes serial if it
 can, else is held — no budget spent, no demotion — and §6's `holds:` line names it. §5's claims
 happen only on a confirmed or serial tick. §7 is evaluated every tick: with work in flight an
 unconfirmed tick reaches no terminal state; with none, the paragraph above applies. **Known and

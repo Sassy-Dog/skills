@@ -80,7 +80,7 @@
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against forty-seven mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against fifty-three mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -133,9 +133,17 @@
 #   M45 §5's two-tick confirmation removed                                         -> 14
 #   M46 §5's transient-probe rationale removed                                     -> 14
 #   M47 §7's stall-record hold-root list loses the isolation root                  -> 14
-# Properties 13 and 14 also forbid dispatch-ready §5 from RESTATING the settings,
-# the `merge` pin, `omp config set` or a tier string: the reference doc owns them
-# (#452 item 1 asked for no third copy), so a restatement is a failure, not a bonus.
+#   M48 "Close each serial record from live state first" removed                   -> 13
+#   M49 the explicit `"mode": "serial"` marker removed                             -> 13
+#   M50 "any claim" removed from the outstanding-worker block list                 -> 13
+#   M51 the confirmed branch no longer waits on the block                          -> 13
+#   M52 the coordinator-site review is no longer deferred under the block          -> 13
+#   M53 a forbidden restatement (`task.isolation.enabled`) injected into §5        -> 13
+# Property 13 also fails if dispatch-ready §5 contains `task.isolation.enabled`,
+# `omp config set` or the `merge` `patch` pin, which the reference doc owns
+# (#452 item 1 asked for no third copy); M53 injects one. No tier string is
+# checked: §5 legitimately carries the worker's tier binding, so a ban would be
+# wrong, and no property-14 text carries such a check.
 # (Property 13 began as dispatch-ready's own interim sentence, nit-added after
 # review: the two dispatching skills must not contradict each other about who
 # confirms. #452 replaced that sentence with the contract itself.)
@@ -429,13 +437,28 @@ for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
 need("dispatch-ready's outstanding-serial-worker rule exists", d5,
      "**An outstanding serial worker blocks every local-tree step of every tick.**", 13)
 need("dispatch-ready reads the manifest ahead of §2's merge hand-off", d5,
-     "**ahead of §2's merge hand-off**", 13)
-need("an outstanding serial worker blocks the fast-forward", d5, "the default-branch fast-forward; any dispatch", 13)
+     "ahead of §2's merge hand-off even though §2 runs first", 13)
+need("an outstanding serial worker blocks any claim and the fast-forward", d5,
+     "any claim; the default-branch fast-forward; any dispatch", 13)
+need("the confirmed branch waits on the outstanding-worker block", d5,
+     "once the outstanding-serial-worker block below is clear (claim, fast-forward and dispatch all wait on it)", 13)
+need("serial records are marked mode serial explicitly", d5,
+     'A serial record carries `"mode": "serial"` explicitly, never inferred from an absent `worktreePath`', 13)
+need("dispatch-ready closes serial records from live state first", d5,
+     "**Close each serial record from live state first.**", 13)
+need("a serial record closes on a PR plus a clean default-branch checkout", d5,
+     "finds a PR on the record's branch **and** the coordinator's checkout is back on the default branch", 13)
+need("a terminal failure record or blocked closes a serial record", d5,
+     "`take-it-terminal-failure` for the active attempt) exists for the issue, or the issue carries `blocked`", 13)
+need("the operator step for a worker that died is documented", d5,
+     "**A worker that died with neither** leaves a record only the operator can close", 13)
+need("an outstanding serial worker defers the coordinator-site review", d5,
+     "dispatch, whose orchestrator diffs the working tree it runs in", 13)
 need("an outstanding serial worker blocks teardown.sh in any mode", d5, "`teardown.sh` in any mode", 13)
 need("an outstanding serial worker blocks merge-shepherd.sh, which tears down itself", d5,
      "`merge-shepherd.sh` for any PR", 13)
 need("dispatch-ready defines outstanding as no pr and no terminal failure", d5,
-     "a serial manifest record with neither a `pr` nor a recorded terminal failure", 13)
+     "Outstanding means a serial record with neither a `pr` nor a recorded terminal failure", 13)
 need("the stop report names a failed precondition, not only a setting", d5,
      "a setting, the probe, a dirty tree, only stack-chain candidates, or an outstanding serial worker", 13)
 need("dispatch-ready goes serial or stops, never parallel on a shared tree", d5,
@@ -742,16 +765,16 @@ mutate "$d/$SK" "On omp the probe's and every worker's \`task\` entry carries" "
 expect_fail "M40 take-it pointer removed" "$d" 'take-it §5 points at the isolated: true rule'
 
 d=$(make_copy m41)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'and `merge-shepherd.sh` for any PR,' 'and nothing else,' || bad "M41: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" '`merge-shepherd.sh` for any PR,' 'nothing else,' || bad "M41: mutation did not apply"
 expect_fail "M41 merge-shepherd no longer blocked" "$d" 'blocks merge-shepherd.sh'
 
 d=$(make_copy m42)
-mutate "$d/skills/dispatch-ready/SKILL.md" "**ahead of §2's merge hand-off**" "**after §2's merge hand-off**" || bad "M42: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" "ahead of §2's merge hand-off" "after §2's merge hand-off" || bad "M42: mutation did not apply"
 expect_fail "M42 manifest read moved after the hand-off" "$d" "reads the manifest ahead of §2's merge hand-off"
 
 d=$(make_copy m43)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'the default-branch fast-forward; any' 'any' || bad "M43: mutation did not apply"
-expect_fail "M43 fast-forward no longer blocked" "$d" 'blocks the fast-forward'
+expect_fail "M43 fast-forward no longer blocked" "$d" 'blocks any claim and the fast-forward'
 
 d=$(make_copy m44)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'a dirty tree, only stack-chain candidates, or an outstanding' 'or an' || bad "M44: mutation did not apply"
@@ -768,6 +791,36 @@ expect_fail "M46 transient-probe rationale removed" "$d" 'gives the transient-pr
 d=$(make_copy m47)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'the decision gate, `isolation unconfirmed`, the Blocking' 'the decision gate, the Blocking' || bad "M47: mutation did not apply"
 expect_fail "M47 stall record loses the isolation root" "$d" "stall record carries the isolation hold root"
+
+d=$(make_copy m48)
+mutate "$d/skills/dispatch-ready/SKILL.md" '**Close each serial record from live state first.**' '**Records.**' || bad "M48: mutation did not apply"
+expect_fail "M48 close-from-live-state removed" "$d" 'closes serial records from live state first'
+
+d=$(make_copy m49)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'A serial record carries `"mode": "serial"` explicitly' 'A serial record carries nothing explicit' || bad "M49: mutation did not apply"
+expect_fail "M49 explicit serial marker removed" "$d" 'serial records are marked mode serial explicitly'
+
+d=$(make_copy m50)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'any claim; the default-branch' 'the default-branch' || bad "M50: mutation did not apply"
+expect_fail "M50 claim no longer blocked" "$d" 'blocks any claim and the fast-forward'
+
+d=$(make_copy m51)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'once the outstanding-serial-worker block below is clear (claim, fast-forward and' 'immediately (claim, fast-forward and' || bad "M51: mutation did not apply"
+expect_fail "M51 confirmed branch no longer gated" "$d" 'the confirmed branch waits on the outstanding-worker block'
+
+d=$(make_copy m52)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'whose orchestrator diffs the working tree it runs in' 'which is harmless' || bad "M52: mutation did not apply"
+expect_fail "M52 review no longer deferred" "$d" 'defers the coordinator-site review'
+
+d=$(make_copy m53)
+mutate "$d/skills/dispatch-ready/SKILL.md" '## 5. Dispatch
+
+' '## 5. Dispatch
+
+Read task.isolation.enabled here.
+
+' || bad "M53: mutation did not apply"
+expect_fail "M53 forbidden restatement injected" "$d" "restates 'task.isolation.enabled'"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2
