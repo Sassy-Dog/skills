@@ -1487,6 +1487,13 @@
 #      doc's corrected claims. Mutation-proven (header lists the mutants).
 #      Source-level, no omp, no gh, no network.
 #
+#  52. config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh) —
+#      the "Unrun config line" paragraph is in the four conservative-mode skills
+#      (send-it, survey-work, groom-backlog, tidy-repo), exact and directly under
+#      the injected config line, and in none of the four NO_CONFIG stoppers; the
+#      set of skills with a config line is derived and must equal those eight
+#      (issue #463). Mutation-proven (header lists the mutants). No gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2399,6 +2406,15 @@ if bash scripts/test-isolation-contract.sh; then
     pass "isolation-contract tests (scripts/test-isolation-contract.sh)"
 else
     failed "isolation-contract tests (scripts/test-isolation-contract.sh)"
+fi
+
+# --- 52. config-fallback-paragraph tests ----------------------------------------
+# The unrun-config paragraph sits in the four carriers, exactly and directly under
+# the config line, and in none of the four stoppers. Source-level, no network.
+if bash scripts/test-config-fallback-paragraph.sh; then
+    pass "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
+else
+    failed "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
 fi
 
 # ------------------------------------------------------------------------------
