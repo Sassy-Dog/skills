@@ -1215,13 +1215,13 @@ Check C). What a skill cannot do is read a `--config` flag's value: `omp config 
 [Isolation contract (#426)](#isolation-contract-426) specifies. #453 also found that `merge` is consulted under `apply = false`
 (E1: `merge: branch` leaves a local branch `omp/task/<Name>` in the parent, not a patch) and that the parent's branch, `HEAD` and tree stay put. The evidence is one run per mode with one model.
 `review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the contract pins `coordinator` for omp.
-The implementation issues are drafted in #426's PR.
+The implementation issues are #451 (`take-it`) and #452 (`dispatch-ready`).
 
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
 2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). The row 5 root-resolution paragraph is done (#454, every `SKILL.md` that carries the token, plus `scripts/test-plugin-root-paragraph.sh`). The row 6 fallback paragraph, behind a first run on `take-it` and `dispatch-ready`, remains an implementation issue.
-3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it called for are #451 (`take-it`, landed with its omp runs) and #452 (`dispatch-ready`, open). Until #452 lands `dispatch-ready` cannot confirm isolation or run serially on omp, so for it the contract's outcome is Stop and the README's `not supported` stands; step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453; #451).
+3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it called for are #451 (`take-it`, implemented; 2 prompted omp runs on one model, see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)) and #452 (`dispatch-ready`, open). Until #452 lands `dispatch-ready` cannot confirm isolation or run serially on omp, so for it the contract's outcome is Stop and the README's `not supported` stands; step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453; #451).
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
 5. A README note that a repo's `.claude/settings.json` declaration does not install the plugin on omp.
@@ -1305,7 +1305,7 @@ a project-level file (`.omp/config.yml`, `.omp/settings.json`, `.claude/settings
 
 `take-it` implements these steps (#451, `skills/take-it/references/isolation-confirmation.md`); `dispatch-ready` does not yet
 (#452). Two model-driven runs followed the `take-it` text on omp (see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)):
-the probe and the `omp config get` reads ran as skill steps in the project-file run. The probe costs one extra dispatch per invocation on an unconfirmed harness.
+the probe and the `omp config get` reads ran when the model was prompted with the §5 text, in the project-file run. The probe costs one extra dispatch per invocation on an unconfirmed harness.
 
 ### Fail closed
 
@@ -1320,8 +1320,9 @@ outcomes and takes the first that applies:
   leak its edits into the next worker's PR. The prerequisite is therefore also a check: before each serial dispatch the
   coordinator fetches and confirms `git status --porcelain` is empty, and otherwise Stops. The worker prompt had **no** such step:
   `skills/take-it/SKILL.md` step 1 assumed "your assigned worktree" and step 8 said only to commit on the named branch, with
-  no base. **`take-it` now carries it** (#451): a serial-mode step 1 in §5's worker template, substituted for step 1 only when
-  the confirmation ended in serial, so the Claude Code prompt is unchanged, plus the coordinator-side check in the reference doc.
+  no base. **`take-it` now carries it** (#451): a separate "Serial variant" subsection in §5, outside the worker template that
+  `dispatch-ready` shares. It substitutes step 1 only when the confirmation ended in serial and is never sent on Claude Code
+  or by `dispatch-ready`, so the Claude Code prompt is unchanged. The coordinator-side check is in the reference doc.
   `skills/dispatch-ready/SKILL.md` reuses those mechanics and has neither yet (#452), so for it serial mode is still not safe and the outcome is **Stop**.
   Without the step, on a shared tree worker 2 would start on worker 1's `HEAD` and carry its commits.
 - **Stop.** Where serial dispatch cannot be made safe (a stacked chain, a concurrent-claim hold, a worker that needs a clean

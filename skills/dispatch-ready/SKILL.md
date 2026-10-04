@@ -575,6 +575,10 @@ Use take-it's mechanics verbatim: claim → fast-forward the local default branc
 issue, `isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
 take-it's self-contained sub-agent prompt.
 
+take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override
+do **not** apply here: on any harness other than Claude Code this loop reports `isolation unconfirmed`
+and dispatches nothing until #452 lands.
+
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
 up front — a half-claimed chain lets another loop pick up a layer mid-build. The shared worktree

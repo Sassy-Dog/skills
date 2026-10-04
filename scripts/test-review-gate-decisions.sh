@@ -90,6 +90,11 @@
 #      that carve-out is what stops the first refresh after a visibility change
 #      from re-creating the silent flip. Both halves are pinned here — the
 #      contract entry AND the Phase 4 exception, scoped to the phase it governs.
+#      Compatible with this decision, so do not "align" it away: take-it's
+#      per-run omp override of `review_site: agent` to `coordinator` (§5 and
+#      skills/take-it/references/isolation-confirmation.md, pinned by
+#      test-isolation-contract.sh). It is never written to config and is always
+#      reported in §7, so it is no silent, config-derived flip.
 #
 #   5. A BLOCKING FINDING BLOCKS THE MERGE, WITH EXACTLY ONE REDISPATCH.
 #      `dispatch-ready` surfaces the finding named, comments it on the issue,

@@ -60,12 +60,12 @@
 #      settings", step 3's "rests on the `apply` read", "all set").
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against twelve mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against twenty-one mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
 #   M1  §5 no longer says Claude Code's isolation parameter is the confirmation -> 1
-#   M2  the §5 pointer moved below the attempt record                           -> 2
+#   M2  the §5 pointer removed (the "pointer missing" branch)                   -> 2
 #   M3  the `merge` read dropped from the reference doc                          -> 3
 #   M4  a fenced `omp config set` added to the reference doc                     -> 4
 #   M5  the probe's `show-toplevel` comparison removed                           -> 5
@@ -73,9 +73,20 @@
 #   M7  the fresh `git ls-remote` requirement removed                            -> 7
 #   M8  "Never dispatch parallel workers on a shared tree" guardrail removed     -> 8
 #   M9  the `git status --porcelain` check before each serial dispatch removed   -> 9
-#   M10 the serial-mode worker step removed from §5's blockquote                 -> 9
+#   M10 the Serial variant's step 1 removed                                      -> 9
 #   M11 the review_site override report removed                                  -> 10
 #   M12 "implements nothing" restored in the design doc                          -> 12
+#   M13 the confirmation paragraph moved below the dispatch step, inside §5       -> 2 (the ordering branch)
+#   M14 the Claude Code clause widened to mention the probe                       -> 1
+#   M15 "nothing in this paragraph applies" dropped                               -> 1
+#   M16 "the dispatch below is unchanged" dropped                                 -> 1
+#   M17 §7's isolation-outcome line removed                                       -> 11
+#   M18 the `true`/`false`/`patch` pin's apply value flipped                      -> 3
+#   M19 serial-step text leaked into the shared worker template                   -> 9
+#   M20 dispatch-ready's "does not apply" sentence removed                        -> 13
+#   M21 the reference doc's name for the serial step diverges from §5's           -> 9
+# (Property 13 is dispatch-ready's own sentence, nit-added after review: the
+# two dispatching skills must not contradict each other about who confirms.)
 #
 # Source-level: python3 stdlib, no gh, no omp, no network. This gate does NOT
 # run omp; the model-driven evidence that the sequence works is recorded in
@@ -157,14 +168,35 @@ if not ref:
 need("§5 says Claude Code's isolation parameter is the confirmation",
      s5, '`isolation: "worktree"` *is* the confirmation', 1)
 need("§5 says the Claude Code dispatch is unchanged", s5, "the dispatch below is unchanged", 1)
+need("§5 says nothing in the paragraph applies on Claude Code", s5, "nothing in this paragraph applies", 1)
 need("the reference doc stops reading on Claude Code",
      ref, "that parameter is the confirmation", 1)
+need("the reference doc says nothing below applies on Claude Code", ref, "nothing below applies", 1)
+need("§5's omp trigger is omp or an unrecognised harness",
+     s5, "On omp (workers are `task` calls), or on any harness you do not recognise", 1)
+# The Claude Code clause must stay inert: it may not mention the omp machinery.
+def between(hay, a, b):
+    i = hay.find(a)
+    j = hay.find(b, i + 1) if i >= 0 else -1
+    return hay[i:j] if i >= 0 and j > i else ""
+cc_s5 = between(s5, "On Claude Code `isolation:", "On omp (workers")
+cc_ref = between(ref, "- **Claude Code**", "- **omp**")
+for label, seg in (("§5", cc_s5), ("the reference doc", cc_ref)):
+    if not seg:
+        problems.append(f"property 1: {label}'s Claude Code clause did not slice")
+    for word in ("probe", "omp config get", "manifest", "task.isolation"):
+        if word in seg:
+            problems.append(f"property 1: {label}'s Claude Code clause mentions {word!r}")
 
 # 2. the pointer, and where it sits
 ptr = "references/isolation-confirmation.md"
 need("§5 points at the reference doc", s5, ptr, 2)
 i_ptr = s5_raw.find(ptr)
-i_all = s5_raw.find("**Issue ALL Agent calls in a single message**")
+need("§5 scopes the single-message dispatch to Claude Code or a confirmed run", s5,
+     "On Claude Code, or once the confirmation above passed, issue ALL Agent calls in a single message", 2)
+need("§5 names the serial loop beside it", s5,
+     "dispatch one worker at a time, each to completion before the next, and record `{issue, pr, branch}` (no `worktreePath`)", 2)
+i_all = s5_raw.find("**On Claude Code, or once the confirmation above passed")
 i_att = s5_raw.find("**Issue-only terminal handoff**")
 if min(i_ptr, i_all, i_att) < 0:
     problems.append("property 2: pointer, dispatch step or attempt-record anchor not found in §5")
@@ -232,14 +264,36 @@ need("serial is limited to a plain list", ref, "Allowed only for a plain list of
 need("the coordinator checks a clean tree before each serial dispatch", ref,
      "confirm `git status --porcelain` is empty; if it is not, **Stop**", 9)
 need("the coordinator fetches before each serial dispatch", ref, "`git fetch origin --quiet`", 9)
-need("the worker prompt carries a serial-mode step 1", s5,
-     "**Serial-mode step 1**", 9)
-need("the serial step branches from the fetched default branch", s5,
-     "git switch -c <branch> origin/<default_branch>", 9)
-need("the serial step also checks for a clean tree", s5,
-     "confirm `git status --porcelain` is empty", 9)
-if "> **Serial-mode step 1**" not in s5_raw:
-    problems.append("property 9: the serial-mode step is not inside §5's dispatched blockquote")
+SV = "### Serial variant (ONLY when §5's isolation confirmation chose serial mode)"
+i_sv = s5_raw.find(SV)
+if i_sv < 0:
+    problems.append("property 9: §5 has no 'Serial variant' subsection")
+    sv_raw, template_raw = "", s5_raw
+else:
+    j = s5_raw.find("\n### ", i_sv + 1)
+    sv_raw = s5_raw[i_sv:j if j > 0 else len(s5_raw)]
+    template_raw = s5_raw[:i_sv]
+sv = flatten(sv_raw)
+need("the serial variant carries step 1", sv, "**Serial-variant step 1.**", 9)
+need("the serial step branches from the fetched default branch without tracking", sv,
+     "git switch -c --no-track {prefix}/issue-{N}-{slug} origin/{default_branch}", 9)
+need("the serial step pushes with -u at push time", sv,
+     "git push -u origin {prefix}/issue-{N}-{slug}", 9)
+need("the serial step also checks for a clean tree", sv, "confirm `git status --porcelain` is empty", 9)
+need("the serial step carries the stash guard", sv, "**Never `git stash`**", 9)
+need("the serial step carries the editable-install guard", sv, "never run an editable or dev install", 9)
+need("the serial variant says it is never sent on Claude Code or by dispatch-ready", sv,
+     "never sent on Claude Code and never by `dispatch-ready`", 9)
+if "> **Serial-variant step 1.**" not in sv_raw:
+    problems.append("property 9: the serial step is not a blockquote inside the Serial variant subsection")
+# The shared worker template (also reused by dispatch-ready) must not carry it.
+for leak in ("Serial-variant", "Serial-mode", "--no-track", "git switch -c"):
+    if leak in template_raw:
+        problems.append(f"property 9: the shared worker template carries {leak!r}; the serial step must stay in its own subsection")
+need("§5's omp paragraph points at the Serial variant", s5, "using the **Serial variant** below", 9)
+need("the reference doc names the Serial variant and its step 1", ref, "Serial variant (its step 1)", 9)
+if "serial-mode step" in (ref + skill).lower():
+    problems.append("property 9: a 'serial-mode step' spelling survives; the one name is 'Serial variant'")
 
 # 10. review_site override
 need("§5 states the omp review_site override", s5, "`review_site: agent` is unsatisfiable", 10)
@@ -266,6 +320,13 @@ need("the doc says all read", doc, "are all read", 12)
 need_re("the doc has the recorded #451 runs section", DOC_RAW,
         r"(?m)^### Isolation confirmation runs \(#451\)$", 12)
 
+# 13. dispatch-ready does not inherit take-it's confirmation, and says so
+dr = flatten(read("skills/dispatch-ready/SKILL.md"))
+need("dispatch-ready says take-it's confirmation, Serial variant and override do not apply", dr,
+     "take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override do **not** apply here", 13)
+need("dispatch-ready reports isolation unconfirmed off Claude Code and dispatches nothing", dr,
+     "on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands", 13)
+
 for p in problems:
     print(p)
 sys.exit(1 if problems else 0)
@@ -273,7 +334,7 @@ PY
 
 # --- the real tree ------------------------------------------------------------
 if out=$(python3 "$CHECKER" "$ROOT" 2>&1); then
-    ok "take-it confirms isolation before a parallel dispatch; the design doc agrees (12 properties)"
+    ok "take-it confirms isolation before a parallel dispatch; the design doc agrees (13 properties)"
 else
     printf '%s\n' "$out" | while IFS= read -r line; do bad "$line"; done
 fi
@@ -281,8 +342,9 @@ fi
 # --- mutation proof: each mutant must FAIL, for its own reason ----------------
 make_copy() {
     local dst="$WORK/$1"
-    mkdir -p "$dst/skills/take-it/references" "$dst/docs"
+    mkdir -p "$dst/skills/take-it/references" "$dst/skills/dispatch-ready" "$dst/docs"
     cp "$ROOT/skills/take-it/SKILL.md" "$dst/skills/take-it/SKILL.md"
+    cp "$ROOT/skills/dispatch-ready/SKILL.md" "$dst/skills/dispatch-ready/SKILL.md"
     cp "$ROOT/skills/take-it/references/isolation-confirmation.md" "$dst/skills/take-it/references/"
     cp "$ROOT/docs/HARNESS-PORTABILITY.md" "$dst/docs/"
     printf '%s' "$dst"
@@ -361,8 +423,8 @@ mutate "$d/$RF" 'confirm `git status --porcelain` is empty; if it is not, **Stop
 expect_fail "M9 clean-tree check before serial dispatch removed" "$d" 'clean tree before each serial dispatch'
 
 d=$(make_copy m10)
-mutate "$d/$SK" '> **Serial-mode step 1**' '> **Optional note**' || bad "M10: mutation did not apply"
-expect_fail "M10 serial-mode worker step removed" "$d" 'the worker prompt carries a serial-mode step 1'
+mutate "$d/$SK" '> **Serial-variant step 1.**' '> **Optional note.**' || bad "M10: mutation did not apply"
+expect_fail "M10 serial variant's step 1 removed" "$d" 'the serial variant carries step 1'
 
 d=$(make_copy m11)
 mutate "$d/$SK" '**report the
@@ -373,6 +435,62 @@ expect_fail "M11 override report removed" "$d" 'property 10:'
 d=$(make_copy m12)
 printf '\nThis section **specifies** a contract and implements nothing.\n' >>"$d/$DC"
 expect_fail "M12 'implements nothing' restored" "$d" "still says 'implements nothing'"
+
+# M13: the whole confirmation paragraph moved BELOW the dispatch paragraph, still
+# inside §5, so the "anchor not found" branch cannot be what fires.
+d=$(make_copy m13)
+python3 - "$d/$SK" <<'PY' || bad "M13: mutation did not apply"
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); s = p.read_text()
+a = s.index("**Confirm isolation before any parallel dispatch")
+b = s.index("**On Claude Code, or once the confirmation above passed")
+para = s[a:b]
+s = s[:a] + s[b:]
+anchor = "so a crashed coordinator's worktrees stay reclaimable.\n\n"
+i = s.index(anchor) + len(anchor)
+p.write_text(s[:i] + para + s[i:])
+PY
+expect_fail "M13 confirmation moved below the dispatch step" "$d" 'must precede the dispatch step AND the attempt record'
+
+d=$(make_copy m14)
+mutate "$d/$SK" 'applies and the dispatch below is unchanged' 'applies; also run the probe first' || bad "M14: mutation did not apply"
+expect_fail "M14 Claude Code clause widened to the probe" "$d" "Claude Code clause mentions 'probe'"
+
+d=$(make_copy m15)
+mutate "$d/$SK" 'nothing in this paragraph
+applies' 'something in this paragraph
+applies' || bad "M15: mutation did not apply"
+expect_fail "M15 'nothing applies' sentence dropped" "$d" 'nothing in the paragraph applies on Claude Code'
+
+d=$(make_copy m16)
+mutate "$d/$SK" 'the dispatch below is unchanged' 'the dispatch below changes' || bad "M16: mutation did not apply"
+expect_fail "M16 'dispatch unchanged' sentence dropped" "$d" 'the Claude Code dispatch is unchanged'
+
+d=$(make_copy m17)
+mutate "$d/$SK" 'State the isolation outcome in the report' 'Say how it went' || bad "M17: mutation did not apply"
+expect_fail "M17 §7 isolation line removed" "$d" 'property 11:'
+
+d=$(make_copy m18)
+mutate "$d/$RF" 'must read `true`, `false` and `patch`' 'must read `true`, `true` and `patch`' || bad "M18: mutation did not apply"
+expect_fail "M18 apply value flipped in the pin" "$d" 'the doc pins true, false and patch'
+
+d=$(make_copy m19)
+printf '\n> **Serial-variant step 1.** leaked\n' >>"$d/$SK"
+mutate "$d/$SK" '### Stacked variant (ONLY for a chain resolved in §2)' '> git switch -c --no-track x origin/y
+
+### Stacked variant (ONLY for a chain resolved in §2)' || bad "M19: mutation did not apply"
+mutate "$d/$SK" '### Serial variant (ONLY' '> git switch -c leak
+>
+### Serial variant (ONLY' || bad "M19: second mutation did not apply"
+expect_fail "M19 serial step leaked into the shared template" "$d" 'the shared worker template carries'
+
+d=$(make_copy m20)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'do **not** apply here' 'apply here' || bad "M20: mutation did not apply"
+expect_fail "M20 dispatch-ready sentence removed" "$d" 'property 13:'
+
+d=$(make_copy m21)
+mutate "$d/$RF" 'Serial variant (its step 1)' 'serial-mode step 0' || bad "M21: mutation did not apply"
+expect_fail "M21 the one name for the serial step diverges" "$d" "the reference doc names the Serial variant and its step 1"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

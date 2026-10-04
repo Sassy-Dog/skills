@@ -230,12 +230,13 @@ you do not recognise, read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isol
 and run its sequence first — the settings read (`task.isolation.enabled` `true`, `apply` `false`,
 `merge` `patch`), one probe worker, the outcome recorded in the batch manifest, and the
 after-every-batch check. Where isolation is unconfirmed, never dispatch in parallel on a shared
-tree: either run **serial** (plain independent list only, using the serial-mode step 1 in the
-template below) or Stop and report `isolation unconfirmed`. On omp a configured
+tree: either run **serial** (plain independent list only, using the **Serial variant** below) or Stop and report `isolation unconfirmed`. On omp a configured
 `review_site: agent` is unsatisfiable, so use `coordinator` for this invocation and **report the
 override in §7**; the config itself is never edited, and the override is never silent.
 
-**Issue ALL Agent calls in a single message** with `isolation: "worktree"`. **Record the batch
+**On Claude Code, or once the confirmation above passed, issue ALL Agent calls in a single message**
+with `isolation: "worktree"`. In serial mode instead, dispatch one worker at a time, each to
+completion before the next, and record `{issue, pr, branch}` (no `worktreePath`). **Record the batch
 manifest** as results return — `{issue, pr, worktreePath, worktreeBranch}` — somewhere durable such
 as `.git/take-it-batch.json`, so a crashed coordinator's worktrees stay reclaimable.
 
@@ -446,17 +447,6 @@ behind in coordinator-only context.
 >    merges. Put `review: deferred to coordinator` in the PR body and `review=deferred` on your
 >    RESULT line.
 >
-> **Serial-mode step 1** — only when §5's isolation confirmation ended in **serial**: the
-> coordinator substitutes this for step 1 above, and otherwise deletes this block. A serial worker
-> shares the coordinator's checkout, so it must not assume a private worktree. First run
-> `git fetch origin --quiet` and confirm `git status --porcelain` is empty; if it is not, stop and
-> report `status=failed` with the status output. Then start your branch from the freshly fetched
-> default branch, never from whatever `HEAD` holds: `git switch -c <branch> origin/<default_branch>`
-> (`git switch -c` does not require a clean tree, which is why the check comes first). Verify
-> `git branch --show-current` names your branch. Never `git stash`. Whatever happens, end with the
-> tree clean: commit WIP to your own branch or discard it explicitly, push, and
-> `git switch <default_branch>`; edits left behind would ride into the next worker's PR.
->
 > 7. **Reconcile the docs against the repo before you commit.** Re-read the docs describing what
 > you touched — `CLAUDE.md`, the relevant `README.md`, anything in `docs/` — and fix every claim
 > your change just made untrue, in this same PR. A stale doc is a defect in your change, not
@@ -474,6 +464,31 @@ behind in coordinator-only context.
 > {pr_template_sections from config}.
 > 10. **Do NOT merge.** Report back: `RESULT: pr=<N> branch=<name>
 >     status=<opened|skipped|failed> review=<clean|nits|no-report|skipped|deferred> recovery_used=<0|1> note=<one-line>`
+
+### Serial variant (ONLY when §5's isolation confirmation chose serial mode)
+
+Kept out of the template above on purpose, the way the stacked variant is: the template is shared
+with `dispatch-ready`, which never runs the confirmation, and a worker on Claude Code that received
+this step would fail at its closing `git switch` (a linked worktree cannot switch to a branch
+checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is never
+sent on Claude Code and never by `dispatch-ready`.** A serial worker shares the coordinator's
+checkout, so it must not assume a private worktree; dispatch one at a time, each to completion
+(see the isolation reference doc), and record `{issue, pr, branch}` for each in the batch manifest
+(there is no `worktreePath`).
+
+> **Serial-variant step 1.** You share the coordinator's checkout; there is no private worktree.
+> First run `git fetch origin --quiet` and confirm `git status --porcelain` is empty; if it is not,
+> stop and report `status=failed` with the status output. Then start your branch from the freshly
+> fetched default branch, never from whatever `HEAD` holds, and without tracking it:
+> `git switch -c --no-track {prefix}/issue-{N}-{slug} origin/{default_branch}` (`git switch -c`
+> does not require a clean tree, which is why the check comes first; `--no-track` because an
+> upstream of `origin/{default_branch}` makes a plain push fail under `push.default=simple`).
+> Verify `git branch --show-current` names your branch. **Never `git stash`**, and never run an
+> editable or dev install into a shared interpreter or global store: you share the coordinator's
+> interpreter too, so use a throwaway env inside the tree and never commit it. At push time run
+> `git push -u origin {prefix}/issue-{N}-{slug}`. Whatever happens, end with the tree clean:
+> commit WIP to your own branch or discard it explicitly, push, and `git switch {default_branch}`;
+> edits left behind would ride into the next worker's PR.
 
 ### Stacked variant (ONLY for a chain resolved in §2)
 

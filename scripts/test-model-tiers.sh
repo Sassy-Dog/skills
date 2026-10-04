@@ -62,6 +62,7 @@
 #   M6 only the orchestrator's Step-3 `terra` binding removed  -> property 5
 #   M7 a JSON-style `"model": "claude-sonnet-5"` added         -> property 3
 #   M8 a single-quoted `'model': 'opus'` added                 -> property 3
+#   M9 the isolation probe worker's `terra` binding removed    -> property 5
 # A gate that passes a mutant is vacuous for that property. Each mutant must
 # also fail FOR ITS OWN REASON: an unmutated control copy has to pass first,
 # and each mutant's failure output has to name its property. Without both, a
