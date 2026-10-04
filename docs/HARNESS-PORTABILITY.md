@@ -131,8 +131,9 @@ The token is **not** substituted in a skill body. Two things resolve a path inst
   literal token (`literal token kept: true`). A hidden autoloaded skill gets the file path instead
   (**source**, `src/extensibility/skills.ts`, `src/prompts/skills/*.md`).
 
-So the plugin root is the skill directory's grandparent (`<root>/skills/<name>`), and a model can
-derive it. It is not a mechanical substitution, so the 22 files that write the token still need a
+So the plugin root is the skill directory's grandparent (`<root>/skills/<name>`), and a model could
+derive it from the `[Skill directory: ...]` line (18.5.1, called directly); the one #440 run recovered by searching
+instead. It is not a mechanical substitution, so the 22 files that write the token still need a
 sentence that tells the model how to resolve it. omp does substitute `${CLAUDE_PLUGIN_ROOT}` and
 `${OMP_PLUGIN_ROOT}`, but only inside a plugin's MCP server config and the env omp passes to plugin
 processes (**source**, `src/discovery/substitute-plugin-root.ts`, used from `claude-plugins.ts` and
@@ -287,7 +288,8 @@ workspace-level files"), keeping one project-level file per depth (`src/capabili
 the system prompt), the run therefore loaded this repo's `CLAUDE.md` (about 43.6 KB) from the worktree root and from the
 main checkout above it. That file documents both mechanisms under test, `${CLAUDE_PLUGIN_ROOT}` with the `PLUGIN_ROOT`
 preamble and `.claude/sassy-dog/<skill>.md` with `NO_CONFIG`, and names `~/Repos/sassy-dog/skills`, the directory Check A's
-recovery `find` searched. The first #440 attempt recorded this same caveat for its own call. "Cold" in A and B therefore
+recovery `find` searched. PR #444's earlier wording hedged the same way ("including any `CLAUDE.md` it found walking up from the cwd"), without the source
+citation. "Cold" in A and B therefore
 means no skill-specific instruction beyond the skill text, not no knowledge of the mechanisms. A and B must be repeated from a
 repository outside this tree before they say anything about a consumer repo.
 
@@ -352,18 +354,20 @@ next to the instruction.
 
 Overlays under `tmp/` (never the default profile's `config.yml`), passed as `--config <file>`: one with
 `task.isolation.enabled: true`, one adding `task.isolation.merge: branch`. `task.isolation.apply` stayed at its
-default of `true`. Commands (run through a wrapper that `cd`s into the scratch repo; the prompt is the file's text):
+default of `true`. Paths below are relative to the worktree root. Commands, as run by a wrapper script (`tmp/run-c.sh`) that
+`cd`s into `tmp/c1-repo` or `tmp/c2-repo` first, so the overlays were passed as `../iso-patch.yml` and `../iso-branch.yml`, with
+the prompt read from `tmp/c-prompt.txt` (its text differed between the two runs, as shown below):
 
 ```text
-omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config tmp/iso-patch.yml  "<prompt>"   # C1
-omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config tmp/iso-branch.yml "<prompt>"   # C2
+omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config ../iso-patch.yml  "<prompt>"   # C1, in tmp/c1-repo
+omp -p --no-session --model anthropic/claude-haiku-4-5 --no-title --max-time 8m --mode json --config ../iso-branch.yml "<prompt>"   # C2, in tmp/c2-repo
 ```
 
-The prompt, with C1's wording first and C2's addition in brackets: "Call the task tool exactly once, with isolated set to true.
-The worker's job: run 'git checkout -b feat/worker-branch', append the line 'worker change' to f.txt, run 'git add f.txt &&
-git commit -m worker-commit', then run 'git push -u origin feat/worker-branch', and report the output of 'git log --oneline -3'
-and 'git branch --show-current' [, 'git branch --show-current' and 'git ls-remote origin']. After the task returns, reply with
-only the word DONE." It told the model to call `task` once with `isolated` true, with a worker that runs
+The prompts, verbatim as run. C1: "Call the task tool exactly once, with isolated set to true. The worker's job: run 'git checkout
+-b feat/worker-branch', append the line 'worker change' to f.txt, run 'git add f.txt && git commit -m worker-commit', then run 'git
+push -u origin feat/worker-branch', and report the output of 'git log --oneline -3' and 'git branch --show-current'. After the task
+returns, reply with only the word DONE." C2 is the same except that the report clause reads "and report the output of 'git log
+--oneline -3' , 'git branch --show-current' and 'git ls-remote origin'." The prompt told the model to call `task` once with `isolated` true, with a worker that runs
 `git checkout -b feat/worker-branch`, appends a line to `f.txt`, commits, pushes `-u origin feat/worker-branch`
 and reports `git log`, `git branch --show-current` and (second run only) `git ls-remote origin`. The model's call
 used the batch form (`tasks: [{name, agent: "task", task, solutionSpace, isolated: true}]`, plus `context`), spawned
@@ -391,8 +395,9 @@ as `37a7e63`, a **different commit** on `main`. The pushed branch and the parent
   patch side; the push side is the C2 evidence.
 - The isolated checkout was not looked at after the run; where omp kept it, and whether it cleaned it, is not recorded
   for 18.6.0 (Q4's 18.5.1 account still stands).
-- Both `task` calls were made by a model, so `isolated` appearing in the call shape is also evidence that the overlay's
-  `task.isolation.enabled: true` took effect. No setting was changed in the default profile.
+- The evidence that the overlay's `task.isolation.enabled: true` took effect is the result text (`Applied patches: yes`
+  in C1, `Merged branch: omp/task/WorkerBranchTask` in C2) and the parent-checkout changes above, not the `isolated` field in
+  the call, which the prompt asked the model to set. No setting was changed in the default profile.
 
 **Operator configuration.** The default profile's `config.yml` had SHA-256 prefix `7b634967911b` before the first omp
 command and `7b634967911b` after the last. No `omp config set`, login, token, install or update command was run, and every

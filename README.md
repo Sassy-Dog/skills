@@ -110,10 +110,10 @@ has been run end to end through a model there (only toy probe skills, see below)
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
 skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. The omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
-has a model-resolved equivalent, and row 6 (`` !`...` `` config injection) has no load-time equivalent:
+has a path-resolvable equivalent, and row 6 (`` !`...` `` config injection) has no load-time equivalent:
 the `` !`...` `` line reaches the model unexecuted. The model-backed checks of
 [#440](https://github.com/Sassy-Dog/skills/issues/440) then ran toy probe skills on omp 18.6.0, with this repo's own
-`CLAUDE.md` in the model's context (omp walks up past a nested repository's root), one run each with one model: the agent
+`CLAUDE.md` in the model's context per omp's source (it walks up past a nested repository's root), one run each with one model: the agent
 ran the literal `${CLAUDE_PLUGIN_ROOT}` token first, failed, and recovered by searching, and an agent told to
 read the repo config by absolute path did so and used its value. Neither result is evidence about a consumer repo. No cell below changed, because no shipped skill
 has been run through a model.
