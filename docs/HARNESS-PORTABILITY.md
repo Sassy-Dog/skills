@@ -242,8 +242,10 @@ array of those items, with no top-level `model`. That batch call is the omp coun
 every call in a single message so they run concurrently". It also answers the per-call model question
 the earlier sections marked unknown: a per-call model exists, per item.
 
-**Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max`, and an agent whose children
-would sit at depth `max` loses its `task` tool (`src/task/types.ts`, `src/task/executor.ts`). With the
+**Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max` on the agent's **own** depth, so an agent
+**at** depth `max` loses its `task` tool (`src/task/types.ts`, applied in `src/tools/index.ts`; children get
+`parentDepth + 1` in `src/task/executor.ts`). Corrected in #426: this sentence earlier said an agent "whose children would
+sit at depth `max`" loses it, which read literally would disqualify the coordinator too. With the
 default 2 and the main session at depth 0: coordinator (0) dispatches `pr-review-orchestrator` (1),
 which dispatches the reviewers (2). That chain **works**, and the reviewers need no `task` tool. Under
 `review_site: agent` the worker is at 1 and the orchestrator at 2, so the orchestrator has **no
@@ -804,8 +806,9 @@ and row 6 still has nothing to bind to.
 What the spike changed. The plugin installs and all 23 skills and 10 agents load (Q1). Row 5 has a
 path-resolvable equivalent that a model reached only by searching, row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
 has none. The dispatch family still cannot be called supported, because every one of those results
-is untested through a model for a real skill and the two settings that gate it are off by default or
-consumer-owned (`task.isolation.enabled`, `task.maxRecursionDepth`). The #440 checks ran toy probe skills and
+is untested through a model for a real skill and the settings that gate it are off by default or
+consumer-owned (for row 3, `task.isolation.enabled: true` and `task.isolation.apply: false`, see the
+[isolation contract](#isolation-contract-426); `task.maxRecursionDepth` gates only `review_site: agent`, which the contract pins away). The #440 checks ran toy probe skills and
 two isolated `task` calls, not a shipped skill, so the README matrix keeps its `not supported` and `untested` cells
 unchanged. What changed is the reason given for them, and that is updated beside the matrix.
 
@@ -827,8 +830,9 @@ installed from the plugin, run from a repository outside this tree. The `take-it
 `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
 
 **Go/no-go for #426 (isolation contract).** **Go**, on `task.isolation.enabled: true` with `task.isolation.apply: false`.
-The worker-owns-a-branch-and-pushes design works inside omp isolation (Q4, Check C2, D1 and D2: the worker's push was
-confirmed by `ls-remote` in all three runs that used an absolute remote). The parent never receives the worker's branch name.
+The worker-owns-a-branch-and-pushes design works inside omp isolation (Check C2, D1 and D2: the worker's push was
+confirmed by `ls-remote` in all three runs that used an absolute remote; Q4's 18.5.1 direct-function transcript showed the
+pushed branch under `remotes/origin/`). The parent never receives the worker's branch name.
 **D1 answers the question #440 left open:** with `apply = false` the parent kept its branch, `HEAD` and a clean tree, the
 push landed, and omp left the change as a patch file nobody applies. Both `apply = true` modes change the parent (D2 and
 Check C). What a skill cannot do is read the setting reliably: `omp config get` ignores a `--config` overlay (see
@@ -869,17 +873,22 @@ A harness may run workers in parallel only if, for each worker:
 4. **Teardown.** The coordinator can remove the worker's tree, or the harness removes it, and no tree is left that a later
    run could mistake for live work.
 
+Requirement 1's "no other worker shares it" is inferred from the per-task `<id>` in the checkout path; no run had two
+concurrent workers.
+
 ### What omp 18.6.0 needs to satisfy it
 
 | Requirement | omp setting | Evidence |
 | --- | --- | --- |
 | 1 and 2 | `task.isolation.enabled: true` (default `false`, which shares one checkout silently) | Q4 (18.5.1, functions called directly), D1 and D2 (18.6.0, model-driven): private checkout at `~/.omp/wt/<id>/m`, own branch, commit, verified push |
 | 3 | `task.isolation.apply: false` (default `true`) | D1: parent `main` at the same `HEAD`, clean `git status`. D2 (defaults `apply: true`, `merge: patch`): parent `f.txt` modified. Check C2 (`merge: branch`): a different commit on the parent's branch |
-| 4 | none; omp removes the checkout | D1 and D2: `ls ~/.omp/wt` held 0 entries after each run |
+| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1 and D2: `ls ~/.omp/wt` held 0 entries after each run. D1's temp directory existed after the run and I removed it by hand |
 
 D1's result text said `Not applied.`, so `task.isolation.merge` had no visible effect there; whether `merge` is consulted at all
 when `apply` is false was not run (no `merge: branch` with `apply: false`). **omp therefore satisfies the contract natively
-only when the operator sets `enabled: true` and `apply: false`.** The plugin cannot ship either setting. With `apply: false`
+only when the operator sets `enabled: true` and `apply: false`.** Qualifier: one run per setting, one model, one worker at a
+time, macOS with `isolation.backend: auto`. `gh pr create` from inside the isolated checkout was never run, because the
+scratch repos had no GitHub remote. The plugin cannot ship either setting. With `apply: false`
 omp writes a patch file into the system temp directory and applies nothing, which is right for a worker that pushed its own
 branch. A worker that did *not* push loses its change from every branch, so the worker prompt's push step is a dependency of the contract.
 
@@ -888,14 +897,18 @@ branch. A worker that did *not* push loses its change from every branch, so the 
 `omp config get task.isolation.enabled` and `omp config get task.isolation.apply` read the **profile's** value and ignore a
 `--config` overlay, so they are necessary and not sufficient. In order, the first failure stops the parallel dispatch:
 
-1. **Harness known?** On Claude Code, `isolation: "worktree"` is the contract, and nothing below applies.
+1. **Harness known?** On Claude Code, `isolation: "worktree"` is the contract, and nothing below applies. On omp, continue.
+   On an unrecognised harness, treat isolation as unconfirmed and fail closed (below).
 2. **Read the settings.** On omp, run both `omp config get` commands. `enabled` not `true`, or `apply` not `false`, means
-   unconfirmed.
+   unconfirmed. Because `omp config get` ignores a `--config` overlay, settings supplied **only** by an overlay can never pass
+   this step, so the operator must set them in the profile. No run here used profile-set values: D1 and D2 used overlays, so
+   the profile-set path is untested.
 3. **Probe, for an overlay or any other setting source.** Before the first parallel batch, dispatch **one** worker whose only
    job is to report `pwd` and `git rev-parse --show-toplevel`, and compare them with the coordinator's own. The same path
    means isolation is off. This probes requirement 1 only. Requirement 3 rests on the `apply` read in step 2 and on the
-   coordinator's own `git status` after the batch: a dirty parent after a worker returned means unconfirmed, and no further
-   batch is dispatched.
+   coordinator comparing its own branch and `HEAD` before and after each batch, as well as `git status`: `merge: branch`
+   leaves the parent clean with `HEAD` moved (Check C2). A moved branch or `HEAD`, or a dirty tree, after a worker returned
+   means unconfirmed, and no further batch is dispatched.
 4. **Record the outcome** in the batch manifest (`.git/take-it-batch.json`, `.git/dispatch-ready-batch.json`) so a later tick
    does not start from nothing.
 
@@ -908,9 +921,13 @@ as a skill step. The probe costs one extra dispatch per invocation on an unconfi
 outcomes and takes the first that applies:
 
 - **Serial.** Dispatch one worker at a time, each to completion (PR opened, or terminal failure recorded) before the next,
-  so the shared tree has one writer. This is the default wherever a serial path exists. It is safe only if each worker begins
-  by switching to its own branch from the default branch, which the existing worker prompt already does; it is not
-  isolation, and it is reported as serial.
+  so the shared tree has one writer. This is the default wherever a serial path exists. It is not isolation, and it is reported as serial.
+  **Prerequisite, not yet met:** each worker first runs `git switch -c <branch> origin/<default>` (or an equivalent that
+  starts from the freshly fetched default branch, on a clean tree). The current worker prompt has **no** such step:
+  `skills/take-it/SKILL.md` step 1 assumes "your assigned worktree" and step 8 says only to commit on the named branch, with
+  no base; its only `git switch` lines are the coordinator's fast-forward and the stacked variant's branch-from-the-layer-below, and
+  `skills/dispatch-ready/SKILL.md` reuses those mechanics. On a shared tree worker 2 would start on worker 1's `HEAD` and
+  carry its commits. Until the prompt gains that step, serial mode is not safe and the outcome is **Stop**.
 - **Stop.** Where serial dispatch cannot be made safe (a stacked chain, a concurrent-claim hold, a worker that needs a clean
   parent), stop and report `isolation unconfirmed` with the setting or probe that failed. `NO_CONFIG`'s existing stop is the
   model: an unknown is never read as "fine".
@@ -921,8 +938,8 @@ they worked while overwriting each other.
 ### `review_site: coordinator` on omp
 
 Pin `review_site: coordinator` (what an absent key already selects) for omp. Under `agent` the worker sits at `task` depth 1
-and `pr-review-orchestrator` at 2, and an agent whose children would sit at `task.maxRecursionDepth` (default 2) has no
-`task` tool, so the orchestrator cannot dispatch the nine reviewers (Q5 "Depth", **source**; not run through a model).
+and `pr-review-orchestrator` at 2, and an agent **at** depth `task.maxRecursionDepth` (default 2) has no
+`task` tool (the gate is the agent's own depth, `taskDepth < maxRecursionDepth`), so the orchestrator cannot dispatch the nine reviewers (Q5 "Depth", **source**; not run through a model).
 Raising `task.maxRecursionDepth` to 3 is a consumer-side setting the plugin cannot ship. A skill on omp that finds
 `review_site: agent` in config treats it as unsatisfied, uses `coordinator`, and says so in its report.
 
