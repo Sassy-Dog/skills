@@ -244,7 +244,7 @@ the earlier sections marked unknown: a per-call model exists, per item.
 
 **Depth (row 1), source.** `canSpawnAtDepth(max, depth)` is `depth < max` on the agent's **own** depth, so an agent
 **at** depth `max` loses its `task` tool (`src/task/types.ts`, applied in `src/tools/index.ts`; children get
-`parentDepth + 1` in `src/task/executor.ts`). Corrected in #426: this sentence earlier said an agent "whose children would
+`parentDepth + 1` in `src/task/executor.ts`). Corrected in #426 (18.6.0 source): this sentence earlier said an agent "whose children would
 sit at depth `max`" loses it, which read literally would disqualify the coordinator too. With the
 default 2 and the main session at depth 0: coordinator (0) dispatches `pr-review-orchestrator` (1),
 which dispatches the reviewers (2). That chain **works**, and the reviewers need no `task` tool. Under
@@ -829,7 +829,11 @@ skill's own sentence. #425 should not rewrite 22 files on this evidence: first r
 installed from the plugin, run from a repository outside this tree. The `take-it` and `dispatch-ready` stop on
 `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
 
-**Go/no-go for #426 (isolation contract).** **Go**, on `task.isolation.enabled: true` with `task.isolation.apply: false`.
+**Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
+configuration is `task.isolation.enabled: true` with `task.isolation.apply: false`, but until Drafts 1 and 2 land neither
+`take-it` nor `dispatch-ready` can confirm isolation or run serially on omp, so the contract's outcome is **Stop** and the
+README's `not supported` stands. Even after Draft 1, the only configuration that can pass step 2 is profile-set values, which no
+run has tested yet (Draft 1's acceptance run will be the first).
 The worker-owns-a-branch-and-pushes design works inside omp isolation (Check C2, D1 and D2: the worker's push was
 confirmed by `ls-remote` in all three runs that used an absolute remote; Q4's 18.5.1 direct-function transcript showed the
 pushed branch under `remotes/origin/`). The parent never receives the worker's branch name.
@@ -845,7 +849,7 @@ Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
 2. #425: #440's checks ran with this repo's `CLAUDE.md` in context, so start by repeating A and B on one shipped skill installed from the plugin, run from a repository outside this tree, then add the root-resolution sentence and prove the first command succeeds.
-3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it calls for are drafted in #426's PR and filed by the coordinator after merge.
+3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it calls for are drafted in #426's PR and filed by the coordinator after merge. Until Drafts 1 and 2 land neither skill can confirm isolation or run serially on omp, so the contract's outcome is Stop and the README's `not supported` stands; even then only profile-set values can pass step 2, and no run has tested those.
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
 5. A README note that a repo's `.claude/settings.json` declaration does not install the plugin on omp.
@@ -882,7 +886,7 @@ concurrent workers.
 | --- | --- | --- |
 | 1 and 2 | `task.isolation.enabled: true` (default `false`, which shares one checkout silently) | Q4 (18.5.1, functions called directly), D1 and D2 (18.6.0, model-driven): private checkout at `~/.omp/wt/<id>/m`, own branch, commit, verified push |
 | 3 | `task.isolation.apply: false` (default `true`) | D1: parent `main` at the same `HEAD`, clean `git status`. D2 (defaults `apply: true`, `merge: patch`): parent `f.txt` modified. Check C2 (`merge: branch`): a different commit on the parent's branch |
-| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1 and D2: `ls ~/.omp/wt` held 0 entries after each run. D1's temp directory existed after the run and I removed it by hand |
+| 4 | none; omp removes the checkout. With `apply: false` it still leaves `<tmp>/omp-task-<id>/` (the patch plus a `.json`, `.jsonl` and `.md`) in the system temp directory, which the coordinator must remove, but only after the worker's push is verified with a fresh `git ls-remote` in the same step, because that directory holds the only remaining copy of a change from a worker that did not push; under a `dispatch-ready` loop that is one leftover temp directory per worker | D1 and D2: `ls ~/.omp/wt` held 0 entries after each run. D1's temp directory existed after the run and I removed it by hand |
 
 D1's result text said `Not applied.`, so `task.isolation.merge` had no visible effect there; whether `merge` is consulted at all
 when `apply` is false was not run (no `merge: branch` with `apply: false`). **omp therefore satisfies the contract natively
@@ -903,7 +907,8 @@ branch. A worker that did *not* push loses its change from every branch, so the 
    unconfirmed. Because `omp config get` ignores a `--config` overlay, settings supplied **only** by an overlay can never pass
    this step, so the operator must set them in the profile. No run here used profile-set values: D1 and D2 used overlays, so
    the profile-set path is untested.
-3. **Probe, for an overlay or any other setting source.** Before the first parallel batch, dispatch **one** worker whose only
+3. **Probe, against an overlay or other source overriding a passing profile.** Step 2 fails closed on overlay-only settings, so this
+   step runs only after the profile passed; it guards against an overlay or another source overriding those profile values. Before the first parallel batch, dispatch **one** worker whose only
    job is to report `pwd` and `git rev-parse --show-toplevel`, and compare them with the coordinator's own. The same path
    means isolation is off. This probes requirement 1 only. Requirement 3 rests on the `apply` read in step 2 and on the
    coordinator comparing its own branch and `HEAD` before and after each batch, as well as `git status`: `merge: branch`
@@ -923,7 +928,10 @@ outcomes and takes the first that applies:
 - **Serial.** Dispatch one worker at a time, each to completion (PR opened, or terminal failure recorded) before the next,
   so the shared tree has one writer. This is the default wherever a serial path exists. It is not isolation, and it is reported as serial.
   **Prerequisite, not yet met:** each worker first runs `git switch -c <branch> origin/<default>` (or an equivalent that
-  starts from the freshly fetched default branch, on a clean tree). The current worker prompt has **no** such step:
+  starts from the freshly fetched default branch). `git switch -c` does not require a clean tree: it carries non-conflicting
+  uncommitted changes and untracked files onto the new branch, so a worker that ended in a recorded terminal failure could
+  leak its edits into the next worker's PR. The prerequisite is therefore also a check: before each serial dispatch the
+  coordinator fetches and confirms `git status --porcelain` is empty, and otherwise Stops. The current worker prompt has **no** such step:
   `skills/take-it/SKILL.md` step 1 assumes "your assigned worktree" and step 8 says only to commit on the named branch, with
   no base; its only `git switch` lines are the coordinator's fast-forward and the stacked variant's branch-from-the-layer-below, and
   `skills/dispatch-ready/SKILL.md` reuses those mechanics. On a shared tree worker 2 would start on worker 1's `HEAD` and
