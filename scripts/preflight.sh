@@ -1477,6 +1477,16 @@
 #      the paragraph text, its placement and its token-freedom, and is
 #      mutation-proven against scratch fixtures. No gh, no network.
 #
+#  51. isolation-contract tests (scripts/test-isolation-contract.sh) — take-it
+#      confirms the isolation contract before a parallel dispatch: Claude
+#      Code's `isolation: "worktree"` is the confirmation and stays unchanged;
+#      on omp it reads three settings, probes one worker, records the outcome,
+#      verifies pushes with a fresh ls-remote, and goes serial (with a
+#      branch-from-default worker step) or stops with `isolation unconfirmed`,
+#      never parallel on a shared tree (issue #451). Also pins the design
+#      doc's corrected claims. Mutation-proven (header lists the mutants).
+#      Source-level, no omp, no gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2380,6 +2390,15 @@ if bash scripts/test-plugin-root-paragraph.sh; then
     pass "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
 else
     failed "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
+fi
+
+# --- 51. isolation-contract tests -----------------------------------------------
+# take-it confirms isolation before a parallel dispatch and fails closed; the
+# design doc's claims agree. Source-level, no omp, no network.
+if bash scripts/test-isolation-contract.sh; then
+    pass "isolation-contract tests (scripts/test-isolation-contract.sh)"
+else
+    failed "isolation-contract tests (scripts/test-isolation-contract.sh)"
 fi
 
 # ------------------------------------------------------------------------------

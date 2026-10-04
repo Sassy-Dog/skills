@@ -53,7 +53,7 @@
 # is flattened (quote markers stripped, whitespace collapsed) before matching,
 # the same treatment the other prose gates give wrapped text.
 #
-# Mutation-proven below against eight mutants, each of which must FAIL:
+# Mutation-proven below against nine mutants, each of which must FAIL:
 #   M1 a binding's Claude Code alias flipped (terra → opus)   -> property 2
 #   M2 dispatch-ready's bare `model: "opus"` pin restored     -> property 3
 #   M3 an agent given `model: sonnet` frontmatter             -> property 4
@@ -62,6 +62,7 @@
 #   M6 only the orchestrator's Step-3 `terra` binding removed  -> property 5
 #   M7 a JSON-style `"model": "claude-sonnet-5"` added         -> property 3
 #   M8 a single-quoted `'model': 'opus'` added                 -> property 3
+#   M9 the isolation probe worker's `terra` binding removed    -> property 5
 # A gate that passes a mutant is vacuous for that property. Each mutant must
 # also fail FOR ITS OWN REASON: an unmutated control copy has to pass first,
 # and each mutant's failure output has to name its property. Without both, a
@@ -167,6 +168,8 @@ if n_bindings == 0:
 required = {
     # §5 worker dispatch (terra); step-6 orchestrator + §6 coordinator gate (sol ×2)
     "skills/take-it/SKILL.md": {"terra": 1, "sol": 2},
+    # the isolation probe worker (#451): a dispatch site that lives in the reference doc §5 points to
+    "skills/take-it/references/isolation-confirmation.md": {"terra": 1},
     # §5 worker model policy (terra); §2 coordinator review (sol)
     "skills/dispatch-ready/SKILL.md": {"terra": 1, "sol": 1},
     # §4 review gate
@@ -294,6 +297,11 @@ expect_fail "M7 JSON-style full model id" "$d" 'outside a tier binding'
 d=$(make_copy m8)
 printf "\nPass \`'model': 'opus'\` here.\n" >>"$d/skills/dispatch-ready/SKILL.md"
 expect_fail "M8 single-quoted bare pin" "$d" 'outside a tier binding'
+
+d=$(make_copy m9)
+mutate "$d/skills/take-it/references/isolation-confirmation.md" ' at tier `terra` \(Claude Code:\s*`model: "sonnet"` · omp:\s*`model: "@task"`\)' '' ||
+    bad "M9: mutation did not apply"
+expect_fail "M9 isolation probe worker's terra site removed" "$d" 'isolation-confirmation.md: required dispatch tier `terra` bound 0x'
 
 if [ "$FAILED" = 0 ]; then
     echo "model-tier tests: all green" >&2

@@ -575,6 +575,14 @@ Use take-it's mechanics verbatim: claim → fast-forward the local default branc
 issue, `isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
 take-it's self-contained sub-agent prompt.
 
+take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override
+do **not** apply here. Claude Code means the dispatch tool is `Agent` and it takes
+`isolation: "worktree"`. Check that **before this tick claims anything**, ahead of the order above:
+on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands,
+**without claiming a single issue**, so no `in-progress` claim is left behind to count as in-flight and block other
+sessions. That is a stop, not a fifth terminal state (§7's four are unchanged; whether to add one is #452's decision),
+so the loop does not self-cancel on it: the operator ends the `/loop`.
+
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
 up front — a half-claimed chain lets another loop pick up a layer mid-build. The shared worktree
