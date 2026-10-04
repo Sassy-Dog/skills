@@ -341,7 +341,7 @@ Observed, 18.6.0:
 - So the token is not substituted under a model either, and "a model can derive the root" is true only in the
   weak sense that it found the script by searching, at the cost of one failed command and a `find` that
   scales with the size of the tree it is pointed at. A sentence that names the resolution rule is still needed. #425 ran
-  such a variant on a shipped skill: see [A″](#out-of-tree-checks-on-shipped-skills-425), where the first command succeeded in one of two runs and reached the script with the right root in both.
+  such a variant on a shipped skill: see [A″](#out-of-tree-checks-on-shipped-skills-425), where, in the two v2 runs, the first command succeeded in one and the right root was used in both; the one v1 run (a wording without the do-not-search clause, three A″ runs in all) searched.
 
 ### Check B (row 6): the model follows an explicit read-the-config instruction
 
@@ -436,7 +436,7 @@ The run numbers follow the table, not the order the calls were made. Run 1 is th
 - **A″ (row 5), one edit, two wordings.** The test edit (a scratch copy, never committed) added a "Plugin root" paragraph before the command at
   `skills/github-issues/SKILL.md`, directly above its `--sites-of` block (original line 54; the skill's first token command is at line 22, see the design's **Open** note). **v1** said Claude Code replaces `${CLAUDE_PLUGIN_ROOT}`, and that when it arrives literally the plugin root is the
   skill's directory with `/skills/github-issues` removed, found in the `[Skill file: ...]` or `[Skill directory: ...]` line. The agent skipped the token
-  but still ran `find` (run 3). **v2** added "do not run it and do not search for the script", told the agent to cut that path at `/skills/github-issues`, and
+  but still ran `find` (run 3). **v2** added only the clause "and do not search for the script" (v1 already said "do not run it"), told the agent to cut that path at `/skills/github-issues`, and
   gave the result form `<root>/skills/github-issues/scripts/queue-snapshot.sh`. Under v2 the agent's first script command used the correct absolute path in both runs, with no
   token and no `find`. In run 5 that command also carried the stray prompt word and the script rejected it with exit 64, so the strict reading, "first command succeeds",
   holds for run 4 only. Reading it as "the root was right on the first try" holds for both.
@@ -765,7 +765,7 @@ plugin-root variable (`https://omp.sh/docs/skills`). The environment variable re
 grandparent is the plugin root (Q2). #440 (Check A, print mode, 18.6.0) found that `/skill:` was not expanded
 there and `[Skill directory: ...]` was never delivered: the model got a `[Skill file: ...]` header from
 `read skill://<name>` and recovered by searching. #425 (out of tree, shipped `github-issues`) saw the same search in 2 of 2 unchanged runs and
-none in 2 of 2 runs with a root-resolution paragraph added; the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
+none in the 2 v2 runs of a root-resolution paragraph that also forbids searching (the one v1 run, without that clause, searched; the token-free wording is untested); the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
 
 ### 6. `` !`...` `` dynamic context injection
 
@@ -917,7 +917,7 @@ designs below are an edit to skill text, which options B and D already allow. Th
 
 - **Replacement.** Keep the `` !`...` `` line in the nine files that carry it (``git grep -l -E '^!`' -- skills agents``). That count is eight skills and
   `skills/setup-config/references/config-contract.md`, which documents the line. Under each skill's line, add a short paragraph: if the line reached you as text (it starts
-  with `!` and shows a command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it; read `<repo root>/.claude/sassy-dog/<skill>.md` by absolute path, the root from
+  with `!` and shows a command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it; read by absolute path the file the `!` line above names (`<repo root>/.claude/sassy-dog/<skill>.md`, and `take-it.md` for the two front-ends `work-recommendations` and `work-fire-watch`), the root from
   `git rev-parse --show-toplevel`; if the file does not exist the config is `NO_CONFIG`, handled as that state already is; **never read an unrun line as "no config
   exists"**. `NO_CONFIG` stays the first-class state it is today, and `take-it` and `dispatch-ready` still stop on it. This is a generalised later edit of the B″ text that ran (it adds `<skill>` and
   "handled as that state already is" and drops "Get the config yourself"); the B″ text is verbatim in the #425 section.
@@ -973,7 +973,7 @@ State a support matrix per skill, and port only what is cheap.
 Resolve the two mechanisms that block everything first, then decide per family.
 
 1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither. The
-   spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440, and followed one added paragraph in #425) and no
+   spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440, and, in #425, used the right root in 2 of 2 runs with a paragraph that also forbids searching (v2; v1 searched)) and no
    load-time step for row 6 (a model ran the line or read the file itself, #425). The designs are
    in [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
