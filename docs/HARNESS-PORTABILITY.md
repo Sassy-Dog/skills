@@ -856,6 +856,38 @@ Observed, two runs, one model:
 **Operator configuration.** `config.yml` SHA-256 prefix `7b634967911b` before and after; `omp plugin list` `No plugins installed`
 before and after. Only `ls ~/.omp/wt` and that hash were read under `~/.omp`.
 
+### Isolation confirmation runs (#452)
+
+Run on 2026-10-04 on site `mac`, `omp/18.6.0`, for #452 (it implements #426's contract in `dispatch-ready`). **6 of the issue's 6 omp runs were used**, all on
+`anthropic/claude-haiku-4-5`, loading the plugin as the #451 runs did (a temporary `CLAUDE_CONFIG_DIR` registry pointing at a copy of the working tree with the new §5 text, plus
+a `--config` overlay enabling `claude-plugins`). Each run used a scratch repo under `/tmp` with a bare remote at an absolute path and no GitHub remote;
+`GH_CONFIG_DIR` pointed at an empty directory and `GH_TOKEN` and `GITHUB_TOKEN` were unset, and no run was given a `gh` step. The prompt told the model to follow **only** §5's
+"Confirm isolation before this tick claims anything" paragraph and the reference doc, with the claim step simulated as one appended line per claim in a local log, then
+to dispatch or follow the fail-closed rule. **This is not a tick**: §2, §3, §4, §7 and the claim scripts were not run. No profile write: `config.yml` had SHA-256 prefix
+`7b634967911b` before and after, `omp plugin list` said `No plugins installed` both times, and the profile still read `enabled=false`, `apply=true`, `merge=patch`.
+
+| Run | Committed `.omp/config.yml`, candidates, §5 wording | What the model did | Parent and bare remote after (my own checks) |
+| --- | --- | --- | --- |
+| 1 | `enabled: false`; stack chain #7 then #8; first wording | read `enabled` false, took **stop**, claimed nothing, printed `isolation unconfirmed` | parent untouched, empty claim log, remote has only `main` |
+| 2 | `enabled: false`; plain #7 and #8; first wording | took serial, **claimed both issues and ran both workers** (one claim per tick was not yet stated) | parent clean on `main`; `feat/issue-7-x` and `feat/issue-8-x` on the remote |
+| 3 | `enabled: true`, `apply: false`; plain #7 and #8; first wording | settings passed, then reported the probe "failed" and went serial; claimed both; ran no worker | parent clean, remote has only `main` |
+| 4 | same as run 3; prompt now asked for the probe's reply verbatim | settings passed; the probe replied the coordinator's own `pwd`, so isolation was **unconfirmed** and the model went serial (the text did not yet require `isolated: true`); claimed both, ran both | parent clean; both branches on the remote |
+| 5 | `enabled: true`, `apply: false`; plain #7 and #8; text now requires `isolated: true` on the probe and every worker | settings passed; the probe replied a `~/.omp/wt/...` path, not the coordinator's; **confirmed**, two workers in parallel | parent on `main` at the same `HEAD`, clean, **no new local branch**; `feat/issue-7-x` and `feat/issue-8-x` on the remote, verified by my own `git ls-remote` |
+| 6 | `enabled: false`; plain #7 and #8; text now says one claim and one worker per tick | took serial, **claimed #7 only** and left #8 unclaimed | no worker ran in this run (it described the dispatch); its claim line went to a path inside the scratch repo, leaving one untracked file |
+
+Observed, one model, prompted:
+
+- **Stop** (run 1) claimed nothing and reported `isolation unconfirmed`. That is the case that decides the loop's terminal state, and the run did not exercise §7.
+- **The project-file case dispatched in parallel with the parent untouched** only after the text required `isolated: true` on the probe and every worker (runs 4 and 5).
+  Before that edit the probe measured the shared tree and the model failed closed, which is the contract working and also a gap in the text, now closed.
+- **The one-claim-per-tick serial rule was followed once it was stated** (runs 2, 3 and 4 claimed both; run 6 claimed one). A serial worker that actually ran was observed
+  in runs 2 and 4 only; the Serial variant's own steps were not checked against the worker's commands.
+- **Not shown:** a full tick, a claim through `issue-claim.sh`, the §2 redispatch path, §7 reaching STALLED from this hold (source-pinned, not run), the after-batch
+  `omp-task-<id>` cleanup (no new directory was observed, so none was removed), `review_site: agent` on omp, Claude Code, and any model other than haiku.
+
+**Operator configuration.** `config.yml` SHA-256 prefix `7b634967911b` before and after; `omp plugin list` `No plugins installed` before and after.
+Only `ls ~/.omp/wt` and that hash were read under `~/.omp`.
+
 ### Verdicts for rows 3, 4, 5 and 6
 
 | Row | Verdict | Evidence beside it |
@@ -1252,8 +1284,8 @@ checked once in Claude Code that the paragraph is inert there; the paragraph's p
 
 **Go/no-go for #426 (isolation contract).** **Go for the contract, no-go for running parallel workers on omp today.** The contract's
 configuration is `task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms
-it and is written to go serial or stop where it is unconfirmed (#451, [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)); `dispatch-ready` cannot
-yet (#452), so the README's `not supported` stands for it, and for `take-it` the matrix cell stays because no full `take-it` invocation was run on omp.
+it and is written to go serial or stop where it is unconfirmed (#451, [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)); `dispatch-ready`
+now does the same once per tick (#452, [Isolation confirmation runs (#452)](#isolation-confirmation-runs-452)), but its text was only prompted through its §5 check with one model, never a full tick, so the README's `not supported` stands for it, and for `take-it` the matrix cell stays because no full `take-it` invocation was run on omp.
 The configurations that can pass step 2 are a project-level file, `PI_CONFIG_FILES` and
 profile-set values; of those only a committed `.omp/config.yml` has driven a run (P1, #453; again in #451 with two workers in one `task` call, overlap not measured), and profile-set values have not.
 The worker-owns-a-branch-and-pushes design works inside omp isolation (Check C2, D1 and D2: the worker's push was
@@ -1267,13 +1299,13 @@ Check C). What a skill cannot do is read a `--config` flag's value: `omp config 
 [Isolation contract (#426)](#isolation-contract-426) specifies. #453 also found that `merge` is consulted under `apply = false`
 (E1: `merge: branch` leaves a local branch `omp/task/<Name>` in the parent, not a patch) and that the parent's branch, `HEAD` and tree stay put. The evidence is one run per mode with one model.
 `review_site: agent` cannot work on omp without raising `task.maxRecursionDepth`, so the contract pins `coordinator` for omp.
-The implementation issues are #451 (`take-it`) and #452 (`dispatch-ready`).
+The implementation issues are #451 (`take-it`) and #452 (`dispatch-ready`); both are implemented.
 
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
 2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). The row 5 root-resolution paragraph is done (#454, every `SKILL.md` that carries the token, plus `scripts/test-plugin-root-paragraph.sh`). The row 6 fallback paragraph is done (#455: the four conservative-mode skills, after a first run on `take-it` and `dispatch-ready` showed the four stoppers did not need it).
-3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it called for are #451 (`take-it`, implemented; 2 prompted omp runs on one model, see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)) and #452 (`dispatch-ready`, open). Until #452 lands `dispatch-ready` cannot confirm isolation or run serially on omp, so for it the contract's outcome is Stop and the README's `not supported` stands; step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453; #451).
+3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it called for are #451 (`take-it`, implemented; 2 prompted omp runs on one model, see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)) and #452 (`dispatch-ready`, implemented; 6 prompted omp runs of its §5 check on one model, see [Isolation confirmation runs (#452)](#isolation-confirmation-runs-452)). `dispatch-ready` confirms isolation every tick and goes serial or stops, and a stopped tick with nothing in flight ends the loop through DRAIN STALLED ([the decision](#dispatch-ready-the-tick-its-terminal-state-and-its-reach-452)); no full tick was run on omp, so the README's `not supported` stands. Step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453; #451).
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.
 5. A README note that a repo's `.claude/settings.json` declaration does not install the plugin on omp.
@@ -1285,7 +1317,7 @@ parallel-worker sites among row 3's four files; `repo-cleanup` and `pr-shepherd`
 them. Row 3 is the mechanism and [Isolation checks (#426)](#isolation-checks-426) the evidence. This section **specifies**
 a contract. `take-it` implements its confirmation sequence ([#451](https://github.com/Sassy-Dog/skills/issues/451),
 `skills/take-it/references/isolation-confirmation.md`, pointed to from §5, pinned by `scripts/test-isolation-contract.sh`);
-`dispatch-ready` does not yet ([#452](https://github.com/Sassy-Dog/skills/issues/452)). Claude Code satisfies it through
+`dispatch-ready` implements the same contract once per tick ([#452](https://github.com/Sassy-Dog/skills/issues/452), its §5, pinned by the same gate). Claude Code satisfies it through
 `isolation: "worktree"`, a linked worktree under `.claude/worktrees/` that the coordinator tears down
 (`skills/pr-shepherd/references/worktree-teardown.md`).
 
@@ -1355,8 +1387,8 @@ a project-level file (`.omp/config.yml`, `.omp/settings.json`, `.claude/settings
 4. **Record the outcome** in the batch manifest (`.git/take-it-batch.json`, `.git/dispatch-ready-batch.json`) so a later tick
    does not start from nothing.
 
-`take-it` implements these steps (#451, `skills/take-it/references/isolation-confirmation.md`); `dispatch-ready` does not yet
-(#452). Two model-driven runs followed the `take-it` text on omp (see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)):
+`take-it` implements these steps (#451, `skills/take-it/references/isolation-confirmation.md`); `dispatch-ready` implements them
+per tick (#452): it re-reads the settings and re-probes every tick rather than reusing a recorded `confirmed`, because a tick shares no memory with the last. Two model-driven runs followed the `take-it` text on omp (see [Isolation confirmation runs (#451)](#isolation-confirmation-runs-451)):
 the probe and the `omp config get` reads ran when the model was prompted with the §5 text, in the project-file run. The probe costs one extra dispatch per invocation on an unconfirmed harness.
 
 ### Fail closed
@@ -1373,9 +1405,10 @@ outcomes and takes the first that applies:
   coordinator fetches and confirms `git status --porcelain` is empty, and otherwise Stops. The worker prompt had **no** such step:
   `skills/take-it/SKILL.md` step 1 assumed "your assigned worktree" and step 8 said only to commit on the named branch, with
   no base. **`take-it` now carries it** (#451): a separate "Serial variant" subsection in §5, outside the worker template that
-  `dispatch-ready` shares. It substitutes step 1 only when the confirmation ended in serial and is never sent on Claude Code
-  or by `dispatch-ready`, so the Claude Code prompt is unchanged. The coordinator-side check is in the reference doc.
-  `skills/dispatch-ready/SKILL.md` reuses those mechanics and has neither yet (#452), so for it serial mode is still not safe and the outcome is **Stop**.
+  `dispatch-ready` shares. It substitutes step 1 only when the confirmation ended in serial and is never sent on Claude Code,
+  so the Claude Code prompt is unchanged. The coordinator-side check is in the reference doc.
+  `skills/dispatch-ready/SKILL.md` (#452) sends the same step on omp only, on a tick whose own check chose serial, and serial there means **one claim and one worker per tick**
+  (a stack-chain member is never serial-eligible and takes **Stop**).
   Without the step, on a shared tree worker 2 would start on worker 1's `HEAD` and carry its commits.
 - **Stop.** Where serial dispatch cannot be made safe (a stacked chain, a concurrent-claim hold, a worker that needs a clean
   parent), stop and report `isolation unconfirmed` with the setting or probe that failed. `NO_CONFIG`'s existing stop is the
@@ -1391,6 +1424,35 @@ and `pr-review-orchestrator` at 2, and an agent **at** depth `task.maxRecursionD
 `task` tool (the gate is the agent's own depth, `taskDepth < maxRecursionDepth`), so the orchestrator cannot dispatch the nine reviewers (Q5 "Depth", **source**; not run through a model).
 Raising `task.maxRecursionDepth` to 3 is a consumer-side setting the plugin cannot ship. A skill on omp that finds
 `review_site: agent` in config treats it as unsatisfied, uses `coordinator`, and says so in its report.
+
+### `dispatch-ready`: the tick, its terminal state and its reach (#452)
+
+`dispatch-ready` §5 carries the contract as a check **before the tick claims anything**. On Claude Code (`Agent` taking `isolation: "worktree"`) that parameter is the
+confirmation and nothing changes. On omp, or an unrecognised harness, each tick re-reads the three settings (`true`, `false`, `patch`), probes with one worker whose `task`
+entry carries `isolated: true` before a parallel batch, and writes the outcome beside the batch records in `.git/dispatch-ready-batch.json`. The record serves the same
+tick's second consumer only; the next tick re-derives, because a tick has no memory and the reference doc already says a later process never reuses `confirmed`. A probe that
+shows the coordinator's own tree, or a setting that does not read as required, is unconfirmed, and an unconfirmed tick goes **serial** (one claim and one worker, a plain issue
+only, after a fetch and a clean `git status --porcelain`, through `take-it`'s Serial variant) or **stops** without claiming anything.
+
+**Terminal-state decision: a stopped tick ends the loop through DRAIN STALLED, and no fifth state is added.** The interim stop reported the same sentence every tick and
+never cancelled the loop, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. The route that gate's header names is to widen an existing state's
+conjunct, not to add a state, and STALLED is the state whose test is already the right one: in-flight zero, dispatched zero, nothing this loop may advance, a non-empty held
+set. The Ready items §4 would have dispatched are held by the check with the hold root `isolation unconfirmed` (the failed setting or probe is reported detail and is not part
+of the root, so it cannot churn the two-tick comparison). STALLED's third conjunct now reads "held by a §4 filter or by §5's isolation check", and nothing else in §7 moved.
+Reasoning:
+
+- **Not DEFERRED.** DEFERRED is for a hold this checkout can never clear (a `site:` label naming another machine) and takes no confirmation tick. An operator can clear this
+  one from the same checkout by committing a `.omp/config.yml`, so it is a hold a human could clear, which is STALLED's definition.
+- **Not a fifth state.** It would be STALLED under another noun: the same conjuncts, the same stop path and cron self-cancel, and one more count and canon entry across
+  `test-drain-terminal-states.sh`, the README and the skill description, none of which would behave differently.
+- **The two-tick confirmation is wanted, not tolerated.** The probe is model-backed and a settings read can fail transiently, so one unconfirmed tick must not end a healthy
+  loop; an identical hold-set on the next tick does.
+- **Serial and confirmed ticks are unaffected**: they dispatch, which deletes any stall record and resets the clock.
+
+**Reach on a stopped or serial tick.** The check gates worker dispatch and nothing else. §2's reconcile, its demotions and comments, `pr-shepherd`'s merges and the
+coordinator-site review dispatch still run, since none of them starts an implementation worker or needs one in its own tree. A §2 redispatch is a worker dispatch: it passes the
+same check, goes serial if eligible, and is otherwise held with no budget spent. §5's claims happen only on a confirmed or serial tick. §7 is evaluated every tick. **Known and
+accepted:** a held redispatch keeps its issue in flight, so a PR needing one after isolation is lost is a reported hold that does not end the loop; the operator ends it.
 
 ## Not read
 

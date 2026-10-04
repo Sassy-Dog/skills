@@ -136,6 +136,24 @@
 # COMPLETE takes no confirmation tick for the same reason, which is why DEFERRED
 # is modelled on it rather than on the state it sits beside.
 #
+# AN ISOLATION-UNCONFIRMED STOP IS STALLED, NOT A FIFTH STATE (issue #452).
+# dispatch-ready §5's isolation check (take-it's contract, re-derived every tick)
+# can leave a tick with candidates it will not claim: on omp with isolation off
+# and no serial-safe candidate. With nothing in flight that is #282's shape
+# again - claim nothing, report the same sentence, never self-cancel. The
+# decision, made by the route this header names (extend an existing state's
+# conjunct rather than add one): those candidates are held by the check with the
+# hold root `isolation unconfirmed`, so STALLED's third conjunct reads "every
+# Ready item held by a §4 filter or by §5's isolation check" and nothing else in
+# §7 moved. Not DEFERRED, whose conjunct 3 is a hold this checkout can NEVER
+# clear (an operator can clear this one by committing a `.omp/config.yml`); not
+# a fifth state, which would be STALLED under another noun with one more count
+# site and canon entry to keep honest. The two-tick confirmation is wanted here,
+# not tolerated: it keeps a transient probe failure from ending a healthy loop.
+# The edit is one phrase in b027 below and in §7; §5's prose is where the rest
+# lives and is pinned by scripts/test-isolation-contract.sh (property 14), since
+# §5 is not read by this gate (limit 5).
+#
 # THE ENUMERATIONS THAT HAD TO MOVE WITH IT, since CLAUDE.md's rule — a count
 # stated in prose is safe only when its members are enumerated beside it, or when
 # a gate re-derives it — is what makes a fourth state cheap to add and expensive
@@ -697,7 +715,7 @@ b023	**No confirmation tick, exactly as COMPLETE takes none.** STALLED and DEGRA
 b024	Announce loudly, naming the site each remaining item requires — **all** of an item's `sites` when it declares more than one, so the operator can see which checkout to run the drain from:
 b025	Then take the **same stop path as DRAIN COMPLETE** below — one path, never a parallel one, and the cron self-cancel is not optional on it. Nothing here is a failure and nothing needs undoing: no redispatch budget is spent, no issue is demoted, and every deferred item is dispatchable again the moment the checkout it names ticks — subject there to the §4 filters this tick never reached.
 b026	### DRAIN STALLED
-b027	In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**, over a **non-empty** held set — every Ready item held by a §4 filter, and every open PR held by the discriminator below. All four conjuncts are stated here rather than corrected further down, for the reason COMPLETE's condition now states all of its own. Nothing this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents working, and dependency holds only resolve when a dep closes — with nothing in flight, only external or human action closes one. The loop is stalled, not idle; "Ready isn't empty" alone must never keep it alive.
+b027	In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**, over a **non-empty** held set — every Ready item held by a §4 filter or by §5's isolation check, and every open PR held by the discriminator below. All four conjuncts are stated here rather than corrected further down, for the reason COMPLETE's condition now states all of its own. Nothing this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents working, and dependency holds only resolve when a dep closes — with nothing in flight, only external or human action closes one. The loop is stalled, not idle; "Ready isn't empty" alone must never keep it alive.
 b028	**The third conjunct is "nothing to advance", and it replaced "Ready non-empty"** — that difference is the whole of #282. Ready empty, in-flight zero and an open unmerged PR was covered by NEITHER terminal state: COMPLETE is vetoed by the open PR, and STALLED could not fire on an empty queue. The loop ticked forever, reporting the state accurately and doing nothing (observed 2026-08-26 on #273 / PR #279; cancelled by hand). The action that creates the state is the action that hides it — `issue-claim.sh block` strips `ready` and `in-progress` together, so recording "a human must decide this" is precisely what removes the issue from the one set the old conjunct consulted.
 b029	**Deleting that conjunct outright would have been the wrong fix**, and re-deriving it that way is the tempting simplification here: an open PR is not automatically a human gate. One whose checks are still running or red can advance on its own, and firing STALLED there cancels a loop that was about to make progress.
 b030	**The held set must be non-empty.** Nothing held, nothing in flight and no open PR is COMPLETE, which fires first and needs no confirmation tick. "Nothing to advance" satisfied vacuously — by a queue that simply finished — must never announce STALLED.

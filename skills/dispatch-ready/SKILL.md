@@ -571,17 +571,72 @@ catches less, not nothing.
 
 ## 5. Dispatch
 
-Use take-it's mechanics verbatim: claim → fast-forward the local default branch → one sub-agent per
+**Confirm isolation before this tick claims anything.** take-it's isolation contract applies here,
+adapted to a tick that remembers nothing. Check it **before this tick claims anything**, ahead of
+the order below. Claude Code means the dispatch tool is `Agent` and it takes
+`isolation: "worktree"`; that parameter *is* the confirmation, nothing in this paragraph applies,
+and the dispatch below is unchanged — the check costs nothing there. On omp (workers are `task`
+calls), or on any harness you do not recognise, read
+`${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` and run its sequence,
+with these tick-shaped differences:
+
+1. **Re-derive every tick.** A tick has no memory, and the doc's own rule holds: a later process
+   never reuses `confirmed`. Re-read the three settings every tick, from the same sources
+   (`task.isolation.enabled` `true`, `apply` `false`, `merge` `patch`; an unset `merge` reads
+   `patch`; a `--config` overlay is invisible to the read, so a committed project `.omp/config.yml`
+   is the route that needs no profile write; never `omp config set`). On a tick about to dispatch a
+   parallel batch, also run the doc's one-worker probe at tier `terra` (Claude Code:
+   `model: "sonnet"` · omp: `model: "@task"`), its `task` entry carrying `isolated: true` — a
+   `task` entry that omits it runs on the shared tree whatever the settings read, and a probe
+   without it measures nothing. Record the outcome beside the batch records in
+   `.git/dispatch-ready-batch.json`, in the doc's `isolation` shape. That record serves this
+   tick's report and its second consumer (§2's redispatch, then this section); the next tick
+   re-derives.
+2. **Confirmed** → dispatch in parallel as below, `isolated: true` on every `task` entry. When a batch's results return, run the doc's
+   after-every-batch check before trusting them: the coordinator's branch, `HEAD` and
+   `git status --porcelain` unchanged, a **fresh** `git ls-remote origin <branch>` per pushed
+   branch, and only after that verification removal of your own `omp-task-<id>` directory. A moved
+   branch or `HEAD`, or a dirty tree, dispatches no further batch.
+3. **Unconfirmed** → **serial or stop, never parallel on a shared tree.** Serial means **one claim and
+   one worker for the tick, and the tick ends there**, through take-it's **Serial variant**, and only when every one of these holds: the
+   candidate is a plain issue, never a stack-chain member; no worker from an earlier tick is still
+   running (every record in the manifest carries a `pr` or a recorded terminal failure);
+   `git fetch origin --quiet`, the default branch fast-forwarded, `git status --porcelain` empty.
+   Claim **that one issue only** — every other candidate stays unclaimed in Ready for a later tick —
+   send the Serial variant's step 1 in place of the worker template's step 1, record
+   `{issue, pr, branch}`, and verify the push with a fresh `git ls-remote` before removing its
+   `omp-task-<id>` directory. Otherwise **stop**: report `isolation unconfirmed` with the
+   setting or probe that failed, **without claiming a single issue**, so no `in-progress` claim is
+   left behind to count as in-flight and block other sessions.
+4. **`review_site: agent` is unsatisfiable on omp**, so run the tick with `coordinator` and report
+   the override on the tick report's `isolation:` line (appended there; §6's shape is unchanged).
+   The override is per tick, never silent, and the config is never edited.
+
+**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
+flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
+shape. The Ready items §4 would have dispatched are held by this check, with the hold root
+`isolation unconfirmed` (the failed setting or probe is reported detail, never part of the root,
+so it cannot churn the stall comparison). They join the held set, and §7 decides: in-flight zero
+AND dispatched zero AND nothing to advance AND a non-empty held set is STALLED, confirmed across
+two ticks, then the stop path and its cron self-cancel. Not DEFERRED, because that state is for a
+hold this checkout can never clear, and an operator can clear this one from here (commit a
+`.omp/config.yml`). Not a fifth state, because it would be STALLED under a different name: the
+same test, the same two-tick confirmation, the same stop path, and one more count to keep honest.
+The two ticks also keep a transient probe failure from ending a healthy loop.
+
+**Reach.** The check gates **worker dispatch** and nothing else. On a stopped or serial tick §2's
+reconcile, its demotions and comments, `pr-shepherd`'s merges and the coordinator-site review
+dispatch all still run, because none of them dispatches an implementation worker or needs one in
+its own tree. A §2 redispatch is a worker dispatch: it passes the same check and goes serial if it
+can, else is held — no budget spent, no demotion — and §6's `holds:` line names it. §5's claims
+happen only on a confirmed or serial tick. §7 is evaluated every tick: with work in flight an
+unconfirmed tick reaches no terminal state; with none, the paragraph above applies. **Known and
+accepted:** a held redispatch keeps its issue in flight, so a PR needing one when isolation is
+lost sits as a reported hold rather than ending the loop; the operator ends it.
+
+Use take-it's mechanics verbatim, after the isolation check above: claim → fast-forward the local default branch → one sub-agent per
 issue, `isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
 take-it's self-contained sub-agent prompt.
-
-take-it's isolation-confirmation paragraph, its Serial variant and its omp `review_site` override
-do **not** apply here. Claude Code means the dispatch tool is `Agent` and it takes
-`isolation: "worktree"`. Check that **before this tick claims anything**, ahead of the order above:
-on any harness other than Claude Code this loop reports `isolation unconfirmed` and dispatches nothing until #452 lands,
-**without claiming a single issue**, so no `in-progress` claim is left behind to count as in-flight and block other
-sessions. That is a stop, not a fifth terminal state (§7's four are unchanged; whether to add one is #452's decision),
-so the loop does not self-cancel on it: the operator ends the `/loop`.
 
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
@@ -848,7 +903,7 @@ moment the checkout it names ticks — subject there to the §4 filters this tic
 ### DRAIN STALLED
 
 In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**,
-over a **non-empty** held set — every Ready item held by a §4 filter, and every open PR held by the
+over a **non-empty** held set — every Ready item held by a §4 filter or by §5's isolation check, and every open PR held by the
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
 reason COMPLETE's condition now states all of its own. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents

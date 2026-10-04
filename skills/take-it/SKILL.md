@@ -468,10 +468,11 @@ behind in coordinator-only context.
 ### Serial variant (ONLY when §5's isolation confirmation chose serial mode)
 
 Kept out of the template above on purpose, the way the stacked variant is: the template is shared
-with `dispatch-ready`, which never runs the confirmation, and a worker on Claude Code that received
-this step would fail at its closing `git switch` (a linked worktree cannot switch to a branch
-checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is never
-sent on Claude Code and never by `dispatch-ready`.** A serial worker shares the coordinator's
+with `dispatch-ready`, which runs its own per-tick confirmation, and a worker on Claude Code that
+received this step would fail at its closing `git switch` (a linked worktree cannot switch to a
+branch checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is
+never sent on Claude Code, and `dispatch-ready` sends it only on omp, on a tick whose own isolation
+check chose serial.** A serial worker shares the coordinator's
 checkout, so it must not assume a private worktree; dispatch one at a time, each to completion
 (see the isolation reference doc), and record `{issue, pr, branch}` for each in the batch manifest
 (there is no `worktreePath`).
