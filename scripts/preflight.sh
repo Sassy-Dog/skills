@@ -1459,6 +1459,14 @@
 #      signer and no Python. Mutation-proven (header lists the mutations).
 #      Missing tools SKIP locally and fail in CI. No gh, no network.
 #
+#  49. board-snapshot call tests (scripts/test-board-snapshot-calls.sh) — every
+#      `board-snapshot.sh` command in a fenced block of tracked Markdown uses
+#      the script's one interface, PROJECT_NUMBER= and OWNER= in the
+#      environment, and passes no flag (it parses none; three SKILL.md snippets
+#      passed --number/--owner and board mode failed closed on every card,
+#      issue #448). Header defines "any flag" and lists the mutants. Source-
+#      level, no gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2343,6 +2351,15 @@ if bash scripts/test-testflight-jwt.sh; then
     pass "testflight JWT tests (scripts/test-testflight-jwt.sh)"
 else
     failed "testflight JWT tests (scripts/test-testflight-jwt.sh)"
+fi
+
+# --- 49. board-snapshot call tests ----------------------------------------------
+# Fenced board-snapshot.sh commands use the environment form and pass no flag.
+# Source-level, no network.
+if bash scripts/test-board-snapshot-calls.sh; then
+    pass "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
+else
+    failed "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
 fi
 
 # ------------------------------------------------------------------------------
