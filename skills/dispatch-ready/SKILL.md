@@ -588,15 +588,17 @@ section restates none of them and states only what a tick changes:
    its second consumer (§2's redispatch, then this section); the next tick re-derives.
 2. **Confirmed** → capture the baseline the doc's after-every-batch check compares against (the
    coordinator's branch, `HEAD` and `git status --porcelain`), dispatch in parallel as below under
-   the doc's worker-dispatch rule (`isolated: true` on every `task` entry), and **wait for that
-   batch's `task` results before this tick ends** — on omp the batch-form `task` call is followed
-   by `wait`, the sequence the design doc records. Then run the doc's after-every-batch check
-   against this tick's own baseline: the fresh `git ls-remote` per pushed branch, then removal of
-   this tick's own `omp-task-<id>` directories. No later tick runs it, because nothing persists a
-   baseline and §2's merges move `HEAD`. A moved branch or `HEAD`, or a dirty tree, dispatches no
-   further batch. What this cannot guarantee: a `wait` that times out, or a worker that never
-   returns, ends the tick without the check; the tick report says so and the batch's issues stay
-   in flight.
+   the doc's worker-dispatch rule (`isolated: true` on every `task` entry), and **on omp, wait for
+   that batch's `task` results before this tick ends** — the batch-form `task` call followed by
+   `wait`, as the design doc's "Check C (row 3)" and "Isolation checks (#426)" sections record. Then
+   run the doc's after-every-batch check (its §4) against this tick's baseline. No later tick runs
+   it, because nothing persists a baseline and §2's merges move `HEAD`. A moved branch or `HEAD`, or
+   a dirty tree, dispatches no further batch. What this cannot guarantee: a `wait` that times out,
+   or a worker that never returns, ends the tick without the check; the tick report says so and the
+   batch's issues stay in flight. On Claude Code nothing here waits: the background `Agent` batch is
+   issued as before ("a tick that waits is a loop that stopped"). A §2 redispatch on omp is held by
+   §2 and dispatched in this batch after the baseline is captured, so it joins the wait and the
+   check.
 3. **Unconfirmed** → **stop, never parallel on a shared tree.** Report `isolation unconfirmed` with
    the setting or probe that failed, claim **nothing** — **without claiming a single issue**, so no
    `in-progress` claim is left behind to count as in-flight and block other sessions — and
@@ -627,10 +629,11 @@ count to keep honest. The two ticks also keep a transient probe failure from end
 tick. On a stopped tick §2's reconcile, its comments and demotions, `pr-shepherd`'s merges with
 their local teardown, and the coordinator-site review dispatch all still run, because no worker
 shares the coordinator's checkout (confirmed workers run in omp's isolated checkouts). A §2
-redispatch is a worker dispatch: it passes the same check, and is dispatched if confirmed and
-otherwise held — no budget spent, no demotion — and §6's `holds:` line names it. A confirmed tick
-waits for its own batch and runs the after-batch check itself, so no tick ends with that check owed. §7 is evaluated
-every tick: with work in flight an unconfirmed tick reaches no terminal state; with none, the
+redispatch is a worker dispatch: it passes the same check, and is dispatched if confirmed (on omp,
+in §5's batch, after the baseline is captured) and otherwise held — no budget spent, no demotion —
+and §6's `holds:` line names it. On omp, a confirmed tick waits for its own batch and runs the
+after-batch check itself; only a timed-out `wait` leaves it owed, and the tick report says so. §7
+is evaluated every tick: with work in flight an unconfirmed tick reaches no terminal state; with none, the
 paragraph above applies. **Known and accepted:** a held redispatch keeps its issue in flight, so a
 PR needing one when isolation is lost sits as a reported hold rather than ending the loop; the
 operator ends it.

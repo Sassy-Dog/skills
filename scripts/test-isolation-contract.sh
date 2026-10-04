@@ -78,7 +78,7 @@
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against forty-eight mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against fifty-one mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -113,7 +113,7 @@
 #   M27 `isolated: true` removed from dispatch-ready (every occurrence)           -> 13
 #   M30 the interim "until #452 lands" stop restored                              -> 13 (the negative)
 #   M31 dispatch-ready's review_site override sentence removed                    -> 13
-#   M32 dispatch-ready's fresh `git ls-remote` after-batch check removed          -> 13
+#   M32 dispatch-ready's pointer to the doc's after-every-batch check changed      -> 13
 #   M33 §5's "DRAIN STALLED, not a fifth state" decision removed                  -> 14
 #   M34 §7's STALLED conjunct no longer names §5's isolation check                -> 14
 #   M35 §5's Reach paragraph removed                                              -> 14
@@ -132,7 +132,12 @@
 #   M58 Reach's "claims happen only on a confirmed tick" removed                   -> 14
 #   M59 the confirmed path's "dispatches no further batch" halt removed            -> 13
 #   M60 the confirmed tick no longer waits for its batch before ending             -> 13
-# New in the stop-only round: M54 a serial path restored, M55 "serial or stop"
+#   M61 the timeout caveat removed                                                 -> 13
+#   M62 Reach's wait sentence loses its "On omp" scope                             -> 14
+#   M63 the §2-redispatch-joins-the-batch sentence removed                         -> 13
+# New in the stop-only round (M60 to M63 came later, in review rounds): M60 the
+# wait removed, M61 the timeout caveat removed, M62 Reach's omp scope removed, M63
+# the redispatch placement removed; and M54 a serial path restored, M55 "serial or stop"
 # restored, M56 the why-paragraph removed, M57 the unconfirmed-means-stop sentence
 # replaced, M58 the Reach claim sentence removed, M59 the after-batch halt removed.
 # Property 13 also fails if dispatch-ready §5 contains `task.isolation.enabled`,
@@ -424,9 +429,15 @@ need("dispatch-ready runs the doc's settings reads and probe rather than restati
 need("dispatch-ready points at the doc's worker-dispatch rule", d5,
      "under the doc's worker-dispatch rule (`isolated: true` on every `task` entry)", 13)
 need("dispatch-ready points at the doc's after-every-batch check", d5,
-     "run the doc's after-every-batch check against this tick's own baseline", 13)
+     "run the doc's after-every-batch check (its §4) against this tick's baseline", 13)
 need("a confirmed tick waits for its batch's task results before it ends", d5,
-     "**wait for that batch's `task` results before this tick ends**", 13)
+     "**on omp, wait for that batch's `task` results before this tick ends**", 13)
+need("the timeout caveat is stated", d5,
+     "a `wait` that times out, or a worker that never returns, ends the tick without the check", 13)
+need("a §2 redispatch on omp joins the tick's batch after the baseline", d5,
+     "A §2 redispatch on omp is held by §2 and dispatched in this batch after the baseline is captured", 13)
+need("Reach scopes the wait sentence to omp", d5,
+     "On omp, a confirmed tick waits for its own batch and runs the after-batch check itself; only a timed-out `wait` leaves it owed", 14)
 need("no later tick runs the after-batch check", d5, "No later tick runs it, because nothing persists a baseline", 13)
 for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
     if copy in d5:
@@ -702,7 +713,7 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'is unsatisfiable on omp' 'is fine on
 expect_fail "M31 review_site override removed" "$d" 'dispatch-ready reports the review_site override on omp'
 
 d=$(make_copy m32)
-mutate "$d/skills/dispatch-ready/SKILL.md" "this tick's own baseline: the fresh" "the last tick's baseline: the fresh" || bad "M32: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" "(its §4) against this tick's baseline" "(its §4) against the last tick's baseline" || bad "M32: mutation did not apply"
 expect_fail "M32 after-every-batch pointer removed" "$d" "dispatch-ready points at the doc's after-every-batch check"
 
 d=$(make_copy m33)
@@ -782,13 +793,25 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'claims happen only on a confirmed' '
 expect_fail "M58 Reach claim sentence removed" "$d" 'Reach says claims happen only on a confirmed tick'
 
 d=$(make_copy m59)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'A moved branch or `HEAD`, or a dirty tree,' 'Nothing happens,' || bad "M59: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" 'A moved branch or `HEAD`, or' 'Nothing happens, or' || bad "M59: mutation did not apply"
 expect_fail "M59 after-batch halt removed" "$d" 'dispatches no further batch'
 
 d=$(make_copy m60)
-mutate "$d/skills/dispatch-ready/SKILL.md" "**wait for that
-   batch's \`task\` results before this tick ends**" "**carry on**" || mutate "$d/skills/dispatch-ready/SKILL.md" "**wait for that batch's \`task\` results before this tick ends**" "**carry on**" || bad "M60: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" "wait for
+   that batch's \`task\` results" "carry on" || bad "M60: mutation did not apply"
 expect_fail "M60 confirmed tick no longer waits" "$d" 'a confirmed tick waits for its batch'
+
+d=$(make_copy m61)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'a `wait` that times out,' 'a `wait` that always returns,' || bad "M61: mutation did not apply"
+expect_fail "M61 timeout caveat removed" "$d" 'the timeout caveat is stated'
+
+d=$(make_copy m62)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'On omp, a confirmed tick waits for its own batch' 'A confirmed tick waits for its own batch' || bad "M62: mutation did not apply"
+expect_fail "M62 Reach omp scope removed" "$d" 'Reach scopes the wait sentence to omp'
+
+d=$(make_copy m63)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'A §2 redispatch on omp is held by' 'A §2 redispatch is dispatched by' || bad "M63: mutation did not apply"
+expect_fail "M63 redispatch placement removed" "$d" "a §2 redispatch on omp joins the tick's batch after the baseline"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2
