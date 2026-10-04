@@ -47,9 +47,10 @@
 # Known blind spots. These are ACCEPTED LIMITS of the scanner, not guarantees;
 # a green run does not rule out any of them:
 #   (a) `~~~` fences and 4-space indented code blocks are never scanned.
-#   (b) a 4-backtick outer fence wrapping an inner fence inverts the toggle from
-#       the inner fence on (docs/superpowers/plans/2026-08-18-security-scanning-
-#       surface-pr1.md already uses 4-backtick fences).
+#   (b) a 3-backtick block nested inside a 4-backtick fence is not scanned; the
+#       outer body and everything after it are unaffected (docs/superpowers/
+#       plans/2026-08-18-security-scanning-surface-pr1.md already uses
+#       4-backtick fences).
 #   (c) any `#` before `board-snapshot.sh` on the logical line skips the whole
 #       command, not only a real comment (e.g. `echo "${#A}" && bash
 #       board-snapshot.sh --number 4`).
@@ -60,8 +61,11 @@
 #   (e) property 4's regex misses `for arg; do case "$arg" in --number=*)`, a
 #       bare `-n|--number)` case label and `${BASH_ARGV[0]}`, and has no
 #       mutation fixture of its own.
-#   (f) a call through a variable (`S=…/board-snapshot.sh; bash "$S" --number
-#       4`) is not seen.
+#   (f) a call through a variable is never checked for flags: `S=…/board-
+#       snapshot.sh; bash "$S" --number 4` fails only as `noenv` (property 3),
+#       unless the same line also sets `PROJECT_NUMBER=` and `OWNER=` (then it
+#       reports ok); when the assignment and the call are on separate lines, a
+#       flag passed through `$S` is never inspected.
 #
 # Source-level: no gh, no network, no repo mutation. No pipeline feeds
 # `grep -q` (test-pipefail-grep.sh).
