@@ -469,7 +469,7 @@ behind in coordinator-only context.
 ### Serial variant (ONLY when §5's isolation confirmation chose serial mode)
 
 Kept out of the template above on purpose, the way the stacked variant is: the template is shared
-with `dispatch-ready`, which never runs the confirmation, and a worker on Claude Code that received
+with `dispatch-ready`, which confirms isolation every tick but never goes serial, and a worker on Claude Code that received
 this step would fail at its closing `git switch` (a linked worktree cannot switch to a branch
 checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is never
 sent on Claude Code and never by `dispatch-ready`.** A serial worker shares the coordinator's

@@ -78,7 +78,7 @@
 #      the reach (worker dispatch only), and the design doc records the decision.
 #
 # A gate that passes a mutant is vacuous for that property. Mutation-proven
-# below against forty-seven mutants, each of which must FAIL FOR ITS OWN REASON after
+# below against forty-eight mutants, each of which must FAIL FOR ITS OWN REASON after
 # an unmutated control copy passes (the same discipline test-model-tiers.sh
 # records: without the control, a copy broken in some unrelated way fails every
 # mutant at once and the proof reads green while measuring nothing):
@@ -131,6 +131,7 @@
 #   M57 "claim **nothing**" replaced                                               -> 13
 #   M58 Reach's "claims happen only on a confirmed tick" removed                   -> 14
 #   M59 the confirmed path's "dispatches no further batch" halt removed            -> 13
+#   M60 the confirmed tick no longer waits for its batch before ending             -> 13
 # New in the stop-only round: M54 a serial path restored, M55 "serial or stop"
 # restored, M56 the why-paragraph removed, M57 the unconfirmed-means-stop sentence
 # replaced, M58 the Reach claim sentence removed, M59 the after-batch halt removed.
@@ -423,7 +424,10 @@ need("dispatch-ready runs the doc's settings reads and probe rather than restati
 need("dispatch-ready points at the doc's worker-dispatch rule", d5,
      "under the doc's worker-dispatch rule (`isolated: true` on every `task` entry)", 13)
 need("dispatch-ready points at the doc's after-every-batch check", d5,
-     "run the doc's after-every-batch check before trusting them", 13)
+     "run the doc's after-every-batch check against this tick's own baseline", 13)
+need("a confirmed tick waits for its batch's task results before it ends", d5,
+     "**wait for that batch's `task` results before this tick ends**", 13)
+need("no later tick runs the after-batch check", d5, "No later tick runs it, because nothing persists a baseline", 13)
 for copy in ("task.isolation.enabled", "omp config set", "`merge` `patch`"):
     if copy in d5:
         problems.append(f"property 13: dispatch-ready §5 restates {copy!r}; the reference doc owns it (#452 item 1)")
@@ -436,7 +440,7 @@ need("the reason is take-it waiting inside one invocation", d5,
      "take-it waits for each serial worker to finish inside one invocation", 13)
 need("the reason cites #452 item 2's or stop", d5, '#452 item 2 permits "or stop"', 13)
 need("a confirmed batch that fails the after-batch check dispatches no further batch", d5,
-     "a moved branch or `HEAD`, or a dirty tree, dispatches no further batch", 13)
+     "A moved branch or `HEAD`, or a dirty tree, dispatches no further batch", 13)
 # no serial path may exist inside dispatch-ready §5
 for forbidden in ('"mode": "serial"', "outstanding serial", "outstanding-serial", "serial or stop",
                   "Serial-variant step", "that one issue only", "Close each serial record",
@@ -698,7 +702,7 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'is unsatisfiable on omp' 'is fine on
 expect_fail "M31 review_site override removed" "$d" 'dispatch-ready reports the review_site override on omp'
 
 d=$(make_copy m32)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'after-every-batch check before trusting them' 'later check' || bad "M32: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" "this tick's own baseline: the fresh" "the last tick's baseline: the fresh" || bad "M32: mutation did not apply"
 expect_fail "M32 after-every-batch pointer removed" "$d" "dispatch-ready points at the doc's after-every-batch check"
 
 d=$(make_copy m33)
@@ -778,8 +782,13 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'claims happen only on a confirmed' '
 expect_fail "M58 Reach claim sentence removed" "$d" 'Reach says claims happen only on a confirmed tick'
 
 d=$(make_copy m59)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'dispatches no further batch.' 'carries on.' || bad "M59: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" 'A moved branch or `HEAD`, or a dirty tree,' 'Nothing happens,' || bad "M59: mutation did not apply"
 expect_fail "M59 after-batch halt removed" "$d" 'dispatches no further batch'
+
+d=$(make_copy m60)
+mutate "$d/skills/dispatch-ready/SKILL.md" "**wait for that
+   batch's \`task\` results before this tick ends**" "**carry on**" || mutate "$d/skills/dispatch-ready/SKILL.md" "**wait for that batch's \`task\` results before this tick ends**" "**carry on**" || bad "M60: mutation did not apply"
+expect_fail "M60 confirmed tick no longer waits" "$d" 'a confirmed tick waits for its batch'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

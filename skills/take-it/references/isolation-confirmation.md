@@ -63,6 +63,8 @@ A resumed run re-reads the settings; it never reuses `confirmed` from a previous
 
 ## Fail closed
 
+A caller without a serial mode, such as `dispatch-ready`, takes **Stop** only and unwinds nothing it has not claimed; the serial and unwind wording below is `take-it`'s.
+
 **Where isolation is unconfirmed, never dispatch parallel workers on a shared tree.** Take the first outcome that applies:
 
 - **Serial.** Allowed only for a plain list of independent issues, never a stacked chain, a concurrent-claim hold or a worker that needs a clean parent. Say in the §7 report that the run was **serial and not isolated**. Before each dispatch, `git fetch origin --quiet`, return to the default branch fast-forwarded, and confirm `git status --porcelain` is empty; if it is not, **Stop**. Dispatch one worker at a time, each to completion (PR opened, or a recorded terminal failure) before the next. §5's Serial variant (its step 1) makes each worker start its branch from `origin/<default>` rather than from the previous worker's `HEAD`.
