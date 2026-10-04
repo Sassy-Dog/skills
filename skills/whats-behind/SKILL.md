@@ -26,6 +26,8 @@ behind its siblings never shows up as a fire, which is exactly why it needs its 
 
 ## 1. Pull the drift
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/whats-behind`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 PORTFOLIO_ROOT=~/Repos/sassy-dog bash ${CLAUDE_PLUGIN_ROOT}/skills/whats-behind/scripts/pull-version-drift.sh
 ```

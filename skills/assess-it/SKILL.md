@@ -71,6 +71,8 @@ Cluster surviving findings so each cluster is one coherent PR (e.g. "harden GitH
 3. Now ask the user to approve, edit, or cancel. **File nothing yet.** A dark domain is surfaced, not a veto: it does not stop the run and does not block filing, and on approval everything that did come back is filed as normal.
 4. On approval, **align the target repo's labels first** — the engineering-dimension + severity taxonomy is owned by one script in this plugin, and this skill invokes it rather than carrying a copy (issue #167). The path below is resolved when this skill loads; pass it on as `ALIGN=<that path>` to anything that needs it, because `references/*.md` are read raw and never get the substitution:
 
+   **Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/assess-it`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
    ```bash
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/align-labels.sh --repo "$REPO" --dry-run   # preview drift, writes nothing
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/align-labels.sh --repo "$REPO"             # create missing + correct drifted

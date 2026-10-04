@@ -261,6 +261,8 @@ The agent-worktree teardown, squash-merge-aware local-branch deletion, ff-reconc
 origin-identical straggler clearing are exactly what `pr-shepherd`'s bundled `teardown.sh --sweep`
 does (it encodes the same "remote branch gone = merged" rule). Reuse it rather than re-implementing:
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 DEFAULT_BRANCH="$DEFAULT_BRANCH" \
   bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/teardown.sh --sweep

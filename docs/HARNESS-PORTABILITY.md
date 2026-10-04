@@ -111,7 +111,7 @@ already lists, and nothing reads `extraKnownMarketplaces` (**source**, `src/disc
 `readClaudeEnabledPlugins`, and a grep of `src/` for `extraKnownMarketplaces` with no hit). A consumer
 repo that declares both keys therefore does **not** get the plugin installed on omp.
 
-### Q2. Plugin root (row 5): equivalent found; unchanged skills make a model search, and so did a paragraph without a do-not-search clause (#440, #425)
+### Q2. Plugin root (row 5): equivalent found; unchanged skills make a model search, and a token-free root-resolution paragraph stopped it (#440, #425, #454)
 
 Observed, `omp read skill://pr-shepherd` (the `read` tool's own output for a skill):
 
@@ -145,7 +145,7 @@ ran the literal token first, failed with exit 127, found the script with `find` 
 not derive the grandparent. Print mode also did not expand `/skill:`, so the `[Skill directory: ...]` line above
 was not seen under a model. #425 then repeated the check out of tree on a shipped skill
 ([A′](#out-of-tree-checks-on-shipped-skills-425)): two runs of the unchanged skill both found the script with `find`
-(one ran the literal token first, and the empty variable made it `/skills/...`, exit 127), and, on a copy with a root-resolution paragraph, with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the shippable token-free wording is untested (the first command itself succeeded in one of the two v2 runs). The `[Skill file: ...]` header from
+(one ran the literal token first, and the empty variable made it `/skills/...`, exit 127), and, on a copy with a root-resolution paragraph, with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the first command itself succeeded in one of the two v2 runs. #454 then ran the token-free wording that ships, at the shipping placement ([A‴](#token-free-paragraph-at-the-shipping-placement-454)): 3 of 3 runs on `github-issues` used the right root with no token run and no `find`, and the first command succeeded in 2 of 3 (the third carried a stray word from the prompt). The `[Skill file: ...]` header from
 `read skill://<name>` is what the model used, not `[Skill directory: ...]`.
 
 ### Q3. Config injection (row 6): no load-time step; the unchanged skill still worked under a model (#425)
@@ -345,7 +345,7 @@ Observed, 18.6.0:
 - So the token is not substituted under a model either, and "a model can derive the root" is true only in the
   weak sense that it found the script by searching, at the cost of one failed command and a `find` that
   scales with the size of the tree it is pointed at. A sentence that names the resolution rule is still needed. #425 ran
-  such a variant on a shipped skill: see [A″](#out-of-tree-checks-on-shipped-skills-425), where, in the two v2 runs, the first command succeeded in one and the right root was used in both; the one v1 run (a wording without the do-not-search clause, three A″ runs in all) searched.
+  such a variant on a shipped skill: see [A″](#out-of-tree-checks-on-shipped-skills-425), where, in the two v2 runs, the first command succeeded in one and the right root was used in both; the one v1 run (a wording without the do-not-search clause, three A″ runs in all) searched. The token-free wording that ships was run in #454, see [A‴](#token-free-paragraph-at-the-shipping-placement-454): 3 of 3 runs used the right root and none searched.
 
 ### Check B (row 6): the model follows an explicit read-the-config instruction
 
@@ -486,12 +486,55 @@ handling. Never read an unrun line as "no config exists".
 **Not shown.** Any other model; interactive `/skill:` invocation; a prompt that does not mention config or `NO_CONFIG`; the `take-it` and
 `dispatch-ready` block-on-`NO_CONFIG` branch; Claude Code itself, where the edited sentences were not run. The v2 wording contains the
 literal token `${CLAUDE_PLUGIN_ROOT}`, which Claude Code **would substitute inside the sentence too**, garbling it, so the shipped
-wording must not spell the token. That reworded sentence was not run (no calls were left), so "first command succeeds" is proved only for the
-tested v2 wording.
+wording must not spell the token. That reworded sentence was not run in #425 (no calls were left), so "first command succeeds" was proved only for the
+tested v2 wording there. #454 ran the token-free wording, see [A‴](#token-free-paragraph-at-the-shipping-placement-454).
 
 **Operator configuration.** `shasum -a 256` of the default profile's `config.yml` began `7b634967911b` before the first omp command and
 `7b634967911b` after the last, and `omp plugin list` printed `No plugins installed` both times. No `omp config set`, login, token, install or update was run. Every
 setting came from the overlay, and the model-free scripts opened settings read-only. The scratch tree was removed afterwards.
+
+### Token-free paragraph at the shipping placement (#454)
+
+Issue #454 ran the wording that ships, with no spelling of the token, out of tree on `omp/18.6.0` with `--model anthropic/claude-haiku-4-5`. It used **5** model-backed
+runs of its cap of 8, same command shape and same per-invocation loading as #425 (a temporary `CLAUDE_CONFIG_DIR` registry holding one `installed_plugins.json`, and a `--config`
+overlay with `enabledProviders: [claude-plugins]`; no `omp plugin install`, no `omp config set`). The plugin copy was `git archive HEAD` of this repository placed under a
+`mktemp -d` directory in `/tmp`, with the paragraph added to two files of the copy. The scratch repo was a `git init` directory in the same tree. Omp's own
+`loadProjectContextFiles`, called from the scratch repo with the temporary `CLAUDE_CONFIG_DIR`, printed `context files: 0`, and `find` over `/tmp` to depth 3 found no `CLAUDE.md` or `AGENTS.md`
+outside the plugin copy (a plugin's root `CLAUDE.md` is not loaded as context, per #425's source read). So no `CLAUDE.md` was in context. One model, 5 runs: this shows what can happen, not how often.
+
+The paragraph, verbatim, for `github-issues` (every other skill has its own name after `/skills/`; no spelling of the token):
+
+```text
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/github-issues`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+```
+
+It differs from v2 in two ways: it is token-free, and it no longer spells out the script path (`<root>/skills/<name>/scripts/queue-snapshot.sh`), because the command beneath it differs per skill. Shipping placement: immediately before the first fenced command that uses the token. In `github-issues` that is
+the board-snapshot block (line 22 of the original file). In the copy the paragraph is at line 21 and the `--sites-of` command the prompt asks for is at line 56, 35 lines below it.
+
+Prompt for runs 1 to 3 (the same as #425's A prompt, except that run 1 kept its `resolver` slip and runs 2 and 3 replaced the word `resolver` with `mode`): "Use the github-issues skill. Run its queue-snapshot.sh --sites-of <resolver|mode> on the label array
+["site:mac","ready"] by piping that array on stdin, and report the exact output. Do not run gh, do not use the network, and do nothing else." Prompt for runs 4 and 5, which test a reference doc, with the paragraph added above the first token command of `pr-shepherd`: "Use the pr-shepherd skill. Read its stacked-prs reference doc, then run the probe command it gives, but with only the --help flag (no PR number, no --repo), and report the first line of the output. Do not run gh, do not use the network, and do nothing else." That probe, `stack-probe.sh --help`, only prints its own header comment (**source**, `skills/pr-shepherd/scripts/stack-probe.sh`).
+
+| Run | Skill | Tool calls, in order (trimmed) | Outcome |
+| --- | --- | --- | --- |
+| 1 | `github-issues` | `read skill://github-issues`; `bash` piping the labels into `<abs>/skills/github-issues/scripts/queue-snapshot.sh --sites-of resolver` (exit 64); the same without the stray word | right root on the first command, no token run, no `find`; the first command was refused by the script for the prompt's stray word, then `["mac"]` |
+| 2 | `github-issues` | `read skill://github-issues`; `bash` piping the labels into `<abs>/skills/github-issues/scripts/queue-snapshot.sh --sites-of` | first command succeeded, `["mac"]` |
+| 3 | `github-issues` | same as run 2 | first command succeeded, `["mac"]` |
+| 4 | `pr-shepherd` | `read skill://pr-shepherd`; `read skill://pr-shepherd/references/stacked-prs.md`; `bash <abs>/skills/pr-shepherd/scripts/stack-probe.sh --help` | first command succeeded, no token run, no `find` |
+| 5 | `pr-shepherd` | same two reads; `bash` of the same `--help` command with its output cut to the first line (twice); two `read` calls of the script; one `bash` printing part of the script | right root on the first command, no token run, no `find`; the extra calls came from the output's first line, a shebang displayed as `!/usr/bin/env bash`, which the agent tried to get past |
+
+`<abs>` is the plugin copy's absolute path under the scratch directory. Observed:
+
+- **Bar met on `github-issues`, 3 runs.** The first command used the right absolute root with no literal token run and no `find` in 3 of 3 runs; it succeeded in runs 2 and 3, and in run 1 the script refused a stray argument that came from the prompt, as in #425's run 5.
+  The agent used the path in `[Skill file: ...]`. No run saw `[Skill directory: ...]`.
+- **A reference-doc command, 2 runs.** The resolved root reached the command in both, with no token and no `find`. **The `PLUGIN_ROOT` preamble was not what carried it:** both agents wrote the absolute path into the command itself and no run set a `PLUGIN_ROOT` variable. The reference doc's own `[Skill file: ...]` header also names its path,
+  so these runs cannot say whether the paragraph's root, or that header, was the source. The preamble says the invoking `SKILL.md` "already carries" the root "resolved in its own command lines". On omp the `SKILL.md` carries the placeholder unexpanded, so that sentence is not true there, and the hand-off worked anyway. Rewording the preambles is outside #454, and the PR body drafts a follow-up.
+- **Not shown.** Any other model; interactive `/skill:`; a skill whose paragraph sits at a larger distance than 35 lines; every token-carrying file other than `github-issues` and `pr-shepherd` (their paragraph is the same text with the skill's own name, and the gate checks the text); `take-it`'s indented fence and `send-it`'s prose-only use, which carry the paragraph but were not run. **Known wording mismatch:** `send-it`'s anchor is a prose instruction to load a file and pass its path, not a command to run, so the paragraph's "the command below ... then run it" does not fit it exactly; the gate enforces one text, so the paragraph was not changed. Likewise `dispatch-ready` loads the Parent recovery protocol from the token path in its section 2, before its first fenced command, where the paragraph sits.
+
+**Claude Code.** The paragraph is inert there, as designed: `claude -p --plugin-dir <worktree>` from the scratch repo, asked to invoke `sassy-dog:github-issues` and quote the paragraph and the first board-snapshot command without running anything, returned the paragraph unchanged
+(including `/skills/github-issues`) and the command with an absolute path in place of the token. 1 of 2 allowed runs.
+
+**Operator configuration.** `shasum -a 256` of the default profile's `config.yml` began `7b634967911b` before the first omp command and `7b634967911b` after the last, and `omp plugin list` printed `No plugins installed` both times. No `omp config set`, login, token, install or update was run.
+The scratch tree was removed afterwards.
 
 ### Check C (row 3): `apply` patches the parent, `merge=branch` replays the commit onto it
 
@@ -728,7 +771,7 @@ after verifying the push.
 | --- | --- | --- |
 | 3 isolation | equivalent found, conditional on two settings the plugin cannot ship | Q4 transcript: private checkout, own branch, commit, push to `origin` all worked. Off by default (`task.isolation.enabled = false`). Check C and D2 (18.6.0): patch mode dirties the parent, `merge=branch` commits onto its current branch. D1 (18.6.0): `apply = false` leaves the parent untouched with the push verified. E1 (#453): `merge` is consulted under `apply = false`, and `branch` leaves a local branch `omp/task/<Name>` in the parent. P1 (#453): a committed `.omp/config.yml` that `omp config get` reflects drove the same untouched-parent run, with no profile write. See [Isolation contract (#426)](#isolation-contract-426) |
 | 4 skill delegation | equivalent found (bare name) | `skill://take-it` resolves, `skill://sassy-dog:take-it` does not. Namespace only on collision |
-| 5 plugin root | equivalent found; unchanged skills make a model search, and a paragraph that also forbids searching stopped it in 2 of 2 runs | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted, and `CLAUDE_PLUGIN_ROOT` is not exported to the shell. Check A (18.6.0, this repo's `CLAUDE.md` in context): the agent ran the literal token, failed, then used `find`. #425, shipped `github-issues`, no context file: unchanged 2 of 2 used `find`; with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the shippable token-free wording is untested. Design: [row 5](#row-5-claude_plugin_root-keep-the-token-add-a-root-resolution-paragraph) |
+| 5 plugin root | equivalent found; unchanged skills make a model search, and the shipped token-free paragraph stopped it in 3 of 3 runs on `github-issues` | `[Skill directory: ...]` on `/skill:` and the path header on `read skill://<name>/<path>`. The token itself is not substituted, and `CLAUDE_PLUGIN_ROOT` is not exported to the shell. Check A (18.6.0, this repo's `CLAUDE.md` in context): the agent ran the literal token, failed, then used `find`. #425, shipped `github-issues`, no context file: unchanged 2 of 2 used `find`; with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run. #454, the token-free wording that ships, at the shipping placement: 3 of 3 runs used the right root with no token run and no `find` (first command succeeded in 2 of 3), and 2 of 2 runs of a reference-doc command did too, but not through the `PLUGIN_ROOT` preamble ([A‴](#token-free-paragraph-at-the-shipping-placement-454)). Design: [row 5](#row-5-claude_plugin_root-keep-the-token-add-a-root-resolution-paragraph) |
 | 6 config injection | none as a load-time step; the unchanged skill still worked in 3 of 3 runs because the agent ran the line or read the file itself | `read skill://take-it` shows the `` !`...` `` line verbatim, and the render path has no shell step. Check B (18.6.0, this repo's `CLAUDE.md` in context): an agent read the config by absolute path and acted on it. #425, shipped `send-it`, no context file: unchanged, file present twice and absent once, all correct; with a read-by-path paragraph, present and absent correct, the paragraph followed once. Design: [row 6](#row-6-config-injection-keep-the-line-add-a-fallback-paragraph-gate-the-stoppers-on-a-first-run) |
 
 ### What omp's remaining pages say
@@ -873,7 +916,7 @@ plugin-root variable (`https://omp.sh/docs/skills`). The environment variable re
 grandparent is the plugin root (Q2). #440 (Check A, print mode, 18.6.0) found that `/skill:` was not expanded
 there and `[Skill directory: ...]` was never delivered: the model got a `[Skill file: ...]` header from
 `read skill://<name>` and recovered by searching. #425 (out of tree, shipped `github-issues`) saw the same search in 2 of 2 unchanged runs and
-none in the 2 v2 runs of a root-resolution paragraph that also forbids searching (the one v1 run, without that clause, searched; the token-free wording is untested); the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
+none in the 2 v2 runs of a root-resolution paragraph that also forbids searching (the one v1 run, without that clause, searched). #454 shipped the token-free paragraph in every `SKILL.md` that carries the token and ran it out of tree: 3 of 3 runs used the right root with no `find` ([A‴](#token-free-paragraph-at-the-shipping-placement-454)); the design is under [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
 
 ### 6. `` !`...` `` dynamic context injection
 
@@ -1003,23 +1046,23 @@ designs below are an edit to skill text, which options B and D already allow. Th
 ### Row 5 (`${CLAUDE_PLUGIN_ROOT}`): keep the token, add a root-resolution paragraph
 
 - **Replacement.** In each `SKILL.md` that carries the token (15 files, ``git grep -l CLAUDE_PLUGIN_ROOT -- 'skills/*/SKILL.md'``), add one paragraph
-  immediately before the first command that uses it (the tested edit sat above a later command, see **Open**). Claude Code substitutes the token and never needs the paragraph. On a harness that does not, the paragraph tells
+  immediately before the first fenced command that uses it (shipped by #454 in every file the derivation above lists; #425's tested edit sat above a later command, see **Open**). Claude Code substitutes the token and never needs the paragraph. On a harness that does not, the paragraph tells
   the agent where the plugin root is: take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of the skill, cut it at
   `/skills/<name>`, and use what comes before the cut as the root; write that absolute path into the command in place of the token; do not search for the script.
 - **Evidence.** Unchanged skill: 2 of 2 runs searched with `find`, 1 of 2 first ran the literal token and failed (exit 127). With the "do not search" wording (v2):
   0 of 2 searched, 0 of 2 ran the token, and the root was right on the first try in 2 of 2, with the very first command succeeding in 1 of 2 (the other hit a stray
-  argument from the prompt, not a path error). The weaker wording (v1, which only described the rule) still searched. So the instruction not to search is part of the fix.
+  argument from the prompt, not a path error). The weaker wording (v1, which only described the rule) still searched. That does not isolate the cause. v2 forbade searching, but it also told the agent where to cut the path and spelled out the resulting script path, and one v1 run cannot separate which of those changes mattered. #454's runs (token-free, no script path spelled, the do-not-search clause kept) used the right root and did not search in 3 of 3 runs, so the shipped wording works with its search clause and without the spelled-out script path. They did not run it without the clause, so what the clause contributes is still unmeasured.
 - **A trap the tested wording has.** The v2 sentence spelled the token. Claude Code substitutes `${CLAUDE_PLUGIN_ROOT}` anywhere in a `SKILL.md`, so the
   sentence would be rewritten into a path in the middle of its own explanation. The shipped wording must refer to "the plugin-root placeholder in the command below"
-  and never spell the token. That wording is **untested**, so the implementation must re-run it.
+  and never spell the token. That wording was run in #454: see [A‴](#token-free-paragraph-at-the-shipping-placement-454).
 - **Why not the alternatives.** Relying on an environment variable fails: omp does not export `CLAUDE_PLUGIN_ROOT` to the shell, and the unset variable made the command a
   path under `/`. A search-based fallback works, but costs a failed command plus a `find` whose cost scales with the tree searched. A per-harness binding table
   (option A) has nothing to hold: the value is a path computed from the skill's own location.
 - **Rules kept.** The token still expands only in `SKILL.md` and no reference doc gains it (`scripts/test-plugin-root-in-references.sh`). Reference docs keep taking the
-  resolved path from the `SKILL.md` that invokes them, through their `PLUGIN_ROOT` preamble. That hand-off was **not** exercised. The `[Skill directory: ...]` form is named in the paragraph for
+  resolved path from the `SKILL.md` that invokes them, through their `PLUGIN_ROOT` preamble. #454 exercised that hand-off in 2 runs: the root reached the command, but the agents wrote the absolute path in directly and never set the variable, so the preamble was not the carrier. The `[Skill directory: ...]` form is named in the paragraph for
   interactive `/skill:` use but only the `[Skill file: ...]` form was seen under a model.
-- **Open.** One skill, one command shape, one model. The tested paragraph sat directly above the `--sites-of` block (about line 54 of the original file), while that skill's first token command
-  is at line 22 and the token occurs 21 times, so the untested variable is the distance between the paragraph and the command that needs it, and the shipping placement (above the first command) was not run.
+- **Open.** One model, 5 runs, two skills. #425's tested paragraph sat directly above the `--sites-of` block (about line 54 of the original file), while that skill's first token command
+  is at line 22 and the token occurs 21 times. #454 ran the shipping placement (above line 22, `--sites-of` 35 lines below it) and it worked in 3 of 3 runs. Distances larger than that, other models, interactive `/skill:`, and the `take-it` (indented fence) and `send-it` (prose-only use) placements were not run. The reference-doc hand-off worked in 2 of 2 runs but not through the `PLUGIN_ROOT` preamble, see [A‴](#token-free-paragraph-at-the-shipping-placement-454).
 
 ### Row 6 (config injection): keep the line, add a fallback paragraph, gate the stoppers on a first run
 
@@ -1081,7 +1124,7 @@ State a support matrix per skill, and port only what is cheap.
 Resolve the two mechanisms that block everything first, then decide per family.
 
 1. Rows 5 and 6 (plugin root, config injection) gate every skill, and omp documents neither. The
-   spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440, and, in #425, used the right root in 2 of 2 runs with a paragraph that also forbids searching (v2; v1 searched)) and no
+   spike found a path-resolvable equivalent for row 5 (a model recovered by searching, #440, and, in #425, used the right root in 2 of 2 runs with a paragraph that also forbids searching (v2; v1 searched), and #454 shipped a token-free paragraph and used the right root in 3 of 3 runs) and no
    load-time step for row 6 (a model ran the line or read the file itself, #425). The designs are
    in [Design for rows 5 and 6](#design-for-rows-5-and-6-425).
 2. Row 3 (isolation) gates the parallel-worker skills, and the risk is a silent no-op.
@@ -1100,19 +1143,19 @@ model-backed run, and the #440 checks then ran three narrow probes through a mod
 and row 6 still has nothing to bind to.
 
 What the spike changed. The plugin installs and all 23 skills and 10 agents load (Q1). Row 5 has a
-path-resolvable equivalent: unchanged skills made a model search for the script, and with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run; the shippable token-free wording is untested (#425, one model). Row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
+path-resolvable equivalent: unchanged skills made a model search for the script, and with a paragraph that also forbids searching (v2), 2 of 2 runs used the right root and none searched; a wording without that clause (v1) searched in its one run (#425). The token-free wording that ships (#454) used the right root with no search in 3 of 3 runs (one model). Row 3 has a working isolation, and row 4 has a bare-name equivalent. Row 6
 has no load-time step, but the unchanged `send-it` was still handled correctly in three runs because the agent ran or read the config itself (#425, one model). The dispatch family still cannot be called supported, because
 no dispatch, isolation or delegation path has been run through a model for a real skill, and the settings that gate it are off by default or
-consumer-owned (for row 3, `task.isolation.enabled: true` and `task.isolation.apply: false`, see the
+consumer-owned (for row 3, `task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`, see the
 [isolation contract](#isolation-contract-426); `task.maxRecursionDepth` gates only `review_site: agent`, which the contract pins away). The #440 checks ran toy probe skills and
 two isolated `task` calls. #425 ran two shipped skills (`github-issues`, `send-it`) on a narrow probe that stopped before any workflow step. That is
 not an end-to-end run, so the README matrix keeps its `not supported` and `untested` cells unchanged. What changed is the reason given for them, and that is updated beside the matrix.
 
 **Go/no-go for #425 (plugin root and config injection).** **Go on both, as small edits to skill text, with a first-run gate on row 6.** #425 repeated A and B
-out of tree on shipped skills, with no context file in the prompt (see the #425 section), one model, 10 runs. **Row 5: go, conditional on the implementation issue's re-run of the token-free wording at the shipping placement.** Unchanged, the agent searched for the script in 2 of 2 runs and ran the
+out of tree on shipped skills, with no context file in the prompt (see the #425 section), one model, 10 runs. **Row 5: go, and done by #454, which shipped the token-free wording in every `SKILL.md` that carries the token after re-running it at the shipping placement.** Unchanged, the agent searched for the script in 2 of 2 runs and ran the
 literal token first in 1 of 2. With a paragraph that resolves the root from the `[Skill file: ...]` header and also forbids searching (v2), the root was right on the first try in 2 of 2 runs and nothing
-searched; a wording without that clause (v1) searched in its one run. The paragraph must not spell the token, because Claude Code would substitute it inside the paragraph. That token-free wording, the shipping placement and
-Claude Code with the paragraph are all untested.
+searched; a wording without that clause (v1) searched in its one run. The paragraph must not spell the token, because Claude Code would substitute it inside the paragraph. #454 ran that token-free wording at the shipping placement (3 of 3 runs on `github-issues` used the right root with no token run and no `find`) and
+checked once in Claude Code that the paragraph is inert there; the paragraph's placement in every token-carrying file other than `github-issues` and `pr-shepherd` was not run through a model, and `scripts/test-plugin-root-paragraph.sh` pins its text and placement.
 **Row 6: go, narrowly.** There is no load-time step, but the unchanged skill was right in 3 of 3 runs, so the data do not show the fallback paragraph is needed. It was followed once with the file present; its own
 absent branch was not exercised (run 10 took the line's route). Both rows are designed in [Design for rows 5 and 6](#design-for-rows-5-and-6-425). Before editing, run
 the unchanged `take-it` and `dispatch-ready` with a prompt that does not mention config; that run decides the four skills that stop on `NO_CONFIG`, and the four conservative-mode skills get the paragraph regardless. The `take-it` and `dispatch-ready` stop on `NO_CONFIG` remains the safe default meanwhile, because an unexecuted line must never be read as "no config exists".
@@ -1138,7 +1181,7 @@ The implementation issues are drafted in #426's PR.
 Candidate follow-up issues, for the operator to accept or drop:
 
 1. Done: the omp spike (#424), recorded above.
-2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). Two implementation issues follow it: the row 5 root-resolution paragraph in 15 `SKILL.md` files, and the row 6 fallback paragraph behind a first run on `take-it` and `dispatch-ready`.
+2. #425: done as a design (see [Design for rows 5 and 6](#design-for-rows-5-and-6-425)). The row 5 root-resolution paragraph is done (#454, every `SKILL.md` that carries the token, plus `scripts/test-plugin-root-paragraph.sh`). The row 6 fallback paragraph, behind a first run on `take-it` and `dispatch-ready`, remains an implementation issue.
 3. #426, done: the contract and its fail-closed rule are in [Isolation contract (#426)](#isolation-contract-426), with the `review_site` pin and a run of `task.isolation.apply = false` (D1). The implementation issues it calls for are drafted in #426's PR and filed by the coordinator after merge. Until Drafts 1 and 2 land neither skill can confirm isolation or run serially on omp, so the contract's outcome is Stop and the README's `not supported` stands; even then step 2 passes on a project-level file, `PI_CONFIG_FILES` or profile-set values, and only a committed `.omp/config.yml` has been run (P1, #453).
 4. Bare agent and skill names on omp (`subagent_type` and `Skill: sassy-dog:<name>` sites), which
    neither #425 nor #426 covers.

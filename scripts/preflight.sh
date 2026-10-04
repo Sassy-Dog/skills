@@ -1467,6 +1467,16 @@
 #      issue #448). Header defines "any flag" and lists the mutants. Source-
 #      level, no gh, no network.
 #
+#  50. plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh) —
+#      omp neither substitutes the plugin-root token in a skill body nor exports
+#      it, so every SKILL.md that carries the token also carries one paragraph
+#      before the first fenced command that uses it telling the agent to derive the root from the
+#      `[Skill file: ...]` line and not to search (issue #454). The paragraph
+#      must never spell the token: Claude Code substitutes it anywhere in a
+#      SKILL.md, garbling the paragraph. The gate derives the checked set, pins
+#      the paragraph text, its placement and its token-freedom, and is
+#      mutation-proven against scratch fixtures. No gh, no network.
+#
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
@@ -2360,6 +2370,16 @@ if bash scripts/test-board-snapshot-calls.sh; then
     pass "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
 else
     failed "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
+fi
+
+# --- 50. plugin-root-paragraph tests --------------------------------------------
+# Every SKILL.md carrying the plugin-root token carries the root-resolution
+# paragraph before the first fenced command, and no paragraph spells the token.
+# Source-level, no network.
+if bash scripts/test-plugin-root-paragraph.sh; then
+    pass "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
+else
+    failed "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
 fi
 
 # ------------------------------------------------------------------------------

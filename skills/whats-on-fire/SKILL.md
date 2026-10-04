@@ -95,6 +95,8 @@ which belongs in blind spots.
 
 ### B. Stuck shipping + backlog heat
 
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/whats-on-fire`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/whats-on-fire/scripts/pull-org-github.sh
 bash ${CLAUDE_PLUGIN_ROOT}/skills/whats-on-fire/scripts/pull-repo-signals.sh
