@@ -77,13 +77,14 @@ through its own detection and mode selection, stopping at the point where it wou
 2. `Skill: sassy-dog:setup-hooks`
 3. `Skill: sassy-dog:setup-deps`
 
-**In a public repo, ask the tracking choice once** (`setup-config`'s "Tracking choice in the plan":
-**local**, the default, or **committed**; `setup-config`'s Phase 0 probe reports visibility, so
-this skill reads none) before walking the first generator, and pass the answer to both
-`setup-config` and `setup-hooks` as their target (local = `settings.local.json`, committed =
-`settings.json`). Each would otherwise ask its own question and the sequential run could combine
-a kept-local config with a committed hooks target and fail. This is a plan-level input, not
-generation mechanics: the derive step, table and transitions stay in `setup-config`.
+**Ask the tracking choice once, only when `setup-config`'s Phase 0 probe reports `PUBLIC` or unknown
+visibility** (this skill reads none itself), after that probe and before the plan gate: `local`
+(the default) or `committed`, per `setup-config`'s "Tracking choice in the plan". Pass the answer to
+both `setup-config` and `setup-hooks` as their target, as the word `local` or `committed`, never as
+a settings file name. Each would otherwise ask its own question, and the sequential run could
+combine a kept-local config with a committed hooks target and fail. A private or internal repo is
+not asked. This is a plan-level input, not generation mechanics: the derive step, tables,
+transitions and `tracking-state.sh` stay in `setup-config`.
 
 Capture from each: the mode it picked, and **every file it would create or modify**. Take the
 generator's own detection output at face value — this skill never second-guesses it, and never

@@ -114,8 +114,9 @@ Ask only what detection cannot answer:
    the repo's `settings.json`, with `.claude/hooks/` untracked and ignored: project hooks run with
    no trust prompt when only a parent folder was trusted, under `claude -p` / the Agent SDK and in
    cloud sessions, so tracked hook scripts are code any PR can change and contributors run
-   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file. When `setup-repo` passes a tracking choice (local or committed), that is the
-   target: do not ask again.
+   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file. When `setup-repo` passes a
+   target (the word `local` or `committed`), use it (`local` is `settings.local.json`,
+   `committed` is `settings.json`) and do not ask again.
 2. **Lint strictness** — linters exit 2 (findings feed back for immediate fix — default) or
    advisory (log to the user, exit 0)?
 3. **Slow tools** — anything detected with a meaningful per-edit cost (`dotnet format`, full
@@ -161,24 +162,31 @@ tracked `tmp/` deeper in the tree. Idempotent: check with
 `git check-ignore -q tmp/probe` from the repo root and skip when already covered. Append it under
 the repo's existing comment style; include the line in the approval diff like any other write.
 
-**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** — the section in
-`${CLAUDE_PLUGIN_ROOT}/skills/setup-config/SKILL.md` (resolve the root as in the paragraph above;
-open that file and read the section). It owns the two end states (local, committed), the derive
-step, the derived-state × target table and every transition, so none of it is restated here, and a
-plain `git check-ignore -q` on a tracked path is the duplicate-line bug it exists to prevent. Your
-**chosen target** (Phase 2) is the end state: `settings.local.json` is **local**, `settings.json`
-is **committed**. Run the derive step against the repo, show the table's action in the same
-approval diff, and propose nothing when the derived state already equals the target. The owned
-scripts are the ones this run rendered: the artifact guard always, the post-edit dispatcher only
-when a tool was detected, so enumerate them rather than naming `sassydog-post-edit.sh`.
+**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** through its script, which
+is authoritative: `${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh` (resolve the
+root as in the **Plugin root** paragraph above; the section in
+`${CLAUDE_PLUGIN_ROOT}/skills/setup-config/SKILL.md` documents the two end states and the table, and
+none of it is restated here). Your chosen target (Phase 2) maps to the script's target:
+`settings.local.json` is `local`, `settings.json` is `committed`; a target passed by `setup-repo`
+is used as is. Run from the repo root, with `--owned` for **every** `.claude/hooks/sassydog-*.sh`
+this run renders (the artifact guard always, the post-edit dispatcher only when a tool was
+detected; enumerate them, never assume which):
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --target local|committed --owned .claude/hooks/sassydog-artifact-guard.sh
+```
+
+Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
+the target state, and then nothing is proposed). After the approval and **after the scripts and the
+settings entries are written**, run the same command with `apply` in place of `plan`, so this
+generator adds what it renders at its own write time rather than depending on what `setup-config`
+saw earlier.
 
 What is specific to this generator is the settings move, which applies in **both** directions:
 the target is `settings.local.json` and `settings.json` holds owned entries (command path
 `.claude/hooks/sassydog-`) → move them to `settings.local.json`; the target is `settings.json` and
 `settings.local.json` holds owned entries → move them back. `references/settings-merge.md` rule 5
-has the mechanics. `settings.local.json` is ignored by Claude Code convention, but
-`.claude/hooks/` is not, so without the local end state's lines an "untracked" hook script is one
-`git add -A` from being committed.
+has the mechanics.
 
 Private and internal repos are unchanged.
 
@@ -215,14 +223,12 @@ execute bit on the script.
    very thing the hook exists to catch.
 4. Confirm `tmp/` is actually ignored: `git check-ignore -v tmp/probe.png` must print the rule.
 5. Validate the chosen target still parses (`.claude/settings.json` or `.claude/settings.local.json`):
-   `jq -e . <target>`. In a **public** repo, then assert the chosen end state for `settings.json` and
-   each owned script this run rendered (the guard always, the dispatcher only when rendered), with
-   `--no-index` probes, **unconditionally** (not only when ignore lines were offered): target
-   `settings.local.json` (local) means `git check-ignore --no-index -q` exits 0 for each and
-   `git ls-files` lists none of them; target `settings.json` (committed) means each is listed by
-   `git ls-files` and `git check-ignore --no-index -q` exits 1. A failure means the plan's
-   transition was declined or not applied; report it. **Private and internal repos:** no tracking
-   assertion at all, since a fresh script is legitimately untracked until the user commits it.
+   `jq -e . <target>`. In a **public** repo, then run the script's
+   `verify --target local|committed --owned <each script rendered this run>`: exit 0 is the pass,
+   and it covers `settings.json` and every owned script unconditionally (not only when ignore lines
+   were offered). A non-zero exit prints the mismatches; report them, because the plan's transition
+   was declined or not applied. **Private and internal repos:** run no tracking verify, since a
+   fresh script is legitimately untracked until the user commits it.
 6. If the markdownlint route was rendered, confirm the version the hook will run matches CI's —
    `grep -o 'markdownlint-cli2[^"]*' .claude/hooks/sassydog-post-edit.sh` against the probe's
    `pin_source`. A pinned render must show the pin on both invocations; a fix-only render must show

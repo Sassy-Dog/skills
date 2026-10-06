@@ -98,7 +98,7 @@ repo"* intent so nobody reaches for one generator and silently gets a third of a
 generation logic — it picks which generators apply, prints one combined plan of every file they
 would touch, runs them **strictly in sequence** (`setup-config` → `setup-hooks` → `setup-deps`), and
 reports what ran and what was skipped. The order is load-bearing rather than cosmetic: the first two
-both write `.claude/` settings (the marketplace/plugin declaration and the `PostToolUse` entry; a public repo keeps them local and `setup-hooks` targets `settings.local.json`),
+both write `.claude/` settings (the marketplace/plugin declaration and the `PostToolUse` entry; in a public repo the default is to keep them local, with `setup-hooks` targeting `settings.local.json`, and the user may choose to commit them instead; `setup-config`'s "Tracking choice in the plan" owns that choice),
 each merging surgically into its own keys, so sequential runs compose while a concurrent or
 last-write-wins run drops one of the two with no error anywhere.
 

@@ -207,9 +207,10 @@ the renamed skills.
 ## Step 4 — `.claude/settings.json`
 
 Merge, never overwrite. `setup-hooks` may already own a hooks entry in the same file.
-Whether this file is **committed** is a per-repo choice (`SKILL.md` Phase 7 step 2): a public repo
-should track only `.claude/sassy-dog/*.md` and keep `settings.json` local, in which case write the
-entries locally and do not stage the file.
+Whether this file is **committed** is a per-repo choice (`SKILL.md` "Tracking choice in the plan"
+owns it; Phase 7 step 2 carries the reasoning): in a public repo the **default** is `local`, which
+tracks only `.claude/sassy-dog/*.md` and keeps `settings.json` local, so write the entries locally
+and do not stage the file, but the user may choose `committed` there.
 
 **In migrate mode the file is usually already tracked, and that is the common case.** The
 untracking commands, the ignore-line predicate, the collaborator-deletion warning with its restore
