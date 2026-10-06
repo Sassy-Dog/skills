@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic bun-badjson
+# fixture-note: No workspaces can be read, so nothing folds: / and /apps/a both keep their lanes.
+# fixture-expect-failure: not valid JSON
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/a

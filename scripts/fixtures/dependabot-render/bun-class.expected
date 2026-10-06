@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-class
+# fixture-note: pkg-[ab] names pkg-a and pkg-b, which fold; pkg-c is not named and keeps its lane.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/pkg-c

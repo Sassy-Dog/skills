@@ -82,6 +82,8 @@ CORPUS_ROOT="$ROOT"
 load_corpus "$FILES_FROM" || { echo "detect-ecosystems: could not load the file corpus" >&2; exit 1; }
 
 failures=()
+DIRS_TMP="$(mktemp)"
+trap 'rm -f "$DIRS_TMP"' EXIT
 note() { failures+=("$1"); }
 
 results=""
@@ -90,7 +92,10 @@ results=""
 add() {
     local name="$1" det="$2" risk="$3" why="$4" dirs_json='[]'
     if [ "$det" = "1" ]; then
-        dirs_json="$(ecosystem_dirs "$name" | jq -Rs 'split("\n")|map(select(length>0))')"
+        # Not `$(ecosystem_dirs ...)`: a subshell would drop the CORPUS_NOTES
+        # the probes append, and they are read below into detect_failures.
+        ecosystem_dirs "$name" > "$DIRS_TMP"
+        dirs_json="$(jq -Rs 'split("\n")|map(select(length>0))' < "$DIRS_TMP")"
         if [ "$dirs_json" = "[]" ]; then
             # Detected but located nowhere: refusing to guess "/" is the whole
             # point — a lane at a directory with no manifest finds nothing and

@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-lockb-member
+# fixture-note: apps/a folds into /; apps/b holds a bun.lockb (not the text bun.lock), which still counts as its OWN lockfile, so it keeps /apps/b.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/b

@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-exclude-first
+# fixture-note: Negations apply after every positive glob regardless of list order (Bun's docs are silent on order, and excluding more keeps more lanes): packages/legacy keeps its lane, packages/a folds.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/packages/legacy

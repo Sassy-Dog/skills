@@ -1,0 +1,11 @@
+# fixture-source-repo: synthetic
+# fixture-scope: a ! exclusion with ** segments keeps the excluded directories' lanes (issue #471, reproduction 2).
+# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (the root package.json's `workspaces` key).
+# ---8<--- one tracked path per line below; optional TAB-separated content
+bun.lock
+package.json	{"workspaces": ["packages/**", "!packages/**/test/**"]}
+packages/a/package.json
+packages/b/package.json
+packages/b/test/package.json
+packages/test/package.json
+packages/test/x/package.json
