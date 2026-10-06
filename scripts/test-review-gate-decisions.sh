@@ -94,7 +94,15 @@
 #      per-run omp override of `review_site: agent` to `coordinator` (§5 and
 #      skills/take-it/references/isolation-confirmation.md, pinned by
 #      test-isolation-contract.sh). It is never written to config and is always
-#      reported in §7, so it is no silent, config-derived flip.
+#      reported in §7, so it is no silent, config-derived flip. Also
+#      compatible: `setup-config`'s advisory reuse of the Phase 0 probe value
+#      for the public-repo tracking choice (the plan's preview and Phase 7
+#      step 2, #472) — it is never written to config and never feeds
+#      `review_site:`, and the Phase 7 use site is pinned to the probe, never to
+#      config or a live re-read. Two assertions hold it, each with its proving
+#      mutation: the phrase `from the Phase 0 probe — never from config`
+#      (mutate it to `from config, or re-read live`), and no `gh repo view` in
+#      Phase 7 (mutate by appending one there).
 #
 #   5. A BLOCKING FINDING BLOCKS THE MERGE, WITH EXACTLY ONE REDISPATCH.
 #      `dispatch-ready` surfaces the finding named, comments it on the issue,
@@ -772,6 +780,16 @@ assert_in "$setup_flat" \
 assert_in "$setup_flat" \
     'that use is advisory, is never written to config, and never feeds `review_site:`' \
     "setup-config's Phase 7 reuse of visibility stays advisory: not config, not review_site"
+assert_in "$setup_flat" \
+    'from the Phase 0 probe — never from config' \
+    "setup-config's Phase 7 use site names the Phase 0 probe as its visibility source, never config"
+phase7="$(awk '/^## Phase 7 /{f=1} /^## Guardrails/{f=0} f' "$SETUP" | tr '\n' ' ' | tr -s ' ')"
+if [ -z "$phase7" ]; then
+    bad "cannot locate setup-config Phase 7"
+else
+    assert_not_in "$phase7" 'gh repo view' \
+        "setup-config's Phase 7 never re-reads visibility live"
+fi
 assert_in "$setup_flat" \
     'never re-read it on a refresh' \
     "setup-config Phase 0 forbids re-reading visibility on a refresh"

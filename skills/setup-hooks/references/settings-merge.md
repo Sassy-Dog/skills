@@ -92,6 +92,12 @@ guard would tax every Stop.
    `sassydog-post-edit.sh` script and **its** entry only, and say so. Leave empty matcher groups the
    removal creates — deleting a group another tool might share is not surgical. **The artifact
    guard is unaffected** — it is stack-agnostic, so an empty tool set is not a reason to remove it.
+5. **Target flip: move, never duplicate.** When the chosen target is `settings.local.json` (the
+   public-repo default) and the other file already holds owned entries (command contains
+   `.claude/hooks/sassydog-`), remove exactly those entries from the other file and add them to the
+   target, and show both diffs. Leaving the old entry keeps a tracked script wired and PR-editable.
+   The reverse flip moves them back the same way. Empty matcher groups the removal leaves stay, as
+   in rule 4; non-owned entries never move.
 
 ## Uninstall
 
@@ -106,7 +112,8 @@ have artifacts there worth keeping out of git.
 - Project `.claude/settings.json` hooks run in addition to (not instead of) the user's global
   `~/.claude/settings.json` hooks — generating here never conflicts with a global SessionStart or
   statusline setup.
-- `settings.local.json` is git-ignored by Claude Code convention; choosing it means teammates do
-  NOT get the hooks — the right choice for personal experimentation, the wrong one for a team
+- `settings.local.json` is git-ignored by Claude Code convention, but `.claude/hooks/` is not,
+  which is why a public repo also gets the `.claude/*` / `!.claude/sassy-dog/` ignore lines
+  (`SKILL.md` Phase 3). Choosing it means teammates do NOT get the hooks — the right choice for personal experimentation, the wrong one for a team
   formatting standard.
 - Hooks are read at session start — a refresh takes effect on the NEXT session in that repo.

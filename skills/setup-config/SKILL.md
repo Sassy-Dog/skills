@@ -55,8 +55,8 @@ gh repo view --json nameWithOwner,defaultBranchRef,deleteBranchOnMerge,visibilit
 
 `visibility` is on that call and is read exactly once: it seeds `review_site:`
 (Phase 1). Extend this call rather than adding a second one — and never re-read it on a refresh,
-for the reason Phase 4 gives. Phase 7 step 2 reuses this same probe value to word one piece of
-advice; that use is advisory, is never written to config, and never feeds `review_site:`.
+for the reason Phase 4 gives. The plan's tracking choice (Phase 3 step 5, Phase 6) and Phase 7 step 2 reuse this same probe
+value; that use is advisory, is never written to config, and never feeds `review_site:`.
 
 **Probe the remote before trusting the checkout.** Every signal the mode table reads lives in the
 working tree, and the working tree can be days stale. Fetch, then list what the remote default
@@ -167,7 +167,8 @@ The essential shape:
    (`plate-it` → `survey-work.md`, `fill-it` → `groom-backlog.md`, `drain-it` →
    `dispatch-ready.md`, `clean-it` → `tidy-repo.md`), carrying each skill's prose
 4. **Write** `.claude/sassy-dog/*.md` + merge `.claude/settings.json`
-5. **Preview** the full config and the exact list of directories to be deleted
+5. **Preview** the full config, the exact list of directories to be deleted, and — in a public
+   repo — the tracking choice (see "Tracking choice in the plan" under Phase 6)
 6. **Delete** the old `.claude/skills/<name>/` directories only after approval
 
 **Order is not negotiable: write config, verify, then delete.** The generated skill is the *source*
@@ -245,12 +246,61 @@ wholesale, and leave no unresolved placeholders. **Print every file in full and
 write only after the user approves** — writing into a product repo is outward-facing and never
 silent.
 
+### Tracking choice in the plan (every mode that writes `settings.json`, public repos)
+
+**This section owns the tracking mechanics and the ignore-line predicate.** `setup-hooks` and
+`references/migrate-mode.md` reference it and never restate it, so the generators cannot diverge.
+
+Whether `.claude/settings.json` and `.claude/hooks/` are tracked is decided **in the approved
+plan**, not advised after the write. It applies in create, migrate, update and adopt modes whenever
+this run writes `settings.json`, and only when `visibility` from the Phase 0 probe is `PUBLIC`
+(unknown visibility: ask, as `setup-hooks` does; private and internal repos see none of this and a
+committed `settings.json` stays the default). The preview shows, beside the config files:
+
+1. **Kept local.** `settings.json` is written but not tracked; only `.claude/sassy-dog/*.md` is,
+   with the one-line reason (project hooks run with no trust prompt in several modes; Phase 7
+   step 2 carries the reasoning).
+2. **Untracking, decided by `git ls-files .claude/settings.json .claude/hooks`.** A `.gitignore`
+   line never untracks a file, so every path that command lists is shown with its own command,
+   `git rm --cached .claude/settings.json` and/or `git rm -r --cached .claude/hooks` (working copy
+   stays; the deletion is staged, not committed). Approval-only, never run unpreviewed. This holds
+   in every mode, not just migrate.
+3. **What the untracking does to everyone else.** After the untracking commit lands, every
+   collaborator who pulls has those files **deleted** from their working tree — their plugin
+   declaration and any hand-added `PreToolUse` push guard go with it (a prior migration lost one
+   exactly this way). The preview says so and gives the restore, run before pulling or right after:
+   `git show <untrack-commit>^:.claude/settings.json > .claude/settings.json` (and the same for
+   each `.claude/hooks/sassydog-*.sh`, or re-run `setup-hooks`). It **warns when the file holds
+   keys beyond the generators' own** — anything other than `extraKnownMarketplaces`,
+   `enabledPlugins` and hook entries whose command contains `.claude/hooks/sassydog-` (for example
+   `permissions`, `env`, or non-owned hooks) — since those are shared team settings that stop being
+   shared.
+4. **The `.gitignore` lines**, `.claude/*` then `!.claude/sassy-dog/`; `.claude/` followed by `!…`
+   does not re-include, because an ignored directory is never visited. Decide **per line**, never
+   with a bare `git check-ignore` on a tracked path (it exits 1 for a tracked file even when the
+   lines are present, which would add duplicates):
+   - `.claude/*` is present iff an exact-line match exists in `.gitignore`
+     (`grep -qxF '.claude/*' .gitignore`); `!.claude/sassy-dog/` likewise. Add only the missing
+     line(s), negation after the wildcard.
+   - Confirm the outcome with `git check-ignore --no-index -q .claude/settings.json` (must exit 0)
+     and `git check-ignore --no-index -q .claude/sassy-dog/<name>.md` (must exit 1 — the generated
+     config has to stay committable). With only `.claude/*` present the second probe exits 0,
+     so the negation line is the one added.
+   - A bare `.claude/` or `.claude` line defeats the re-include. **Flag it** in the preview and
+     propose replacing it with `.claude/*`; never silently keep it.
+5. **Other tracked `.claude/` paths.** List `git ls-files .claude` entries outside `sassy-dog/`
+   (kept `skills/`, `agents/`, `commands/`). `.claude/*` would silently ignore new files there, so
+   offer a `!.claude/<dir>/` line for each such directory.
+
+The user may decline and keep the files tracked; that is recorded in the report, not re-asked.
+Visibility is never written to config and never feeds `review_site:`.
+
 ## Phase 7 — verify
 
 1. Every written `.claude/sassy-dog/*.md` parses: `---` on line 1, valid YAML frontmatter, `##`
    sections intact.
-2. If `.claude/settings.json` exists it is valid JSON, and a repo that tracks it declares **both**
-   the marketplace (`extraKnownMarketplaces`) and the plugin (`enabledPlugins`). **Committing it is
+2. If `.claude/settings.json` exists — tracked or kept local — it is valid JSON and declares
+   **both** the marketplace (`extraKnownMarketplaces`) and the plugin (`enabledPlugins`). **Committing it is
    a per-repo choice for local multi-machine convenience, not a requirement, and it does not
    reach cloud sessions or scheduled routines.** Per the Claude Code docs (plugins/install, "Cloud
    session"; plugins/loading; cloud-environments, "What carries over"), a cloud session loads
@@ -261,8 +311,15 @@ silent.
    Declaring the plugin costs something to every contributor without it: a project-only
    `enabledPlugins` entry for a `github`-sourced plugin installs nothing, so they get a `/plugin`
    Errors-tab row, and accepting the trust dialog clones the marketplace repo in the background.
-   - **Public repos** (`visibility` from the Phase 0 probe — never from config): recommend tracking
-     only `.claude/sassy-dog/*.md` and keeping `settings.json` and `hooks/` local. Hooks in a
+   - **Public repos** (`visibility` from the Phase 0 probe — never from config): **verify** the
+     tracking choice the approved plan made: `git ls-files .claude/settings.json .claude/hooks`
+     prints nothing, `git check-ignore -v .claude/settings.json
+     .claude/hooks/sassydog-post-edit.sh` reports both ignored, and `git check-ignore -q
+     .claude/sassy-dog/<name>.md` exits 1 (not ignored). Other tracked `.claude/` paths (kept
+     `skills/`, `agents/`) are expected and not an error. In update or adopt mode, where no plan
+     made the choice, report the observed state only. Report any mismatch rather than fixing it
+     unpreviewed; if the user declined the choice, say the files stay tracked. The rule behind it:
+     `settings.json` and `hooks/` stay local. Hooks in a
      project's settings run with **no trust prompt** when only a parent folder was trusted, under
      `claude -p` / the Agent SDK, and in cloud sessions (permissions, "What runs before you trust a
      folder"; cloud-environments, "What carries over"), so in a public repo a tracked

@@ -41,11 +41,11 @@ nothing reports the other two-thirds as missing — it surfaces later as a repo 
 Dependabot flood nobody automated. Naming all three in one report is the
 whole point.
 
-**The shared write.** `setup-config` and `setup-hooks` both write `.claude/settings.json` — config
-writes `extraKnownMarketplaces` + `enabledPlugins`, hooks writes the `hooks.PostToolUse` entry.
-Whether the file is committed is a per-repo choice, and a public repo should keep it (and
-`hooks/`) local: project hooks run without a trust prompt in several modes (`setup-config`
-Phase 7 step 2).
+**The shared write.** `setup-config` and `setup-hooks` both write `.claude/` settings — config
+writes `extraKnownMarketplaces` + `enabledPlugins` to `.claude/settings.json`, hooks writes the
+`hooks.PostToolUse` entry to `.claude/settings.json` (or `settings.local.json`, where the
+generator's own public-repo rule sends it). Whether files are tracked is each generator's call
+(`setup-config` Phase 7 step 2); this skill only relays it.
 Each documents a *surgical merge into its own keys*, never a rewrite, so **sequential** runs
 compose: the second reads the file as the first left it and adds to it. Run them concurrently — or
 let either plan against one copy and write back a whole file later — and one of the two
@@ -95,6 +95,11 @@ Record the reason verbatim. Anything skipped is carried into the report in Phase
 Print one plan covering all three: per generator, its mode, the full list of files it would create
 or modify, and — for anything skipped — the reason. Then ask for approval. **Nothing is written
 before this gate.**
+
+Where a generator reports a tracking or `.gitignore` change in a public repo, the plan relays that
+report as that generator reported it. `setup-config` owns the displayed `.gitignore` edit and
+`setup-hooks` shows it only when run standalone, so it appears once; this skill assigns no
+mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
 `setup-hooks`). This gate is what makes the *sweep* visible: three generators firing across

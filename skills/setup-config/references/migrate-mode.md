@@ -211,6 +211,13 @@ Whether this file is **committed** is a per-repo choice (`SKILL.md` Phase 7 step
 should track only `.claude/sassy-dog/*.md` and keep `settings.json` local, in which case write the
 entries locally and do not stage the file.
 
+**In migrate mode the file is usually already tracked, and that is the common case.** The
+untracking commands, the ignore-line predicate, the collaborator-deletion warning with its restore
+command, and the already-tracked `.claude/hooks/` handling are all owned by `SKILL.md`, "Tracking
+choice in the plan". Put each of them in the Step 5 preview; an unstaged edit to a tracked file
+stays tracked and dirties the tree, so nothing here substitutes for them. Private and internal repos
+skip this and keep the committed file.
+
 ```json
 {
   "extraKnownMarketplaces": {
@@ -248,6 +255,9 @@ Show, before any write or delete:
 3. Every fact that could **not** be verified
 4. The exact list of directories to be deleted, each with its `generated-by:` marker quoted
 5. Any `.claude/skills/` directory being **kept** because it has no marker
+6. In a public repo, the tracking choice exactly as `SKILL.md` "Tracking choice in the plan" lists
+   it: untracking commands, collaborator-deletion warning and restore command, the `.gitignore`
+   lines, and other tracked `.claude/` paths (Step 4)
 
 Then write config, verify it, and delete only on explicit approval.
 
