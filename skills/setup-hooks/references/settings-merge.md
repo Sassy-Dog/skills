@@ -92,6 +92,12 @@ guard would tax every Stop.
    `sassydog-post-edit.sh` script and **its** entry only, and say so. Leave empty matcher groups the
    removal creates — deleting a group another tool might share is not surgical. **The artifact
    guard is unaffected** — it is stack-agnostic, so an empty tool set is not a reason to remove it.
+5. **Target flip: move, never duplicate.** When the chosen target is `settings.local.json` (the
+   public-repo default) and the other file already holds owned entries (command contains
+   `.claude/hooks/sassydog-`), remove exactly those entries from the other file and add them to the
+   target, and show both diffs. Leaving the old entry keeps a tracked script wired and PR-editable.
+   The reverse flip moves them back the same way. Empty matcher groups the removal leaves stay, as
+   in rule 4; non-owned entries never move.
 
 ## Uninstall
 
