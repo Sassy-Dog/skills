@@ -90,9 +90,11 @@ under that root matches one of those globs and that carries no bun lockfile of i
 not ancestry, so a `package.json` the globs do not name keeps its lane. Globs follow Bun's syntax
 (`*` stays inside one segment, `**/` is zero or more segments, `[ab]`, one level of `{a,b}`); every
 `!` glob excludes after all positive globs whatever its list position, and a `!` glob's trailing `/**`
-also matches zero segments — each undocumented point resolves toward keeping a lane. A glob the
-translator cannot handle (nested braces, extglob, an unterminated `[` or `{`) collapses nothing under
-that root and is reported in `detect_failures`. A member-only PR never
+also matches zero segments — each undocumented point resolves toward keeping a lane. `**` is
+honoured only as a whole path segment. A glob the translator cannot handle — for example nested
+braces, extglob, an unterminated `[` or `{`, an empty `{a,}` alternative, a `**` that is not a whole
+segment, or any pattern the local `grep -E` refuses to compile — collapses nothing under that root
+and is reported in `detect_failures`. A member-only PR never
 rewrites the root lockfile, so it fails `bun install --frozen-lockfile` and cannot merge (what2wear:
 seven red PRs, while the root entry's grouped PR passed). A repo with only the binary `bun.lockb` is
 not bun at all — it stays npm + lockfile-sync, and its lanes do not collapse. npm, pub, nuget and

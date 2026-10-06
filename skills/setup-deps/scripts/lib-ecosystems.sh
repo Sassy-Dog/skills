@@ -208,6 +208,12 @@ _glob_frag() {
         case "$ch" in
             '*')
                 if [ "$next" = "*" ]; then
+                    # `**` is only defined as a WHOLE segment (at the start or
+                    # after `/`, before `/` or the end), and not inside braces;
+                    # anything else is a guess at Bun's semantics, so refuse.
+                    [ "$braces" -eq 1 ] || return 1
+                    { [ "$i" -eq 0 ] || [ "${g:i-1:1}" = "/" ]; } || return 1
+                    case "${g:i+2:1}" in ''|'/') ;; *) return 1 ;; esac
                     if [ "${g:i+2:1}" = "/" ]; then out+='(.*/)?'; i=$((i + 2)); else out+='.*'; i=$((i + 1)); fi
                 else out+='[^/]*'; fi ;;
             '?') out+='[^/]' ;;
@@ -232,6 +238,7 @@ _glob_frag() {
                 alts=""
                 while :; do
                     alt="${body%%,*}"
+                    [ -n "$alt" ] || return 1
                     frag="$(_glob_frag "$alt" 0)" || return 1
                     alts+="${alts:+|}$frag"
                     case "$body" in *,*) body="${body#*,}" ;; *) break ;; esac
@@ -271,7 +278,7 @@ _glob_to_ere() {
 # An unparsable manifest, or a root with any glob _glob_to_ere cannot translate,
 # degrades to "not a workspace root" and is noted: nothing under it collapses.
 bun_dirs() {
-    local all locks texts d p c r rel keep g neg hit excl globs i bad
+    local all locks texts d p c r rel keep g neg hit excl globs i bad ere
     all="$(dirs_of '^package\.json$')"
     locks="$(dirs_of '^bun\.lockb?$')"
     texts="$(dirs_of '^bun\.lock$')"
@@ -287,7 +294,13 @@ bun_dirs() {
                     bad=""
                     while IFS= read -r g; do
                         [ -n "$g" ] || continue
-                        _glob_to_ere "${g#!}" 0 >/dev/null || { bad="$g"; break; }
+                        neg=0
+                        case "$g" in '!'*) neg=1 ;; esac
+                        ere="$(_glob_to_ere "${g#!}" "$neg")" || { bad="$g"; break; }
+                        # A regex this grep cannot compile exits 2, which the
+                        # membership test below would read as "no match".
+                        grep -E -- "$ere" </dev/null >/dev/null 2>&1
+                        if [ $? -eq 2 ]; then bad="$g"; break; fi
                     done <<<"$globs"
                     if [ -n "$bad" ]; then
                         CORPUS_NOTES+="bun: $p workspaces glob '$bad' is not translatable — no member under $d collapses"$'\n'
@@ -315,7 +328,8 @@ bun_dirs() {
                     [ -n "$g" ] || continue
                     neg=0
                     case "$g" in '!'*) neg=1; g="${g#!}" ;; esac
-                    if grep -qE "$(_glob_to_ere "$g" "$neg")" <<<"$rel"; then
+                    ere="$(_glob_to_ere "$g" "$neg")"
+                    if grep -qE -- "$ere" <<<"$rel"; then
                         if [ "$neg" -eq 1 ]; then excl=1; else hit=1; fi
                     fi
                 done <<<"${root_globs[$i]}"

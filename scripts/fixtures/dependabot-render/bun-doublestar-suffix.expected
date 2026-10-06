@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic bun-doublestar-suffix
+# fixture-note: x/**y is not a whole-segment **, so nothing under the root collapses and x/q/y keeps its lane.
+# fixture-expect-failure: not translatable
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/x/q/y
