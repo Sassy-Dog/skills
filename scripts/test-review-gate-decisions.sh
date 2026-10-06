@@ -770,6 +770,9 @@ assert_in "$setup_flat" \
     'read exactly once: it seeds `review_site:`' \
     "setup-config Phase 0 reads visibility exactly once"
 assert_in "$setup_flat" \
+    'that use is advisory, is never written to config, and never feeds `review_site:`' \
+    "setup-config's Phase 7 reuse of visibility stays advisory: not config, not review_site"
+assert_in "$setup_flat" \
     'never re-read it on a refresh' \
     "setup-config Phase 0 forbids re-reading visibility on a refresh"
 assert_in "$setup_flat" \

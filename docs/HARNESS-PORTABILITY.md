@@ -1074,7 +1074,8 @@ reaches the skill (row 6), not the format. **Spike:** nothing changed; the row-6
 ### 8. Plugin and marketplace declaration in `.claude/settings.json`
 
 **Used for.** `setup-config` and `setup-repo` write `extraKnownMarketplaces` and `enabledPlugins`
-into a consumer repo, so a cloud session or routine loads the plugin. `repo-health`'s `SKILL.md`
+into a consumer repo so local sessions on any machine resolve the plugin (it does not reach cloud
+sessions or routines, #468). `repo-health`'s `SKILL.md`
 reads both keys for its plugin-drift guidance. Of the five files, four are the writers' own
 skill and reference docs and one is that reader.
 

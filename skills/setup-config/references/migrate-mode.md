@@ -207,6 +207,9 @@ the renamed skills.
 ## Step 4 — `.claude/settings.json`
 
 Merge, never overwrite. `setup-hooks` may already own a hooks entry in the same file.
+Whether this file is **committed** is a per-repo choice (`SKILL.md` Phase 7 step 2): a public repo
+should track only `.claude/sassy-dog/*.md` and keep `settings.json` local, in which case write the
+entries locally and do not stage the file.
 
 ```json
 {
@@ -228,13 +231,13 @@ Preserve every existing key; add only the `extraKnownMarketplaces` and `enabledP
 the file already declares both, leave it alone. A file that declares only `enabledPlugins` is the
 pre-#97 state — add the missing `extraKnownMarketplaces` entry.
 
-**Why this matters more than it looks:** `enabledPlugins` honors project settings, and plugin skills
-enabled only in *user* settings do not transfer to cloud sessions or scheduled routines. And
-`enabledPlugins` alone is not enough: it names the marketplace, but marketplace registration
-otherwise lives in user-level state (`~/.claude/plugins/known_marketplaces.json`) that never reaches
-a cloud VM — `extraKnownMarketplaces` is what lets the session resolve `@skills` and
-install the plugin at session start. Omit either and a scheduled `dispatch-ready` silently finds no
-skill while every local session works — a failure mode local testing cannot reproduce.
+**What this does and does not buy:** it makes the plugin resolvable for local sessions on any
+machine that opens the repo, and `enabledPlugins` alone is not enough there: it names the
+marketplace, but registration otherwise lives in user-level state
+(`~/.claude/plugins/known_marketplaces.json`), so `extraKnownMarketplaces` is what lets the session
+resolve `@skills`. It does **not** reach cloud sessions or scheduled routines: those load neither
+user-scope nor repo-declared plugins (Claude Code docs, plugins/install "Cloud session" and
+cloud-environments "What carries over"), and a routine cannot load a plugin skill at all (#175).
 
 ## Step 5 — preview
 

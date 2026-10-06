@@ -14,8 +14,10 @@
 #       right for every version below 10.
 #   R02 A path with NO project entry lands in `no_entry`, never in the clean
 #       set. Absent means it inherits user scope, which usually means the
-#       `.claude/settings.json` declaration #97 requires is missing — so it
-#       loads no skill in a cloud session. "Current by accident" and "current"
+#       `.claude/settings.json` declaration `setup-config` writes is missing, so
+#       this checkout has no project pin and a machine without a user-scope
+#       install resolves nothing locally (cloud sessions never read it; #468).
+#       "Current by accident" and "current"
 #       are different facts and only one survives being fixed.
 #   R03 The pruned worktree/dead-path counts are EMITTED. 96 of 107 entries on
 #       the machine this shipped from were agent worktrees. Filtering them is
@@ -189,7 +191,7 @@ run_mut "M4: an unresolvable reference reads as current" R04 \
 #
 # WHY IT IS PINNED AT ALL. `claude plugin uninstall --scope project` does not
 # only remove local state: it EDITS the repo's committed `.claude/settings.json`
-# and empties `enabledPlugins`, stripping the declaration #97 requires. Measured
+# and empties `enabledPlugins`, stripping the declaration `setup-config` writes. Measured
 # 2026-09-06 across 13 checkouts, 10 of which had the key silently deleted from
 # a tracked file. It is the one command in this area that damages a repo, and
 # the sentence warning about it is exactly the kind a later trim reads as
