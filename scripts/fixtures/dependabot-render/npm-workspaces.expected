@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic npm-workspaces
+# fixture-note: npm does not collapse: every package.json directory keeps its lane.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+npm	/
+npm	/apps/a
+npm	/apps/b

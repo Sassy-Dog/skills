@@ -99,7 +99,8 @@ eco_manifest_re() {
 #     Dependabot wants the workspace root (devcanopy: / and /agent, never the
 #     nine crates/* members — /agent is listed because it declares its own
 #     empty [workspace] table).
-#   - bun     — a workspace member covered by a root bun.lock/bun.lockb is not
+#   - bun     — a workspace MEMBER (named by the root package.json's top-level
+#     `workspaces` globs) covered by a root text bun.lock is not
 #     independently updatable: a PR from a member entry edits only that member's
 #     package.json, never the root lockfile, so it fails `bun install
 #     --frozen-lockfile` and can never merge (what2wear: seven per-member PRs
@@ -189,35 +190,75 @@ cargo_dirs() {
     _roots_under "$ws" "$all"
 }
 
-# bun_dirs — package.json directories minus workspace members that a root
-# lockfile covers. A lockfile dir is a workspace root only when its own
-# package.json declares `workspaces` (content probe, same degrade-and-note
-# shape as cargo_dirs). A package.json dir collapses into the nearest-or-any
-# such ancestor unless it holds a bun lockfile itself.
+# _glob_to_ere <workspace-glob> — a package.json `workspaces` glob as an ERE
+# anchored to a whole relative path: `**` spans segments, `*` and `?` do not.
+_glob_to_ere() {
+    local g="${1#./}" out="" i ch next
+    g="${g%/}"
+    for ((i = 0; i < ${#g}; i++)); do
+        ch="${g:i:1}"; next="${g:i+1:1}"
+        case "$ch" in
+            '*') if [ "$next" = "*" ]; then out+='.*'; i=$((i + 1)); else out+='[^/]*'; fi ;;
+            '?') out+='[^/]' ;;
+            '.'|'+'|'('|')'|'['|']'|'{'|'}'|'^'|'$'|'|'|'\') out+="\\$ch" ;;
+            *)   out+="$ch" ;;
+        esac
+    done
+    printf '^%s$' "$out"
+}
+
+# bun_dirs — package.json directories minus the workspace MEMBERS a root bun.lock
+# covers. A root is a directory holding the TEXT bun.lock (a bun.lockb-only repo
+# is classified npm by detect-ecosystems.sh and never collapses; a bun.lockb
+# still counts as a member's OWN lockfile) whose package.json
+# declares a TOP-LEVEL `workspaces` (array form or {"packages": [...]}), read
+# with jq; a member is a directory whose path under that root matches one of
+# those globs (a `!glob` excludes) and that holds no bun lockfile of its own.
+# Membership, not ancestry: a package.json under the root that the globs do not
+# name is not covered by the root install, so it keeps the lane it always had.
+# An unparsable manifest degrades to "not a workspace root" and is noted.
 bun_dirs() {
-    local all locks ws d p c r keep
+    local all locks texts d p c r rel keep g neg hit globs i
     all="$(dirs_of '^package\.json$')"
     locks="$(dirs_of '^bun\.lockb?$')"
-    ws=""
+    texts="$(dirs_of '^bun\.lock$')"
+    local -a root_dirs=() root_globs=()
     while IFS= read -r d; do
         [ -n "$d" ] || continue
         if [ "$d" = "/" ]; then p="package.json"; else p="${d#/}/package.json"; fi
         if [ -r "$CORPUS_ROOT/$p" ]; then
-            grep -qE '"workspaces"[[:space:]]*:' "$CORPUS_ROOT/$p" && ws+="$d"$'\n'
+            if globs="$(jq -r 'if (.workspaces|type)=="array" then .workspaces[]
+                elif (.workspaces|type)=="object" then (.workspaces.packages // [])[]
+                else empty end' "$CORPUS_ROOT/$p" 2>/dev/null)"; then
+                if [ -n "$globs" ]; then root_dirs+=("$d"); root_globs+=("$globs"); fi
+            else
+                CORPUS_NOTES+="bun: $p is not valid JSON — treated as a non-workspace root"$'\n'
+            fi
         else
             CORPUS_NOTES+="bun: $p not readable — treated as a non-workspace root"$'\n'
         fi
-    done <<<"$locks"
+    done <<<"$texts"
     while IFS= read -r c; do
         [ -n "$c" ] || continue
         keep=1
         if ! grep -qxF -- "$c" <<<"$locks"; then
-            while IFS= read -r r; do
-                [ -n "$r" ] || continue
-                is_ancestor "$r" "$c" && keep=0
-            done <<<"$ws"
+            for i in "${!root_dirs[@]}"; do
+                r="${root_dirs[$i]}"
+                is_ancestor "$r" "$c" || continue
+                if [ "$r" = "/" ]; then rel="${c#/}"; else rel="${c#"$r"/}"; fi
+                hit=0
+                while IFS= read -r g; do
+                    [ -n "$g" ] || continue
+                    neg=0
+                    case "$g" in '!'*) neg=1; g="${g#!}" ;; esac
+                    if grep -qE "$(_glob_to_ere "$g")" <<<"$rel"; then
+                        if [ "$neg" -eq 1 ]; then hit=0; else hit=1; fi
+                    fi
+                done <<<"${root_globs[$i]}"
+                if [ "$hit" -eq 1 ]; then keep=0; fi
+            done
         fi
-        [ "$keep" -eq 1 ] && echo "$c"
+        if [ "$keep" -eq 1 ]; then echo "$c"; fi
     done <<<"$all" | sort -u
 }
 

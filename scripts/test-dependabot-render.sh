@@ -15,12 +15,16 @@
 # Three properties are asserted:
 #
 #   1. The render's (ecosystem, directory) pairs match the fixture's recorded
-#      expectation, for three real consumer layouts — a Flutter+bun monorepo, a
-#      polyglot workspaces monorepo, and a two-workspace cargo repo. Three bun
-#      workspace fixtures (issue #467) cover the collapse: what2wear (one root
-#      bun.lock, nine members -> one lane at /), velovate (same shape, its JS
-#      member lanes collapse into /) and bun-ownlock (a member with its own
-#      bun.lock keeps its lane).
+#      expectation. Real consumer layouts: tailoredtip (Flutter + bun
+#      monorepo), velovate (polyglot workspaces monorepo, a real ls-files),
+#      devcanopy (two-workspace cargo repo). Reconstructed from issue #467's
+#      recorded detect output, not fetched: what2wear (one root bun.lock, nine
+#      members -> one lane at /). Synthetic, written for the bun collapse rule:
+#      bun-ownlock (a member with its own bun.lock keeps its lane), bun-nows (a
+#      root bun.lock without a top-level `workspaces` key), bun-lockb (a
+#      bun.lockb-only workspace stays npm), npm-workspaces (npm never
+#      collapses) and bun-nonmember (a package.json the globs do not name keeps
+#      its lane).
 #   2. validate-dependabot.sh passes on every render: each lane is backed by a
 #      tracked manifest in the directory it names.
 #   3. The pre-fix shape FAILS that validation. A "v2" render of the same repo
@@ -92,6 +96,8 @@ materialize() {
     done < "$src"
 }
 
+v2_rejected=0
+v2_exempt=0
 for corpus in $corpora; do
     name="$(basename "$corpus" .corpus)"
     expected="$FIXTURES/$name.expected"
@@ -150,6 +156,7 @@ for corpus in $corpora; do
     if cmp -s "$WORK/$name.yml" "$WORK/$name.v2.yml"; then
         ok "$name — root-only repo: the v2 shape is the correct shape here, nothing to reject"
     elif grep -q '^# fixture-v2-valid:' "$expected"; then
+        v2_exempt=$((v2_exempt + 1))
         # Opt-in, recorded in the fixture's own header: the root holds the
         # manifests, so a "/" lane IS backed (the own-lockfile bun fixture —
         # collapsing there only duplicates a lane, it does not point at
@@ -159,9 +166,19 @@ for corpus in $corpora; do
         --root "$tree" --files-from "$WORK/$name.files" >/dev/null 2>&1; then
         bad "$name — the validator ACCEPTED the collapsed-to-\"/\" v2 render; the post-render check is not checking anything"
     else
+        v2_rejected=$((v2_rejected + 1))
         ok "$name — the collapsed-to-\"/\" v2 render is rejected"
     fi
 done
+
+# The opt-out above is a header any fixture can carry, so it must not be able to
+# silence step 3 everywhere: at least one fixture's v2 render has to have been
+# actually rejected, or the post-render validator is unproven.
+if [ "$v2_rejected" -eq 0 ]; then
+    bad "step 3 proved nothing — no fixture's collapsed-to-\"/\" v2 render was rejected ($v2_exempt exempted by fixture-v2-valid)"
+else
+    ok "step 3 is live — $v2_rejected fixture(s) had their v2 render rejected ($v2_exempt exempted)"
+fi
 
 # --- the regression case, against real committed bytes -----------------------
 # tailoredtip is the repo a refresh would have regressed: marked owned, content

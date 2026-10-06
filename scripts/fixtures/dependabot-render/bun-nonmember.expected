@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-nonmember
+# fixture-note: apps/a and apps/b are members and fold into /; tools/x is not named by the globs, so it keeps the lane it always had (membership, not ancestry).
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/tools/x
