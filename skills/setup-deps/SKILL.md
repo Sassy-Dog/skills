@@ -92,7 +92,8 @@ not ancestry, so a `package.json` the globs do not name keeps its lane. Globs fo
 `!` glob excludes after all positive globs whatever its list position, and a `!` glob's trailing `/**`
 also matches zero segments — each undocumented point resolves toward keeping a lane. `**` is
 honoured only as a whole path segment. A glob the translator cannot handle — for example nested
-braces, extglob, an unterminated `[` or `{`, an empty `{a,}` alternative, a `**` that is not a whole
+braces, extglob, an unterminated `[` or `{`, a class range whose ends are not both within one of `0-9`, `a-z` or
+`A-Z` (`[.-0]`), an empty `{a,}` alternative, a `**` that is not a whole
 segment, or any pattern the local `grep -E` refuses to compile — collapses nothing under that root
 and is reported in `detect_failures`. A member-only PR never
 rewrites the root lockfile, so it fails `bun install --frozen-lockfile` and cannot merge (what2wear:

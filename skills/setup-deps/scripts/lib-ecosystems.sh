@@ -196,7 +196,8 @@ cargo_dirs() {
 # is a character class (a leading `!` or `^` negates); `{a,b}` is alternation,
 # one level only. Returns 1 for anything it will not guess at — nested braces,
 # extglob (`!(`, `@(`, `?(`, `*(`, `+(`), backslash escapes, an unterminated or
-# stray `[`/`{`/`}`/`]`, an empty or `/`-bearing class — so the caller can
+# stray `[`/`{`/`}`/`]`, an empty or `/`-bearing class, a class range whose
+# ends are not both within one of 0-9, a-z or A-Z — so the caller can
 # fail safe rather than fold a package it misread.
 _glob_frag() {
     local g="$1" braces="$2" out="" i ch next j body alt alts frag neg k lo hi

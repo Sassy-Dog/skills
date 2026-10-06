@@ -35,17 +35,17 @@
 #      bun-doublestar-prefix / bun-doublestar-suffix (`a**b`, `x**/y`, `x/**y`
 #      are untranslatable: `**` must be a whole segment), bun-trailing-globstar (a positive `packages/**`
 #      does not name packages itself), bun-question (`?` is one non-/ char),
-#      Added for issue #475, one each: bun-grep-compile (`!packages/[z-a]` is a
-#      descending range every grep rejects with exit 2, which the membership test
-#      would read as "no match": it pins the exit-2 check in bun_dirs under any
-#      grep and any locale, replacing an inline probe that GNU grep, i.e. CI,
-#      always skipped) and bun-class-straddle (`pkg[.-0]b` has a range whose ends
-#      straddle `/`, so the ERE would fold /pkg/b; `_glob_frag` refuses a class
-#      range unless both ends lie in one of 0-9, a-z or A-Z),
 #      bun-dot (`.` is literal), bun-negclass (`[!a]` never matches `/`),
 #      bun-subroot (a workspace root
 #      other than /) and bun-badjson (an invalid root package.json is a
-#      detect_failures entry). A fixture's `# fixture-expect-failure: <text>`
+#      detect_failures entry). Added for issue #475, one each: bun-grep-compile
+#      (`!packages/[z-a]` is a descending range every grep rejects with exit 2,
+#      which the membership test would read as "no match": it pins the exit-2
+#      check in bun_dirs under any grep and any locale, replacing an inline
+#      probe that GNU grep, i.e. CI, always skipped) and bun-class-straddle
+#      (`pkg[.-0]b` has a range whose ends straddle `/`, so the ERE would fold
+#      /pkg/b; `_glob_frag` refuses a class range unless both ends lie in one
+#      of 0-9, a-z or A-Z). A fixture's `# fixture-expect-failure: <text>`
 #      header asserts that substring appears in detect_failures; an unreadable
 #      Cargo workspace manifest is checked inline, since a corpus cannot
 #      express file modes.

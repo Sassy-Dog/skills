@@ -164,21 +164,26 @@ the repo's existing comment style; include the line in the approval diff like an
 `${CLAUDE_PLUGIN_ROOT}/skills/setup-config/SKILL.md` (resolve the root as in the paragraph above;
 open that file and read the section, because it owns the per-line `.gitignore` predicate and a
 plain `git check-ignore -q` on a tracked path is the duplicate-line bug it exists to prevent). It
-owns the mechanics, so they are not restated here. What is specific to this generator, in the same
-approval diff, and **only when the chosen target is `settings.local.json`**:
+owns the mechanics, so they are not restated here. What is specific to this generator, in the
+same approval diff, by chosen target:
 
-- **Untrack the hooks** (`git ls-files .claude/hooks`, every mode) with the section's warning and
-  restore. When the chosen target is the committed `settings.json`, the user is keeping the
-  scripts tracked together with the settings that wire them: do not untrack hooks and do not
-  assert them untracked, or collaborators' hooks point at missing files. `settings.json` itself
-  is untracked only when it is tracked and the target is `settings.local.json`.
-- **Move, never duplicate.** Flip direction is decided by repo state: the target is
-  `settings.local.json` and the tracked `settings.json` holds owned entries (command path
+- **Move, never duplicate (both directions).** Flip direction is decided by repo state: the target
+  is `settings.local.json` and the tracked `settings.json` holds owned entries (command path
   `.claude/hooks/sassydog-`) → move them to `settings.local.json`; the target is `settings.json`
   and `settings.local.json` holds owned entries → move them back. Rule 5 of
   `references/settings-merge.md` has the mechanics.
-- **The `.gitignore` lines**, per-line predicate as in that section, evaluated at preview time so
-  only lines still missing are shown. `settings.local.json` is ignored by Claude Code
+- **Target `settings.local.json`: untrack.** Untrack the hooks (`git ls-files .claude/hooks`,
+  every mode) with the section's warning and restore, and `settings.json` too when it is tracked.
+- **Target committed `settings.json`: make it shareable.** Keeping the scripts tracked with the
+  settings that wire them is the point, so do not untrack hooks. But a repo that earlier accepted
+  the local choice has `.claude/*` ignored and both paths untracked, and moving entries into an
+  ignored, untracked file shares nothing. Probe `git ls-files` and
+  `git check-ignore --no-index -q` on `.claude/settings.json` and
+  `.claude/hooks/sassydog-post-edit.sh`; when either is ignored or untracked, show in the preview,
+  approval-only, the `.gitignore` change (narrow or drop `.claude/*`, or add `!.claude/settings.json`
+  and `!.claude/hooks/` after it) and the `git add` of those paths. Never run it unpreviewed.
+- **Target `settings.local.json`: the `.gitignore` lines**, per-line predicate as in that section,
+  evaluated at preview time so only lines still missing are shown. `settings.local.json` is ignored by Claude Code
   convention, but `.claude/hooks/` is not, so without them an "untracked" hook script is one
   `git add -A` from being committed.
 
@@ -221,7 +226,10 @@ execute bit on the script.
    `git ls-files .claude/hooks` prints nothing (a tracked hook script means the untracking was not
    applied) and, when ignore lines were offered,
    `git check-ignore --no-index -v .claude/hooks/sassydog-post-edit.sh` prints the rule. When the
-   target is the committed `settings.json`, skip both: the hooks stay tracked with it.
+   target is the committed `settings.json`, assert the opposite: `git ls-files` lists
+   `.claude/settings.json` and `.claude/hooks/sassydog-post-edit.sh`, and
+   `git check-ignore --no-index -q` exits 1 for both (tracked and not ignored). A failure means
+   the team-sharing change was declined or not applied; report it.
 6. If the markdownlint route was rendered, confirm the version the hook will run matches CI's —
    `grep -o 'markdownlint-cli2[^"]*' .claude/hooks/sassydog-post-edit.sh` against the probe's
    `pin_source`. A pinned render must show the pin on both invocations; a fix-only render must show

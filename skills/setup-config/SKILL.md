@@ -277,9 +277,11 @@ committed `settings.json` stays the default). The preview shows, beside the conf
    declaration and any hand-added `PreToolUse` push guard go with it (a prior migration lost one
    exactly this way). The preview says so and gives the restore, run **right after pulling** (the pull is what deletes the file, so a
    restore run before it is undone):
-   `git show <untrack-commit>^:.claude/settings.json > .claude/settings.json` (and the same for
-   each `.claude/hooks/sassydog-*.sh` and for every hand-written path the preview listed, or
-   re-run `setup-hooks` for the generated ones). It **warns when the file holds
+   `git restore --source=<untrack-commit>^ --worktree -- .claude/settings.json .claude/hooks/<each
+   path the commit untracked, hand-written ones included>` (it recreates the `.claude/hooks/`
+   directory the pull removed, keeps the exec bit, and leaves the files untracked and ignored; a
+   `git show … > path` redirect fails there with "No such file or directory"), or re-run
+   `setup-hooks` for the generated ones. It **warns when the file holds
    keys beyond the generators' own** — anything other than `extraKnownMarketplaces`,
    `enabledPlugins` and hook entries whose command contains `.claude/hooks/sassydog-` (for example
    `permissions`, `env`, or non-owned hooks) — since those are shared team settings that stop being
@@ -331,8 +333,10 @@ Visibility is never written to config and never feeds `review_site:`.
      prints nothing, `git check-ignore --no-index -v .claude/settings.json
      .claude/hooks/sassydog-post-edit.sh` reports both ignored, and `git check-ignore --no-index -q
      .claude/sassy-dog/<name>.md` exits 1 (not ignored; `--no-index` because the config is
-     tracked and a plain probe exits 1 regardless of `.gitignore`). This verify applies in every
-     mode, since the plan's tracking choice does. Other tracked `.claude/` paths (kept `skills/`,
+     tracked and a plain probe exits 1 regardless of `.gitignore`). Verify only when this run's
+     plan carried the tracking choice (create, migrate, or an update or adopt run that writes
+     `settings.json`); otherwise no plan made the choice, so report the observed state only and
+     say which case applied. Other tracked `.claude/` paths (kept `skills/`,
      `agents/`) are expected and not an error. Report any mismatch rather than fixing it
      unpreviewed; if the user declined the choice, say the files stay tracked. The rule behind it:
      `settings.json` and `hooks/` stay local. Hooks in a
