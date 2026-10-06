@@ -38,8 +38,9 @@
 #      stalest and hide the real ones.
 #   2. ABSENT IS NOT CURRENT. A checkout with no project entry inherits user
 #      scope — which usually means it is missing the `.claude/settings.json`
-#      declaration that Sassy-Dog/skills#97 requires, so it would load
-#      NO skill in a cloud session or scheduled routine. It is reported under
+#      declaration `setup-config` writes, so this checkout has no project pin
+#      and a machine without a user-scope install resolves nothing locally
+#      (cloud sessions never read it; #468). It is reported under
 #      `no_entry`, never folded into the clean set: "current by accident" and
 #      "current" are different facts, and only one of them survives being fixed.
 #   3. THE PRUNED COUNTS ARE REPORTED, not silently dropped. 96 of 107 entries

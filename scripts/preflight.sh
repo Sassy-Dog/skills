@@ -1328,8 +1328,10 @@
 #      reports the newest pins as the stalest, and every version below 10 makes
 #      it look right; and a checkout with NO entry lands in `no_entry` rather
 #      than the clean set, because it inherits user scope, which usually means
-#      the `.claude/settings.json` declaration #97 requires is missing and the
-#      repo would load nothing at all in a cloud session. "Current by accident"
+#      the `.claude/settings.json` declaration `setup-config` writes is missing,
+#      so the checkout has no project pin and a machine without a user-scope
+#      install resolves nothing locally (cloud sessions never read it; #468).
+#      "Current by accident"
 #      and "current" are different facts. The other two: the pruned worktree and
 #      dead-path counts are EMITTED (96 of 107 entries on the machine this
 #      shipped from were agent worktrees — hiding the count is how nobody ever

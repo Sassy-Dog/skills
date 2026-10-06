@@ -53,7 +53,7 @@ Confirm cwd is a git repo with a GitHub remote:
 gh repo view --json nameWithOwner,defaultBranchRef,deleteBranchOnMerge,visibility
 ```
 
-`visibility` is on that call for one reason and is read exactly once: it seeds `review_site:`
+`visibility` is on that call and is read exactly once: it seeds `review_site:`
 (Phase 1). Extend this call rather than adding a second one — and never re-read it on a refresh,
 for the reason Phase 4 gives. Phase 7 step 2 reuses this same probe value to word one piece of
 advice; that use is advisory, is never written to config, and never feeds `review_site:`.
