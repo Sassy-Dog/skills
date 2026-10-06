@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-nows
+# fixture-note: no top-level workspaces key -> apps/a is not a member, keeps its lane (a whole-file grep for "workspaces" would wrongly collapse it).
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/a

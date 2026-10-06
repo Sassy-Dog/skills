@@ -79,13 +79,22 @@ Read §3 before skipping it.
 **`directories` is the field that decides whether Dependabot finds anything at all.** Dependabot
 reads the manifest AT `directory:` and does not recurse, so an ecosystem detected in a
 subdirectory and rendered at `/` is a lane pointing at nothing — valid YAML, zero PRs, no error
-(issue #169). The probe therefore reports one directory per manifest, with two ecosystem-specific
-collapses that are backed by a consumer repo's committed config rather than a guess: **gradle**
-folds modules into the build root that holds `settings.gradle` (tailoredtip: `/app/android`, never
-`/app/android/app`) and **cargo** folds `[workspace]` members into their workspace root (devcanopy:
-`/` and `/agent`, never the nine `crates/*`). npm/bun, pub, nuget and docker do **not** collapse —
-velovate's hand-written config lists every workspace member, every pubspec including a nested one,
-every `.csproj` folder and every Dockerfile folder, and that is the coverage it wants. An ecosystem
+(issue #169). The probe therefore reports one directory per manifest, with three ecosystem-specific
+collapses. Two are backed by a consumer repo's committed config: **gradle** folds modules into the
+build root that holds `settings.gradle` (tailoredtip: `/app/android`, never `/app/android/app`) and
+**cargo** folds `[workspace]` members into their workspace root (devcanopy: `/` and `/agent`, never
+the nine `crates/*`). The third is backed by observed failures instead (issue #467): **bun** folds
+workspace members into a root that holds a text `bun.lock` and whose `package.json` declares a
+top-level `workspaces` (array form or `{"packages": [...]}`). A member is a directory whose path
+under that root matches one of those globs and that carries no bun lockfile of its own — membership,
+not ancestry, so a `package.json` the globs do not name keeps its lane. A member-only PR never
+rewrites the root lockfile, so it fails `bun install --frozen-lockfile` and cannot merge (what2wear:
+seven red PRs, while the root entry's grouped PR passed). A repo with only the binary `bun.lockb` is
+not bun at all — it stays npm + lockfile-sync, and its lanes do not collapse. npm, pub, nuget and
+docker do **not** collapse — velovate's hand-written config lists every npm workspace member, every
+pubspec including a nested one, every `.csproj` folder and every Dockerfile folder, and that is the
+coverage it wants (those velovate lanes are `npm`, which does not regenerate `bun.lock` either, so
+they are the committed config's choice and not evidence that per-member bun lanes merge). An ecosystem
 detected with an empty `directories` is reported in `detect_failures` and rendered as nothing;
 never paper over it with `/`.
 

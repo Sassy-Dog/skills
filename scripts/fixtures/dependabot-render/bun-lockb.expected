@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic bun-lockb
+# fixture-note: lockb-only stays npm + lockfile-sync: every lane kept, no collapse.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+npm	/
+npm	/apps/a
+npm	/apps/b

@@ -14,9 +14,9 @@
 # subdirectory and reported without its location renders as `directory: "/"` —
 # valid YAML pointing at nothing, and Dependabot then silently does nothing
 # (issue #169: tailoredtip's four correctly-directed lanes would have collapsed
-# onto the root on the next refresh). The derivation rules, and the two
-# ecosystems that collapse to a build/workspace root, live in
-# lib-ecosystems.sh.
+# onto the root on the next refresh). The derivation rules, and the three
+# ecosystems that collapse to a build/workspace root (gradle, cargo, bun), live
+# in lib-ecosystems.sh.
 #
 # `lockfile_risk` is the field that matters most. Dependabot updates a manifest
 # (package.json, Podfile) but only writes the lockfile formats it supports. When
