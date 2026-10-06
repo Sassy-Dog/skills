@@ -4,15 +4,18 @@
 #   scripts/fixtures/legacy-markers/velovate-dependabot.fixture).
 # fixture-note: the DIRECTORIES below reproduce every directory that file declares — 12 nuget
 #   project folders, 4 pubspecs (including one nested under another), 3 Dockerfile folders,
-#   /apps/mobile/android, / for actions, and the 4 JS workspace directories. Three deliberate
+#   /apps/mobile/android, / for actions, and ONE bun lane at / (the JS workspace members collapse — difference 1). Three deliberate
 #   differences remain, and none of them is a location bug:
-#     1. ECOSYSTEM NAME. The JS lanes render as `bun`, not `npm`: the repo has a root bun.lock, and
-#        setup-deps has classified that as the native bun ecosystem since it GA'd (2025-02). That
-#        predates this fixture and is a policy, not a layout, difference.
-#     2. ONE EXTRA JS LANE. /media/hyperframes/velovate-team-promo holds a real tracked
-#        package.json that the hand-written file omits. It is not vendored (no templates/,
-#        fixtures/, examples/ segment), so the derivation counts it. A repo that wants it excluded
-#        should say so in the file, not rely on the probe overlooking it.
+#     1. ECOSYSTEM NAME AND COLLAPSE. The JS lanes render as `bun`, not `npm`: the repo has a root
+#        bun.lock, and setup-deps has classified that as the native bun ecosystem since it GA'd
+#        (2025-02). Because that one root lockfile covers every workspace member, the four member
+#        lanes the hand-written file lists collapse into the root `/` lane (issue #467): a
+#        member-only PR never rewrites bun.lock, fails `bun install --frozen-lockfile` and cannot
+#        merge, and those hand-written lanes were npm, which does not regenerate bun.lock either.
+#     2. NO EXTRA JS LANE. /media/hyperframes/velovate-team-promo holds a real tracked
+#        package.json that the hand-written file omits. It is not vendored, so it is a candidate,
+#        but it sits under the root workspace lockfile with none of its own and so collapses into
+#        the root lane like the members do (ancestry decides, not the `workspaces` globs).
 #     3. LANE GROUPING IS NOT DERIVABLE. The committed file folds those 12 nuget folders into TWO
 #        entries via the plural `directories:` key (an api lane and a cli lane) and the 3 docker
 #        folders into one, each with its own commit-message prefix, schedule and ignore rules —
@@ -23,10 +26,6 @@
 #   fixture exists to show the generator could now serve that layout, not to propose replacing it.
 # ---8<--- ecosystem<TAB>directory, one rendered lane per line
 bun	/
-bun	/apps/web
-bun	/apps/web-e2e
-bun	/libs/brand
-bun	/media/hyperframes/velovate-team-promo
 docker	/apps/api/Velovate.Api
 docker	/apps/api/Velovate.Jobs
 docker	/apps/api/Velovate.Workers

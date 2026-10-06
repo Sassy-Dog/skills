@@ -3,7 +3,7 @@
 # fixture-fetched: 2026-08-11
 # fixture-scope: every tracked path that can match an ecosystem probe (manifests, lockfiles, .github/workflows). Paths that cannot change the derivation are omitted to keep the fixture readable; nothing else is filtered, so vendored manifests still reach the exclude filter.
 # fixture-regen: gh api "repos/Sassy-Dog/velovate/git/trees/d0abe2a643ba028941a4aac80fb1562d5b3f0162?recursive=1" --jq '.tree[]|select(.type=="blob")|.path' | sort | grep -E '(^|/)(package\.json|bun\.lock|bun\.lockb|pnpm-lock\.yaml|yarn\.lock|package-lock\.json|pubspec\.yaml|Podfile|go\.mod|Package\.swift|Cargo\.toml|requirements\.txt|pyproject\.toml|setup\.py|Pipfile|settings\.gradle(\.kts)?|build\.gradle(\.kts)?|Directory\.Packages\.props|packages\.config)$|(^|/)Dockerfile[^/]*$|\.(csproj|vbproj|fsproj|sln)$|^\.github/workflows/[^/]+\.ya?ml$'
-# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (Cargo.toml's [workspace] table); it is the verbatim marker line from upstream.
+# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (Cargo.toml's [workspace] table; the root package.json's `workspaces` key); it is the verbatim marker line from upstream.
 # ---8<--- one tracked path per line below; optional TAB-separated content
 .github/workflows/_ci-jobs.yml
 .github/workflows/_terraform-apply.yml
@@ -59,5 +59,5 @@ libs/brand_flutter/pubspec.yaml
 libs/brand/package.json
 libs/maps/pubspec.yaml
 media/hyperframes/velovate-team-promo/package.json
-package.json
+package.json	{"workspaces": ["apps/*", "libs/*"]}
 velovate.sln

@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic bun workspace with one self-locked member
+# fixture-note: / covers packages/shared (no lockfile of its own); apps/web has its own bun.lock, so
+#   its PRs regenerate that lockfile and it keeps its own lane (issue #467).
+# fixture-v2-valid: the collapsed-to-/ shape is backed here (root holds package.json), so step 3 of the test does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/web

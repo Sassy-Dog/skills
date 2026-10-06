@@ -79,11 +79,11 @@ Read §3 before skipping it.
 **`directories` is the field that decides whether Dependabot finds anything at all.** Dependabot
 reads the manifest AT `directory:` and does not recurse, so an ecosystem detected in a
 subdirectory and rendered at `/` is a lane pointing at nothing — valid YAML, zero PRs, no error
-(issue #169). The probe therefore reports one directory per manifest, with two ecosystem-specific
+(issue #169). The probe therefore reports one directory per manifest, with three ecosystem-specific
 collapses that are backed by a consumer repo's committed config rather than a guess: **gradle**
 folds modules into the build root that holds `settings.gradle` (tailoredtip: `/app/android`, never
 `/app/android/app`) and **cargo** folds `[workspace]` members into their workspace root (devcanopy:
-`/` and `/agent`, never the nine `crates/*`). npm/bun, pub, nuget and docker do **not** collapse —
+`/` and `/agent`, never the nine `crates/*`). **bun** folds workspace members covered by a root `bun.lock`/`bun.lockb` into the root (a member-only PR never rewrites the root lockfile, so it fails `bun install --frozen-lockfile`; a member with its own lockfile keeps its entry; issue #467). npm, pub, nuget and docker do **not** collapse —
 velovate's hand-written config lists every workspace member, every pubspec including a nested one,
 every `.csproj` folder and every Dockerfile folder, and that is the coverage it wants. An ecosystem
 detected with an empty `directories` is reported in `detect_failures` and rendered as nothing;

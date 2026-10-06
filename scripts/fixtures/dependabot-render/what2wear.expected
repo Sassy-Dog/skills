@@ -1,0 +1,9 @@
+# fixture-expectation-for: Sassy-Dog/what2wear
+# fixture-expectation-source: issue #467 — what2wear#240/#241 removed nine per-member bun entries by
+#   hand because every member-only PR (#212, #213, #216, #234-#237) failed `bun install
+#   --frozen-lockfile`, while the root entry's PR #238 rewrote package.json, bun.lock and every
+#   member manifest and passed.
+# fixture-note: ONE bun lane at /, never the nine members. The corpus is the pre-fix detect output
+#   (ten directories) and the expectation is the single lane the root covers.
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/

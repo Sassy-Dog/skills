@@ -16,7 +16,11 @@
 #
 #   1. The render's (ecosystem, directory) pairs match the fixture's recorded
 #      expectation, for three real consumer layouts — a Flutter+bun monorepo, a
-#      polyglot workspaces monorepo, and a two-workspace cargo repo.
+#      polyglot workspaces monorepo, and a two-workspace cargo repo. Three bun
+#      workspace fixtures (issue #467) cover the collapse: what2wear (one root
+#      bun.lock, nine members -> one lane at /), velovate (same shape, its JS
+#      member lanes collapse into /) and bun-ownlock (a member with its own
+#      bun.lock keeps its lane).
 #   2. validate-dependabot.sh passes on every render: each lane is backed by a
 #      tracked manifest in the directory it names.
 #   3. The pre-fix shape FAILS that validation. A "v2" render of the same repo
@@ -145,6 +149,12 @@ for corpus in $corpora; do
     sed -E 's#^( *directory: ")[^"]*(")#\1/\2#' "$WORK/$name.yml" > "$WORK/$name.v2.yml"
     if cmp -s "$WORK/$name.yml" "$WORK/$name.v2.yml"; then
         ok "$name — root-only repo: the v2 shape is the correct shape here, nothing to reject"
+    elif grep -q '^# fixture-v2-valid:' "$expected"; then
+        # Opt-in, recorded in the fixture's own header: the root holds the
+        # manifests, so a "/" lane IS backed (the own-lockfile bun fixture —
+        # collapsing there only duplicates a lane, it does not point at
+        # nothing). Rejection is still proven by the other fixtures.
+        ok "$name — fixture declares the collapsed-to-\"/\" shape backed by root manifests; rejection is proven by the other fixtures"
     elif bash "$SCRIPTS/validate-dependabot.sh" "$WORK/$name.v2.yml" \
         --root "$tree" --files-from "$WORK/$name.files" >/dev/null 2>&1; then
         bad "$name — the validator ACCEPTED the collapsed-to-\"/\" v2 render; the post-render check is not checking anything"

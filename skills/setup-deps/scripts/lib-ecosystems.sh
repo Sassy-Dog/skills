@@ -90,9 +90,8 @@ eco_manifest_re() {
 # manifest is a lane that silently finds nothing — the failure this whole
 # module exists to make impossible.
 #
-# Default rule: one directory per tracked manifest. Two ecosystems override it,
-# and each override is backed by a consumer repo's committed config rather than
-# a guess:
+# Default rule: one directory per tracked manifest. Three ecosystems override it,
+# and each override is backed by evidence rather than a guess:
 #   - gradle  — settings.gradle(.kts) defines the BUILD ROOT; app/build.gradle
 #     under it is a module of the same build, not a second project
 #     (tailoredtip: /app/android, never /app/android/app).
@@ -100,9 +99,18 @@ eco_manifest_re() {
 #     Dependabot wants the workspace root (devcanopy: / and /agent, never the
 #     nine crates/* members — /agent is listed because it declares its own
 #     empty [workspace] table).
-# npm/bun, pub, nuget and docker deliberately do NOT collapse: velovate's
-# committed config lists each workspace member, each pubspec (including one
-# nested under another), each .csproj folder and each Dockerfile folder.
+#   - bun     — a workspace member covered by a root bun.lock/bun.lockb is not
+#     independently updatable: a PR from a member entry edits only that member's
+#     package.json, never the root lockfile, so it fails `bun install
+#     --frozen-lockfile` and can never merge (what2wear: seven per-member PRs
+#     red, while the root entry's grouped PR rewrote every member manifest plus
+#     bun.lock and passed). A member with its OWN lockfile keeps its own entry.
+#     The cited precedent for per-member entries does not apply: velovate has
+#     the same single-root-lockfile shape, and its per-member lanes are `npm`,
+#     which does not regenerate bun.lock either (qr-ninja#326, 0 of 20 merged).
+# npm, pub, nuget and docker deliberately do NOT collapse: velovate's committed
+# config lists each npm workspace member, each pubspec (including one nested
+# under another), each .csproj folder and each Dockerfile folder.
 # ---------------------------------------------------------------------------
 
 # _display_dir <path> — the `directory:` value for the directory holding <path>.
@@ -181,6 +189,38 @@ cargo_dirs() {
     _roots_under "$ws" "$all"
 }
 
+# bun_dirs — package.json directories minus workspace members that a root
+# lockfile covers. A lockfile dir is a workspace root only when its own
+# package.json declares `workspaces` (content probe, same degrade-and-note
+# shape as cargo_dirs). A package.json dir collapses into the nearest-or-any
+# such ancestor unless it holds a bun lockfile itself.
+bun_dirs() {
+    local all locks ws d p c r keep
+    all="$(dirs_of '^package\.json$')"
+    locks="$(dirs_of '^bun\.lockb?$')"
+    ws=""
+    while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        if [ "$d" = "/" ]; then p="package.json"; else p="${d#/}/package.json"; fi
+        if [ -r "$CORPUS_ROOT/$p" ]; then
+            grep -qE '"workspaces"[[:space:]]*:' "$CORPUS_ROOT/$p" && ws+="$d"$'\n'
+        else
+            CORPUS_NOTES+="bun: $p not readable — treated as a non-workspace root"$'\n'
+        fi
+    done <<<"$locks"
+    while IFS= read -r c; do
+        [ -n "$c" ] || continue
+        keep=1
+        if ! grep -qxF -- "$c" <<<"$locks"; then
+            while IFS= read -r r; do
+                [ -n "$r" ] || continue
+                is_ancestor "$r" "$c" && keep=0
+            done <<<"$ws"
+        fi
+        [ "$keep" -eq 1 ] && echo "$c"
+    done <<<"$all" | sort -u
+}
+
 # nuget_dirs — project folders; Dependabot does not recurse, so a lane pointed
 # at a solution folder with no project file in it discovers nothing (velovate
 # froze its API deps for months that way). Fall back to the solution/central-
@@ -201,7 +241,8 @@ ecosystem_dirs() {
         github-actions)
             # Dependabot scans .github/workflows at the repo root only.
             has '^\.github/workflows/.*\.ya?ml$' && echo "/" ;;
-        bun|npm)   dirs_of '^package\.json$' ;;
+        bun)       bun_dirs ;;
+        npm)       dirs_of '^package\.json$' ;;
         nuget)     nuget_dirs ;;
         pub)       dirs_of '^pubspec\.yaml$' ;;
         gomod)     dirs_of '^go\.mod$' ;;
