@@ -96,7 +96,8 @@ guard would tax every Stop.
    public-repo default) and the other file already holds owned entries (command contains
    `.claude/hooks/sassydog-`), remove exactly those entries from the other file and add them to the
    target, and show both diffs. Leaving the old entry keeps a tracked script wired and PR-editable.
-   The reverse flip moves them back the same way. Empty matcher groups the removal leaves stay, as
+   The reverse flip fires when the chosen target is `settings.json` and `settings.local.json`
+   already holds owned entries; it moves them back the same way. Empty matcher groups the removal leaves stay, as
    in rule 4; non-owned entries never move.
 
 ## Uninstall

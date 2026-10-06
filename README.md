@@ -22,7 +22,7 @@ Everything here is plain Markdown plus Bash. Claude Code consumes it as a plugin
 | `sassy-dog` | `recap` | Session wrap-up report — work completed, what surfaced, issues to file, immediate next steps |
 | `sassy-dog` | `setup-repo` | Orchestrator: owns the broad "set up this repo" intent — runs `setup-config` → `setup-hooks` → `setup-deps` strictly in sequence behind one combined plan gate, and reports what ran, what was skipped, and why |
 | `sassy-dog` | `setup-config` | Generator/refresher: writes and re-syncs a repo's `.claude/sassy-dog/*.md` workflow-skill config plus its `.claude/settings.json` plugin declaration |
-| `sassy-dog` | `setup-hooks` | Generator/refresher: renders a repo's Claude Code hooks (`.claude/hooks/sassydog-*.sh` + settings.json wiring) — a stack-specific format-on-edit/lint dispatcher from detection, plus an always-on stray-artifact guard that keeps throwaway binaries out of the repo root; re-runnable as the stack evolves |
+| `sassy-dog` | `setup-hooks` | Generator/refresher: renders a repo's Claude Code hooks (`.claude/hooks/sassydog-*.sh` + `.claude/settings.json` wiring, or `settings.local.json` in a public repo) — a stack-specific format-on-edit/lint dispatcher from detection, plus an always-on stray-artifact guard that keeps throwaway binaries out of the repo root; re-runnable as the stack evolves |
 | `sassy-dog` | `setup-deps` | Generator/refresher: renders a repo's `.github/dependabot.yml` (grouped, per detected ecosystem) plus its dependency automation workflows — auto-merge, `bun.lock` sync, pod lockfile sync — from stack detection; re-runnable as the stack evolves |
 | `sassy-dog` | `github-issues` | Issue/board reads, stale-issue detection, idempotent dedupe-then-file issue creation |
 | `sassy-dog` | `sentry-triage` | Gate-and-escalate Sentry triage; qualifying hits escalate via `github-issues` |
@@ -74,7 +74,7 @@ user-facing flow.
 `setup-hooks` is the same pattern one layer down: it detects the repo's stack (ruff,
 prettier, markdownlint, shellcheck, dart, rustfmt, gofmt, dotnet format — keyed on repo config, not
 installed binaries) and renders a PostToolUse dispatcher into `.claude/hooks/`, wired into
-`.claude/settings.json`. Formatters fix silently; unfixable lint findings exit 2 so they feed
+`.claude/settings.json` (`.claude/settings.local.json` by default in a public repo). Formatters fix silently; unfixable lint findings exit 2 so they feed
 straight back for an immediate fix. Alongside it, a stack-agnostic **stray-artifact guard** is
 always rendered: it keeps screenshots and other throwaway binaries out of the repo root, pointing
 them at a gitignored `tmp/` that `tidy-repo` already sweeps. It reports, never relocates. Re-runs reconcile only entries the generator owns (command path

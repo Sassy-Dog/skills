@@ -101,8 +101,15 @@
 #      `review_site:`, and the Phase 7 use site is pinned to the probe, never to
 #      config or a live re-read. Two assertions hold it, each with its proving
 #      mutation: the phrase `from the Phase 0 probe — never from config`
-#      (mutate it to `from config, or re-read live`), and no `gh repo view` in
-#      Phase 7 (mutate by appending one there).
+#      (mutate it to `from config, or re-read live`), and no live visibility
+#      read in Phase 7 or in "Tracking choice in the plan" under Phase 6, the
+#      main use site (#475). A live read is `gh repo view` or a `gh api` call
+#      naming `visibility`; the first spelling alone left
+#      `gh api repos/x/y --jq .visibility` green. Proving mutations, each run in
+#      a throwaway copy with its own committed repo (the gate reads tracked
+#      files through git): append `gh api repos/x/y --jq .visibility` to Phase
+#      7; append `gh repo view` to the Tracking section; append the `gh api`
+#      form to the Tracking section. Each turns the gate red.
 #
 #   5. A BLOCKING FINDING BLOCKS THE MERGE, WITH EXACTLY ONE REDISPATCH.
 #      `dispatch-ready` surfaces the finding named, comments it on the issue,
@@ -787,8 +794,17 @@ phase7="$(awk '/^## Phase 7 /{f=1} /^## Guardrails/{f=0} f' "$SETUP" | tr '\n' '
 if [ -z "$phase7" ]; then
     bad "cannot locate setup-config Phase 7"
 else
-    assert_not_in "$phase7" 'gh repo view' \
+    assert_not_in "$phase7" 'gh repo view|gh api.*visibility' \
         "setup-config's Phase 7 never re-reads visibility live"
+fi
+# The plan's tracking section is the main use site of the probe value, and sits
+# under Phase 6, outside the Phase 7 slice above.
+tracking="$(awk '/^### Tracking choice in the plan/{f=1} /^## Phase 7 /{f=0} f' "$SETUP" | tr '\n' ' ' | tr -s ' ')"
+if [ -z "$tracking" ]; then
+    bad "cannot locate setup-config's Tracking choice in the plan section"
+else
+    assert_not_in "$tracking" 'gh repo view|gh api.*visibility' \
+        "setup-config's Tracking choice in the plan never re-reads visibility live"
 fi
 assert_in "$setup_flat" \
     'never re-read it on a refresh' \

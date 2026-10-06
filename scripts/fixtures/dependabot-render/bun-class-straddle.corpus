@@ -1,0 +1,8 @@
+# fixture-source-repo: synthetic
+# fixture-scope: a class range whose ends straddle `/` is untranslatable, not folded (issue #475).
+# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (the root package.json's `workspaces` key).
+# ---8<--- one tracked path per line below; optional TAB-separated content
+bun.lock
+package.json	{"workspaces": ["pkg[.-0]b"]}
+pkg/b/package.json
+pkg.b/package.json

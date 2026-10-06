@@ -1,0 +1,8 @@
+# fixture-expectation-for: synthetic bun-class-straddle
+# fixture-note: [.-0] spans `/` (0x2F) in code-point order, so the ERE would match pkg/b and fold /pkg/b into /. The range is refused: the root is not a workspace root and nothing under it collapses.
+# fixture-expect-failure: not translatable
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/pkg.b
+bun	/pkg/b

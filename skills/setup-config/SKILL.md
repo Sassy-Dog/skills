@@ -220,11 +220,16 @@ that was skipped. See `references/update-mode.md`.
 
 Apply per file, on approval only.
 
+**In a public repo, the preview also carries "Tracking choice in the plan"** (Phase 6) whenever
+this run writes `.claude/settings.json`; update mode is not exempt, or a refresh would leave
+`settings.json` and `hooks/` tracked.
+
 ## Phase 5 — adopt mode
 
 Legacy hand-written skills with no marker. Read `references/update-mode.md`. Side-by-side review of
 every hand-written section, the user decides per section (fold into config prose / promote upstream
-as plugin feedback / drop), then the legacy directories are deleted on approval.
+as plugin feedback / drop), then the legacy directories are deleted on approval. In a public repo the preview also carries
+"Tracking choice in the plan" (Phase 6) whenever this run writes `.claude/settings.json`.
 
 ## Phase 6 — create mode
 
@@ -264,13 +269,17 @@ committed `settings.json` stays the default). The preview shows, beside the conf
    line never untracks a file, so every path that command lists is shown with its own command,
    `git rm --cached .claude/settings.json` and/or `git rm -r --cached .claude/hooks` (working copy
    stays; the deletion is staged, not committed). Approval-only, never run unpreviewed. This holds
-   in every mode, not just migrate.
+   in every mode, not just migrate. `git rm -r --cached .claude/hooks` untracks **every** file
+   under `.claude/hooks/`, so the preview lists any path that is not `sassydog-*` separately
+   (hand-written hooks) and names each one in the warning below.
 3. **What the untracking does to everyone else.** After the untracking commit lands, every
    collaborator who pulls has those files **deleted** from their working tree — their plugin
    declaration and any hand-added `PreToolUse` push guard go with it (a prior migration lost one
-   exactly this way). The preview says so and gives the restore, run before pulling or right after:
+   exactly this way). The preview says so and gives the restore, run **right after pulling** (the pull is what deletes the file, so a
+   restore run before it is undone):
    `git show <untrack-commit>^:.claude/settings.json > .claude/settings.json` (and the same for
-   each `.claude/hooks/sassydog-*.sh`, or re-run `setup-hooks`). It **warns when the file holds
+   each `.claude/hooks/sassydog-*.sh` and for every hand-written path the preview listed, or
+   re-run `setup-hooks` for the generated ones). It **warns when the file holds
    keys beyond the generators' own** — anything other than `extraKnownMarketplaces`,
    `enabledPlugins` and hook entries whose command contains `.claude/hooks/sassydog-` (for example
    `permissions`, `env`, or non-owned hooks) — since those are shared team settings that stop being
@@ -280,11 +289,17 @@ committed `settings.json` stays the default). The preview shows, beside the conf
    with a bare `git check-ignore` on a tracked path (it exits 1 for a tracked file even when the
    lines are present, which would add duplicates):
    - `.claude/*` is present iff an exact-line match exists in `.gitignore`
-     (`grep -qxF '.claude/*' .gitignore`); `!.claude/sassy-dog/` likewise. Add only the missing
+     (`grep -qxF '.claude/*' .gitignore`); `!.claude/sassy-dog/` likewise. Re-evaluate this at
+     preview time, so the preview shows only the lines still missing. Add only the missing
      line(s), negation after the wildcard.
+   - **Order matters.** A `!.claude/sassy-dog/` line that sits *before* `.claude/*` passes the
+     exact-line match but the wildcard overrides it, so the config is still ignored. Compare
+     `grep -nxF` line numbers; when the negation precedes the wildcard, **propose moving it
+     after** in the preview, never silently.
    - Confirm the outcome with `git check-ignore --no-index -q .claude/settings.json` (must exit 0)
      and `git check-ignore --no-index -q .claude/sassy-dog/<name>.md` (must exit 1 — the generated
-     config has to stay committable). With only `.claude/*` present the second probe exits 0,
+     config has to stay committable). `--no-index` is required on both: without it a tracked path
+     exits 1 whatever `.gitignore` says. With only `.claude/*` present the second probe exits 0,
      so the negation line is the one added.
    - A bare `.claude/` or `.claude` line defeats the re-include. **Flag it** in the preview and
      propose replacing it with `.claude/*`; never silently keep it.
@@ -313,11 +328,12 @@ Visibility is never written to config and never feeds `review_site:`.
    Errors-tab row, and accepting the trust dialog clones the marketplace repo in the background.
    - **Public repos** (`visibility` from the Phase 0 probe — never from config): **verify** the
      tracking choice the approved plan made: `git ls-files .claude/settings.json .claude/hooks`
-     prints nothing, `git check-ignore -v .claude/settings.json
-     .claude/hooks/sassydog-post-edit.sh` reports both ignored, and `git check-ignore -q
-     .claude/sassy-dog/<name>.md` exits 1 (not ignored). Other tracked `.claude/` paths (kept
-     `skills/`, `agents/`) are expected and not an error. In update or adopt mode, where no plan
-     made the choice, report the observed state only. Report any mismatch rather than fixing it
+     prints nothing, `git check-ignore --no-index -v .claude/settings.json
+     .claude/hooks/sassydog-post-edit.sh` reports both ignored, and `git check-ignore --no-index -q
+     .claude/sassy-dog/<name>.md` exits 1 (not ignored; `--no-index` because the config is
+     tracked and a plain probe exits 1 regardless of `.gitignore`). This verify applies in every
+     mode, since the plan's tracking choice does. Other tracked `.claude/` paths (kept `skills/`,
+     `agents/`) are expected and not an error. Report any mismatch rather than fixing it
      unpreviewed; if the user declined the choice, say the files stay tracked. The rule behind it:
      `settings.json` and `hooks/` stay local. Hooks in a
      project's settings run with **no trust prompt** when only a parent folder was trusted, under

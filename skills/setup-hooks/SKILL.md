@@ -160,25 +160,27 @@ tracked `tmp/` deeper in the tree. Idempotent: check with
 `git check-ignore -q tmp/probe` from the repo root and skip when already covered. Append it under
 the repo's existing comment style; include the line in the approval diff like any other write.
 
-**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** (`sassy-dog:setup-config`
-`SKILL.md`) — it owns the predicate and the mechanics, so they are not restated here. For this
-generator that means, in the same approval diff:
+**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** — the section in
+`${CLAUDE_PLUGIN_ROOT}/skills/setup-config/SKILL.md` (resolve the root as in the paragraph above;
+open that file and read the section, because it owns the per-line `.gitignore` predicate and a
+plain `git check-ignore -q` on a tracked path is the duplicate-line bug it exists to prevent). It
+owns the mechanics, so they are not restated here. What is specific to this generator, in the same
+approval diff, and **only when the chosen target is `settings.local.json`**:
 
-- **Untrack by `git ls-files .claude/settings.json .claude/hooks`**, in every mode: preview
-  `git rm -r --cached .claude/hooks` (and `git rm --cached .claude/settings.json` only if this run
-  is the one keeping it local) with its collaborator-deletion warning and restore command. A
-  `.gitignore` line never untracks a file.
-- **Move, never duplicate.** When the target flips to `settings.local.json` and the tracked
-  `settings.json` already holds owned entries (command path `.claude/hooks/sassydog-`), remove
-  exactly those entries from `settings.json` and add them to `settings.local.json`, per
-  `references/settings-merge.md` rule 5. Leaving them would keep the tracked script wired and
-  PR-editable.
-- **The `.gitignore` lines**, per-line predicate as in that section. Under `setup-repo`,
-  `setup-config` owns the displayed edit; show it here only when run standalone or when
-  `setup-config` was skipped or declined, and at write time re-evaluate the predicate so a line the
-  prior generator added is never added twice. `settings.local.json` is ignored by Claude Code
+- **Untrack the hooks** (`git ls-files .claude/hooks`, every mode) with the section's warning and
+  restore. When the chosen target is the committed `settings.json`, the user is keeping the
+  scripts tracked together with the settings that wire them: do not untrack hooks and do not
+  assert them untracked, or collaborators' hooks point at missing files. `settings.json` itself
+  is untracked only when it is tracked and the target is `settings.local.json`.
+- **Move, never duplicate.** Flip direction is decided by repo state: the target is
+  `settings.local.json` and the tracked `settings.json` holds owned entries (command path
+  `.claude/hooks/sassydog-`) → move them to `settings.local.json`; the target is `settings.json`
+  and `settings.local.json` holds owned entries → move them back. Rule 5 of
+  `references/settings-merge.md` has the mechanics.
+- **The `.gitignore` lines**, per-line predicate as in that section, evaluated at preview time so
+  only lines still missing are shown. `settings.local.json` is ignored by Claude Code
   convention, but `.claude/hooks/` is not, so without them an "untracked" hook script is one
-  `git add -A` from being committed. Do not offer them if the user chose the committed file.
+  `git add -A` from being committed.
 
 Private and internal repos are unchanged.
 
@@ -215,9 +217,11 @@ execute bit on the script.
    very thing the hook exists to catch.
 4. Confirm `tmp/` is actually ignored: `git check-ignore -v tmp/probe.png` must print the rule.
 5. Validate the chosen target still parses (`.claude/settings.json` or `.claude/settings.local.json`):
-   `jq -e . <target>`. In a public repo, also assert `git ls-files .claude/hooks` prints nothing
-   (a tracked hook script means the untracking was not applied) and, when ignore lines were
-   offered, `git check-ignore -v .claude/hooks/sassydog-post-edit.sh` prints the rule.
+   `jq -e . <target>`. In a public repo whose target is `settings.local.json`, also assert
+   `git ls-files .claude/hooks` prints nothing (a tracked hook script means the untracking was not
+   applied) and, when ignore lines were offered,
+   `git check-ignore --no-index -v .claude/hooks/sassydog-post-edit.sh` prints the rule. When the
+   target is the committed `settings.json`, skip both: the hooks stay tracked with it.
 6. If the markdownlint route was rendered, confirm the version the hook will run matches CI's —
    `grep -o 'markdownlint-cli2[^"]*' .claude/hooks/sassydog-post-edit.sh` against the probe's
    `pin_source`. A pinned render must show the pin on both invocations; a fix-only render must show

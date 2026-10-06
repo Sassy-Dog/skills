@@ -45,7 +45,8 @@ whole point.
 writes `extraKnownMarketplaces` + `enabledPlugins` to `.claude/settings.json`, hooks writes the
 `hooks.PostToolUse` entry to `.claude/settings.json` (or `settings.local.json`, where the
 generator's own public-repo rule sends it). Whether files are tracked is each generator's call
-(`setup-config` Phase 7 step 2); this skill only relays it.
+(`setup-config`'s "Tracking choice in the plan" owns the call; Phase 7 step 2 carries the
+reasoning); this skill only relays it.
 Each documents a *surgical merge into its own keys*, never a rewrite, so **sequential** runs
 compose: the second reads the file as the first left it and adds to it. Run them concurrently — or
 let either plan against one copy and write back a whole file later — and one of the two
@@ -97,9 +98,12 @@ or modify, and — for anything skipped — the reason. Then ask for approval. *
 before this gate.**
 
 Where a generator reports a tracking or `.gitignore` change in a public repo, the plan relays that
-report as that generator reported it. `setup-config` owns the displayed `.gitignore` edit and
-`setup-hooks` shows it only when run standalone, so it appears once; this skill assigns no
-mechanics of its own.
+report as that generator reported it. Each generator evaluates the
+per-line `.gitignore` predicate against the repo as it stands and shows only the lines still
+missing, counting a line an earlier generator's plan entry already adds, so a line appears once:
+under `setup-config` when it adds it, under `setup-hooks` when `setup-config` was skipped or
+declined. This skill assigns
+no mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
 `setup-hooks`). This gate is what makes the *sweep* visible: three generators firing across

@@ -199,7 +199,7 @@ cargo_dirs() {
 # stray `[`/`{`/`}`/`]`, an empty or `/`-bearing class — so the caller can
 # fail safe rather than fold a package it misread.
 _glob_frag() {
-    local g="$1" braces="$2" out="" i ch next j body alt alts frag neg
+    local g="$1" braces="$2" out="" i ch next j body alt alts frag neg k lo hi
     for ((i = 0; i < ${#g}; i++)); do
         ch="${g:i:1}"; next="${g:i+1:1}"
         case "$ch" in
@@ -226,6 +226,19 @@ _glob_frag() {
                 case "$body" in '!'*|'^'*) neg='^'; body="${body:1}" ;; esac
                 [ -n "$body" ] || return 1
                 case "$body" in *'/'*|*'['*|*'\'*) return 1 ;; esac
+                # A range is only portable between two ends of one of 0-9, a-z
+                # or A-Z: anything else (`[.-0]` straddles `/`) is ordered by
+                # locale and by grep flavour, so refuse rather than guess. Ends
+                # are compared by code point, which no locale reorders.
+                for ((k = 1; k < ${#body} - 1; k++)); do
+                    [ "${body:k:1}" = "-" ] || continue
+                    lo="$(LC_ALL=C printf '%d' "'${body:k-1:1}")"
+                    hi="$(LC_ALL=C printf '%d' "'${body:k+1:1}")"
+                    if   [ "$lo" -ge 48 ] && [ "$lo" -le 57 ]  && [ "$hi" -ge 48 ] && [ "$hi" -le 57 ];  then :
+                    elif [ "$lo" -ge 97 ] && [ "$lo" -le 122 ] && [ "$hi" -ge 97 ] && [ "$hi" -le 122 ]; then :
+                    elif [ "$lo" -ge 65 ] && [ "$lo" -le 90 ]  && [ "$hi" -ge 65 ] && [ "$hi" -le 90 ];  then :
+                    else return 1; fi
+                done
                 [ -n "$neg" ] && neg='^/'
                 out+="[$neg$body]" ;;
             '{')
