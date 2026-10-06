@@ -37,12 +37,15 @@ description is the trigger-phrase tightening to refuse.
 ## Why the orchestrator exists
 
 **The gap is invisible.** A repo reached through one generator alone is a third of a setup, and
-nothing reports the other two-thirds as missing — it surfaces later as a routine that silently
-loads no skill, or a Dependabot flood nobody automated. Naming all three in one report is the
+nothing reports the other two-thirds as missing — it surfaces later as a repo with no hooks, or a
+Dependabot flood nobody automated. Naming all three in one report is the
 whole point.
 
 **The shared write.** `setup-config` and `setup-hooks` both write `.claude/settings.json` — config
 writes `extraKnownMarketplaces` + `enabledPlugins`, hooks writes the `hooks.PostToolUse` entry.
+Whether the file is committed is a per-repo choice, and a public repo should keep it (and
+`hooks/`) local: project hooks run without a trust prompt in several modes (`setup-config`
+Phase 7 step 2).
 Each documents a *surgical merge into its own keys*, never a rewrite, so **sequential** runs
 compose: the second reads the file as the first left it and adds to it. Run them concurrently — or
 let either plan against one copy and write back a whole file later — and one of the two

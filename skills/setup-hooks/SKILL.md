@@ -105,7 +105,10 @@ machine — the render must hold on a colleague's machine too.
 Ask only what detection cannot answer:
 
 1. **Settings target** — committed `.claude/settings.json` (default: the whole team gets the
-   hooks) or personal `.claude/settings.local.json`?
+   hooks) or personal `.claude/settings.local.json`? In a **public** repo, recommend the local file
+   and an untracked `hooks/`: project hooks run with no trust prompt when only a parent folder was
+   trusted, under `claude -p` / the Agent SDK and in cloud sessions, so tracked hook scripts are
+   code any PR can change and contributors run unprompted (`setup-config` Phase 7 step 2).
 2. **Lint strictness** — linters exit 2 (findings feed back for immediate fix — default) or
    advisory (log to the user, exit 0)?
 3. **Slow tools** — anything detected with a meaningful per-edit cost (`dotnet format`, full

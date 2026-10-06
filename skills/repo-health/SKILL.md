@@ -159,16 +159,17 @@ directory that no longer exists.
 
 > **Never clear a pin with `claude plugin uninstall --scope project`.** It does not only remove
 > local state: it **edits the repo's committed `.claude/settings.json`**, emptying `enabledPlugins`
-> — which strips the declaration `sassy-dog:setup-config` writes and #97 requires, so the repo then
-> loads nothing in a cloud session or scheduled routine. Measured 2026-09-06 across 13 checkouts,
+> — which strips the declaration `sassy-dog:setup-config` writes, so the repo then loads nothing
+> for local sessions on other machines (cloud sessions and routines never read it; #468). Measured 2026-09-06 across 13 checkouts,
 > 10 of which had the key silently deleted from a tracked file. It also makes a naive experiment
 > lie: uninstall-then-reopen looks like the pin "stays gone", when what actually happened is that
 > the declaration which creates it was deleted too.
 
 **The declaration and the local pin are one mechanism, and you cannot keep one without the other.**
-The declaration is a committed repo file and is what makes cloud sessions work; the pin is the
-local snapshot it causes. Removing the declaration to avoid the pin trades a silent staleness
-problem for a silent no-skills-at-all problem, which is strictly worse.
+The declaration is a committed repo file that makes the plugin resolve for local sessions (it does
+not reach cloud sessions, #468); the pin is the local snapshot it causes. Removing the declaration
+to avoid the pin trades a silent staleness problem for a silent no-skills-at-all problem locally,
+which is strictly worse.
 
 Two results that are not what they look like:
 
@@ -176,7 +177,7 @@ Two results that are not what they look like:
   has opened that checkout **since the declaration reached its working tree** — in which case the
   next one creates an entry pinned to whatever is current — or the repo is missing the
   `.claude/settings.json` declaration `sassy-dog:setup-config` writes, in which case it would load
-  no skill at all in a cloud session or scheduled routine. **This report cannot tell them apart**:
+  no skill at all for local sessions on other machines. **This report cannot tell them apart**:
   read the repo's `.claude/settings.json` for `enabledPlugins` *and* `extraKnownMarketplaces`
   before concluding anything, and read it **in the checkout**, not on the default branch: a repo
   can be committed-correct and locally behind. `mission-control` was exactly that — it ran a

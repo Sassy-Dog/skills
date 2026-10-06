@@ -55,7 +55,8 @@ gh repo view --json nameWithOwner,defaultBranchRef,deleteBranchOnMerge,visibilit
 
 `visibility` is on that call for one reason and is read exactly once: it seeds `review_site:`
 (Phase 1). Extend this call rather than adding a second one — and never re-read it on a refresh,
-for the reason Phase 4 gives.
+for the reason Phase 4 gives. Phase 7 step 2 reuses this same probe value to word one piece of
+advice; that use is advisory, is never written to config, and never feeds `review_site:`.
 
 **Probe the remote before trusting the checkout.** Every signal the mode table reads lives in the
 working tree, and the working tree can be days stale. Fetch, then list what the remote default
@@ -248,12 +249,34 @@ silent.
 
 1. Every written `.claude/sassy-dog/*.md` parses: `---` on line 1, valid YAML frontmatter, `##`
    sections intact.
-2. `.claude/settings.json` is valid JSON and declares **both** the marketplace
-   (`extraKnownMarketplaces`) and the plugin (`enabledPlugins`). **This is the step most likely to
-   be skipped**, because everything works locally without it — plugin skills enabled only in *user*
-   settings do not transfer to cloud sessions or scheduled routines, and `enabledPlugins` without
-   the marketplace declaration leaves cloud sessions unable to resolve `@skills` at all,
-   so a scheduled `dispatch-ready` silently finds no skill while every local session passes.
+2. If `.claude/settings.json` exists it is valid JSON, and a repo that tracks it declares **both**
+   the marketplace (`extraKnownMarketplaces`) and the plugin (`enabledPlugins`). **Committing it is
+   a per-repo choice for local multi-machine convenience, not a requirement, and it does not
+   reach cloud sessions or scheduled routines.** Per the Claude Code docs (plugins/install, "Cloud
+   session"; plugins/loading; cloud-environments, "What carries over"), a cloud session loads
+   neither the plugins installed on a user's machine nor the ones a repo's `.claude/settings.json`
+   turns on, and it does not add the marketplaces under `extraKnownMarketplaces`, because that
+   needs the workspace trust dialog, which a cloud session never shows. A scheduled routine cannot
+   load a plugin skill at all (#175); only org-managed settings reach those sessions.
+   Declaring the plugin costs something to every contributor without it: a project-only
+   `enabledPlugins` entry for a `github`-sourced plugin installs nothing, so they get a `/plugin`
+   Errors-tab row, and accepting the trust dialog clones the marketplace repo in the background.
+   - **Public repos** (`visibility` from the Phase 0 probe — never from config): recommend tracking
+     only `.claude/sassy-dog/*.md` and keeping `settings.json` and `hooks/` local. Hooks in a
+     project's settings run with **no trust prompt** when only a parent folder was trusted, under
+     `claude -p` / the Agent SDK, and in cloud sessions (permissions, "What runs before you trust a
+     folder"; cloud-environments, "What carries over"), so in a public repo a tracked
+     `.claude/hooks/sassydog-*.sh` is code that runs on contributors' machines without per-repo
+     consent and is editable by any PR. The ignore-file form is `.claude/*` followed by
+     `!.claude/sassy-dog/`; `.claude/` followed by `!…` does **not** re-include, because the
+     directory itself is ignored and its contents are never visited. Ignoring alone is not a
+     boundary: checking out a branch that force-adds `.claude/settings.json` overwrites the local
+     ignored copy and deletes it on switching back. A CI guard that fails when anything under
+     `.claude` other than `.claude/sassy-dog/<name>.md` is tracked is an option (case-insensitive,
+     any depth, symlinks caught); `Sassy-Dog/solador` ships one as `scripts/claude-dir-guard.sh`.
+     Offer it, never add it unasked.
+   - **Non-public repos:** committing the declaration remains reasonable, since team members on
+     other machines pick the plugin up from it.
 3. In migrate mode: `.claude/skills/` contains no marker-carrying directory, and every unmarked one
    still exists.
 4. Remind: config is read at skill invocation, so it takes effect immediately — no session restart

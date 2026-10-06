@@ -900,11 +900,13 @@ Skills that write or dispatch unattended (`take-it`, `dispatch-ready`) do not de
 
 ## Cloud sessions and routines
 
-A repo carrying these config files must also declare, in its own `.claude/settings.json`, both the
-marketplace (`extraKnownMarketplaces` → `skills` from `Sassy-Dog/skills`) and the
-plugin (`enabledPlugins` → `sassy-dog@skills`). Plugin skills enabled only in user settings
-do not transfer to cloud sessions or scheduled routines — only repo-declared plugins install at
-session start, and they install *from the marketplace the repo declares*. `enabledPlugins` alone
-references the marketplace by name only; the name resolves locally through user-level registration
-(`~/.claude/plugins/known_marketplaces.json`), which never reaches a cloud VM. Without both
-declarations a scheduled `dispatch-ready` silently finds no skill, while every local session works fine.
+A repo's `.claude/settings.json` declaration of the marketplace (`extraKnownMarketplaces` → `skills`
+from `Sassy-Dog/skills`) and the plugin (`enabledPlugins` → `sassy-dog@skills`) is a **local
+convenience, not a cloud mechanism**. Per the Claude Code docs (plugins/install, "Cloud session";
+plugins/loading; cloud-environments, "What carries over"), a cloud session loads neither the
+plugins installed on a user's machine nor the ones the repo's `.claude/settings.json` turns on, and
+does not add `extraKnownMarketplaces` marketplaces, because that needs the workspace trust dialog,
+which a cloud session never shows. A scheduled routine cannot load a plugin skill at all (#175).
+Only org-managed settings reach those sessions. Whether to track the file is a per-repo choice; for
+a public repo, track only `.claude/sassy-dog/*.md` and keep `settings.json` and `hooks/` local
+(`setup-config` SKILL.md, Phase 7 step 2, carries the reasoning and the ignore-file form).
