@@ -1,0 +1,8 @@
+# fixture-expectation-for: synthetic bun-untranslatable
+# fixture-note: packages/{a,{b,c}} has nested braces, so the whole root is treated as not-a-workspace-root: apps/a, which a translatable glob would have folded, keeps its lane too.
+# fixture-expect-failure: not translatable
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/a
+bun	/packages/a

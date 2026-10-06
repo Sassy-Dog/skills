@@ -108,7 +108,7 @@ eco_manifest_re() {
 #     bun.lock and passed). A member with its OWN lockfile keeps its own entry.
 #     The cited precedent for per-member entries does not apply: velovate has
 #     the same single-root-lockfile shape, and its per-member lanes are `npm`,
-#     which does not regenerate bun.lock either (qr-ninja#326, 0 of 20 merged).
+#     which does not regenerate bun.lock either (qr-ninja#326: Dependabot does not regenerate bun.lock, so the frozen install aborts).
 # npm, pub, nuget and docker deliberately do NOT collapse: velovate's committed
 # config lists each npm workspace member, each pubspec (including one nested
 # under another), each .csproj folder and each Dockerfile folder.
@@ -190,21 +190,79 @@ cargo_dirs() {
     _roots_under "$ws" "$all"
 }
 
-# _glob_to_ere <workspace-glob> — a package.json `workspaces` glob as an ERE
-# anchored to a whole relative path: `**` spans segments, `*` and `?` do not.
-_glob_to_ere() {
-    local g="${1#./}" out="" i ch next
-    g="${g%/}"
+# _glob_frag <glob-fragment> <allow-braces 0|1> — translate Bun's documented
+# `workspaces` glob syntax to an ERE fragment, on stdout. `*` and `?` do not
+# span `/`; `**/` is zero or more segments, a bare `**` spans anything; `[...]`
+# is a character class (a leading `!` or `^` negates); `{a,b}` is alternation,
+# one level only. Returns 1 for anything it will not guess at — nested braces,
+# extglob (`!(`, `@(`, `?(`, `*(`, `+(`), backslash escapes, an unterminated or
+# stray `[`/`{`/`}`/`]`, an empty or `/`-bearing class — so the caller can
+# fail safe rather than fold a package it misread.
+_glob_frag() {
+    local g="$1" braces="$2" out="" i ch next j body alt alts frag neg
     for ((i = 0; i < ${#g}; i++)); do
         ch="${g:i:1}"; next="${g:i+1:1}"
         case "$ch" in
-            '*') if [ "$next" = "*" ]; then out+='.*'; i=$((i + 1)); else out+='[^/]*'; fi ;;
+            '?'|'*'|'+'|'@'|'!') [ "$next" = "(" ] && return 1 ;;
+        esac
+        case "$ch" in
+            '*')
+                if [ "$next" = "*" ]; then
+                    # `**` is only defined as a WHOLE segment (at the start or
+                    # after `/`, before `/` or the end), and not inside braces;
+                    # anything else is a guess at Bun's semantics, so refuse.
+                    [ "$braces" -eq 1 ] || return 1
+                    { [ "$i" -eq 0 ] || [ "${g:i-1:1}" = "/" ]; } || return 1
+                    case "${g:i+2:1}" in ''|'/') ;; *) return 1 ;; esac
+                    if [ "${g:i+2:1}" = "/" ]; then out+='(.*/)?'; i=$((i + 2)); else out+='.*'; i=$((i + 1)); fi
+                else out+='[^/]*'; fi ;;
             '?') out+='[^/]' ;;
-            '.'|'+'|'('|')'|'['|']'|'{'|'}'|'^'|'$'|'|'|'\') out+="\\$ch" ;;
-            *)   out+="$ch" ;;
+            '[')
+                j="${g:i+1}"
+                case "$j" in *']'*) ;; *) return 1 ;; esac
+                body="${j%%]*}"
+                i=$((i + ${#body} + 1))
+                neg=""
+                case "$body" in '!'*|'^'*) neg='^'; body="${body:1}" ;; esac
+                [ -n "$body" ] || return 1
+                case "$body" in *'/'*|*'['*|*'\'*) return 1 ;; esac
+                [ -n "$neg" ] && neg='^/'
+                out+="[$neg$body]" ;;
+            '{')
+                [ "$braces" -eq 1 ] || return 1
+                j="${g:i+1}"
+                case "$j" in *'}'*) ;; *) return 1 ;; esac
+                body="${j%%\}*}"
+                case "$body" in *'{'*) return 1 ;; esac
+                i=$((i + ${#body} + 1))
+                alts=""
+                while :; do
+                    alt="${body%%,*}"
+                    [ -n "$alt" ] || return 1
+                    frag="$(_glob_frag "$alt" 0)" || return 1
+                    alts+="${alts:+|}$frag"
+                    case "$body" in *,*) body="${body#*,}" ;; *) break ;; esac
+                done
+                out+="($alts)" ;;
+            ']'|'}'|'\') return 1 ;;
+            '.'|'+'|'('|')'|'^'|'$'|'|') out+="\\$ch" ;;
+            *) out+="$ch" ;;
         esac
     done
-    printf '^%s$' "$out"
+    printf '%s' "$out"
+}
+
+# _glob_to_ere <workspace-glob> <neg 0|1> — the glob as an ERE anchored to a
+# whole relative path, or return 1 when it cannot be translated safely. In a
+# positive glob a trailing `/**` needs at least one more segment (the narrow,
+# lane-keeping reading). In a `!` glob it also matches zero segments: Bun's docs
+# do not say, and excluding more keeps more lanes.
+_glob_to_ere() {
+    local g="${1#./}" neg="$2" tail="" frag
+    g="${g%/}"
+    if [ "$neg" -eq 1 ] && [[ "$g" == */'**' ]]; then g="${g%/\*\*}"; tail='(/.*)?'; fi
+    frag="$(_glob_frag "$g" 1)" || return 1
+    printf '^%s%s$' "$frag" "$tail"
 }
 
 # bun_dirs — package.json directories minus the workspace MEMBERS a root bun.lock
@@ -213,12 +271,14 @@ _glob_to_ere() {
 # still counts as a member's OWN lockfile) whose package.json
 # declares a TOP-LEVEL `workspaces` (array form or {"packages": [...]}), read
 # with jq; a member is a directory whose path under that root matches one of
-# those globs (a `!glob` excludes) and that holds no bun lockfile of its own.
+# those globs (every `!glob` excludes, wherever it sits in the list, and a `!`
+# glob's trailing `/**` also matches zero segments) and that holds no bun lockfile of its own.
 # Membership, not ancestry: a package.json under the root that the globs do not
 # name is not covered by the root install, so it keeps the lane it always had.
-# An unparsable manifest degrades to "not a workspace root" and is noted.
+# An unparsable manifest, or a root with any glob _glob_to_ere cannot translate,
+# degrades to "not a workspace root" and is noted: nothing under it collapses.
 bun_dirs() {
-    local all locks texts d p c r rel keep g neg hit globs i
+    local all locks texts d p c r rel keep g neg hit excl globs i bad ere
     all="$(dirs_of '^package\.json$')"
     locks="$(dirs_of '^bun\.lockb?$')"
     texts="$(dirs_of '^bun\.lock$')"
@@ -230,7 +290,24 @@ bun_dirs() {
             if globs="$(jq -r 'if (.workspaces|type)=="array" then .workspaces[]
                 elif (.workspaces|type)=="object" then (.workspaces.packages // [])[]
                 else empty end' "$CORPUS_ROOT/$p" 2>/dev/null)"; then
-                if [ -n "$globs" ]; then root_dirs+=("$d"); root_globs+=("$globs"); fi
+                if [ -n "$globs" ]; then
+                    bad=""
+                    while IFS= read -r g; do
+                        [ -n "$g" ] || continue
+                        neg=0
+                        case "$g" in '!'*) neg=1 ;; esac
+                        ere="$(_glob_to_ere "${g#!}" "$neg")" || { bad="$g"; break; }
+                        # A regex this grep cannot compile exits 2, which the
+                        # membership test below would read as "no match".
+                        grep -E -- "$ere" </dev/null >/dev/null 2>&1
+                        if [ $? -eq 2 ]; then bad="$g"; break; fi
+                    done <<<"$globs"
+                    if [ -n "$bad" ]; then
+                        CORPUS_NOTES+="bun: $p workspaces glob '$bad' is not translatable — no member under $d collapses"$'\n'
+                    else
+                        root_dirs+=("$d"); root_globs+=("$globs")
+                    fi
+                fi
             else
                 CORPUS_NOTES+="bun: $p is not valid JSON — treated as a non-workspace root"$'\n'
             fi
@@ -246,15 +323,17 @@ bun_dirs() {
                 r="${root_dirs[$i]}"
                 is_ancestor "$r" "$c" || continue
                 if [ "$r" = "/" ]; then rel="${c#/}"; else rel="${c#"$r"/}"; fi
-                hit=0
+                hit=0; excl=0
                 while IFS= read -r g; do
                     [ -n "$g" ] || continue
                     neg=0
                     case "$g" in '!'*) neg=1; g="${g#!}" ;; esac
-                    if grep -qE "$(_glob_to_ere "$g")" <<<"$rel"; then
-                        if [ "$neg" -eq 1 ]; then hit=0; else hit=1; fi
+                    ere="$(_glob_to_ere "$g" "$neg")"
+                    if grep -qE -- "$ere" <<<"$rel"; then
+                        if [ "$neg" -eq 1 ]; then excl=1; else hit=1; fi
                     fi
                 done <<<"${root_globs[$i]}"
+                [ "$excl" -eq 1 ] && hit=0
                 if [ "$hit" -eq 1 ]; then keep=0; fi
             done
         fi

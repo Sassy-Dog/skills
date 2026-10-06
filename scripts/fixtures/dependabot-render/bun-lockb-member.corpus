@@ -1,0 +1,9 @@
+# fixture-source-repo: synthetic
+# fixture-scope: boundary: a workspace member carrying only a binary bun.lockb has its own lockfile and keeps its lane.
+# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (the root package.json's `workspaces` key).
+# ---8<--- one tracked path per line below; optional TAB-separated content
+bun.lock
+package.json	{"workspaces": ["apps/*"]}
+apps/a/package.json
+apps/b/package.json
+apps/b/bun.lockb

@@ -1,0 +1,7 @@
+# fixture-expectation-for: synthetic bun-negclass
+# fixture-note: pkg[!a]b names pkgxb, which folds; pkgab is excluded by the class, and pkg/b has a / where the class would sit; both keep their lanes.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/pkg/b
+bun	/pkgab

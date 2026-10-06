@@ -1,0 +1,7 @@
+# fixture-source-repo: synthetic
+# fixture-scope: a root package.json that is not valid JSON is treated as not-a-workspace-root and reported in detect_failures.
+# fixture-content: a TAB-separated body follows the path only where the CONTENT decides the derivation (the root package.json's `workspaces` key).
+# ---8<--- one tracked path per line below; optional TAB-separated content
+bun.lock
+package.json	{not json
+apps/a/package.json

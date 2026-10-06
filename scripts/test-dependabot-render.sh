@@ -24,7 +24,24 @@
 #      root bun.lock without a top-level `workspaces` key), bun-lockb (a
 #      bun.lockb-only workspace stays npm), npm-workspaces (npm never
 #      collapses) and bun-nonmember (a package.json the globs do not name keeps
-#      its lane).
+#      its lane). Added for issue #471, one boundary each: bun-lockb-member (a
+#      member with only a bun.lockb keeps its lane), bun-nested (`apps/*` does
+#      not name apps/web/nested), bun-exclude / bun-exclude-brace /
+#      bun-exclude-first (`!` exclusions with `**`, with `{a,b}`, and listed
+#      before the positive glob), bun-class (`[ab]`), bun-untranslatable (nested
+#      braces: nothing under that root collapses, and a note is emitted),
+#      bun-object (the {"packages": [...]} form), bun-empty-alt (an empty brace
+#      alternative is untranslatable, not silently dropped), bun-bare-doublestar /
+#      bun-doublestar-prefix / bun-doublestar-suffix (`a**b`, `x**/y`, `x/**y`
+#      are untranslatable: `**` must be a whole segment), bun-trailing-globstar (a positive `packages/**`
+#      does not name packages itself), bun-question (`?` is one non-/ char),
+#      bun-dot (`.` is literal), bun-negclass (`[!a]` never matches `/`),
+#      bun-subroot (a workspace root
+#      other than /) and bun-badjson (an invalid root package.json is a
+#      detect_failures entry). A fixture's `# fixture-expect-failure: <text>`
+#      header asserts that substring appears in detect_failures; an unreadable
+#      Cargo workspace manifest is checked inline, since a corpus cannot
+#      express file modes.
 #   2. validate-dependabot.sh passes on every render: each lane is backed by a
 #      tracked manifest in the directory it names.
 #   3. The pre-fix shape FAILS that validation. A "v2" render of the same repo
@@ -140,6 +157,18 @@ for corpus in $corpora; do
         sed 's/^/        /' "$WORK/$name.diff" >&2
     fi
 
+    # 1b. a fixture may record a detect_failures substring it must produce
+    #     (an unparsable root manifest, an untranslatable workspace glob).
+    want_fail="$(sed -n 's/^# fixture-expect-failure: //p' "$expected" | head -n1)"
+    if [ -n "$want_fail" ]; then
+        if jq -e --arg w "$want_fail" '.detect_failures | map(select(contains($w))) | length > 0' \
+            "$WORK/$name.detect.json" >/dev/null 2>&1; then
+            ok "$name — detect_failures carries a '$want_fail' entry"
+        else
+            bad "$name — detect_failures has no '$want_fail' entry (CORPUS_NOTES lost in a subshell?)"
+        fi
+    fi
+
     # 2. every lane is backed by a manifest in the directory it names
     if bash "$SCRIPTS/validate-dependabot.sh" "$WORK/$name.yml" \
         --root "$tree" --files-from "$WORK/$name.files" > /dev/null 2> "$WORK/$name.val.err"; then
@@ -178,6 +207,49 @@ if [ "$v2_rejected" -eq 0 ]; then
     bad "step 3 proved nothing — no fixture's collapsed-to-\"/\" v2 render was rejected ($v2_exempt exempted by fixture-v2-valid)"
 else
     ok "step 3 is live — $v2_rejected fixture(s) had their v2 render rejected ($v2_exempt exempted)"
+fi
+
+# --- an unreadable Cargo workspace manifest reaches detect_failures ----------
+# cargo_dirs appends to CORPUS_NOTES while detect-ecosystems.sh builds each
+# ecosystem's directories; a `$(...)` subshell there once dropped every note.
+# Skipped when the shell can read a mode-000 file anyway (running as root).
+CR="$WORK/cargo-unreadable"
+mkdir -p "$CR/crates/a"
+printf '[workspace]\n' > "$CR/Cargo.toml"
+printf '[package]\n' > "$CR/crates/a/Cargo.toml"
+printf 'Cargo.toml\ncrates/a/Cargo.toml\n' > "$WORK/cargo-unreadable.files"
+chmod 000 "$CR/Cargo.toml"
+if [ -r "$CR/Cargo.toml" ]; then
+    ok "cargo-unreadable — skipped: this user can read a mode-000 file"
+elif bash "$SCRIPTS/detect-ecosystems.sh" --files-from "$WORK/cargo-unreadable.files" --root "$CR" 2>/dev/null \
+    | jq -e '.detect_failures | map(select(contains("not readable"))) | length > 0' >/dev/null 2>&1; then
+    ok "cargo-unreadable — an unreadable Cargo workspace manifest reaches detect_failures"
+else
+    bad "cargo-unreadable — no 'not readable' entry in detect_failures (CORPUS_NOTES lost in a subshell?)"
+fi
+chmod 600 "$CR/Cargo.toml"
+
+# --- a glob this grep cannot compile is untranslatable, not "no match" -------
+# `[+--]` is a valid Bun class, but BSD grep and ugrep exit 2 on the ERE it
+# becomes, and a membership test reads exit 2 as "no match". Whether it compiles
+# is a property of the grep on PATH AND the locale (GNU accepts it; BSD grep
+# rejects it under a UTF-8 locale but not under the LC_ALL=C this script exports),
+# so a lane fixture cannot pin it portably: probe under a UTF-8 locale, and
+# assert the note only where the probe is rejected.
+GC="$WORK/grep-compile"
+mkdir -p "$GC/apps/a"
+printf '{"workspaces": ["apps/[+--]"]}\n' > "$GC/package.json"
+: > "$GC/bun.lock"
+printf '{}\n' > "$GC/apps/a/package.json"
+printf 'package.json\nbun.lock\napps/a/package.json\n' > "$WORK/grep-compile.files"
+LC_ALL=en_US.UTF-8 grep -E -- '^a[+--]b$' </dev/null >/dev/null 2>&1
+if [ $? -ne 2 ]; then
+    ok "grep-compile — skipped: this grep compiles [+--] (the check is pinned where it does not)"
+elif LC_ALL=en_US.UTF-8 bash "$SCRIPTS/detect-ecosystems.sh" --files-from "$WORK/grep-compile.files" --root "$GC" 2>/dev/null \
+    | jq -e '.detect_failures | map(select(contains("not translatable"))) | length > 0' >/dev/null 2>&1; then
+    ok "grep-compile — a glob whose ERE this grep rejects is reported as untranslatable"
+else
+    bad "grep-compile — a glob whose ERE this grep rejects was not reported (exit 2 read as no match?)"
 fi
 
 # --- the regression case, against real committed bytes -----------------------

@@ -1,0 +1,6 @@
+# fixture-expectation-for: synthetic bun-nested
+# fixture-note: apps/web is a member and folds into /; apps/web/nested is two segments below apps/, so apps/* does not name it and it keeps its lane.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/apps/web/nested

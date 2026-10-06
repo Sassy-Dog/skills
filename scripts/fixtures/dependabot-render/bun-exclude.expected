@@ -1,0 +1,8 @@
+# fixture-expectation-for: synthetic bun-exclude
+# fixture-note: packages/** names every member, and !packages/**/test/** excludes whatever sits under a test segment. packages/test (zero segments before test, a trailing /** matching zero segments) and packages/test/x and packages/b/test all keep their lanes; packages/a and packages/b fold.
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/packages/b/test
+bun	/packages/test
+bun	/packages/test/x

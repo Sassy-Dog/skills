@@ -2,9 +2,11 @@
 # fixture-expectation-source: the repo's committed .github/dependabot.yml (hand-written, no
 #   generated-by marker; also committed verbatim as
 #   scripts/fixtures/legacy-markers/velovate-dependabot.fixture).
-# fixture-note: the DIRECTORIES below reproduce every directory that file declares — 12 nuget
+# fixture-note: the DIRECTORIES below are every directory that file declares — 12 nuget
 #   project folders, 4 pubspecs (including one nested under another), 3 Dockerfile folders,
-#   /apps/mobile/android, / for actions, and bun at / plus the one non-member (the 3 workspace members collapse into / — difference 1). Three deliberate
+#   /apps/mobile/android, / for actions — except the 3 npm workspace members, which fold into
+#   the bun lane at / (difference 1), plus one extra non-member bun lane the hand-written file
+#   omits (difference 2). Three deliberate
 #   differences remain, and none of them is a location bug:
 #     1. ECOSYSTEM NAME AND COLLAPSE. The JS lanes render as `bun`, not `npm`: the repo has a root
 #        bun.lock, and setup-deps has classified that as the native bun ecosystem since it GA'd

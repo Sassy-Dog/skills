@@ -1,0 +1,4 @@
+# fixture-expectation-for: synthetic bun-subroot
+# fixture-note: web/ holds the text bun.lock and the workspaces key; web/packages/a and b fold into /web, never into /.
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/web

@@ -1,0 +1,4 @@
+# fixture-expectation-for: synthetic bun-object
+# fixture-note: apps/a folds into /; the object form names the same globs as the array form.
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
