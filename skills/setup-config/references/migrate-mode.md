@@ -256,8 +256,9 @@ Show, before any write or delete:
 4. The exact list of directories to be deleted, each with its `generated-by:` marker quoted
 5. Any `.claude/skills/` directory being **kept** because it has no marker
 6. In a public repo, the tracking choice exactly as `SKILL.md` "Tracking choice in the plan" lists
-   it: untracking commands, collaborator-deletion warning and restore command, the `.gitignore`
-   lines, and other tracked `.claude/` paths (Step 4)
+   it: the derived end state and the transition to the chosen target (untracking commands,
+   collaborator-deletion warning and restore command, the `.gitignore` lines), and other tracked
+   `.claude/` paths (Step 4)
 
 Then write config, verify it, and delete only on explicit approval.
 

@@ -77,6 +77,14 @@ through its own detection and mode selection, stopping at the point where it wou
 2. `Skill: sassy-dog:setup-hooks`
 3. `Skill: sassy-dog:setup-deps`
 
+**In a public repo, ask the tracking choice once** (`setup-config`'s "Tracking choice in the plan":
+**local**, the default, or **committed**; `setup-config`'s Phase 0 probe reports visibility, so
+this skill reads none) before walking the first generator, and pass the answer to both
+`setup-config` and `setup-hooks` as their target (local = `settings.local.json`, committed =
+`settings.json`). Each would otherwise ask its own question and the sequential run could combine
+a kept-local config with a committed hooks target and fail. This is a plan-level input, not
+generation mechanics: the derive step, table and transitions stay in `setup-config`.
+
 Capture from each: the mode it picked, and **every file it would create or modify**. Take the
 generator's own detection output at face value — this skill never second-guesses it, and never
 re-derives a stack of its own.
@@ -98,12 +106,11 @@ or modify, and — for anything skipped — the reason. Then ask for approval. *
 before this gate.**
 
 Where a generator reports a tracking or `.gitignore` change in a public repo, the plan relays that
-report as that generator reported it. Each generator evaluates the
-per-line `.gitignore` predicate against the repo as it stands and shows only the lines still
-missing, counting a line an earlier generator's plan entry already adds, so a line appears once:
-under `setup-config` when it adds it, under `setup-hooks` when `setup-config` was skipped or
-declined. This skill assigns
-no mechanics of its own.
+report as that generator reported it. Both derive the repo's current end state against the one
+target chosen above and show only the transition still needed, counting a change an earlier
+generator's plan entry already makes, so each change appears once: under `setup-config` when it
+makes it, under `setup-hooks` when `setup-config` was skipped or declined. This skill assigns no
+mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
 `setup-hooks`). This gate is what makes the *sweep* visible: three generators firing across

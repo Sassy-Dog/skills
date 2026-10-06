@@ -97,10 +97,10 @@ guard would tax every Stop.
    `.claude/hooks/sassydog-`), remove exactly those entries from the other file and add them to the
    target, and show both diffs. Leaving the old entry keeps a tracked script wired and PR-editable.
    The reverse flip fires when the chosen target is `settings.json` and `settings.local.json`
-   already holds owned entries; it moves them back the same way. The move alone shares nothing
-   when an earlier local choice left `settings.json` and `.claude/hooks/` ignored and untracked:
-   `SKILL.md` Phase 3 ("Target committed `settings.json`") adds the previewed un-ignore and
-   `git add`, and Phase 4 step 5 verifies both are tracked and not ignored. Empty matcher groups
+   already holds owned entries; it moves them back the same way. The move alone changes no
+   tracking: in a public repo `setup-config`'s "Tracking choice in the plan" (derived state ×
+   target table) owns the `.gitignore` and `git add`/`git rm --cached` transition that makes the
+   moved entries shared or local, and `SKILL.md` Phase 4 step 5 verifies it. Empty matcher groups
    the removal leaves stay, as in rule 4; non-owned entries never move.
 
 ## Uninstall

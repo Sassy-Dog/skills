@@ -253,63 +253,91 @@ silent.
 
 ### Tracking choice in the plan (every mode that writes `settings.json`, public repos)
 
-**This section owns the tracking mechanics and the ignore-line predicate.** `setup-hooks` and
-`references/migrate-mode.md` reference it and never restate it, so the generators cannot diverge.
+**This section owns the tracking mechanics, the two end states and every transition between
+them.** `setup-hooks`, `setup-repo` and `references/migrate-mode.md` reference it and never restate
+it, so the generators cannot diverge.
 
-Whether `.claude/settings.json` and `.claude/hooks/` are tracked is decided **in the approved
+Whether `.claude/settings.json` and the owned hook scripts are tracked is decided **in the approved
 plan**, not advised after the write. It applies in create, migrate, update and adopt modes whenever
 this run writes `settings.json`, and only when `visibility` from the Phase 0 probe is `PUBLIC`
 (unknown visibility: ask, as `setup-hooks` does; private and internal repos see none of this and a
-committed `settings.json` stays the default). The preview shows, beside the config files:
+committed `settings.json` stays the default). The chosen **target** is one of two end states, both
+defined by the exact `.gitignore` shape and by tracked/ignored status. "Owned scripts" means the
+`.claude/hooks/sassydog-*.sh` files that exist or that this run's generators render: the artifact
+guard always, the post-edit dispatcher only when a tool was detected. Any other file under
+`.claude/hooks/` is **non-owned**.
 
-1. **Kept local.** `settings.json` is written but not tracked; only `.claude/sassy-dog/*.md` is,
-   with the one-line reason (project hooks run with no trust prompt in several modes; Phase 7
-   step 2 carries the reasoning).
-2. **Untracking, decided by `git ls-files .claude/settings.json .claude/hooks`.** A `.gitignore`
-   line never untracks a file, so every path that command lists is shown with its own command,
-   `git rm --cached .claude/settings.json` and/or `git rm -r --cached .claude/hooks` (working copy
-   stays; the deletion is staged, not committed). Approval-only, never run unpreviewed. This holds
-   in every mode, not just migrate. `git rm -r --cached .claude/hooks` untracks **every** file
-   under `.claude/hooks/`, so the preview lists any path that is not `sassydog-*` separately
-   (hand-written hooks) and names each one in the warning below.
-3. **What the untracking does to everyone else.** After the untracking commit lands, every
-   collaborator who pulls has those files **deleted** from their working tree — their plugin
-   declaration and any hand-added `PreToolUse` push guard go with it (a prior migration lost one
-   exactly this way). The preview says so and gives the restore, run **right after pulling** (the pull is what deletes the file, so a
-   restore run before it is undone):
-   `git restore --source=<untrack-commit>^ --worktree -- .claude/settings.json .claude/hooks/<each
-   path the commit untracked, hand-written ones included>` (it recreates the `.claude/hooks/`
-   directory the pull removed, keeps the exec bit, and leaves the files untracked and ignored; a
-   `git show … > path` redirect fails there with "No such file or directory"), or re-run
-   `setup-hooks` for the generated ones. It **warns when the file holds
-   keys beyond the generators' own** — anything other than `extraKnownMarketplaces`,
-   `enabledPlugins` and hook entries whose command contains `.claude/hooks/sassydog-` (for example
-   `permissions`, `env`, or non-owned hooks) — since those are shared team settings that stop being
-   shared.
-4. **The `.gitignore` lines**, `.claude/*` then `!.claude/sassy-dog/`; `.claude/` followed by `!…`
-   does not re-include, because an ignored directory is never visited. Decide **per line**, never
-   with a bare `git check-ignore` on a tracked path (it exits 1 for a tracked file even when the
-   lines are present, which would add duplicates):
-   - `.claude/*` is present iff an exact-line match exists in `.gitignore`
-     (`grep -qxF '.claude/*' .gitignore`); `!.claude/sassy-dog/` likewise. Re-evaluate this at
-     preview time, so the preview shows only the lines still missing. Add only the missing
-     line(s), negation after the wildcard.
-   - **Order matters.** A `!.claude/sassy-dog/` line that sits *before* `.claude/*` passes the
-     exact-line match but the wildcard overrides it, so the config is still ignored. Compare
-     `grep -nxF` line numbers; when the negation precedes the wildcard, **propose moving it
-     after** in the preview, never silently.
-   - Confirm the outcome with `git check-ignore --no-index -q .claude/settings.json` (must exit 0)
-     and `git check-ignore --no-index -q .claude/sassy-dog/<name>.md` (must exit 1 — the generated
-     config has to stay committable). `--no-index` is required on both: without it a tracked path
-     exits 1 whatever `.gitignore` says. With only `.claude/*` present the second probe exits 0,
-     so the negation line is the one added.
-   - A bare `.claude/` or `.claude` line defeats the re-include. **Flag it** in the preview and
-     propose replacing it with `.claude/*`; never silently keep it.
-5. **Other tracked `.claude/` paths.** List `git ls-files .claude` entries outside `sassy-dog/`
-   (kept `skills/`, `agents/`, `commands/`). `.claude/*` would silently ignore new files there, so
-   offer a `!.claude/<dir>/` line for each such directory.
+| End state | `.gitignore` (in this order) | `settings.json` and each owned script |
+|---|---|---|
+| **local** (public default) | `.claude/*`, then `!.claude/sassy-dog/`; neither `!.claude/settings.json` nor `!.claude/hooks/` | untracked **and** ignored |
+| **committed** | `.claude/*`, then `!.claude/sassy-dog/`, `!.claude/settings.json`, `!.claude/hooks/`; every negation after `.claude/*` | tracked **and** not ignored |
 
-The user may decline and keep the files tracked; that is recorded in the report, not re-asked.
+In both, `.claude/sassy-dog/*.md` is tracked and not ignored, and `.claude/settings.local.json`,
+`worktrees/` and the rest of `.claude/` stay ignored. There is no third form: never narrow or drop
+`.claude/*`, because that un-ignores `settings.local.json`.
+
+**Derive the current state from the repo, every run** (a declined choice is never persisted, so
+this is what stops a re-run re-proposing). Per-line, never with a bare `git check-ignore` on a
+tracked path; probe ignore status with `git check-ignore --no-index -q` (exit 0 = ignored) and
+tracking with `git ls-files --error-unmatch`; a line is present iff `grep -qxF` finds it, and its
+position is `grep -nxF`:
+
+- **committed:** both negations present after `.claude/*`, and `settings.json` tracked and not
+  ignored.
+- **local:** neither negation present, `.claude/*` then `!.claude/sassy-dog/` in order, and
+  `settings.json` untracked and ignored.
+- **mixed:** anything else (one negation missing, a negation before `.claude/*`, a bare `.claude/`
+  or `.claude` line, tracked-but-ignored, untracked-but-not-ignored, no lines at all).
+
+| Derived state | Target **local** | Target **committed** |
+|---|---|---|
+| local | nothing | **local → committed** |
+| committed | **committed → local** | nothing |
+| mixed | report the exact mismatch; propose the transition to **local** | report the exact mismatch; propose the transition to **committed** |
+
+"Nothing" means the preview shows no tracking change at all. Every transition below is shown in the
+preview, approval-only, never run unpreviewed:
+
+- **local → committed.** Add `!.claude/settings.json` and `!.claude/hooks/` after `.claude/*`
+  (and the `!.claude/sassy-dog/` line if missing), then `git add` `.claude/settings.json` and each
+  owned script **individually by path, never the directory**. List non-owned files under
+  `.claude/hooks/` separately and do not auto-add them; say that `!.claude/hooks/` un-ignores
+  them, so a later `git add -A` would stage them, and that they are the user's to commit or
+  to ignore by a specific line.
+- **committed → local.** Remove those two negation lines. Untrack with `git rm --cached` on
+  `.claude/settings.json` and each owned script, individually (working copy stays; the deletion is
+  staged, not committed). `git rm -r --cached .claude/hooks` would untrack non-owned files too, so
+  list each non-owned file under `.claude/hooks/` separately and name it in the warning below.
+- **mixed → target.** Whichever of the two above reaches the target shape, fixing a misordered
+  line by moving it after `.claude/*`, replacing a bare `.claude/` or `.claude` line with
+  `.claude/*` (flagged, never silently kept: `.claude/` followed by `!…` does not re-include,
+  because an ignored directory is never visited), and adding only the lines still missing.
+
+**What untracking does to everyone else.** After an untracking commit lands, every collaborator
+who pulls has those files **deleted** from their working tree: their plugin declaration and any
+hand-added `PreToolUse` push guard go with it (a prior migration lost one exactly this way). The
+preview says so and gives the restore, run **right after pulling** (the pull is what deletes the
+file, so a restore run before it is undone):
+`git restore --source=<untrack-commit>^ --worktree -- .claude/settings.json .claude/hooks/<each
+path the commit untracked, non-owned ones included>` (it recreates the `.claude/hooks/` directory
+the pull removed, keeps the exec bit, and leaves the files untracked and ignored; a
+`git show … > path` redirect fails there with "No such file or directory"), or re-run
+`setup-hooks` for the owned ones. It **warns when the file holds keys beyond the generators' own**
+(anything other than `extraKnownMarketplaces`, `enabledPlugins` and hook entries whose command
+contains `.claude/hooks/sassydog-`, for example `permissions`, `env`, or non-owned hooks), since
+those are shared team settings that stop being shared.
+
+**Other tracked `.claude/` paths.** List `git ls-files .claude` entries outside `sassy-dog/`,
+`settings.json` and the owned scripts (kept `skills/`, `agents/`, `commands/`). `.claude/*` would
+silently ignore new files there, so offer a `!.claude/<dir>/` line for each such directory.
+
+**Verify the end state** with `--no-index` probes: local target, exit 0 for `settings.json` and each
+owned script; committed target, tracked and exit 1 for each; either way exit 1 for
+`.claude/sassy-dog/<name>.md` (the config has to stay committable) and exit 0 for
+`.claude/settings.local.json`.
+
+The user may decline and keep the files tracked; that is recorded in the report. It is not
+persisted, so a later run derives the mixed state again and re-proposes the transition; say so.
 Visibility is never written to config and never feeds `review_site:`.
 
 ## Phase 7 — verify
@@ -329,17 +357,14 @@ Visibility is never written to config and never feeds `review_site:`.
    `enabledPlugins` entry for a `github`-sourced plugin installs nothing, so they get a `/plugin`
    Errors-tab row, and accepting the trust dialog clones the marketplace repo in the background.
    - **Public repos** (`visibility` from the Phase 0 probe — never from config): **verify** the
-     tracking choice the approved plan made: `git ls-files .claude/settings.json .claude/hooks`
-     prints nothing, `git check-ignore --no-index -v .claude/settings.json
-     .claude/hooks/sassydog-post-edit.sh` reports both ignored, and `git check-ignore --no-index -q
-     .claude/sassy-dog/<name>.md` exits 1 (not ignored; `--no-index` because the config is
-     tracked and a plain probe exits 1 regardless of `.gitignore`). Verify only when this run's
-     plan carried the tracking choice (create, migrate, or an update or adopt run that writes
-     `settings.json`); otherwise no plan made the choice, so report the observed state only and
-     say which case applied. Other tracked `.claude/` paths (kept `skills/`,
-     `agents/`) are expected and not an error. Report any mismatch rather than fixing it
-     unpreviewed; if the user declined the choice, say the files stay tracked. The rule behind it:
-     `settings.json` and `hooks/` stay local. Hooks in a
+     end state the approved plan chose, with the "Verify the end state" probes of "Tracking choice
+     in the plan" (`--no-index`, because the config is tracked and a plain probe exits 1
+     regardless of `.gitignore`). Verify only when this run's plan carried the tracking choice
+     (create, migrate, or an update or adopt run that writes `settings.json`); otherwise no plan
+     made the choice, so report the derived state (local, committed or mixed) only and say which
+     case applied. Other tracked `.claude/` paths (kept `skills/`, `agents/`) are expected and not
+     an error. Report any mismatch rather than fixing it unpreviewed; if the user declined the
+     choice, say so. The default rule behind it: `settings.json` and `hooks/` stay local. Hooks in a
      project's settings run with **no trust prompt** when only a parent folder was trusted, under
      `claude -p` / the Agent SDK, and in cloud sessions (permissions, "What runs before you trust a
      folder"; cloud-environments, "What carries over"), so in a public repo a tracked
