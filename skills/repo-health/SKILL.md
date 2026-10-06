@@ -166,7 +166,7 @@ directory that no longer exists.
 > the declaration which creates it was deleted too.
 
 **The declaration and the local pin are one mechanism, and you cannot keep one without the other.**
-The declaration is a committed repo file that makes the plugin resolve for local sessions (it does
+The declaration is a repo file (committed, or kept local in a public repo per `setup-config` Phase 7 step 2) that makes the plugin resolve for local sessions (it does
 not reach cloud sessions, #468); the pin is the local snapshot it causes. Removing the declaration
 to avoid the pin trades a silent staleness problem for a silent no-skills-at-all problem locally,
 which is strictly worse.

@@ -104,11 +104,14 @@ machine — the render must hold on a colleague's machine too.
 
 Ask only what detection cannot answer:
 
-1. **Settings target** — committed `.claude/settings.json` (default: the whole team gets the
-   hooks) or personal `.claude/settings.local.json`? In a **public** repo, recommend the local file
-   and an untracked `hooks/`: project hooks run with no trust prompt when only a parent folder was
-   trusted, under `claude -p` / the Agent SDK and in cloud sessions, so tracked hook scripts are
-   code any PR can change and contributors run unprompted (`setup-config` Phase 7 step 2).
+1. **Settings target** — committed `.claude/settings.json` (default in a private or internal repo:
+   the whole team gets the hooks) or personal `.claude/settings.local.json`? Read visibility once
+   with `gh repo view --json visibility` (never written to config, never feeds `review_site:`). In a
+   **public** repo the default flips to `settings.local.json`, beside the repo's `settings.json`,
+   with `.claude/hooks/` ignored: project hooks run with no trust prompt when only a parent folder
+   was trusted, under `claude -p` / the Agent SDK and in cloud sessions, so tracked hook scripts are
+   code any PR can change and contributors run unprompted (`setup-config` Phase 7 step 2). The user
+   may still choose the committed file.
 2. **Lint strictness** — linters exit 2 (findings feed back for immediate fix — default) or
    advisory (log to the user, exit 0)?
 3. **Slow tools** — anything detected with a meaningful per-edit cost (`dotnet format`, full
@@ -153,6 +156,14 @@ missing; in refresh mode also remove the post-edit entry when its tool set becam
 tracked `tmp/` deeper in the tree. Idempotent: check with
 `git check-ignore -q tmp/probe` from the repo root and skip when already covered. Append it under
 the repo's existing comment style; include the line in the approval diff like any other write.
+
+**In a public repo, also offer the ignore lines for `.claude/`** through the same approval diff:
+`.claude/*` then `!.claude/sassy-dog/` (`.claude/` followed by `!…` does not re-include).
+`settings.local.json` is ignored by Claude Code convention, but `.claude/hooks/` is not, so without
+these lines an "untracked" hook script is one `git add -A` from being committed. Idempotent: check
+`git check-ignore -q .claude/hooks/sassydog-post-edit.sh` and add only what is missing, so
+`setup-config` having proposed the same lines (under `setup-repo`) never duplicates them. If the
+user chose the committed file, do not offer them. Private and internal repos are unchanged.
 
 **Print the full rendered script AND the settings diff, and write only after the user approves** —
 writing into a product repo is an outward-facing action; never write silently. Preserve the

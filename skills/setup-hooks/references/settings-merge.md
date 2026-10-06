@@ -106,7 +106,8 @@ have artifacts there worth keeping out of git.
 - Project `.claude/settings.json` hooks run in addition to (not instead of) the user's global
   `~/.claude/settings.json` hooks — generating here never conflicts with a global SessionStart or
   statusline setup.
-- `settings.local.json` is git-ignored by Claude Code convention; choosing it means teammates do
-  NOT get the hooks — the right choice for personal experimentation, the wrong one for a team
+- `settings.local.json` is git-ignored by Claude Code convention, but `.claude/hooks/` is not,
+  which is why a public repo also gets the `.claude/*` / `!.claude/sassy-dog/` ignore lines
+  (`SKILL.md` Phase 3). Choosing it means teammates do NOT get the hooks — the right choice for personal experimentation, the wrong one for a team
   formatting standard.
 - Hooks are read at session start — a refresh takes effect on the NEXT session in that repo.

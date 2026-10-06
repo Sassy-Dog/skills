@@ -45,7 +45,8 @@ whole point.
 writes `extraKnownMarketplaces` + `enabledPlugins`, hooks writes the `hooks.PostToolUse` entry.
 Whether the file is committed is a per-repo choice, and a public repo should keep it (and
 `hooks/`) local: project hooks run without a trust prompt in several modes (`setup-config`
-Phase 7 step 2).
+Phase 7 step 2). In a public repo each generator proposes the same `.gitignore` lines
+(`.claude/*`, `!.claude/sassy-dog/`) idempotently, so the combined plan shows that edit **once**.
 Each documents a *surgical merge into its own keys*, never a rewrite, so **sequential** runs
 compose: the second reads the file as the first left it and adds to it. Run them concurrently — or
 let either plan against one copy and write back a whole file later — and one of the two
@@ -95,6 +96,10 @@ Record the reason verbatim. Anything skipped is carried into the report in Phase
 Print one plan covering all three: per generator, its mode, the full list of files it would create
 or modify, and — for anything skipped — the reason. Then ask for approval. **Nothing is written
 before this gate.**
+
+In a public repo the plan also lists the tracking choice once: `settings.json` kept local (plus
+`git rm --cached` when it is already tracked), `setup-hooks` targeting `settings.local.json`, and
+the shared `.gitignore` lines.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
 `setup-hooks`). This gate is what makes the *sweep* visible: three generators firing across

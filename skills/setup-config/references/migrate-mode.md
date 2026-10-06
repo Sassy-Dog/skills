@@ -211,6 +211,15 @@ Whether this file is **committed** is a per-repo choice (`SKILL.md` Phase 7 step
 should track only `.claude/sassy-dog/*.md` and keep `settings.json` local, in which case write the
 entries locally and do not stage the file.
 
+**In migrate mode the file is usually already tracked, and that is the common case.** An unstaged
+edit to a tracked file stays tracked and dirties the tree, so keeping it local takes two things in
+the Step 5 preview, run only on approval and never unpreviewed: `git rm --cached
+.claude/settings.json` (check `git ls-files .claude/settings.json` first; the working copy stays on
+disk) and the `.gitignore` lines `.claude/*` then `!.claude/sassy-dog/`, added idempotently (skip
+any line, or the whole pair, already effective per `git check-ignore`). The same preview item
+covers an already-tracked `.claude/hooks/` when one exists. Private and internal repos skip this
+and keep the committed file.
+
 ```json
 {
   "extraKnownMarketplaces": {
@@ -248,6 +257,8 @@ Show, before any write or delete:
 3. Every fact that could **not** be verified
 4. The exact list of directories to be deleted, each with its `generated-by:` marker quoted
 5. Any `.claude/skills/` directory being **kept** because it has no marker
+6. In a public repo, the tracking choice: `settings.json` kept local, the exact `.gitignore` lines,
+   and `git rm --cached` when the file is already tracked (Step 4)
 
 Then write config, verify it, and delete only on explicit approval.
 
