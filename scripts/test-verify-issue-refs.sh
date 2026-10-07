@@ -710,12 +710,11 @@ fi
 # Acceptance item 1, and the production false positive: `read_monitors()` is
 # defined, and was reported DRIFT against another language's name.
 #
-# This case cannot be mutation-proved, and the reason is measured rather than
-# assumed: `resolve_symbol`'s mention fallback probes with `\b`, git's -E engine
-# honours `\b` on Linux (2.54/musl, 2.47/glibc) and matches nothing with it on
-# macOS (2.55, 26.6), and a DEFINED name is also a MENTIONED one — so pre-fix
-# this body drifts on one platform and resolves on the other. Case 12 is where
-# pool membership is proved on every platform, by names that appear nowhere.
+# A defined name is also a mentioned one, so the portable mention fallback
+# resolves it even without pool membership. Before #479, the ERE `\b` spelling
+# resolved it on Linux (2.54/musl, 2.47/glibc) but not macOS (2.55, 26.6); that
+# platform split no longer applies. Case 12 proves pool membership on every
+# platform, using near-miss names that appear nowhere.
 cat > "$WORK/s1.md" <<'MD'
 The monitor list comes from `read_monitors()` in `scripts/check-sentry-monitors.sh`.
 MD
@@ -768,8 +767,8 @@ fi
 # lint-token-scope-sync.sh:82`), which is why a definition must carry a body.
 #
 # Every reference here is a near-miss of its definition — scoring >0.94 — and
-# none of them appears anywhere in the tree, so `resolve_symbol`'s `\b` mention
-# probe is never reached and the verdict is the pool's alone on every platform.
+# none of them appears anywhere in the tree, so the mention probe returns no
+# match and the verdict is the pool's alone on every platform.
 # A leak therefore fires loudly, as a suggestion, rather than as a silent
 # resolve that reads the same as a clean run.
 cat > "$WORK/s3.md" <<'MD'
@@ -796,10 +795,9 @@ else
     fail "non-shell name() must not enter the pool (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
-# --- case 12: the pool holds every shell name, proved without `\b` ----------
-# The platform-independent half of acceptance item 1: each reference here
-# appears NOWHERE in the tree, so `resolve_symbol` never reaches its `\b`
-# mention probe and the verdict is decided by the pool alone. It covers all
+# --- case 12: the pool holds every shell name, proved by absent near misses ---
+# Each reference here appears NOWHERE in the tree, so the mention probe returns
+# no match and the verdict is decided by the pool alone. It covers all
 # three shell sources at once — `fetch_config` from the `*.sh`, `dev_server`
 # from an extensionless shebang script, `parse_line` from after a here-string,
 # `run_all` from after a heredoc, `tail_helper` from after a COMMENT that
