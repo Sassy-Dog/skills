@@ -114,9 +114,11 @@ Ask only what detection cannot answer:
    the repo's `settings.json`, with `.claude/hooks/` untracked and ignored: project hooks run with
    no trust prompt when only a parent folder was trusted, under `claude -p` / the Agent SDK and in
    cloud sessions, so tracked hook scripts are code any PR can change and contributors run
-   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file. When `setup-repo` passes a
-   target (the word `local` or `committed`), use it (`local` is `settings.local.json`,
-   `committed` is `settings.json`) and do not ask again.
+   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file. The
+   **default offered** is the repo's current end state when the script's `derive` reports `local` or
+   `committed` (a refresh must not offer to undo a deliberate `committed`), and `local` only when it
+   reports `mixed`. When `setup-repo` passes a target (the word `local` or `committed`), use it
+   (`local` is `settings.local.json`, `committed` is `settings.json`) and do not ask again.
 2. **Lint strictness** — linters exit 2 (findings feed back for immediate fix — default) or
    advisory (log to the user, exit 0)?
 3. **Slow tools** — anything detected with a meaningful per-edit cost (`dotnet format`, full
@@ -178,9 +180,11 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --
 
 Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
 the target state, and then nothing is proposed). After the approval and **after the scripts and the
-settings entries are written**, run the same command with `apply` in place of `plan`, so this
-generator adds what it renders at its own write time rather than depending on what `setup-config`
-saw earlier.
+settings entries are written**, run `plan` again with the same flags (the scripts now exist), and
+run `apply` with the same flags and `--plan-id <the id that second plan printed>` (the id is
+required; `apply` refuses with exit 3 if the repo changed after that plan). This generator
+therefore adds what it renders at its own write time, whatever `setup-config` saw earlier.
+`setup-config` passes no `--owned` of its own, because it renders no script.
 
 What is specific to this generator is the settings move, which applies in **both** directions:
 the target is `settings.local.json` and `settings.json` holds owned entries (command path

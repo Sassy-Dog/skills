@@ -215,7 +215,8 @@ and do not stage the file, but the user may choose `committed` there.
 **In migrate mode the file is usually already tracked, and that is the common case.** The
 untracking commands, the ignore-line predicate, the collaborator-deletion warning with its restore
 command, and the already-tracked `.claude/hooks/` handling are all owned by `SKILL.md`, "Tracking
-choice in the plan". Put each of them in the Step 5 preview; an unstaged edit to a tracked file
+choice in the plan", whose rules live in `scripts/tracking-state.sh` (its `plan` output is the
+preview). Put each of them in the Step 5 preview; an unstaged edit to a tracked file
 stays tracked and dirties the tree, so nothing here substitutes for them. Private and internal repos
 skip this and keep the committed file.
 

@@ -263,22 +263,27 @@ Whether `.claude/settings.json` and the owned hook scripts are tracked is decide
 plan**, not advised after the write. It applies in create, migrate, update and adopt modes whenever
 this run writes `settings.json`, and only when `visibility` from the Phase 0 probe is `PUBLIC`
 (unknown visibility: ask, as `setup-hooks` does; private and internal repos see none of this and a
-committed `settings.json` stays the default). **The target is `local` or `committed`**: `local` is
-the public-repo **default**, not a rule, and the user may choose `committed`. When `setup-repo`
-passes a target, use it and do not ask again. The script takes no visibility input; the caller
-decides the target. "Owned scripts" are the `.claude/hooks/sassydog-*.sh` files in the tree or the
-index plus any this run's generators are about to render (the artifact guard always, the post-edit
-dispatcher only when a tool was detected); every other file under `.claude/hooks/` is
-**non-owned**.
+committed `settings.json` stays the default). **The target is `local` or `committed`**, and the
+**default offered** is the repo's current end state when `derive` reports `local` or `committed`
+(a refresh must not offer to undo a deliberate `committed`), and `local` only when it reports
+`mixed`. The user may choose either. When `setup-repo` passes a target, use it and do not ask again.
+The script takes no visibility input; the caller decides the target. "Owned scripts" are the
+**direct-child regular files** `.claude/hooks/sassydog-<name>.sh` (`<name>` limited to
+`[A-Za-z0-9._-]`) in the tree or the index, plus any a generator passes with `--owned` because it is
+about to render them; every other file under `.claude/hooks/` is **non-owned**. A path with
+whitespace, a glob character, a quote, a backslash, `$` or a backtick, one nested under an
+owned-name entry, or an owned-name directory or symlink is **reported as a mismatch and never acted
+on**.
 
 | End state | `.gitignore` (negations after the pattern they re-include) | `settings.json` and each owned script |
 |---|---|---|
 | **local** (public default) | `.claude/*`, `!.claude/sassy-dog/`; none of the committed-only lines | untracked **and** ignored |
-| **committed** | `.claude/*`, `!.claude/sassy-dog/`, `!.claude/settings.json`, `!.claude/hooks/`, `.claude/hooks/*`, `!.claude/hooks/sassydog-*.sh` | tracked **and** not ignored |
+| **committed** | `.claude/*`, `!.claude/sassy-dog/`, `!.claude/settings.json`, `!.claude/hooks/`, `.claude/hooks/*`, `!.claude/hooks/sassydog-*.sh`, `.claude/hooks/sassydog-*.sh/` | tracked **and** not ignored |
 
 In both, `.claude/sassy-dog/*.md` is tracked and not ignored, and `.claude/settings.local.json`,
-`worktrees/` and any non-owned hook stay ignored (the committed shape's last two lines are what keep
-`git add -A` from staging a non-owned hook). There is no third form: never narrow or drop
+`worktrees/`, any non-owned hook and any directory named like an owned script stay ignored (the
+committed shape's `.claude/hooks/*` and trailing `.claude/hooks/sassydog-*.sh/` lines are what keep
+`git add -A` from staging them). There is no third form: never narrow or drop
 `.claude/*`, because that un-ignores `settings.local.json`. Anything else is **mixed**: a missing or
 misordered line, a bare `.claude/` or `.claude`, an owned script whose status disagrees with
 `settings.json`, no sassy-dog negation.
@@ -294,7 +299,7 @@ misordered line, a bare `.claude/` or `.claude`, an owned script whose status di
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh derive [--owned PATH ...]
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan   --target local|committed [--owned PATH ...]
-bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh apply  --target local|committed [--owned PATH ...] [--plan-id ID]
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh apply  --target local|committed [--owned PATH ...] --plan-id ID
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh verify --target local|committed [--owned PATH ...]
 ```
 
@@ -302,10 +307,15 @@ Run from the repo root. **The preview shows `plan`'s output verbatim**: the exac
 edits, every `git add` / `git rm --cached` path (acted on individually, never as a directory), the
 warnings, and "nothing to do" when the derived state already equals the target (a declined choice is
 not persisted, so a later run derives the mismatch again and re-proposes it; say so). **Approval runs
-`apply`**, passing the previewed `plan-id`; `apply` re-derives immediately before it acts and
-refuses (exit 3) if the repo changed since. Pass `--owned` for every `sassydog-*.sh` a generator is
-about to render but has not yet written, so the derive counts it. `derive`'s `mismatches` name what
-disagrees; for a hand-run, they are the reason to re-plan, never to edit by hand.
+`apply`, passing the previewed `plan-id`** (it is required): `apply` re-derives immediately before it
+acts and refuses (exit 3) if the repo no longer plans that id, (exit 4) if a path it must add does not
+exist yet, (exit 6) if `.gitignore` is a symlink, and it exits 2 with "unknown, not verified" when a
+git probe fails, which is never read as ok. **`setup-config` passes no `--owned`**: it renders no
+hook script, so the only paths its `apply` can add are ones that already exist, and an `--owned`
+path that does not exist yet would make `apply` refuse and Phase 7's `verify` fail. `setup-hooks`
+passes `--owned` for every script it renders, in its own plan and apply, so what it renders is
+added at its own write time. `derive`'s `mismatches` name what disagrees; for a hand-run, they are
+the reason to re-plan, never to edit by hand.
 
 The warnings `plan` prints for an untracking, which the preview must carry: after the untracking
 commit lands, every collaborator who pulls has those files **deleted** from their working tree
@@ -345,7 +355,7 @@ Visibility is never written to config and never feeds `review_site:`.
    - **Public repos** (`visibility` from the Phase 0 probe — never from config): when this run's
      plan carried the tracking choice (create, migrate, or an update or adopt run that writes
      `settings.json`), **verify** it by running the script's `verify` with the chosen target (and
-     `--owned` for any script rendered this run); exit 0 is the pass, and any mismatch it names is
+     no `--owned`: this skill renders no hook script); exit 0 is the pass, and any mismatch it names is
      reported rather than fixed unpreviewed. Otherwise no plan made the choice: report `derive`'s
      output (the state and its mismatches) only, and say which case applied. If the user declined
      the choice, say so. Other tracked `.claude/` paths (kept `skills/`, `agents/`) are expected and
