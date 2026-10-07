@@ -180,14 +180,23 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --
 
 Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
 the target state, and then nothing is proposed). After the approval and **after the scripts and the
-settings entries are written**, run `plan` again with the same flags (the scripts now exist). **Apply
-only a plan the user has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`,
-`gitignore-remove`, `gitignore-append`) must be a subset of the action lines of the previewed plan,
-the one expected difference being that the files this run rendered now exist. If any action line is
-new, or the second plan prints `blocked:` lines, do not apply: show the new plan and ask again. Then
-run `apply` with the same flags and `--plan-id <the id the second plan printed>` (the id is required;
-`apply` refuses with exit 3 if the repo changed after that plan). This generator therefore adds what
-it renders at its own write time, whatever `setup-config` saw earlier. **If the script path does not
+settings entries are written**, run `plan` again with the same flags. **Apply only a plan the user
+has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`, `gitignore-remove`,
+`gitignore-append`) must be a subset of the action lines of the previewed plan (an action line does
+not depend on whether the owned file exists yet, so a plan previewed before rendering keeps its
+plan-id after it). **If the second plan prints `nothing to do`, it prints no plan-id: skip `apply`
+and go straight to `verify`.** That is the normal outcome under `setup-repo` in a public repo, where
+`setup-config` already moved the repo to the target. If any action line is new, show the new plan and
+ask again. Otherwise run `apply` with the same flags and `--plan-id <the id the second plan
+printed>` (the id is required; `apply` refuses with exit 3 if the repo changed after that plan),
+then `verify`. This generator therefore adds what it renders at its own write time, whatever
+`setup-config` saw earlier. **Do not loop on a refusal.** If either plan prints `blocked:` lines,
+or `apply` exits 4, 5, 6, 7 or 8, stop: name the entry or rule from the `blocked:` line (exit 6 a
+non-regular `.gitignore`, 7 an unsafe or nested owned-name entry, 8 an ignore rule outside the
+managed lines, which a human edits; `git add -f` does not help; 5 a failed `git add` or
+`git rm --cached`, after which the repo may be half-moved and `plan` should be re-run), say how to
+fix it, and **report the tracking step as not applied**; the scripts and settings entries already
+written stay written. **If the script path does not
 exist, stop and say that `setup-config`'s `tracking-state.sh` is missing (the plugin is incomplete or
 the file moved); do not improvise the tracking rules.**
 `setup-config` passes no `--owned` of its own, because it renders no script.

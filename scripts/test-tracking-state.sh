@@ -49,7 +49,17 @@
 # nested under one (`git add -A -n` stages nothing nested); a tracked non-owned
 # hook (stays tracked); a corrupted index (fails closed: "unknown, not
 # verified", never ok); and the mismatch TIE (a misordered line makes local and
-# committed equally far, and the tie goes to local).
+# committed equally far, and the tie goes to local). Issue #477 added: every
+# refusal kind runs toward BOTH targets (refused_both) with a .gitignore
+# checksum, `git ls-files -s` and `git add -A -n` snapshot before and after,
+# including an index-only symlink (120000) and submodule (160000); plan stability
+# before and after an owned script is rendered, and "nothing to do" printing no
+# plan-id; an ignore rule OUTSIDE the managed lines (nested .gitignore in both
+# directions, an unmanaged root line, .git/info/exclude, core.excludesFile) that
+# apply refuses with exit 8, plus the two cases that must NOT block (an
+# info/exclude line the root negation outranks, a nested rule that agrees with
+# the target); a symlinked .claude keeping git's own stderr; and exit 5 from a
+# failed `git add`. The matrix size is pinned as literals (76 states, 152 rows).
 #
 # NON-VACUOUS BY CONSTRUCTION. The gate mutates a COPY of the script and runs the
 # scenario that owns each mutation against it; a mutant is only scored once it
@@ -79,6 +89,12 @@
 #               owned-name entry exists. Caught by the hostile, nested and
 #               symlinked-owned-name scenarios (exit code, checksum of .gitignore,
 #               `git ls-files -s` and `git add -A -n` before and after).
+#   droprule    the exit-8 refusal for an ignore rule outside the managed lines is
+#               removed. Caught by s_rulesrc (exit code, snapshots).
+#   hidecause   git check-ignore's stderr is discarded again, so the fail-closed
+#               message loses git's cause. Caught by the symlinked-.claude scenario.
+#   shrinkmatrix one VARIANTS entry is dropped and the state list rebuilt. Caught
+#               by the pinned literals (built, not run, so it costs nothing).
 #   killrow     a row worker is made to exit before it reports. Caught by the
 #               harness's own accounting: exactly one `@@counts` line and a zero
 #               exit status per launched worker, and totals equal to what was
@@ -411,19 +427,28 @@ s_nonowned_tracked() {
 }
 # snap <dir> — checksum of .gitignore, the staged index, and what `git add -A -n` would stage.
 snap() { ( cd "$1" && { cksum < .gitignore 2>/dev/null || echo nogi; git ls-files -s; echo "--"; git add -A -n 2>&1; } ); }
-# refused <label> <dir> <target> [flags] — apply must exit 7 and change NOTHING.
+# refused <label> <dir> <target> <rc> [flags] — apply must exit <rc> and change NOTHING.
+REFUSED_PLAN=""
 refused() {
-    local lbl="$1" d="$2" t="$3" before after plan; shift 3
+    local lbl="$1" d="$2" t="$3" rc="$4" before after plan; shift 4
     before="$(snap "$d")"
-    plan="$(tsd "$d" plan --target "$t" "$@")"
+    plan="$(tsd "$d" plan --target "$t" "$@")"; REFUSED_PLAN="$plan"
     contains "$lbl: plan prints blocked:" "$plan" "blocked:"
     lacks "$lbl: plan proposes no action" "$plan" "git-add:"
     lacks "$lbl: plan proposes no untracking" "$plan" "git-rm-cached:"
     lacks "$lbl: plan proposes no .gitignore edit" "$plan" "gitignore-"
     do_apply "$d" "$t" "$@"
-    expect "$lbl: apply refuses with exit 7" "$APPLY_RC" 7
+    expect "$lbl: apply refuses with exit $rc" "$APPLY_RC" "$rc"
     after="$(snap "$d")"
     expect "$lbl: .gitignore, index and git add -A -n are all unchanged" "$after" "$before"
+}
+# refused_both <label> <dir> <rc> [flags] — the same refusal toward BOTH targets
+# on the same directory (a refusal writes nothing, so the second run starts from
+# the identical state).
+refused_both() {
+    local lbl="$1" d="$2" rc="$3"; shift 3
+    refused "$lbl -> committed" "$d" committed "$rc" "$@"
+    refused "$lbl -> local" "$d" local "$rc" "$@"
 }
 s_hostile() {
     mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
@@ -439,13 +464,13 @@ s_hostile() {
     json="$(tsd "$SC" derive)"
     expect "hostile names: none is owned" "$(jq -r '.owned | length' <<<"$json")" 0
     expect "hostile names: each is an unsafe-name mismatch" "$(jq -r '[.mismatches[] | select(startswith("unsafe owned name"))] | length' <<<"$json")" 4
-    refused "hostile names (local to committed)" "$SC" committed
+    refused_both "hostile names" "$SC" 7
     lacks "hostile names: no hostile hook would be staged" "$(cd "$SC" && git add -A -n 2>&1)" "sassydog-"
     tsd "$SC" derive --owned '.claude/hooks/sassydog-x .env .sh' >/dev/null 2>&1; expect "hostile names: --owned with whitespace is refused (exit 64)" "$?" 64
     # committed to local with a tracked unsafe name must not untrack settings.json or the guard
     mkstate "$WORK/sc" committed-exact tracked tracked 0; SC="$WORK/sc"
     ( cd "$SC" && printf '#!/bin/sh\n' > '.claude/hooks/sassydog-a b.sh' && git add -f -- '.claude/hooks/sassydog-a b.sh' ) >/dev/null 2>&1
-    refused "tracked hostile name (committed to local)" "$SC" local
+    refused_both "tracked hostile name" "$SC" 7
     contains "tracked hostile name: settings.json is still tracked" "$(cd "$SC" && git ls-files)" ".claude/settings.json"
     # the restore line is built with %q: a safe name stays plain
     mkstate "$WORK/sc" committed-exact tracked tracked 0; SC="$WORK/sc"
@@ -455,7 +480,7 @@ s_ownedlink() {
     mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
     ln -s /etc/hosts "$SC/.claude/hooks/sassydog-link.sh"
     contains "symlinked owned-name entry is named" "$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')" "sassydog-link.sh is not a regular file (symlink)"
-    refused "symlinked owned-name entry (local to committed)" "$SC" committed
+    refused_both "symlinked owned-name entry" "$SC" 7
     expect "symlinked owned-name entry: the link is untouched" "$(readlink "$SC/.claude/hooks/sassydog-link.sh")" /etc/hosts
 }
 s_symlink() {
@@ -464,8 +489,7 @@ s_symlink() {
     rm -f "$SC/.gitignore"; ln -s "$WORK/outside-gi" "$SC/.gitignore"
     expect "symlinked .gitignore derives mixed" "$(state_of "$SC")" mixed
     contains "symlinked .gitignore is named" "$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')" "symlink"
-    do_apply "$SC" committed
-    expect "symlinked .gitignore: apply refuses (exit 6)" "$APPLY_RC" 6
+    refused_both "symlinked .gitignore" "$SC" 6
     expect "symlinked .gitignore: the outside file is unchanged" "$(cat "$WORK/outside-gi")" outside
     expect "symlinked .gitignore: still a symlink" "$([ -L "$SC/.gitignore" ] && echo yes)" yes
 }
@@ -477,10 +501,111 @@ s_nested() {
     mm="$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')"
     contains "owned-name directory is not a regular file" "$mm" "sassydog-e.sh is not a regular file"
     contains "path nested under an owned-name entry is named" "$mm" "nested path under an owned-name entry: .claude/hooks/sassydog-d.sh/evil"
-    refused "nested path and owned-name directory (local to committed)" "$SC" committed
+    refused_both "nested path and owned-name directory" "$SC" 7
     lacks "nested path: nothing nested is tracked" "$(cd "$SC" && git ls-files)" "evil"
     lacks "nested path: git add -A -n stages nothing nested" "$(cd "$SC" && git add -A -n 2>&1)" "evil"
     lacks "owned-name directory: git add -A -n stages none" "$(cd "$SC" && git add -A -n 2>&1)" "sassydog-e.sh"
+}
+# s_indexkinds — an owned-name entry that exists only in the INDEX as a symlink
+# (mode 120000) or a submodule (160000): no working-tree file backs it.
+s_indexkinds() {
+    local blob
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    blob="$(cd "$SC" && printf '/etc/hosts' | git hash-object -w --stdin)"
+    ( cd "$SC" && git update-index --add --cacheinfo "120000,$blob,.claude/hooks/sassydog-idxlink.sh" ) >/dev/null 2>&1
+    contains "index-level symlink is named" "$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')" "sassydog-idxlink.sh is not a regular file (symlink)"
+    refused_both "index-level symlink (mode 120000)" "$SC" 7
+    mkstate "$WORK/sc" committed-exact tracked tracked 0; SC="$WORK/sc"
+    ( cd "$SC" && git update-index --add --cacheinfo "160000,1111111111111111111111111111111111111111,.claude/hooks/sassydog-sub.sh" ) >/dev/null 2>&1
+    contains "index-level submodule is named" "$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')" "sassydog-sub.sh is not a regular file (dir)"
+    refused_both "index-level submodule (mode 160000)" "$SC" 7
+}
+# s_planstable — a plan previewed BEFORE an owned script is rendered is the plan
+# after it exists (setup-hooks previews, writes, then re-plans); and a plan that
+# is "nothing to do" has NO plan-id, so a caller must not demand one.
+s_planstable() {
+    local before after
+    fresh local-exact untracked none 0
+    before="$(tsd "$SC" plan --target committed --owned "$G")"
+    printf '#!/bin/sh\n' > "$SC/$G"
+    after="$(tsd "$SC" plan --target committed --owned "$G")"
+    contains "plan before the script is rendered carries a plan-id" "$before" "plan-id: "
+    expect "plan before and after the script is rendered: identical action lines and plan-id" "$after" "$before"
+    fresh local-exact untracked none 0
+    before="$(tsd "$SC" plan --target local --owned "$G")"
+    printf '#!/bin/sh\n' > "$SC/$G"
+    after="$(tsd "$SC" plan --target local --owned "$G")"
+    contains "local target, script not yet rendered: nothing to do" "$before" "nothing to do"
+    lacks "nothing to do prints no plan-id" "$before" "plan-id"
+    contains "local target, script rendered: still nothing to do" "$after" "nothing to do"
+    lacks "nothing to do after rendering prints no plan-id" "$after" "plan-id"
+}
+# s_rulesrc — an ignore rule OUTSIDE the managed root lines. apply must refuse
+# with exit 8 before its first write, and plan names the winning rule.
+s_rulesrc() {
+    local lc
+    # a nested .gitignore ignoring settings.json, target committed (the #477 repro)
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    printf 'settings.json\n' > "$SC/.claude/.gitignore"
+    refused "nested .gitignore ignores settings.json -> committed" "$SC" committed 8
+    contains "nested ignore: plan names the file and line" "$REFUSED_PLAN" ".claude/.gitignore:1:settings.json"
+    contains "nested ignore: plan says git add -f does not help" "$REFUSED_PLAN" "git add -f would not help"
+    # the other direction: a nested negation keeps settings.json un-ignored, target local
+    mkstate "$WORK/sc" committed-exact tracked none 0; SC="$WORK/sc"
+    printf '!settings.json\n' > "$SC/.claude/.gitignore"
+    refused "nested .gitignore un-ignores settings.json -> local" "$SC" local 8
+    contains "nested negation: plan names the file and line" "$REFUSED_PLAN" ".claude/.gitignore:1:!settings.json"
+    # an unmanaged line of the root .gitignore that outranks the managed negation
+    mkstate "$WORK/sc" committed-exact tracked none 0; SC="$WORK/sc"
+    printf '%s\n' 'settings.json' >> "$SC/.gitignore"
+    refused "unmanaged root line ignores settings.json -> committed" "$SC" committed 8
+    contains "unmanaged root line: plan names the root file and line" "$REFUSED_PLAN" ".gitignore:8:settings.json"
+    # .git/info/exclude ignoring every .md (new sassy-dog config would be ignored), both targets
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    mkdir -p "$SC/.git/info"; printf "*.md\n" >> "$SC/.git/info/exclude"
+    refused_both "info/exclude ignores *.md" "$SC" 8
+    contains "info/exclude: plan names the exclude file" "$REFUSED_PLAN" "info/exclude:"
+    # core.excludesFile, both targets
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    printf '*.md\n' > "$WORK/global-exclude"
+    ( cd "$SC" && git config core.excludesFile "$WORK/global-exclude" ) >/dev/null 2>&1
+    refused_both "core.excludesFile ignores *.md" "$SC" 8
+    contains "core.excludesFile: plan names that file" "$REFUSED_PLAN" "$WORK/global-exclude:1:*.md"
+    # NOT a block: info/exclude ignoring settings.json is outranked by the root's own negation
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    mkdir -p "$SC/.git/info"; printf ".claude/settings.json\n" >> "$SC/.git/info/exclude"
+    do_apply "$SC" committed
+    expect "info/exclude ignoring settings.json is outranked by the root negation: apply exits 0" "$APPLY_RC" 0
+    facts "$SC" committed none "info/exclude outranked by the root negation"
+    # a nested rule that agrees with the target is fine (settings.local.json stays ignored)
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    printf 'settings.local.json\n' > "$SC/.claude/.gitignore"
+    do_apply "$SC" committed
+    expect "a nested rule that agrees with the target does not block (exit 0)" "$APPLY_RC" 0
+    lc="$(cd "$SC" && git ls-files)"
+    contains "and settings.json is tracked" "$lc" ".claude/settings.json"
+}
+# s_claudelink — a symlinked .claude: git refuses, the script fails closed (exit 2)
+# AND keeps git's own cause instead of discarding it.
+s_claudelink() {
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    rm -rf "$WORK/claude-real"; mv "$SC/.claude" "$WORK/claude-real"; ln -s "$WORK/claude-real" "$SC/.claude"
+    local out rc
+    out="$(cd "$SC" && bash "$TS" derive 2>&1)"; rc=$?
+    expect "symlinked .claude: derive fails closed (exit 2)" "$rc" 2
+    contains "symlinked .claude: says unknown, not verified" "$out" "unknown, not verified"
+    contains "symlinked .claude: carries git's own cause" "$out" "beyond a symbolic link"
+}
+# s_exit5 — a git add that FAILS after the rewrite is exit 5 with a message naming it.
+s_exit5() {
+    local id
+    fresh local-exact untracked none 0
+    id="$(tsd "$SC" plan --target committed | sed -n 's/^plan-id: //p')"
+    : > "$SC/.git/index.lock"
+    APPLY_OUT="$(tsd "$SC" apply --target committed --plan-id "$id" 2>&1)"; APPLY_RC=$?
+    expect "failed git add: apply exits 5" "$APPLY_RC" 5
+    contains "failed git add: a message names the path" "$APPLY_OUT" "git add failed for .claude/settings.json (exit 5)"
+    rm -f "$SC/.git/index.lock"
 }
 s_corrupt() {
     mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
@@ -506,7 +631,7 @@ s_planid() {
     expect "plan-id: apply without --plan-id is a usage error (exit 64)" "$rc" 64
 }
 
-SCENARIOS="s_round2 s_blocking s_r3_2 s_r3_3 s_order s_tie s_planid s_unrelated s_dup s_nogi s_nonl s_crlf s_nonowned_tracked s_hostile s_ownedlink s_symlink s_nested s_corrupt"
+SCENARIOS="s_round2 s_blocking s_r3_2 s_r3_3 s_order s_tie s_planid s_unrelated s_dup s_nogi s_nonl s_crlf s_nonowned_tracked s_hostile s_ownedlink s_symlink s_nested s_indexkinds s_planstable s_rulesrc s_claudelink s_exit5 s_corrupt"
 
 # --- 1. the enumerated rows -------------------------------------------------------
 # Rows are independent (each state has its own directories), so they run in
@@ -517,22 +642,43 @@ SCENARIOS="s_round2 s_blocking s_r3_2 s_r3_3 s_order s_tie s_planid s_unrelated 
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
 [ "$JOBS" -le 8 ] || JOBS=8
+# The matrix size, PINNED AS LITERALS. A VARIANTS entry dropped or a `continue`
+# filter widened shrinks the matrix, and every per-worker accounting check below
+# compares the matrix to ITSELF, so only a literal notices. Derivation: 15
+# variants, 2 of them exact. Each of the 13 others crosses settings (2) x owned
+# {none, tracked} (2) with no non-owned hook = 4 states (52). Each exact variant
+# crosses settings (2) x owned (4) = 8 states, plus the non-owned hook where the
+# owned set is none or untracked (2 more per settings value) = 12 (24). 52 + 24 =
+# 76 states, two targets each = 152 rows.
+WANT_VARIANTS=15; WANT_STATES=76; WANT_ROWS=152
 STATE_LIST=()
-for v in $VARIANTS; do
-    exact=0; case "$v" in local-exact|committed-exact) exact=1 ;; esac
-    for s in tracked untracked; do
-        for o in none tracked untracked flag; do
-            # Every variant crosses settings x {none, tracked}; the two exact
-            # variants (the only ones that can be AT a target) cross the full
-            # owned set and the non-owned hook, where each adds a distinct case.
-            if [ "$exact" -eq 0 ] && [ "$o" != none ] && [ "$o" != tracked ]; then continue; fi
-            for n in 0 1; do
-                if [ "$n" = 1 ] && { [ "$exact" -eq 0 ] || { [ "$o" != none ] && [ "$o" != untracked ]; }; }; then continue; fi
-                STATE_LIST+=("$v $s $o $n")
+# build_state_list <variants> — STATE_LIST for that variant list.
+build_state_list() {
+    local v s o n exact
+    STATE_LIST=()
+    for v in $1; do
+        exact=0; case "$v" in local-exact|committed-exact) exact=1 ;; esac
+        for s in tracked untracked; do
+            for o in none tracked untracked flag; do
+                # Every variant crosses settings x {none, tracked}; the two exact
+                # variants (the only ones that can be AT a target) cross the full
+                # owned set and the non-owned hook, where each adds a distinct case.
+                if [ "$exact" -eq 0 ] && [ "$o" != none ] && [ "$o" != tracked ]; then continue; fi
+                for n in 0 1; do
+                    if [ "$n" = 1 ] && { [ "$exact" -eq 0 ] || { [ "$o" != none ] && [ "$o" != untracked ]; }; }; then continue; fi
+                    STATE_LIST+=("$v $s $o $n")
+                done
             done
         done
     done
-done
+}
+# matrix_literals <variant count> <states> <rows> — the literals, as assertions.
+matrix_literals() {
+    expect "matrix: $WANT_VARIANTS variants" "$1" "$WANT_VARIANTS"
+    expect "matrix: $WANT_STATES states" "$2" "$WANT_STATES"
+    expect "matrix: $WANT_ROWS rows" "$3" "$WANT_ROWS"
+}
+build_state_list "$VARIANTS"
 R_STATES=0; R_ROWS=0
 BATCH=(); BPIDS=(); COUNTED=0
 flush() {
@@ -576,6 +722,8 @@ run_rows() {
 echo "tracking-state rows"
 run_rows 0 0
 echo "  ($R_STATES states, $R_ROWS rows)"
+read -ra VLIST <<<"$VARIANTS"
+matrix_literals "${#VLIST[@]}" "$R_STATES" "$R_ROWS"
 ok "every one of $R_STATES row workers reported once, with $R_ROWS rows (2 per state)"
 
 # --- cross-skill dependency: every path that names tracking-state.sh must exist --
@@ -611,16 +759,19 @@ mutate() { # <name> <out>
         dropsymlink) sed -e '/is a symlink; it is never read or written through/d' "$SCRIPT" > "$out" ;;
         dropfail) awk '/^        exit 2$/ { print "        :"; next } { print }' "$SCRIPT" > "$out" ;;
         droprefuse) sed -e '/refusing to apply, nothing was written/d' "$SCRIPT" > "$out" ;;
+        droprule) sed -e '/an ignore rule outside the managed lines would leave/d' "$SCRIPT" > "$out" ;;
+        hidecause) sed -e 's|2>"\$TMPD/ck.err"|2>/dev/null|' "$SCRIPT" > "$out" ;;
     esac
 }
 # mutant_scenarios <name> — the scenarios that own it.
 mutant_scenarios() {
     case "$1" in
         dropowned) echo s_r3_2 ;; dropsassy) echo s_r3_3 ;; droporder) echo s_order ;;
-        tie) echo s_tie ;; dropsafe) echo s_hostile ;; dropsymlink) echo s_symlink ;; dropfail) echo s_corrupt ;; droprefuse) echo "s_hostile s_ownedlink s_nested" ;;
+        tie) echo s_tie ;; dropsafe) echo s_hostile ;; dropsymlink) echo s_symlink ;; dropfail) echo s_corrupt ;; droprefuse) echo "s_hostile s_ownedlink s_nested s_indexkinds" ;;
+        droprule) echo s_rulesrc ;; hidecause) echo s_claudelink ;;
     esac
 }
-for m in dropowned dropsassy droporder tie dropsafe dropsymlink dropfail droprefuse; do
+for m in dropowned dropsassy droporder tie dropsafe dropsymlink dropfail droprefuse droprule hidecause; do
     mut="$WORK/mut-$m.sh"
     mutate "$m" "$mut"
     if cmp -s "$mut" "$SCRIPT"; then bad "mutant $m changed nothing (the mutation did not apply)"; continue; fi
@@ -646,6 +797,19 @@ if [ "$after" -gt "$before" ]; then
     FAIL="$before"; PASS="$pbefore"; ok "mutant killrow is caught ($((after - before)) accounting failure(s): a dead row worker is not silently dropped)"
 else
     bad "mutant killrow SURVIVED — a row worker that dies reads as a pass"
+fi
+
+# shrinkmatrix: the matrix size literals. Drop one VARIANTS entry, rebuild the
+# state list, and the literals must go red (the list is built, not run).
+before="$FAIL"; pbefore="$PASS"; QUIET=1
+build_state_list "${VARIANTS#* }"
+read -ra VLIST <<<"${VARIANTS#* }"
+matrix_literals "${#VLIST[@]}" "${#STATE_LIST[@]}" $((${#STATE_LIST[@]} * 2))
+QUIET=0; after="$FAIL"
+if [ "$after" -gt "$before" ]; then
+    FAIL="$before"; PASS="$pbefore"; ok "mutant shrinkmatrix is caught ($((after - before)) literal(s) went red when one VARIANTS entry was dropped)"
+else
+    bad "mutant shrinkmatrix SURVIVED — a shrunk matrix reads as a pass"
 fi
 
 echo "tracking-state: $PASS passed, $FAIL failed"
