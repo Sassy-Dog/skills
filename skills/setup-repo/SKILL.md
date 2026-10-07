@@ -110,10 +110,13 @@ before this gate.**
 
 Where a generator reports a tracking or `.gitignore` change in a public repo, the plan relays that
 report as that generator reported it. Both derive the repo's current end state against the one
-target chosen above and show only the transition still needed, counting a change an earlier
-generator's plan entry already makes, so each change appears once: under `setup-config` when it
-makes it, under `setup-hooks` when `setup-config` was skipped or declined. This skill assigns no
-mechanics of its own.
+target chosen above and show only the transition still needed. Each `plan` derives from what is on
+disk and cannot see a change an earlier generator has only previewed, so the same `.gitignore` edits
+may appear under both generators in the combined plan; the later one is always a subset of the
+earlier. Once `setup-config` has applied, the later generator's plan reads "nothing to do" for
+`local`; for `committed` it still carries a `git-add` line for each script that generator renders
+(and nothing else), which that generator applies through its own subset check.
+This skill assigns no mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
 `setup-hooks`). This gate is what makes the *sweep* visible: three generators firing across

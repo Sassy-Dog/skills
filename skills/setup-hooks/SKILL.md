@@ -180,14 +180,38 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --
 
 Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
 the target state, and then nothing is proposed). After the approval and **after the scripts and the
-settings entries are written**, run `plan` again with the same flags (the scripts now exist). **Apply
-only a plan the user has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`,
-`gitignore-remove`, `gitignore-append`) must be a subset of the action lines of the previewed plan,
-the one expected difference being that the files this run rendered now exist. If any action line is
-new, or the second plan prints `blocked:` lines, do not apply: show the new plan and ask again. Then
-run `apply` with the same flags and `--plan-id <the id the second plan printed>` (the id is required;
-`apply` refuses with exit 3 if the repo changed after that plan). This generator therefore adds what
-it renders at its own write time, whatever `setup-config` saw earlier. **If the script path does not
+settings entries are written**, run `plan` again with the same flags. **Apply only a plan the user
+has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`, `gitignore-remove`,
+`gitignore-append`) must be a subset of the action lines of the previewed plan (an action line does
+not depend on whether the owned file exists yet, so a plan previewed before rendering keeps its
+plan-id after it). **If the second plan prints `nothing to do`, it prints no plan-id: skip `apply`
+and go straight to `verify`.** Under `setup-repo` in a public repo that is the outcome for target
+`local`, where `setup-config` already moved the repo to the target and the rendered scripts are
+ignored. For target `committed` it is **not**: `setup-config` applies without `--owned`, so the
+second plan still carries one `git-add` line for each script this generator rendered (and nothing
+else, since the `.gitignore` edits are done), and this generator applies it through the subset check
+above. If any action line is new, show the new plan and ask again. Otherwise run `apply` with the
+same flags and `--plan-id <the id the second plan printed>` (the id is required; `apply` refuses
+with exit 3 if the repo changed after that plan), then `verify`. This generator therefore adds what
+it renders at its own write time, whatever `setup-config` saw earlier. **Do not loop on a refusal.**
+If either plan prints `blocked:` lines, or `apply` exits non-zero, stop, name the entry or rule from
+the `blocked:` line (or the message), say how to fix it, and report by exit code:
+
+- **`blocked:` plan, exit 6, 7 or 8**: nothing was written by `apply`. Exit 6 is a non-regular
+  `.gitignore`, 7 an unsafe or nested owned-name entry, 8 an ignore rule outside the managed lines
+  (a nested `.gitignore`, `.git/info/exclude`, `core.excludesFile`, an unmanaged root line) that a
+  human edits; `git add -f` does not help. Report the tracking step as **not applied**.
+- **Exit 4**: a path to add does not exist as a regular file yet (a script this run should have
+  rendered is missing); write it, then re-plan. Report the tracking step as **not applied**.
+- **Exit 3**: the repo changed after the plan; re-plan and show the new plan.
+- **Exit 2**: a git probe failed ("unknown, not verified", with git's own message, for example a
+  symlinked `.claude`); fix the cause named. Report the tracking step as **not applied**.
+- **Exit 5**: a `git add` or `git rm --cached` failed AFTER the `.gitignore` was rewritten, so the
+  repo may be **partially applied**. Report it as such, and inspect with `git status --short` and
+  `git diff .gitignore`; a stale `.git/index.lock` is the usual cause. Re-run `plan` once it is
+  cleared; never `git add -f`.
+
+The scripts and settings entries already written stay written. **If the script path does not
 exist, stop and say that `setup-config`'s `tracking-state.sh` is missing (the plugin is incomplete or
 the file moved); do not improvise the tracking rules.**
 `setup-config` passes no `--owned` of its own, because it renders no script.

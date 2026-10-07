@@ -22,14 +22,31 @@
 #       plans that id, (exit 4) when a path it must `git add` does not exist as
 #       a regular file, (exit 6) when .gitignore is a symlink or not a regular
 #       file, (exit 7) when any owned-name entry is unsafe, nested, a directory
-#       or a symlink. Both 6 and 7 refuse BEFORE the first write, and `plan`
-#       prints `blocked: <each problem>` instead of actions; the way out is for
-#       a human to rename or remove the entry (this script never deletes or
-#       renames a user file). It never writes through a symlink.
+#       or a symlink, (exit 8) when an ignore rule OUTSIDE the managed root lines
+#       (a nested .gitignore, .git/info/exclude, core.excludesFile, or an
+#       unmanaged line of the root .gitignore) would still leave a path with the
+#       wrong ignore status after the rewrite, (exit 5) when a `git rm --cached`
+#       or `git add` itself FAILED, which can only happen after the .gitignore
+#       rewrite (a message names the path; re-run `plan`, the state may be
+#       mixed). 6, 7 and 8 refuse BEFORE the first write, and `plan` prints
+#       `blocked: <each problem>` instead of actions (for 8, naming the winning
+#       rule as `source:line:pattern`); the way out is for a human to rename or
+#       remove the entry or the rule (this script never deletes or renames a
+#       user file, and never edits a rule it does not own). `git add -f` is NOT
+#       the way out: a forced add still derives as ignored. It never writes
+#       through a symlink. Exit 8 is decided against a throwaway repo (built by hand,
+#       its git calls pinned to it, so exported GIT_DIR/GIT_WORK_TREE cannot reach
+#       the real repo; a relative core.excludesFile resolves against the work-tree
+#       root; the reported line is the REAL file's) holding
+#       the projected root .gitignore plus the nested .gitignore files, the
+#       info/exclude and the excludes file the real repo has, so a rule the
+#       managed lines override (a lower-precedence info/exclude line under
+#       `!.claude/settings.json`) is correctly NOT a block.
 #   verify --target ... [--owned ...]
 #       Exit 0 iff the derived state equals the target; otherwise exit 1 and the
 #       target's mismatches on stdout.
-#   Exit 2 on every subcommand: a git probe FAILED ("unknown, not verified");
+#   Exit 2 on every subcommand: a git probe FAILED ("unknown, not verified",
+#   with git's own stderr, e.g. a symlinked .claude: "beyond a symbolic link");
 #   it never reads as ok. Exit 64: usage.
 #
 # END STATES (every negation must come after the pattern it re-includes):
@@ -190,8 +207,8 @@ collect() {
     # $paths ends in a newline already; a here-string would add an empty last
     # line, which check-ignore rejects as an empty pathspec. Exit 0/1 = answered
     # (some / none ignored); anything else is a failed probe, never "not ignored".
-    IGN="$(printf '%s' "$paths" | git check-ignore --no-index --stdin 2>/dev/null)"; rc=$?
-    [ "$rc" -le 1 ] || FAILED+="git check-ignore failed (exit $rc); "
+    IGN="$(printf '%s' "$paths" | git check-ignore --no-index --stdin 2>"$TMPD/ck.err")"; rc=$?
+    [ "$rc" -le 1 ] || FAILED+="git check-ignore failed (exit $rc): $(tr '\n' ' ' < "$TMPD/ck.err"); "
     if [ -n "$FAILED" ]; then
         echo "tracking-state.sh: unknown, not verified: $FAILED" >&2
         exit 2
@@ -302,17 +319,138 @@ jarr() {
 }
 
 # --- plan --------------------------------------------------------------------
-PLAN=""; PLAN_ID=""; GI_REMOVE_N=""; GI_APPEND=""; ADD=""; RMC=""; NOTHING=0
+PLAN=""; PLAN_ID=""; GI_REMOVE_N=""; GI_APPEND=""; ADD=""; RMC=""; NOTHING=0; GI_NEW=""; RULE_BLOCK=""
 managed() { case "$1" in "$W"|"$S"|"$NS"|"$NH"|"$HW"|"$HN"|"$HD"|'.claude/'|'.claude') return 0 ;; esac; return 1; }
 
+# render_gi — GI_NEW = the root .gitignore as the rewrite will leave it: every
+# unrelated line and its order kept, the removals dropped, the appends added, in
+# the file's own line-ending convention. GI_MAP is one line per GI_NEW line: the
+# line's number in the REAL file, or 0 for a line this script appends, so a rule
+# named in the probe can be reported at the line the user can open. Globals,
+# because a command substitution would strip the trailing newline. mutate()
+# writes exactly GI_NEW.
+GI_MAP=""
+render_gi() {
+    local l n=0 cr=""
+    [ "$GI_CRLF" -eq 1 ] && cr=$'\r'
+    GI_NEW=""; GI_MAP=""
+    if [ -f "$GI" ]; then
+        while IFS= read -r l || [ -n "$l" ]; do
+            n=$((n + 1))
+            in_list "$n" "$GI_REMOVE_N" && continue
+            case "$l" in *$'\r') ;; *) l+="$cr" ;; esac
+            GI_NEW+="$l"$'\n'; GI_MAP+="$n"$'\n'
+        done < "$GI"
+    fi
+    while IFS= read -r l; do [ -z "$l" ] || { GI_NEW+="$l$cr"$'\n'; GI_MAP+="0"$'\n'; }; done <<<"$GI_APPEND"
+}
+
+SIM="$TMPD/sim"
+# sgit — git against the throwaway probe repo ONLY: the repo and work tree are
+# pinned explicitly, so an exported GIT_DIR / GIT_WORK_TREE can neither redirect
+# a probe at the real work tree nor make anything write to the real repo.
+sgit() { GIT_DIR="$SIM/.git" GIT_WORK_TREE="$SIM" git "$@"; }
+
+# rule_name <src> <line> <pattern> <path> — RN = the rule as a user can find it:
+# the probe's root .gitignore line mapped back to the real file's line, the real
+# info/exclude path, and, when no rule matches the path itself, the parent
+# directory rule that decides it (a `!hooks/` in a nested .gitignore).
+RN=""
+rule_name() {
+    local src="$1" ln="$2" pat="$3" path="$4" i=0 m real a anc="" line s l p pt
+    if [ -n "$src" ]; then
+        case "$src" in
+            "$GI")
+                real="$ln"
+                if [ -n "$GI_MAP" ]; then
+                    real=0
+                    while IFS= read -r m; do i=$((i + 1)); [ "$i" -eq "$ln" ] && { real="$m"; break; }; done <<<"$GI_MAP"
+                fi
+                if [ "$real" = 0 ]; then RN="$GI (a line this script would append):$pat"; else RN="$GI:$real:$pat"; fi ;;
+            *info/exclude) RN="${EXC:-$src}:$ln:$pat" ;;
+            *) RN="$src:$ln:$pat" ;;
+        esac
+        return 0
+    fi
+    a="${path%/*}"
+    # A directory-only rule (`!hooks/`) matches only a directory that EXISTS, so
+    # the probe repo gets the ancestors as real directories before they are asked.
+    while :; do anc+="$a"$'\n'; mkdir -p "$SIM/$a"; case "$a" in */*) a="${a%/*}" ;; *) break ;; esac; done
+    while IFS= read -r line; do [ -z "$line" ] || printf '%s\0' "$line"; done <<<"$anc" > "$TMPD/anc.in"
+    sgit "${EXARGS[@]}" check-ignore -v -n -z --no-index --stdin < "$TMPD/anc.in" > "$TMPD/anc.out" 2>/dev/null
+    while IFS= read -r -d '' s && IFS= read -r -d '' l && IFS= read -r -d '' p && IFS= read -r -d '' pt; do
+        # only a negation explains a path that no rule ignores
+        [ "${p#!}" != "$p" ] || continue
+        rule_name "$s" "$l" "$p" "$pt/x"; RN="$RN (decides the parent directory $pt)"; return 0
+    done < "$TMPD/anc.out"
+    RN="no rule matches"
+}
+
+# rule_check <target> — RULE_BLOCK, one line per path that would NOT have the
+# target's ignore status once the root .gitignore is rewritten, because of a rule
+# the rewrite cannot touch (a nested .gitignore, .git/info/exclude,
+# core.excludesFile, an unmanaged root line). Decided in a throwaway repo built by
+# hand (no `git init`, so nothing can write to the real repo) holding the
+# projected root .gitignore and copies of every other rule file the real repo
+# consults for these paths (each probed path's parent directories are walked),
+# so precedence is git's own, and named with `git check-ignore -v -z --no-index`.
+# A failed probe is "unknown", never "fine".
+EXC=""; EXARGS=()
+rule_check() {
+    local t="$1" d p x path src ln pat ign want cfg err paths="" copied=""
+    RULE_BLOCK=""
+    mkdir -p "$SIM/.git/objects" "$SIM/.git/refs" "$SIM/.git/info" && printf 'ref: refs/heads/main\n' > "$SIM/.git/HEAD" || { RULE_BLOCK="could not build the ignore-rule probe repo"$'\n'; return 0; }
+    if [ -n "$GI_APPEND" ] || [ -n "$GI_REMOVE_N" ]; then printf '%s' "$GI_NEW" > "$SIM/.gitignore"
+    elif [ -f "$GI" ] && [ ! -L "$GI" ]; then cp "$GI" "$SIM/.gitignore"; fi
+    for x in "$SETTINGS" "$PROBE_CONFIG" "$PROBE_NONOWNED" "$PROBE_OWNEDDIR" $PROBES_IGNORED; do paths+="$x"$'\n'; done
+    while IFS= read -r p; do [ -z "$p" ] || paths+="$p"$'\n'; done <<<"$OWNED"$'\n'"$NONOWNED"
+    while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        d="${p%/*}"
+        while :; do
+            case "$copied" in
+                *$'\n'"$d"$'\n'*) ;;
+                *) copied+=$'\n'"$d"$'\n'
+                   if [ -f "$d/.gitignore" ] && [ ! -L "$d/.gitignore" ]; then mkdir -p "$SIM/$d" && cp "$d/.gitignore" "$SIM/$d/.gitignore"; fi ;;
+            esac
+            case "$d" in */*) d="${d%/*}" ;; *) break ;; esac
+        done
+    done <<<"$paths"
+    EXC="$(git rev-parse --git-path info/exclude 2>/dev/null)"
+    if [ -n "$EXC" ] && [ -f "$EXC" ]; then cp "$EXC" "$SIM/.git/info/exclude"; fi
+    # core.excludesFile: `--type=path` expands ~/; a relative value is read by git
+    # from the work-tree root, so resolve it there (the probe repo is elsewhere).
+    cfg="$(git config --type=path --get core.excludesFile 2>/dev/null)"
+    case "$cfg" in ''|/*) ;; *) cfg="$top/$cfg" ;; esac
+    EXARGS=(); [ -z "$cfg" ] || EXARGS=(-c "core.excludesFile=$cfg")
+    while IFS= read -r p; do [ -z "$p" ] || printf '%s\0' "$p"; done <<<"$paths" > "$TMPD/sim.in"
+    err="$TMPD/sim.err"
+    sgit "${EXARGS[@]}" check-ignore -v -n -z --no-index --stdin < "$TMPD/sim.in" > "$TMPD/sim.out" 2>"$err"
+    [ "$?" -le 1 ] || { RULE_BLOCK="could not probe the ignore rules: $(tr '\n' ' ' < "$err")"$'\n'; return 0; }
+    while IFS= read -r -d '' src && IFS= read -r -d '' ln && IFS= read -r -d '' pat && IFS= read -r -d '' path; do
+        ign=n; { [ -n "$pat" ] && [ "${pat#!}" = "$pat" ]; } && ign=y
+        case "$path" in
+            "$SETTINGS") if [ "$t" = local ]; then want=y; else want=n; fi ;;
+            "$PROBE_CONFIG") want=n ;;
+            *) want=y ;;
+        esac
+        in_list "$path" "$OWNED" && { if [ "$t" = local ]; then want=y; else want=n; fi; }
+        [ "$ign" != "$want" ] || continue
+        rule_name "$src" "$ln" "$pat" "$path"
+        if [ "$want" = y ]; then RULE_BLOCK+="$path would not be ignored after the rewrite ($RN)"$'\n'
+        else RULE_BLOCK+="$path would still be ignored after the rewrite ($RN)"$'\n'; fi
+    done < "$TMPD/sim.out"
+}
+
 build_plan() {
-    local t="$1" want l n p gi_ok=1 x m t2 q restore
+    local t="$1" want l n p gi_ok=1 x m t2 q restore head
     derive
-    PLAN=""; GI_REMOVE_N=""; GI_APPEND=""; ADD=""; RMC=""; NOTHING=0
+    PLAN=""; GI_REMOVE_N=""; GI_APPEND=""; ADD=""; RMC=""; NOTHING=0; GI_NEW=""; RULE_BLOCK=""
     if [ "$STATE" = "$t" ]; then NOTHING=1; PLAN="state: $STATE  target: $t"$'\n'"nothing to do"$'\n'; PLAN_ID="$(printf '%s' "$PLAN" | cksum | cut -d' ' -f1)"; return 0; fi
     PLAN="state: $STATE  target: $t"$'\n'
     m="$(mm_for "$t")"
     while IFS= read -r x; do [ -z "$x" ] || PLAN+="mismatch: $x"$'\n'; done <<<"$m"
+    head="$PLAN"
     # Blocked: nothing is planned, so there is nothing to half-apply.
     if [ -n "$GI_BAD" ] || [ -n "$PROBLEMS" ]; then
         [ -z "$GI_BAD" ] || PLAN+="blocked: $GI_BAD"$'\n'
@@ -351,6 +489,16 @@ build_plan() {
             [ -z "$l" ] || PLAN+="gitignore-append (end of $GI, in this order): $l"$'\n'
         done <<<"$GI_APPEND"
     fi
+    if [ -n "$GI_APPEND" ] || [ -n "$GI_REMOVE_N" ]; then render_gi; fi
+    rule_check "$t"
+    if [ -n "$RULE_BLOCK" ]; then
+        # No rewrite of the managed lines can fix this, so nothing is planned.
+        PLAN="$head"; GI_REMOVE_N=""; GI_APPEND=""; GI_NEW=""; ADD=""; RMC=""
+        while IFS= read -r x; do [ -z "$x" ] || PLAN+="blocked: $x"$'\n'; done <<<"$RULE_BLOCK"
+        PLAN+="blocked: edit or remove that rule yourself; this script only edits its own managed lines in the root $GI, and git add -f would not help (the path would still derive as ignored)"$'\n'
+        PLAN_ID="$(printf '%s' "$PLAN" | cksum | cut -d' ' -f1)"
+        return 0
+    fi
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         if [ "$t" = local ]; then
@@ -384,7 +532,7 @@ build_plan() {
 # mutate <target> — the ONLY place anything is written. Its body re-derives and
 # compares the result to the plan-id the caller previewed before the first write.
 mutate() {
-    local t="$1" l p new n cr tmp
+    local t="$1" p tmp
     build_plan "$t"
     if [ "$NOTHING" -eq 1 ]; then echo "nothing to do"; return 0; fi
     if [ "$PLAN_ID" != "$EXPECT_ID" ]; then
@@ -393,28 +541,19 @@ mutate() {
     fi
     if [ -n "$GI_BAD" ]; then echo "tracking-state.sh: refusing to apply: $GI_BAD" >&2; return 6; fi
     if [ -n "$PROBLEMS" ]; then echo "tracking-state.sh: refusing to apply, nothing was written: an owned-name entry is unsafe, nested, a directory or a symlink (rename or remove it yourself): $(printf '%s' "$PROBLEMS" | tr '\n' ';')" >&2; return 7; fi
+    if [ -n "$RULE_BLOCK" ]; then echo "tracking-state.sh: refusing to apply (nothing written): an ignore rule outside the managed lines would leave the state mixed (edit or remove it yourself; git add -f does not help): $(printf '%s' "$RULE_BLOCK" | tr '\n' ';')" >&2; return 8; fi
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         { [ -f "$p" ] && [ ! -L "$p" ]; } || { echo "tracking-state.sh: refusing to apply: $p does not exist as a regular file yet; write or render it first" >&2; return 4; }
     done <<<"$ADD"
     if [ -n "$GI_APPEND" ] || [ -n "$GI_REMOVE_N" ]; then
-        new=""; n=0; cr=""; [ "$GI_CRLF" -eq 1 ] && cr=$'\r'
-        if [ -f "$GI" ]; then
-            while IFS= read -r l || [ -n "$l" ]; do
-                n=$((n + 1))
-                in_list "$n" "$GI_REMOVE_N" && continue
-                case "$l" in *$'\r') ;; *) l+="$cr" ;; esac
-                new+="$l"$'\n'
-            done < "$GI"
-        fi
-        while IFS= read -r l; do [ -z "$l" ] || new+="$l$cr"$'\n'; done <<<"$GI_APPEND"
         tmp="$(mktemp "$GI.tmp.XXXXXX")" || return 6
         if [ -f "$GI" ]; then cp -p "$GI" "$tmp" || { rm -f "$tmp"; return 6; }; else chmod 644 "$tmp"; fi
-        printf '%s' "$new" > "$tmp" || { rm -f "$tmp"; return 6; }
+        printf '%s' "$GI_NEW" > "$tmp" || { rm -f "$tmp"; return 6; }
         mv -f "$tmp" "$GI" || { rm -f "$tmp"; return 6; }
     fi
-    while IFS= read -r p; do [ -z "$p" ] || git rm --cached -q -- "$p" || return 5; done <<<"$RMC"
-    while IFS= read -r p; do [ -z "$p" ] || git add -- "$p" || return 5; done <<<"$ADD"
+    while IFS= read -r p; do [ -z "$p" ] || git rm --cached -q -- "$p" || { echo "tracking-state.sh: git rm --cached failed for $p (exit 5); the .gitignore may already be rewritten, re-run plan" >&2; return 5; }; done <<<"$RMC"
+    while IFS= read -r p; do [ -z "$p" ] || git add -- "$p" || { echo "tracking-state.sh: git add failed for $p (exit 5); the .gitignore may already be rewritten, re-run plan" >&2; return 5; }; done <<<"$ADD"
     return 0
 }
 

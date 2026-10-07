@@ -275,7 +275,12 @@ whitespace, a glob character, a quote, a backslash, `$` or a backtick, one neste
 owned-name entry, or an owned-name directory or symlink is **reported as a mismatch and never acted
 on**, and `plan` prints `blocked:` for it and `apply` refuses (exit 7) before its first write while
 it exists: the way out is for a human to rename or remove the entry, and the script never deletes or
-renames a user file.
+renames a user file. An **ignore rule outside the managed lines** (a nested `.claude/.gitignore`,
+`.git/info/exclude`, `core.excludesFile`, or an unmanaged line of the root `.gitignore`) that would
+still leave `settings.json`, an owned script, a new config path or an ignored-by-design path with the
+wrong ignore status after the rewrite is blocked the same way: `plan` prints `blocked:` naming the
+winning rule as `source:line:pattern`, and `apply` refuses (exit 8) before its first write. The way
+out is to edit that rule; `git add -f` is not it, because a forced add still derives as ignored.
 
 | End state | `.gitignore` (negations after the pattern they re-include) | `settings.json` and each owned script |
 |---|---|---|
@@ -311,10 +316,15 @@ Run from the repo root. **The preview shows `plan`'s output verbatim**: the exac
 edits, every `git add` / `git rm --cached` path (acted on individually, never as a directory), the
 warnings, and "nothing to do" when the derived state already equals the target (a declined choice is
 not persisted, so a later run derives the mismatch again and re-proposes it; say so). **Approval runs
-`apply`, passing the previewed `plan-id`** (it is required): `apply` re-derives immediately before it
-acts and refuses (exit 3) if the repo no longer plans that id, (exit 4) if a path it must add does not
-exist yet, (exit 6) if `.gitignore` is a symlink, and it exits 2 with "unknown, not verified" when a
-git probe fails, which is never read as ok. **`setup-config` passes no `--owned`**: it renders no
+`apply`, passing the previewed `plan-id`** (it is required; a "nothing to do" plan prints none, and
+there is then nothing to apply): `apply` re-derives immediately before it acts and refuses (exit 3)
+if the repo no longer plans that id, (exit 4) if a path it must add does not exist yet, (exit 6) if
+`.gitignore` is a symlink or any other non-regular file, (exit 7) if an owned-name entry is unsafe,
+nested, a directory or a symlink, (exit 8) if an ignore rule outside the managed lines would still
+leave a path with the wrong ignore status. Exits 6, 7 and 8 write nothing. **Exit 5** is not a
+refusal: a `git rm --cached` or `git add` itself failed after the `.gitignore` rewrite, so the repo
+may be half-moved (re-run `plan`, never `git add -f`). It exits 2 with "unknown, not verified" and
+git's own message when a git probe fails, which is never read as ok. **`setup-config` passes no `--owned`**: it renders no
 hook script, so the only paths its `apply` can add are ones that already exist, and an `--owned`
 path that does not exist yet would make `apply` refuse and Phase 7's `verify` fail. `setup-hooks`
 passes `--owned` for every script it renders, in its own plan and apply, so what it renders is
