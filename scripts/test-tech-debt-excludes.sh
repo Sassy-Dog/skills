@@ -196,9 +196,10 @@ if [ "$staged" -ne 9 ]; then
 fi
 
 # --- helpers ------------------------------------------------------------------
-# `printf` is the writer into every `grep -q` below: the value is already a
-# shell variable, so it is bounded and fully written (test-pipefail-grep.sh).
-has()   { printf '%s\n' "$1" | grep -qF -- "$2"; }
+# Feed the value directly: even a materialized shell variable can exceed the
+# pipe buffer, letting `grep -q` close early and turn `printf`'s SIGPIPE into a
+# false miss under pipefail (main CI after PR #481).
+has()   { grep -qF -- "$2" <<<"$1"; }
 hasnt() { if has "$1" "$2"; then return 1; fi; return 0; }
 same()  { [ "$1" = "$2" ]; }
 verdict() { if "$@"; then echo pass; else echo fail; fi; }
@@ -209,6 +210,17 @@ run_fixture() {  # $1 = script path, $2 = EXCLUDE_PATHSPECS value
 run_live() {     # $1 = script path, $2 = EXCLUDE_PATHSPECS value
     ( cd "$REPO_ROOT" && SCAN_PATHS="skills" EXCLUDE_PATHSPECS="$2" bash "$1" 2>/dev/null )
 }
+
+# An early match in a value larger than a pipe buffer must stay a match. This
+# catches the former printf pipeline without depending on the live doc's size
+# or on the scheduler race that made the same checkout pass PR and queue CI.
+printf -v match_fixture 'present\n%1048576s' ''
+if has "$match_fixture" present; then
+    ok "an early match in a large value is not lost under pipefail"
+else
+    bad "an early match in a large value became a false miss under pipefail"
+fi
+unset match_fixture
 
 # --- derive the live fixture's excluded directory -----------------------------
 # Taken from the REAL script's unfiltered scan, never from a mutant, so every
