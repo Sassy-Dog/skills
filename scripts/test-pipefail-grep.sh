@@ -10,7 +10,7 @@
 # review and in small fixtures: the identical line is correct today and wrong
 # later, with no code change, when the tree or file or API page it reads grows.
 #
-# It has bitten twice, both times inside code written to prevent silent passes:
+# The two original failures were inside code written to prevent silent passes:
 #   #172  setup-hooks' has_tracked (`git ls-files <glob> | head -1 | grep -q .`)
 #         read a match as a miss, and the rendered hook silently dropped that
 #         tool's route. Gated — but the gate pins that ONE function by name.
@@ -24,16 +24,17 @@
 # "simplify" it into the blanket ban below). A pipeline into `grep -q` is
 # flagged unless the pipeline's SOURCE stage is `printf` or `echo`. Purely
 # syntactic: no judgement about any particular site lives in this script, and
-# the two allowlisted writers are the two whose output is a shell variable that
-# already exists in memory, i.e. bounded and fully written.
+# the allowlisted writers use values already materialized in memory. That is
+# not a size bound or proof that their pipe writes will finish.
 #
 # KNOWN LIMITATION, accepted. The allowlist is a HEURISTIC, not a proof.
 # `printf '%s' "$huge" | grep -q x` slips through, because the writer is
-# `printf` and nothing here can know how large `$huge` is. That is the trade
-# deliberately taken: the shape that has actually bitten twice is a COMMAND
-# writer — `git ls-files` over a large tree, `grep` or `jq` over a file — not a
-# `printf` of a variable. A rule that could catch the variable case too would
-# have to reason about data size, which no syntactic check can do.
+# `printf` and nothing here can know how large `$huge` is. The original failures
+# involved COMMAND writers — `git ls-files` over a large tree, or `grep`/`jq`
+# over a file. A large variable later hit the same boundary in
+# test-tech-debt-excludes.sh (main CI after PR #481); that helper now uses a
+# here-string and carries a large-value regression. The syntactic allowlist
+# stays unchanged: this scanner does not infer data size.
 #
 # REJECTED on #256, recorded so it is not re-litigated:
 #   * Flag everything, opt out with an inline `# pipefail-safe:` marker. It
