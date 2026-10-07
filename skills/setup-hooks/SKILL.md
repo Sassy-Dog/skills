@@ -114,7 +114,11 @@ Ask only what detection cannot answer:
    the repo's `settings.json`, with `.claude/hooks/` untracked and ignored: project hooks run with
    no trust prompt when only a parent folder was trusted, under `claude -p` / the Agent SDK and in
    cloud sessions, so tracked hook scripts are code any PR can change and contributors run
-   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file.
+   unprompted (`setup-config` Phase 7 step 2). The user may still choose the committed file. The
+   **default offered** is the repo's current end state when the script's `derive` reports `local` or
+   `committed` (a refresh must not offer to undo a deliberate `committed`), and `local` only when it
+   reports `mixed`. When `setup-repo` passes a target (the word `local` or `committed`), use it
+   (`local` is `settings.local.json`, `committed` is `settings.json`) and do not ask again.
 2. **Lint strictness** — linters exit 2 (findings feed back for immediate fix — default) or
    advisory (log to the user, exit 0)?
 3. **Slow tools** — anything detected with a meaningful per-edit cost (`dotnet format`, full
@@ -160,25 +164,39 @@ tracked `tmp/` deeper in the tree. Idempotent: check with
 `git check-ignore -q tmp/probe` from the repo root and skip when already covered. Append it under
 the repo's existing comment style; include the line in the approval diff like any other write.
 
-**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** (`sassy-dog:setup-config`
-`SKILL.md`) — it owns the predicate and the mechanics, so they are not restated here. For this
-generator that means, in the same approval diff:
+**In a public repo, apply `setup-config`'s "Tracking choice in the plan"** through its script, which
+is authoritative: `${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh` (resolve the
+root as in the **Plugin root** paragraph above; the section in
+`${CLAUDE_PLUGIN_ROOT}/skills/setup-config/SKILL.md` documents the two end states and the table, and
+none of it is restated here). Your chosen target (Phase 2) maps to the script's target:
+`settings.local.json` is `local`, `settings.json` is `committed`; a target passed by `setup-repo`
+is used as is. Run from the repo root, with `--owned` for **every** `.claude/hooks/sassydog-*.sh`
+this run renders (the artifact guard always, the post-edit dispatcher only when a tool was
+detected; enumerate them, never assume which):
 
-- **Untrack by `git ls-files .claude/settings.json .claude/hooks`**, in every mode: preview
-  `git rm -r --cached .claude/hooks` (and `git rm --cached .claude/settings.json` only if this run
-  is the one keeping it local) with its collaborator-deletion warning and restore command. A
-  `.gitignore` line never untracks a file.
-- **Move, never duplicate.** When the target flips to `settings.local.json` and the tracked
-  `settings.json` already holds owned entries (command path `.claude/hooks/sassydog-`), remove
-  exactly those entries from `settings.json` and add them to `settings.local.json`, per
-  `references/settings-merge.md` rule 5. Leaving them would keep the tracked script wired and
-  PR-editable.
-- **The `.gitignore` lines**, per-line predicate as in that section. Under `setup-repo`,
-  `setup-config` owns the displayed edit; show it here only when run standalone or when
-  `setup-config` was skipped or declined, and at write time re-evaluate the predicate so a line the
-  prior generator added is never added twice. `settings.local.json` is ignored by Claude Code
-  convention, but `.claude/hooks/` is not, so without them an "untracked" hook script is one
-  `git add -A` from being committed. Do not offer them if the user chose the committed file.
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --target local|committed --owned .claude/hooks/sassydog-artifact-guard.sh
+```
+
+Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
+the target state, and then nothing is proposed). After the approval and **after the scripts and the
+settings entries are written**, run `plan` again with the same flags (the scripts now exist). **Apply
+only a plan the user has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`,
+`gitignore-remove`, `gitignore-append`) must be a subset of the action lines of the previewed plan,
+the one expected difference being that the files this run rendered now exist. If any action line is
+new, or the second plan prints `blocked:` lines, do not apply: show the new plan and ask again. Then
+run `apply` with the same flags and `--plan-id <the id the second plan printed>` (the id is required;
+`apply` refuses with exit 3 if the repo changed after that plan). This generator therefore adds what
+it renders at its own write time, whatever `setup-config` saw earlier. **If the script path does not
+exist, stop and say that `setup-config`'s `tracking-state.sh` is missing (the plugin is incomplete or
+the file moved); do not improvise the tracking rules.**
+`setup-config` passes no `--owned` of its own, because it renders no script.
+
+What is specific to this generator is the settings move, which applies in **both** directions:
+the target is `settings.local.json` and `settings.json` holds owned entries (command path
+`.claude/hooks/sassydog-`) → move them to `settings.local.json`; the target is `settings.json` and
+`settings.local.json` holds owned entries → move them back. `references/settings-merge.md` rule 5
+has the mechanics.
 
 Private and internal repos are unchanged.
 
@@ -215,9 +233,12 @@ execute bit on the script.
    very thing the hook exists to catch.
 4. Confirm `tmp/` is actually ignored: `git check-ignore -v tmp/probe.png` must print the rule.
 5. Validate the chosen target still parses (`.claude/settings.json` or `.claude/settings.local.json`):
-   `jq -e . <target>`. In a public repo, also assert `git ls-files .claude/hooks` prints nothing
-   (a tracked hook script means the untracking was not applied) and, when ignore lines were
-   offered, `git check-ignore -v .claude/hooks/sassydog-post-edit.sh` prints the rule.
+   `jq -e . <target>`. In a **public** repo, then run the script's
+   `verify --target local|committed --owned <each script rendered this run>`: exit 0 is the pass,
+   and it covers `settings.json` and every owned script unconditionally (not only when ignore lines
+   were offered). A non-zero exit prints the mismatches; report them, because the plan's transition
+   was declined or not applied. **Private and internal repos:** run no tracking verify, since a
+   fresh script is legitimately untracked until the user commits it.
 6. If the markdownlint route was rendered, confirm the version the hook will run matches CI's —
    `grep -o 'markdownlint-cli2[^"]*' .claude/hooks/sassydog-post-edit.sh` against the probe's
    `pin_source`. A pinned render must show the pin on both invocations; a fix-only render must show

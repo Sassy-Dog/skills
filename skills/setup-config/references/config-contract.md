@@ -908,5 +908,6 @@ plugins installed on a user's machine nor the ones the repo's `.claude/settings.
 does not add `extraKnownMarketplaces` marketplaces, because that needs the workspace trust dialog,
 which a cloud session never shows. A scheduled routine cannot load a plugin skill at all (#175).
 Only org-managed settings reach those sessions. Whether to track the file is a per-repo choice; for
-a public repo, track only `.claude/sassy-dog/*.md` and keep `settings.json` and `hooks/` local
-(`setup-config` SKILL.md, Phase 7 step 2, carries the reasoning and the ignore-file form).
+a public repo the **default** is to track only `.claude/sassy-dog/*.md` and keep `settings.json` and
+`hooks/` local, and the user may choose to commit them. `setup-config` SKILL.md "Tracking choice in
+the plan" owns the choice and its two end states; Phase 7 step 2 carries the reasoning.

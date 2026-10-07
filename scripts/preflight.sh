@@ -1497,6 +1497,12 @@
 #      the injected config line, and in none of the four NO_CONFIG stoppers; the
 #      set of skills with a config line is derived and must equal those eight
 #      (issue #463). Mutation-proven (header lists the mutants). No gh, no network.
+#  53. tracking-state tests (scripts/test-tracking-state.sh) — setup-config's
+#      tracking-state.sh derives, plans, applies and verifies the public-repo
+#      tracking end state (local / committed / mixed) from every fact that defines
+#      it; enumerated rows against an independent oracle, the round-2 and
+#      round-3 repros (issue #475), and the self-run mutants its header enumerates,
+#      each of which must be caught. Temp `git init` repos only, no gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2419,6 +2425,17 @@ if bash scripts/test-config-fallback-paragraph.sh; then
     pass "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
 else
     failed "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
+fi
+
+# --- 53. tracking-state tests ---------------------------------------------------
+# The two end states of settings.json and the owned hook scripts are derived from
+# every fact that defines them (the .gitignore lines and their order, tracked and
+# ignored status of settings.json and each owned script, the sassy-dog negation),
+# and plan/apply/verify reach the target. Rows + named repros + mutants. No network.
+if bash scripts/test-tracking-state.sh; then
+    pass "tracking-state tests (scripts/test-tracking-state.sh)"
+else
+    failed "tracking-state tests (scripts/test-tracking-state.sh)"
 fi
 
 # ------------------------------------------------------------------------------

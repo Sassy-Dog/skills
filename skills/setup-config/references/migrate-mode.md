@@ -207,14 +207,16 @@ the renamed skills.
 ## Step 4 — `.claude/settings.json`
 
 Merge, never overwrite. `setup-hooks` may already own a hooks entry in the same file.
-Whether this file is **committed** is a per-repo choice (`SKILL.md` Phase 7 step 2): a public repo
-should track only `.claude/sassy-dog/*.md` and keep `settings.json` local, in which case write the
-entries locally and do not stage the file.
+Whether this file is **committed** is a per-repo choice (`SKILL.md` "Tracking choice in the plan"
+owns it; Phase 7 step 2 carries the reasoning): in a public repo the **default** is `local`, which
+tracks only `.claude/sassy-dog/*.md` and keeps `settings.json` local, so write the entries locally
+and do not stage the file, but the user may choose `committed` there.
 
 **In migrate mode the file is usually already tracked, and that is the common case.** The
 untracking commands, the ignore-line predicate, the collaborator-deletion warning with its restore
 command, and the already-tracked `.claude/hooks/` handling are all owned by `SKILL.md`, "Tracking
-choice in the plan". Put each of them in the Step 5 preview; an unstaged edit to a tracked file
+choice in the plan", whose rules live in `scripts/tracking-state.sh` (its `plan` output is the
+preview). Put each of them in the Step 5 preview; an unstaged edit to a tracked file
 stays tracked and dirties the tree, so nothing here substitutes for them. Private and internal repos
 skip this and keep the committed file.
 
@@ -256,8 +258,9 @@ Show, before any write or delete:
 4. The exact list of directories to be deleted, each with its `generated-by:` marker quoted
 5. Any `.claude/skills/` directory being **kept** because it has no marker
 6. In a public repo, the tracking choice exactly as `SKILL.md` "Tracking choice in the plan" lists
-   it: untracking commands, collaborator-deletion warning and restore command, the `.gitignore`
-   lines, and other tracked `.claude/` paths (Step 4)
+   it: the derived end state and the transition to the chosen target (untracking commands,
+   collaborator-deletion warning and restore command, the `.gitignore` lines), and other tracked
+   `.claude/` paths (Step 4)
 
 Then write config, verify it, and delete only on explicit approval.
 

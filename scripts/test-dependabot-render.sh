@@ -38,7 +38,14 @@
 #      bun-dot (`.` is literal), bun-negclass (`[!a]` never matches `/`),
 #      bun-subroot (a workspace root
 #      other than /) and bun-badjson (an invalid root package.json is a
-#      detect_failures entry). A fixture's `# fixture-expect-failure: <text>`
+#      detect_failures entry). Added for issue #475, one each: bun-grep-compile
+#      (`!packages/[z-a]` is a descending range every grep rejects with exit 2,
+#      which the membership test would read as "no match": it pins the exit-2
+#      check in bun_dirs under any grep and any locale, replacing an inline
+#      probe that GNU grep, i.e. CI, always skipped) and bun-class-straddle
+#      (`pkg[.-0]b` has a range whose ends straddle `/`, so the ERE would fold
+#      /pkg/b; `_glob_frag` refuses a class range unless both ends lie in one
+#      of 0-9, a-z or A-Z). A fixture's `# fixture-expect-failure: <text>`
 #      header asserts that substring appears in detect_failures; an unreadable
 #      Cargo workspace manifest is checked inline, since a corpus cannot
 #      express file modes.
@@ -228,29 +235,6 @@ else
     bad "cargo-unreadable — no 'not readable' entry in detect_failures (CORPUS_NOTES lost in a subshell?)"
 fi
 chmod 600 "$CR/Cargo.toml"
-
-# --- a glob this grep cannot compile is untranslatable, not "no match" -------
-# `[+--]` is a valid Bun class, but BSD grep and ugrep exit 2 on the ERE it
-# becomes, and a membership test reads exit 2 as "no match". Whether it compiles
-# is a property of the grep on PATH AND the locale (GNU accepts it; BSD grep
-# rejects it under a UTF-8 locale but not under the LC_ALL=C this script exports),
-# so a lane fixture cannot pin it portably: probe under a UTF-8 locale, and
-# assert the note only where the probe is rejected.
-GC="$WORK/grep-compile"
-mkdir -p "$GC/apps/a"
-printf '{"workspaces": ["apps/[+--]"]}\n' > "$GC/package.json"
-: > "$GC/bun.lock"
-printf '{}\n' > "$GC/apps/a/package.json"
-printf 'package.json\nbun.lock\napps/a/package.json\n' > "$WORK/grep-compile.files"
-LC_ALL=en_US.UTF-8 grep -E -- '^a[+--]b$' </dev/null >/dev/null 2>&1
-if [ $? -ne 2 ]; then
-    ok "grep-compile — skipped: this grep compiles [+--] (the check is pinned where it does not)"
-elif LC_ALL=en_US.UTF-8 bash "$SCRIPTS/detect-ecosystems.sh" --files-from "$WORK/grep-compile.files" --root "$GC" 2>/dev/null \
-    | jq -e '.detect_failures | map(select(contains("not translatable"))) | length > 0' >/dev/null 2>&1; then
-    ok "grep-compile — a glob whose ERE this grep rejects is reported as untranslatable"
-else
-    bad "grep-compile — a glob whose ERE this grep rejects was not reported (exit 2 read as no match?)"
-fi
 
 # --- the regression case, against real committed bytes -----------------------
 # tailoredtip is the repo a refresh would have regressed: marked owned, content

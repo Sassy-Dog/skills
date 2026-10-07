@@ -1,0 +1,8 @@
+# fixture-expectation-for: synthetic bun-grep-compile
+# fixture-note: [z-a] passes the range-end check (both ends lowercase) and becomes an ERE every grep rejects with exit 2, which a membership test would read as "no match". Only the exit-2 check in bun_dirs catches it, so deleting that check turns this fixture red.
+# fixture-expect-failure: not translatable
+# fixture-v2-valid: the root holds the manifests, so the collapsed-to-/ shape is backed here and step 3 does not apply
+# ---8<--- ecosystem<TAB>directory, one rendered lane per line
+bun	/
+bun	/packages/a
+bun	/packages/b

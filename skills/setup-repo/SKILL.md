@@ -45,7 +45,8 @@ whole point.
 writes `extraKnownMarketplaces` + `enabledPlugins` to `.claude/settings.json`, hooks writes the
 `hooks.PostToolUse` entry to `.claude/settings.json` (or `settings.local.json`, where the
 generator's own public-repo rule sends it). Whether files are tracked is each generator's call
-(`setup-config` Phase 7 step 2); this skill only relays it.
+(`setup-config`'s "Tracking choice in the plan" owns the call; Phase 7 step 2 carries the
+reasoning); this skill only relays it.
 Each documents a *surgical merge into its own keys*, never a rewrite, so **sequential** runs
 compose: the second reads the file as the first left it and adds to it. Run them concurrently — or
 let either plan against one copy and write back a whole file later — and one of the two
@@ -76,6 +77,17 @@ through its own detection and mode selection, stopping at the point where it wou
 2. `Skill: sassy-dog:setup-hooks`
 3. `Skill: sassy-dog:setup-deps`
 
+**Ask the tracking choice once, only when `setup-config`'s Phase 0 probe reports `PUBLIC` or unknown
+visibility.** Take that `visibility` from `setup-config` (this skill reads none and runs no script)
+and, from its "Tracking choice in the plan" section, the current end state its `derive` reports and
+the default that section assigns to it. Ask once, after that and before the plan gate, `local` or
+`committed`, offering that default; an unknown visibility is asked here once and `setup-config`
+does not ask it again. Pass the answer to both `setup-config` and `setup-hooks` as their target, as
+the word `local` or `committed`, never as a settings file name. Each would otherwise ask its own
+question, and the sequential run could combine a kept-local config with a committed hooks target and
+fail. A private or internal repo is not asked. This is a plan-level input, not generation
+mechanics: the derive step, tables, transitions and `tracking-state.sh` stay in `setup-config`.
+
 Capture from each: the mode it picked, and **every file it would create or modify**. Take the
 generator's own detection output at face value — this skill never second-guesses it, and never
 re-derives a stack of its own.
@@ -97,8 +109,10 @@ or modify, and — for anything skipped — the reason. Then ask for approval. *
 before this gate.**
 
 Where a generator reports a tracking or `.gitignore` change in a public repo, the plan relays that
-report as that generator reported it. `setup-config` owns the displayed `.gitignore` edit and
-`setup-hooks` shows it only when run standalone, so it appears once; this skill assigns no
+report as that generator reported it. Both derive the repo's current end state against the one
+target chosen above and show only the transition still needed, counting a change an earlier
+generator's plan entry already makes, so each change appears once: under `setup-config` when it
+makes it, under `setup-hooks` when `setup-config` was skipped or declined. This skill assigns no
 mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
