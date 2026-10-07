@@ -84,6 +84,10 @@ them, producing specs whose types and invariants are right and whose *locations*
 are fiction — which reads as perfectly dispatchable. Exit `3` means at least one
 `likely-drift` finding; `0` means none.
 
+Symbols outside the definitions pool (including enum variants and fields) resolve
+through a portable literal whole-word mention check. Git exit `1` means absent;
+other grep failures are reported as `unknown`, never drift or new.
+
 **The tier is the point, not the absence.** Every issue names things that do not
 exist yet, so unresolved-means-broken would flag the whole backlog. A finding is
 `likely-drift` only when something *close* exists — an invented reference is

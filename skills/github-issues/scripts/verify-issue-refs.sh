@@ -156,12 +156,11 @@ fi
 # with git 2.55 `\b` matches nothing, while on Linux — git 2.54/musl and git
 # 2.47/glibc, i.e. what CI and every cloud session run — it matches normally.
 # So `\b` here would not fail loudly anywhere; it would harvest a full pool on
-# one machine and an empty one on another. Read the same way, `resolve_symbol`'s
-# mention fallback below still spells its probe `\b`, so on macOS it answers
-# "not mentioned" for every reference and on Linux it answers truthfully. That
-# is a separate defect from the harvest fixed here, it changes which findings
-# are reported rather than which names exist, and it is deliberately NOT changed
-# in this pass — do not read the two spellings as an inconsistency to tidy.
+# one machine and an empty one on another. The separate `resolve_symbol` mention
+# fallback had the same defect for names outside the pool, including enum
+# variants and fields (#479). It now uses `git grep -q -w -F -- NAME`: literal
+# whole-word matching, without a platform-specific regex boundary. Only exit 1
+# means absent; other failures remain unknown.
 #
 # An empty pool is not the worst shape it can take, though. A pool full of the
 # WRONG LANGUAGES is (issue #263), and the harvest below produces one on any
@@ -562,10 +561,11 @@ for p in pkg_refs:
     refs[p] = 'package'          # a -p arg outranks an inline-code guess
 
 # ── resolution ──────────────────────────────────────────────────────────────
-def git_grep(pattern):
+def git_grep(name):
     try:
-        return subprocess.run(['git', '-C', tree_root, 'grep', '-qE', pattern],
-                              capture_output=True, timeout=30).returncode == 0
+        rc = subprocess.run(['git', '-C', tree_root, 'grep', '-q', '-w', '-F', '--', name],
+                            capture_output=True, timeout=30).returncode
+        return rc == 0 if rc in (0, 1) else None
     except Exception:
         return None            # unknown, never "absent"
 
@@ -630,9 +630,9 @@ def resolve_symbol(ref):
     name = leaf(ref)
     if name in symbols:
         return True, None
-    # Not defined anywhere; is it referenced at all? A ref that appears only as
-    # a call site still tells us the body is not inventing it wholesale.
-    hit = git_grep(r'\b%s\b' % re.escape(name))
+    # Not in the definitions pool; is it mentioned at all? Enum variants, fields
+    # and call sites can still tell us the body is not inventing it wholesale.
+    hit = git_grep(name)
     if hit is None:
         return None, 'git grep failed — treated as unknown, not absent'
     if hit:
