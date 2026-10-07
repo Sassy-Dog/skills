@@ -78,17 +78,15 @@ through its own detection and mode selection, stopping at the point where it wou
 3. `Skill: sassy-dog:setup-deps`
 
 **Ask the tracking choice once, only when `setup-config`'s Phase 0 probe reports `PUBLIC` or unknown
-visibility.** Run `setup-config` far enough to get that probe's `visibility` and its `derive` result
-(its own first step, before it plans anything), and take both from it: this skill reads no
-visibility and runs no script. Ask once, after that and before the plan gate, `local` or
-`committed` per `setup-config`'s "Tracking choice in the plan", offering as the default the end
-state `derive` reported when it is `local` or `committed`, and `local` when it is `mixed`; an
-unknown visibility is asked here once and `setup-config` does not ask it again. Pass the answer to
-both `setup-config` and `setup-hooks` as their target, as the word `local` or `committed`, never as
-a settings file name. Each would otherwise ask its own question, and the sequential run could
-combine a kept-local config with a committed hooks target and fail. A private or internal repo is
-not asked. This is a plan-level input, not generation mechanics: the derive step, tables,
-transitions and `tracking-state.sh` stay in `setup-config`.
+visibility.** Take that `visibility` from `setup-config` (this skill reads none and runs no script)
+and, from its "Tracking choice in the plan" section, the current end state its `derive` reports and
+the default that section assigns to it. Ask once, after that and before the plan gate, `local` or
+`committed`, offering that default; an unknown visibility is asked here once and `setup-config`
+does not ask it again. Pass the answer to both `setup-config` and `setup-hooks` as their target, as
+the word `local` or `committed`, never as a settings file name. Each would otherwise ask its own
+question, and the sequential run could combine a kept-local config with a committed hooks target and
+fail. A private or internal repo is not asked. This is a plan-level input, not generation
+mechanics: the derive step, tables, transitions and `tracking-state.sh` stay in `setup-config`.
 
 Capture from each: the mode it picked, and **every file it would create or modify**. Take the
 generator's own detection output at face value — this skill never second-guesses it, and never

@@ -273,7 +273,9 @@ The script takes no visibility input; the caller decides the target. "Owned scri
 about to render them; every other file under `.claude/hooks/` is **non-owned**. A path with
 whitespace, a glob character, a quote, a backslash, `$` or a backtick, one nested under an
 owned-name entry, or an owned-name directory or symlink is **reported as a mismatch and never acted
-on**.
+on**, and `plan` prints `blocked:` for it and `apply` refuses (exit 7) before its first write while
+it exists: the way out is for a human to rename or remove the entry, and the script never deletes or
+renames a user file.
 
 | End state | `.gitignore` (negations after the pattern they re-include) | `settings.json` and each owned script |
 |---|---|---|
@@ -283,7 +285,9 @@ on**.
 In both, `.claude/sassy-dog/*.md` is tracked and not ignored, and `.claude/settings.local.json`,
 `worktrees/`, any non-owned hook and any directory named like an owned script stay ignored (the
 committed shape's `.claude/hooks/*` and trailing `.claude/hooks/sassydog-*.sh/` lines are what keep
-`git add -A` from staging them). There is no third form: never narrow or drop
+`git add -A` from staging them; an unsafe-named or symlinked `sassydog-*.sh` entry is the exception:
+in a repo that is already committed it is reported as mixed, but `!.claude/hooks/sassydog-*.sh`
+re-includes it, so the glob does NOT keep it out of `git add -A`). There is no third form: never narrow or drop
 `.claude/*`, because that un-ignores `settings.local.json`. Anything else is **mixed**: a missing or
 misordered line, a bare `.claude/` or `.claude`, an owned script whose status disagrees with
 `settings.json`, no sassy-dog negation.

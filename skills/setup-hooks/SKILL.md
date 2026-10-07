@@ -180,10 +180,16 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-config/scripts/tracking-state.sh plan --
 
 Show its output in the same approval diff (it prints "nothing to do" when the repo is already in
 the target state, and then nothing is proposed). After the approval and **after the scripts and the
-settings entries are written**, run `plan` again with the same flags (the scripts now exist), and
-run `apply` with the same flags and `--plan-id <the id that second plan printed>` (the id is
-required; `apply` refuses with exit 3 if the repo changed after that plan). This generator
-therefore adds what it renders at its own write time, whatever `setup-config` saw earlier.
+settings entries are written**, run `plan` again with the same flags (the scripts now exist). **Apply
+only a plan the user has seen:** the action lines of that second plan (`git-add`, `git-rm-cached`,
+`gitignore-remove`, `gitignore-append`) must be a subset of the action lines of the previewed plan,
+the one expected difference being that the files this run rendered now exist. If any action line is
+new, or the second plan prints `blocked:` lines, do not apply: show the new plan and ask again. Then
+run `apply` with the same flags and `--plan-id <the id the second plan printed>` (the id is required;
+`apply` refuses with exit 3 if the repo changed after that plan). This generator therefore adds what
+it renders at its own write time, whatever `setup-config` saw earlier. **If the script path does not
+exist, stop and say that `setup-config`'s `tracking-state.sh` is missing (the plugin is incomplete or
+the file moved); do not improvise the tracking rules.**
 `setup-config` passes no `--owned` of its own, because it renders no script.
 
 What is specific to this generator is the settings move, which applies in **both** directions:

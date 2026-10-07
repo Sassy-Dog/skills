@@ -21,7 +21,11 @@
 #       immediately before acting and refuses (exit 3) when the repo no longer
 #       plans that id, (exit 4) when a path it must `git add` does not exist as
 #       a regular file, (exit 6) when .gitignore is a symlink or not a regular
-#       file. It never writes through a symlink.
+#       file, (exit 7) when any owned-name entry is unsafe, nested, a directory
+#       or a symlink. Both 6 and 7 refuse BEFORE the first write, and `plan`
+#       prints `blocked: <each problem>` instead of actions; the way out is for
+#       a human to rename or remove the entry (this script never deletes or
+#       renames a user file). It never writes through a symlink.
 #   verify --target ... [--owned ...]
 #       Exit 0 iff the derived state equals the target; otherwise exit 1 and the
 #       target's mismatches on stdout.
@@ -37,7 +41,13 @@
 #              .claude/hooks/sassydog-*.sh/ . settings.json and every owned
 #              script are tracked AND not ignored; settings.local.json,
 #              worktrees/, any non-owned hook and any directory NAMED like an
-#              owned script stay ignored, so `git add -A` can never stage them.
+#              owned script stay ignored, so `git add -A` does not stage them.
+#              That holds for a directory and for a name this script reached
+#              through its own apply; it does NOT hold for an unsafe-named or
+#              symlinked `sassydog-*.sh` entry in a repo that is ALREADY
+#              committed: `!.claude/hooks/sassydog-*.sh` re-includes any such
+#              name, so it is reported as mixed but `git add -A` can stage it.
+#              `apply` refuses (exit 7) while one exists.
 #   anything else is mixed (a missing or misordered line, a bare `.claude/`, an
 #   owned script whose status disagrees with settings.json, no sassy-dog
 #   negation, a symlinked .gitignore, an unsafe or nested hook path, ...).
@@ -48,7 +58,8 @@
 # owned-name entry (.claude/hooks/sassydog-d.sh/evil) is a mismatch, as is an
 # owned-name directory or symlink, and an owned-name path with whitespace, a glob
 # character, a quote, a backslash, `$` or a backtick is an "unsafe owned name":
-# reported, never acted on, never printed as a runnable command. A caller that
+# reported, never acted on, never printed as a runnable command, and `apply`
+# refuses (exit 7) before its first write while one exists. A caller that
 # renders a script after setup-config ran passes it here, so the derive sees it
 # BEFORE it exists. setup-config itself passes none: it renders no script, and
 # `apply` refuses (exit 4) a path that does not exist yet.
@@ -302,13 +313,18 @@ build_plan() {
     PLAN="state: $STATE  target: $t"$'\n'
     m="$(mm_for "$t")"
     while IFS= read -r x; do [ -z "$x" ] || PLAN+="mismatch: $x"$'\n'; done <<<"$m"
+    # Blocked: nothing is planned, so there is nothing to half-apply.
+    if [ -n "$GI_BAD" ] || [ -n "$PROBLEMS" ]; then
+        [ -z "$GI_BAD" ] || PLAN+="blocked: $GI_BAD"$'\n'
+        while IFS= read -r x; do [ -z "$x" ] || PLAN+="blocked: $x"$'\n'; done <<<"$PROBLEMS"
+        PLAN+="blocked: rename or remove the entry yourself; this script never deletes or renames a file"$'\n'
+        PLAN_ID="$(printf '%s' "$PLAN" | cksum | cut -d' ' -f1)"
+        return 0
+    fi
     if [ "$t" = local ]; then want="$W"$'\n'"$S"; else want="$W"$'\n'"$S"$'\n'"$NS"$'\n'"$NH"$'\n'"$HW"$'\n'"$HN"$'\n'"$HD"; fi
     # .gitignore edit needed? Only when a wanted line is missing/misordered, an
     # unwanted managed line is present, or a bare `.claude/` line exists.
     case "$m" in *"$GI lacks"*|*"does not come after"*|*"committed-only line"*|*"bare '"*|*"would be ignored"*|*"is not ignored (a directory"*) gi_ok=0 ;; esac
-    if [ -n "$GI_BAD" ]; then
-        gi_ok=1; PLAN+="blocked: $GI_BAD"$'\n'
-    fi
     if [ "$gi_ok" -eq 0 ]; then
         # Keep each wanted line that already sits after the previous kept one;
         # from the first that does not, re-append it and every later wanted line
@@ -376,6 +392,7 @@ mutate() {
         return 3
     fi
     if [ -n "$GI_BAD" ]; then echo "tracking-state.sh: refusing to apply: $GI_BAD" >&2; return 6; fi
+    if [ -n "$PROBLEMS" ]; then echo "tracking-state.sh: refusing to apply, nothing was written: an owned-name entry is unsafe, nested, a directory or a symlink (rename or remove it yourself): $(printf '%s' "$PROBLEMS" | tr '\n' ';')" >&2; return 7; fi
     while IFS= read -r p; do
         [ -n "$p" ] || continue
         { [ -f "$p" ] && [ ! -L "$p" ]; } || { echo "tracking-state.sh: refusing to apply: $p does not exist as a regular file yet; write or render it first" >&2; return 4; }

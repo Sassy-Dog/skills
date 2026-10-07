@@ -74,6 +74,19 @@
 #               .gitignore scenario (apply must exit 6 and leave the link alone).
 #   dropfail    `exit 2` on a failed git probe is removed, so a corrupted index
 #               reads as a clean state. Caught by the corrupted-index scenario.
+#   droprefuse  the exit-7 refusal before the first write is removed, so `apply`
+#               no longer refuses while an unsafe, nested, directory or symlinked
+#               owned-name entry exists. Caught by the hostile, nested and
+#               symlinked-owned-name scenarios (exit code, checksum of .gitignore,
+#               `git ls-files -s` and `git add -A -n` before and after).
+#   killrow     a row worker is made to exit before it reports. Caught by the
+#               harness's own accounting: exactly one `@@counts` line and a zero
+#               exit status per launched worker, and totals equal to what was
+#               launched (a worker killed with `kill -9` once read as 150 rows,
+#               "all green").
+# Also asserted here, not mutated: every skills/*/SKILL.md path that names
+# tracking-state.sh resolves to the real file (setup-hooks reaches across skills
+# to setup-config's script and nothing else fails if it moves).
 #
 # CLAUDE.md names the pipeline-into-grep rule (test-pipefail-grep.sh): every
 # probe here captures into a variable and matches with a here-string or case.
@@ -396,6 +409,22 @@ s_nonowned_tracked() {
     do_apply "$SC" local
     contains "tracked non-owned hook stays tracked after untracking the owned ones" "$(cd "$SC" && git ls-files)" "$NONOWNED"
 }
+# snap <dir> — checksum of .gitignore, the staged index, and what `git add -A -n` would stage.
+snap() { ( cd "$1" && { cksum < .gitignore 2>/dev/null || echo nogi; git ls-files -s; echo "--"; git add -A -n 2>&1; } ); }
+# refused <label> <dir> <target> [flags] — apply must exit 7 and change NOTHING.
+refused() {
+    local lbl="$1" d="$2" t="$3" before after plan; shift 3
+    before="$(snap "$d")"
+    plan="$(tsd "$d" plan --target "$t" "$@")"
+    contains "$lbl: plan prints blocked:" "$plan" "blocked:"
+    lacks "$lbl: plan proposes no action" "$plan" "git-add:"
+    lacks "$lbl: plan proposes no untracking" "$plan" "git-rm-cached:"
+    lacks "$lbl: plan proposes no .gitignore edit" "$plan" "gitignore-"
+    do_apply "$d" "$t" "$@"
+    expect "$lbl: apply refuses with exit 7" "$APPLY_RC" 7
+    after="$(snap "$d")"
+    expect "$lbl: .gitignore, index and git add -A -n are all unchanged" "$after" "$before"
+}
 s_hostile() {
     mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
     ( cd "$SC" || exit 1
@@ -407,18 +436,27 @@ s_hostile() {
     local plan json
     plan="$(tsd "$SC" plan --target committed)"
     lacks "hostile names: plan never prints 'git-add: .env'" "$plan" "git-add: .env"
-    lacks "hostile names: plan names no hostile path as a git-add" "$plan" "git-add: .claude/hooks/sassydog-"
     json="$(tsd "$SC" derive)"
     expect "hostile names: none is owned" "$(jq -r '.owned | length' <<<"$json")" 0
     expect "hostile names: each is an unsafe-name mismatch" "$(jq -r '[.mismatches[] | select(startswith("unsafe owned name"))] | length' <<<"$json")" 4
-    do_apply "$SC" committed
-    expect "hostile names: apply cannot reach a clean state (exit 1)" "$APPLY_RC" 1
-    lacks "hostile names: nothing hostile was staged" "$(cd "$SC" && git ls-files)" "sassydog-"
-    lacks "hostile names: .env was not staged" "$(cd "$SC" && git ls-files)" ".env"
+    refused "hostile names (local to committed)" "$SC" committed
+    lacks "hostile names: no hostile hook would be staged" "$(cd "$SC" && git add -A -n 2>&1)" "sassydog-"
     tsd "$SC" derive --owned '.claude/hooks/sassydog-x .env .sh' >/dev/null 2>&1; expect "hostile names: --owned with whitespace is refused (exit 64)" "$?" 64
+    # committed to local with a tracked unsafe name must not untrack settings.json or the guard
+    mkstate "$WORK/sc" committed-exact tracked tracked 0; SC="$WORK/sc"
+    ( cd "$SC" && printf '#!/bin/sh\n' > '.claude/hooks/sassydog-a b.sh' && git add -f -- '.claude/hooks/sassydog-a b.sh' ) >/dev/null 2>&1
+    refused "tracked hostile name (committed to local)" "$SC" local
+    contains "tracked hostile name: settings.json is still tracked" "$(cd "$SC" && git ls-files)" ".claude/settings.json"
     # the restore line is built with %q: a safe name stays plain
     mkstate "$WORK/sc" committed-exact tracked tracked 0; SC="$WORK/sc"
     contains "restore line lists the safe owned path" "$(tsd "$SC" plan --target local)" "restore (run right after pulling): git restore --source=<untrack-commit>^ --worktree -- .claude/settings.json $G"
+}
+s_ownedlink() {
+    mkstate "$WORK/sc" local-exact untracked none 0; SC="$WORK/sc"
+    ln -s /etc/hosts "$SC/.claude/hooks/sassydog-link.sh"
+    contains "symlinked owned-name entry is named" "$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')" "sassydog-link.sh is not a regular file (symlink)"
+    refused "symlinked owned-name entry (local to committed)" "$SC" committed
+    expect "symlinked owned-name entry: the link is untouched" "$(readlink "$SC/.claude/hooks/sassydog-link.sh")" /etc/hosts
 }
 s_symlink() {
     mkstate "$WORK/sc" - untracked none 0; SC="$WORK/sc"
@@ -439,7 +477,7 @@ s_nested() {
     mm="$(tsd "$SC" derive | jq -r '.mismatches | join(" | ")')"
     contains "owned-name directory is not a regular file" "$mm" "sassydog-e.sh is not a regular file"
     contains "path nested under an owned-name entry is named" "$mm" "nested path under an owned-name entry: .claude/hooks/sassydog-d.sh/evil"
-    do_apply "$SC" committed
+    refused "nested path and owned-name directory (local to committed)" "$SC" committed
     lacks "nested path: nothing nested is tracked" "$(cd "$SC" && git ls-files)" "evil"
     lacks "nested path: git add -A -n stages nothing nested" "$(cd "$SC" && git add -A -n 2>&1)" "evil"
     lacks "owned-name directory: git add -A -n stages none" "$(cd "$SC" && git add -A -n 2>&1)" "sassydog-e.sh"
@@ -468,31 +506,18 @@ s_planid() {
     expect "plan-id: apply without --plan-id is a usage error (exit 64)" "$rc" 64
 }
 
-SCENARIOS="s_round2 s_blocking s_r3_2 s_r3_3 s_order s_tie s_planid s_unrelated s_dup s_nogi s_nonl s_crlf s_nonowned_tracked s_hostile s_symlink s_nested s_corrupt"
+SCENARIOS="s_round2 s_blocking s_r3_2 s_r3_3 s_order s_tie s_planid s_unrelated s_dup s_nogi s_nonl s_crlf s_nonowned_tracked s_hostile s_ownedlink s_symlink s_nested s_corrupt"
 
 # --- 1. the enumerated rows -------------------------------------------------------
 # Rows are independent (each state has its own directories), so they run in
-# batches of JOBS background subshells; each writes its report and a counts line
-# to its own file, replayed in order. No state is shared between them.
-echo "tracking-state rows"
+# batches of JOBS background subshells; each writes its report and exactly one
+# counts line to its own file. The harness checks every worker's exit status and
+# that it printed exactly one counts line, and that the totals equal what it
+# launched: a worker that dies is a failure, never a silently shorter run.
 JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 case "$JOBS" in ''|*[!0-9]*) JOBS=4 ;; esac
 [ "$JOBS" -le 8 ] || JOBS=8
-rows=0; states=0; batch=()
-flush() {
-    local i out p f r
-    wait
-    for i in "${batch[@]}"; do
-        out="$WORK/out.$i"
-        while IFS= read -r line; do
-            case "$line" in
-                "@@counts "*) read -r _ p f r <<<"$line"; PASS=$((PASS + p)); FAIL=$((FAIL + f)); rows=$((rows + r)) ;;
-                *) echo "$line" ;;
-            esac
-        done < "$out" 2>&1
-    done
-    batch=()
-}
+STATE_LIST=()
 for v in $VARIANTS; do
     exact=0; case "$v" in local-exact|committed-exact) exact=1 ;; esac
     for s in tracked untracked; do
@@ -503,19 +528,71 @@ for v in $VARIANTS; do
             if [ "$exact" -eq 0 ] && [ "$o" != none ] && [ "$o" != tracked ]; then continue; fi
             for n in 0 1; do
                 if [ "$n" = 1 ] && { [ "$exact" -eq 0 ] || { [ "$o" != none ] && [ "$o" != untracked ]; }; }; then continue; fi
-                states=$((states + 1))
-                (   PASS=0; FAIL=0; rows=0
-                    run_state "$states" "[$v/$s/$o/n$n]" "$v" "$s" "$o" "$n"
-                    echo "@@counts $PASS $FAIL $rows"
-                ) > "$WORK/out.$states" 2>&1 &
-                batch+=("$states")
-                [ "${#batch[@]}" -lt "$JOBS" ] || flush
+                STATE_LIST+=("$v $s $o $n")
             done
         done
     done
 done
-flush
-echo "  ($states states, $rows rows)"
+R_STATES=0; R_ROWS=0
+BATCH=(); BPIDS=(); COUNTED=0
+flush() {
+    local k i out p f r line c rc
+    for k in "${!BATCH[@]}"; do
+        i="${BATCH[$k]}"
+        wait "${BPIDS[$k]}"; rc=$?
+        out="$WORK/out.$i"; c=0
+        while IFS= read -r line; do
+            case "$line" in
+                "@@counts "*) c=$((c + 1)); read -r _ p f r <<<"$line"; PASS=$((PASS + p)); FAIL=$((FAIL + f)); R_ROWS=$((R_ROWS + r)) ;;
+                *) [ "$QUIET" -eq 1 ] || echo "$line" ;;
+            esac
+        done < "$out"
+        [ "$rc" -eq 0 ] || bad "row worker $i exited $rc"
+        if [ "$c" -ne 1 ]; then bad "row worker $i printed $c counts lines, want exactly 1"; else COUNTED=$((COUNTED + 1)); fi
+    done
+    BATCH=(); BPIDS=()
+}
+# run_rows <max states, 0 = all> <worker index that exits before reporting, 0 = none>
+run_rows() {
+    local maxn="$1" dieat="$2" entry v s o n launched=0
+    R_STATES=0; R_ROWS=0; COUNTED=0; BATCH=(); BPIDS=()
+    for entry in "${STATE_LIST[@]}"; do
+        [ "$maxn" -eq 0 ] || [ "$launched" -lt "$maxn" ] || break
+        launched=$((launched + 1))
+        read -r v s o n <<<"$entry"
+        (   PASS=0; FAIL=0; rows=0
+            run_state "$launched" "[$v/$s/$o/n$n]" "$v" "$s" "$o" "$n"
+            [ "$launched" -ne "$dieat" ] || exit 9
+            echo "@@counts $PASS $FAIL $rows"
+        ) > "$WORK/out.$launched" 2>&1 &
+        BATCH+=("$launched"); BPIDS+=("$!")
+        [ "${#BATCH[@]}" -lt "$JOBS" ] || flush
+    done
+    flush
+    R_STATES="$launched"
+    [ "$COUNTED" -eq "$launched" ] || bad "only $COUNTED of $launched row workers reported"
+    [ "$R_ROWS" -eq $((launched * 2)) ] || bad "rows total $R_ROWS, want $((launched * 2)) (two targets per state)"
+}
+echo "tracking-state rows"
+run_rows 0 0
+echo "  ($R_STATES states, $R_ROWS rows)"
+ok "every one of $R_STATES row workers reported once, with $R_ROWS rows (2 per state)"
+
+# --- cross-skill dependency: every path that names tracking-state.sh must exist --
+echo "script references"
+refs=0; setup_hooks_refs=0
+for f in "$REPO_ROOT"/skills/*/SKILL.md; do
+    while IFS= read -r line; do
+        rest="$line"
+        while [[ "$rest" =~ (skills/[A-Za-z0-9_-]+/scripts/tracking-state\.sh) ]]; do
+            ref="${BASH_REMATCH[1]}"; refs=$((refs + 1))
+            [ -f "$REPO_ROOT/$ref" ] && ok "${f#"$REPO_ROOT"/}: $ref resolves" || bad "${f#"$REPO_ROOT"/} names $ref, which does not exist"
+            case "$f" in */setup-hooks/SKILL.md) setup_hooks_refs=$((setup_hooks_refs + 1)) ;; esac
+            rest="${rest#*"$ref"}"
+        done
+    done < "$f"
+done
+[ "$setup_hooks_refs" -gt 0 ] && ok "setup-hooks names the script by path (the check is not vacuous: $refs references)" || bad "setup-hooks no longer names skills/setup-config/scripts/tracking-state.sh by path, or this check lost its reach"
 
 # --- 2. the named scenarios ---------------------------------------------------------
 echo "named scenarios"
@@ -533,16 +610,17 @@ mutate() { # <name> <out>
         dropsafe) awk '/^safe_path\(\) \{/ { print "safe_path() { return 0; }"; next } { print }' "$SCRIPT" > "$out" ;;
         dropsymlink) sed -e '/is a symlink; it is never read or written through/d' "$SCRIPT" > "$out" ;;
         dropfail) awk '/^        exit 2$/ { print "        :"; next } { print }' "$SCRIPT" > "$out" ;;
+        droprefuse) sed -e '/refusing to apply, nothing was written/d' "$SCRIPT" > "$out" ;;
     esac
 }
 # mutant_scenarios <name> — the scenarios that own it.
 mutant_scenarios() {
     case "$1" in
         dropowned) echo s_r3_2 ;; dropsassy) echo s_r3_3 ;; droporder) echo s_order ;;
-        tie) echo s_tie ;; dropsafe) echo s_hostile ;; dropsymlink) echo s_symlink ;; dropfail) echo s_corrupt ;;
+        tie) echo s_tie ;; dropsafe) echo s_hostile ;; dropsymlink) echo s_symlink ;; dropfail) echo s_corrupt ;; droprefuse) echo "s_hostile s_ownedlink s_nested" ;;
     esac
 }
-for m in dropowned dropsassy droporder tie dropsafe dropsymlink dropfail; do
+for m in dropowned dropsassy droporder tie dropsafe dropsymlink dropfail droprefuse; do
     mut="$WORK/mut-$m.sh"
     mutate "$m" "$mut"
     if cmp -s "$mut" "$SCRIPT"; then bad "mutant $m changed nothing (the mutation did not apply)"; continue; fi
@@ -558,6 +636,17 @@ for m in dropowned dropsassy droporder tie dropsafe dropsymlink dropfail; do
         bad "mutant $m SURVIVED — its scenario did not notice"
     fi
 done
+
+# killrow: the harness itself. A row worker that exits before reporting must turn
+# the accounting red; run three states with worker 2 forced to exit.
+before="$FAIL"; pbefore="$PASS"; QUIET=1
+run_rows 3 2
+QUIET=0; after="$FAIL"
+if [ "$after" -gt "$before" ]; then
+    FAIL="$before"; PASS="$pbefore"; ok "mutant killrow is caught ($((after - before)) accounting failure(s): a dead row worker is not silently dropped)"
+else
+    bad "mutant killrow SURVIVED — a row worker that dies reads as a pass"
+fi
 
 echo "tracking-state: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ] && { echo "tracking-state tests: all green" >&2; exit 0; }

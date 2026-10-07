@@ -1501,8 +1501,8 @@
 #      tracking-state.sh derives, plans, applies and verifies the public-repo
 #      tracking end state (local / committed / mixed) from every fact that defines
 #      it; enumerated rows against an independent oracle, the round-2 and
-#      round-3 repros (issue #475), and three self-run mutants that must each be
-#      caught. Temp `git init` repos only, no gh, no network.
+#      round-3 repros (issue #475), and the self-run mutants its header enumerates,
+#      each of which must be caught. Temp `git init` repos only, no gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
