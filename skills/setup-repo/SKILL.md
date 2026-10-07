@@ -113,7 +113,9 @@ report as that generator reported it. Both derive the repo's current end state a
 target chosen above and show only the transition still needed. Each `plan` derives from what is on
 disk and cannot see a change an earlier generator has only previewed, so the same `.gitignore` edits
 may appear under both generators in the combined plan; the later one is always a subset of the
-earlier, and once `setup-config` has applied it the later generator's plan reads "nothing to do".
+earlier. Once `setup-config` has applied, the later generator's plan reads "nothing to do" for
+`local`; for `committed` it still carries a `git-add` line for each script that generator renders
+(and nothing else), which that generator applies through its own subset check.
 This skill assigns no mechanics of its own.
 
 Two of the three print their full rendered content before writing as well (`setup-config`,
