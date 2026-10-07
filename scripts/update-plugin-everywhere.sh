@@ -3,9 +3,9 @@
 # machine up to the marketplace's current content, and prove it by content.
 #
 # Why this exists: Claude Code registers a plugin once PER SCOPE in
-# ~/.claude/plugins/installed_plugins.json, and every repo whose committed
-# .claude/settings.json declares `enabledPlugins` (all of ours, by contract)
-# gets its own `project` entry the first time a session opens there — pinned to
+# ~/.claude/plugins/installed_plugins.json, and every repo whose
+# .claude/settings.json (committed, or local and ignored as in this public repo)
+# declares `enabledPlugins` gets its own `project` entry the first time a session opens there — pinned to
 # whatever was current THEN. `claude plugin update` acts on exactly one entry
 # (default `user`), so there is no system-wide command. Measured 2026-09-19:
 # user scope at 2026.9.43, six live repos at 2026.9.4 (two weeks stale), this

@@ -7,3 +7,12 @@ node_modules/
 # scripts). Ignored so a scratch file cannot be committed by accident, and
 # ignored by markdownlint too -- a scratch .md here must not redden preflight.
 tmp/
+
+# Claude Code: track only the sassy-dog workflow config. This repo is public, so
+# .claude/settings.json and any hooks stay local (CLAUDE.md, the settings.json bullet).
+.claude/*
+!.claude/sassy-dog/
+
+# Local environment files. Secrets never belong in the repo, and this repo has none to track.
+.env
+.env.*
