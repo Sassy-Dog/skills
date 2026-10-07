@@ -2,7 +2,8 @@
 # test-verify-issue-refs.sh — proves the grooming-drift checker on the
 # reference shapes that actually shipped past review in a production drain, on
 # the false-positive shape that made a correct issue unpromotable (#199), and on
-# the shell-repo shape whose symbol pool held no shell names at all (#263).
+# the shell-repo shape whose symbol pool held no shell names at all (#263), and
+# unpooled enum variants and fields whose mention check missed on macOS (#479).
 #
 # Provenance: the shapes are real, both fixture trees are synthetic. Each case
 # below is a de-identified reduction of a body that reached the Ready column of
@@ -13,7 +14,7 @@
 # very coupling the checker exists to detect.
 #
 # THREE trees, and the second is not a variation on the first. `$TREE` is a
-# Rust/TypeScript fixture (cases 1-7, 13, 15b, 16, and case 14's rule-1 proof);
+# Rust/TypeScript fixture (cases 1-7, 13, 15b, 16, 18, and case 14's rule-1 proof);
 # `$SHTREE` is shell-majority (cases 8-12 and the rest of case 14); `$MAGIC` is
 # one real script beside three hostile tracked FILENAMES (case 15) and is the
 # only cover for the pathspec-magic empty-pool mode. Case 17 reads source, not
@@ -94,9 +95,9 @@ skip() { printf '  skip %s\n' "$1"; SKIPS=$((SKIPS + 1)); }
 #                             unscoped harvest is indistinguishable from a scoped
 #                             one here. Its name is deliberately NOT a token any
 #                             other case probes: naming it `open_at` put that
-#                             token in the tree, where `resolve_symbol`'s `\b`
-#                             mention probe resolves it on Linux and case 3's
-#                             DRIFT silently stopped happening on CI.
+#                             token in the tree, where the mention fallback
+#                             resolves it (historically only on Linux), and
+#                             case 3's DRIFT silently stopped happening on CI.
 TREE="$WORK/tree"
 mkdir -p "$TREE/crates/store/src" "$TREE/app/src-tauri/src" "$TREE/app/ui"
 cat > "$TREE/crates/store/src/lib.rs" <<'RS'
@@ -114,6 +115,13 @@ TOML
 cat > "$TREE/app/src-tauri/src/github.rs" <<'RS'
 pub fn repos_view() -> u8 { 0 }
 pub fn runners_view() -> u8 { 0 }
+pub enum RepoStatus {
+    NeedsApproval,
+}
+pub struct RepoState {
+    pub retry_count: u8,
+}
+// LongerNeedsApprovOnly other_galactic_zebra_suffix
 RS
 echo "body { color: #fff; }" > "$TREE/app/ui/app.css"
 cat > "$TREE/app/ui/panel.ts" <<'TS'
@@ -1051,8 +1059,8 @@ esac
 # It reads the KEYWORD harvest's own pattern line, not a range: an earlier
 # version counted lines in the range carrying `[^A-Za-z0-9_]` and was satisfied
 # by the heredoc delimiter cleaner two hundred lines away, which meant deleting
-# the boundary outright still passed. `resolve_symbol`'s `\b` probe is untouched
-# by construction, being nowhere near that line.
+# the boundary outright still passed. This checks only the harvest; case 18
+# separately covers the mention fallback's actual git argv.
 boundary_ok() {   # boundary_ok <script> — 0 when the harvest boundary is the class
     local line
     line=$(grep -F '(fn|def|function|class|struct|enum|trait|type|interface|const)' "$1" | head -1)
@@ -1166,6 +1174,76 @@ elif awk -f "$WORK/comment-detector.awk" "$SCRIPT"; then
     pass "source: no comment inside an open process substitution (bash 3.2 parse trap)"
 else
     fail "source: a comment sits inside an open process substitution — bash 3.2 cannot parse it"
+fi
+
+# --- case 18: unpooled symbols use portable, whole-word literal mentions ----
+# GNU ERE accepts \b, so a real-tree test alone would pass the old spelling on
+# Linux. Observe the actual argv and emulate Darwin's miss for that spelling;
+# all other git calls, including fixed-string word searches, reach real git.
+# Exit 1 is absence; errors must stay unknown, even with a real qualifier.
+if python3 - "$SCRIPT" "$TREE" "$WORK" <<'PY'
+import json, os, pathlib, shutil, subprocess, sys
+
+script, tree, work = sys.argv[1:]
+shim_dir = pathlib.Path(work) / 'mention-bin'
+shim_dir.mkdir()
+shim = shim_dir / 'git'
+shim.write_text('#!%s\n' % sys.executable + r'''
+import json, os, sys
+args = sys.argv[1:]
+if 'grep' in args:
+    search = args[args.index('grep'):]
+    if '-q' in search or '-qE' in search:
+        with open(os.environ['MENTION_LOG'], 'a') as log:
+            log.write(json.dumps(search) + '\n')
+        if os.environ['MENTION_MODE'] == 'error':
+            sys.exit(2)
+        if '-qE' in search and any(r'\b' in arg for arg in search):
+            sys.exit(1)
+os.execv(os.environ['REAL_GIT'], ['git'] + args)
+''')
+shim.chmod(0o755)
+env = dict(os.environ, REAL_GIT=shutil.which('git'),
+           PATH=str(shim_dir) + os.pathsep + os.environ['PATH'],
+           MENTION_LOG=str(pathlib.Path(work) / 'mention-argv.jsonl'))
+body = pathlib.Path(work) / 'b18.md'
+
+def check(text, mode='normal'):
+    body.write_text(text)
+    pathlib.Path(env['MENTION_LOG']).write_text('')
+    result = subprocess.run(['bash', script, '--body-file', str(body),
+                             '--tree', tree, '--format', 'json'],
+                            env=dict(env, MENTION_MODE=mode),
+                            capture_output=True, text=True, timeout=60)
+    data = json.loads(result.stdout)
+    calls = [json.loads(line) for line in
+             pathlib.Path(env['MENTION_LOG']).read_text().splitlines()]
+    return result.returncode, data, calls
+
+rc, data, calls = check('Use `RepoStatus::NeedsApproval` and `RepoState::retry_count`.')
+expected = [['grep', '-q', '-w', '-F', '--', name]
+            for name in ('retry_count', 'NeedsApproval')]
+assert calls == expected, ('nonportable mention argv', calls)
+assert rc == 0 and data['findings'] == [] and data['counts']['checked'] == 2, (rc, data)
+print('  ok   unpooled enum variant and field resolve with literal word-match argv')
+
+rc, data, _ = check('Use `RepoStatus::NeedsApprov` and `galactic_zebra()`.')
+assert rc == 3 and {f['ref']: f['tier'] for f in data['findings']} == {
+    'RepoStatus::NeedsApprov': 'likely-drift', 'galactic_zebra()': 'likely-new'
+}, (rc, data)
+print('  ok   substrings do not resolve absent symbols; drift/new tiers survive')
+
+rc, data, _ = check('Use `RepoStatus::NeedsApproval`.', mode='error')
+assert rc == 0 and len(data['findings']) == 1, (rc, data)
+finding = data['findings'][0]
+assert finding['tier'] == 'unknown' and finding['suggestion'] is None, data
+assert 'git grep failed' in finding['why'], data
+print('  ok   git grep exit 2 is unknown, not absence or qualified drift')
+PY
+then
+    :
+else
+    fail "portable mention fallback, word boundaries, or error classification"
 fi
 
 if [ "$FAILURES" -eq 0 ]; then
