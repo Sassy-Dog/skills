@@ -19,6 +19,13 @@ Rank 1 is the strongest. The Claude Code column is the value for the Agent tool'
 parameter. The omp column is an omp role alias, and it resolves to whatever model that role is
 configured to use.
 
+The omp aliases are task-tool bindings, not CLI model selectors. The supervised serial
+transport resolves `modelRoles.task` to a concrete `omp --model` selector, falling back
+explicitly to configured `modelRoles.default` when task is unset and reporting that fallback.
+Missing configuration is a pre-claim hold, never an invented model or a profile write.
+On omp 18.8.5 the literal CLI selector `@task` was rejected; the shared invocation lives in
+`skills/take-it/references/isolation-confirmation.md`.
+
 ## Why tiers, and why at the dispatch site
 
 **Implementation and fan-out review run at `terra`, and this is a cost decision.** A measured

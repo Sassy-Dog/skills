@@ -705,161 +705,10 @@
 #      the mock's label store is seeded from the `taxonomy` emitter, gate 8's
 #      no-third-copy rule. Mock gh only: no repo, no network.
 #  32. drain terminal-state tests (scripts/test-drain-terminal-states.sh) —
-#      `dispatch-ready` §7's terminal states must COVER the state where
-#      Ready is empty, in-flight is zero, and an open unmerged PR sits there
-#      that this loop is not permitted to advance (issue #282). They did not:
-#      COMPLETE is vetoed by the open PR and STALLED required Ready non-empty,
-#      so neither branch was reachable and the loop ticked forever — accurately
-#      reporting the state and doing nothing, unable to self-cancel. The stall
-#      record could not help, being written only INSIDE the STALLED branch, so
-#      the two-tick clock never started. THE ACTION THAT CREATES THE STATE IS
-#      THE ACTION THAT HIDES IT: `issue-claim.sh block` strips `ready` and
-#      `in-progress` together, so recording "a human must decide this" removes
-#      the issue from the one set the old conjunct consulted (observed
-#      2026-08-26 on #273 / PR #279; cancelled by hand).
-#      THE ENUMERATION IS PART OF THE FIX, not a detail of it, and the first
-#      edition of that fix omitted it and was WORSE THAN THE BUG: §2's only PR
-#      discovery was the branches of IN-FLIGHT issues, and `block` strips
-#      `in-progress`, so in #282's own state the tick enumerated zero PRs. A
-#      held set empty because nothing was looked at is indistinguishable from
-#      one empty because nothing is held — STALLED is then forbidden by the
-#      non-empty rule while COMPLETE is admitted, and the loop announces DRAIN
-#      COMPLETE and self-cancels with a human-gated PR still open. The
-#      forever-tick at least never claimed to be finished.
-#      THE SET HAS TO BE ONE SET: COMPLETE's veto and §7's held set must range
-#      over the SAME PRs, since any PR that vetoes COMPLETE but can never enter
-#      the held set gives Ready-empty + in-flight-zero + held-empty — #282 one
-#      shape over, which an unqualified "any open PR vetoes COMPLETE" produces
-#      the moment a Dependabot or hand-opened PR is sitting there. And BOTH
-#      HALVES SPAN BOTH PATHS, because the blocked set is `blocked[]` only
-#      without a board and a bullet written for one path is invisible on the
-#      other — which is how a board repo would have kept the bug with every
-#      assertion green.
-#      THE FIX IS A DISCRIMINATOR, NOT A DELETED CONJUNCT, and the deletion is
-#      what a later "this conjunct does nothing" sweep re-derives: an open PR is
-#      not automatically a human gate — one whose checks are running or red can
-#      still advance on its own. So the third conjunct is "nothing this loop is
-#      permitted to advance" and a table decides which side an open PR falls on,
-#      hinged on §2's ONE redispatch. ITS LAST ROW IS A DEFAULT and is pinned as
-#      one, since §2 holds a PR for more reasons than the rows enumerate and a
-#      table that silently answers "alive" for a shape it does not know
-#      re-creates #282 one shape at a time; `CONFLICTING` is the measured case,
-#      stopping CI from firing at all so that `no checks reported` reads exactly
-#      like `CI hasn't started`. Rows 2-6 cannot fire at the moment STALLED is
-#      decided — in-flight zero empties the branch half of the union — and §7
-#      SAYS so, because a reader who works it out will otherwise trust them as
-#      live or delete them as dead.
-#      HOW IT IS BOUND, IN THREE LAYERS, each added after a review defeated the
-#      one before it, and layer 1 now covers §7 WHOLE — FENCES INCLUDED.
-#      Presence-only assertions were measured passing rewrites that KEPT the
-#      sentence and QUALIFIED it; whole-paragraph equality was defeated by
-#      INSERTING A SIBLING PARAGRAPH; a hand-picked SUBSET of paragraphs was
-#      then defeated five rounds running, each time by a paragraph no key held
-#      that inverted one a key did — including the API-failure rule a pinned
-#      paragraph merely DELEGATES to. So: (1) CANON, every blank-line block of
-#      §7 compared for equality after flattening, so a bullet body and a table
-#      cell are as pinned as a paragraph, PLUS every fenced block with `#N`
-#      normalised — the fences are the text the loop PRINTS, and a parenthetical
-#      added inside the DRAIN COMPLETE fence was measured restoring #282 at exit
-#      0 with markdownlint clean; (2) INVENTORY, the ordered lists of block
-#      openers, list markers, table rows and headings for §7 AND for §2, §4, §6
-#      and the top-level Guardrails list — Guardrails already restates a
-#      §7-adjacent rule today, so hoisting one there has precedent in that very
-#      file. §3 is pinned by TEXT rather than inventoried, being the file's only
-#      "in-flight is" sentence, which §2, §4 and §7 all read: re-including
-#      `blocked` there, or inverting "a green PR in the merge queue still counts
-#      as in-flight", were each measured at exit 0 while §3 sat outside every
-#      window. §5 and §1 are still unread, which is stated limit (6); (3)
-#      CONSUMPTION, every canon key consumed by exactly one assertion. The claim
-#      is "identical after flattening", NOT "byte-identical", and the inventory
-#      keeps each opener's first words only. Must-not-exist checks run against a
-#      flattened AND an emphasis-stripped copy, and FAIL CLOSED on a malformed
-#      pattern — grep exits 2 on an invalid ERE, which an `if grep … || grep …`
-#      reads as "not found", so every must-not-exist check was failing open,
-#      three of them carrying #282's own decision. Every
-#      line-scoped check runs against a resolved window; table-row patterns are
-#      anchored `^[[:space:]]*\|`; example identifiers are matched by SHAPE.
-#      ITS VACUITY FLOOR IS A SECTION REGISTRY WITH PER-SECTION MINIMUMS —
-#      `name:count`, members enumerated beside their counts, the floor DERIVED
-#      as their sum — because a bare number was measured not binding three times
-#      over. The registry block's OWN minimum is held apart from that array
-#      (`REGISTRY_MIN`), since while it was a summand, deleting the block and
-#      its entry shrank the floor by exactly what the deletion removed. The
-#      known limits are stated in its header rather than patched, and that
-#      enumeration and this one must agree: §2's and §4's remaining bullets, §6
-#      and Guardrails are inventoried but not content-pinned (both of the first
-#      two carry text-pinned exceptions the header enumerates), so rewriting the
-#      BODY of an existing bullet there can invert §7 from outside it; removing
-#      a section quietly takes three coordinated edits on HEAD; canon values are
-#      regenerated by hand; a gate cannot verify its own guard from inside it; markdownlint
-#      remains load-bearing for a malformed table; and §5 and §1 are unread. THE
-#      FLOOR VALIDATES ITS OWN INPUTS, after one deleted digit was measured
-#      voiding it at exit 0 on bash 3.2 — the arithmetic aborted mid-loop and
-#      dropped every later summand, and an unset `REGISTRY_MIN` ran ZERO
-#      assertions and still exited 0. THE PREMISE IS ASSERTED, NOT ASSUMED:
-#      `issue-claim.sh`'s `block` case is read for the one fact everything rests
-#      on — that it strips BOTH labels — since if it stripped only `ready` the
-#      whole account of the bug would be wrong with every prose assertion still
-#      green. Its header records why it carries no `-ef` precondition and what
-#      that costs a mutation harness. The assertion count is printed, never
-#      transcribed.
-#      THE SAME FOREVER-TICK IS REACHABLE ONE BULLET EARLIER, and #282 does not
-#      close it (issue #290): every §2 failure path had a demotion route except
-#      the `CONFLICTING` one, which surfaced the PR and HELD it with no comment,
-#      no counter and no exit. The hold left the issue `in-progress`, so
-#      in-flight never reached zero and BOTH terminal states stayed vetoed. The
-#      discriminator classifies such a PR correctly the moment it is enumerable,
-#      and on the in-flight path it never became so. IT CANNOT REACH A DEMOTION
-#      ANY OTHER WAY EITHER: a conflicted PR stops CI firing at all, so the
-#      failed-check bullet's attempt counter never starts. THE DECISION IS
-#      DEMOTE ON SIGHT — comment, `blocked`, a human rebases — and the REJECTED
-#      alternative is pinned as a negative, because mirroring the failed-check
-#      bullet's ONE redispatch means dispatching a sub-agent to rebase, which IS
-#      this loop advancing that PR and is exactly what §7's `CONFLICTING` row
-#      forbids; that option costs a §7 row as well. §7's TABLE IS UNTOUCHED:
-#      once the issue carries `blocked`, §7's FIRST row matches before the
-#      `CONFLICTING` row is reached. Its section carries canon equality — the
-#      only layer bounding a REWORDED decision, and the one the header's
-#      hand-regeneration limit says a rubber-stamp regeneration silences — plus
-#      literal must-exists and the `surface and hold` / `ONE redispatch` vetoes,
-#      which catch a literal DELETION and nothing subtler. That asymmetry is
-#      measured and stated rather than papered over by widening the greps.
-#      Three tracked files — `dispatch-ready/SKILL.md`, `issue-claim.sh` and
-#      `merge-shepherd.sh` — no gh, no network. The members are enumerated
-#      beside the number because the number rotted here once: 369bbef (#297)
-#      added the third subject and left "Two" standing through two later hand
-#      edits, which is CLAUDE.md's bare-count rule collecting its own example.
-#      IT NOW PINS A THIRD TERMINAL STATE (issue #286). DRAIN DEGRADED ends a
-#      loop that is ticking into a void under a platform outage: measured, an
-#      18-tick three-hour run that reported the state accurately, did nothing,
-#      and then proposed closing and reopening a PR mid-outage. It CONSUMES
-#      #285's probe rather than re-deriving health, is EVALUATED FIRST because
-#      a degraded platform is exactly when COMPLETE's and STALLED's live reads
-#      stop being trustworthy, and reaches the SAME stop path — a second cancel
-#      implementation is the defect, not the feature. `unknown` is deliberately
-#      NOT degraded and is the collapse a later sweep will make: it means the
-#      probe could not measure, which is precisely the state that must not stop
-#      a loop. COMPLETE and STALLED are untouched.
-#      AND A FOURTH (issue #342, epic #322). #341's Site filter steps around a
-#      Ready item whose `site:` labels name another machine, and that hold
-#      reached §7 with nowhere to go: in-flight zero, Ready non-empty and every
-#      remaining item site-held satisfies STALLED's every conjunct, so the loop
-#      ended telling the operator to resolve a gate this checkout cannot. A site
-#      hold is neither self-resolving — this checkout will never satisfy it —
-#      nor a human gate, so DRAIN DEFERRED names the site and takes COMPLETE's
-#      stop path, cron self-cancel included, and is NEVER reported as STALLED.
-#      THE DISCRIMINATION IS THE WHOLE OF IT and is pinned in BOTH directions:
-#      DEFERRED is STALLED plus one test — the held set holds nothing but site
-#      holds — so it is evaluated FIRST or it is unreachable, while a held set
-#      carrying one dependency hold, one `blocked` label or one held PR is still
-#      STALLED with the site holds listed among its reasons. It takes NO
-#      confirmation tick, modelled on COMPLETE rather than on the state beside
-#      it: a site declaration cannot change what this checkout IS, so a second
-#      tick reaches the same answer. DEGRADED cannot compete for the state at
-#      all — it requires in-flight non-zero — so #286's evaluated-first rule
-#      needed no widening. §4's POINTER at the new state belongs to the site
-#      filter gate below (`test-site-filter.sh` row R30, deletion- AND
-#      qualification-mutated there) and is deliberately not duplicated here.
+#      real shared-checkout worker lifecycles: a terminal issue comment or clean
+#      tree is not process termination; interruption, timeout, concurrent ticks
+#      and duplicate runners retain ownership. No model/GitHub calls. This no
+#      longer compares §7's prose to a second copy; see the gate's header.
 #  33. audit lost-reviewer tests (scripts/test-audit-lost-reviewer.sh) — the
 #      nine `*-reviewer` agents serve TWO orchestrators and only one of them
 #      scored a reviewer that came back with nothing. `pr-review-orchestrator`
@@ -1479,17 +1328,11 @@
 #      the paragraph text, its placement and its token-freedom, and is
 #      mutation-proven against scratch fixtures. No gh, no network.
 #
-#  51. isolation-contract tests (scripts/test-isolation-contract.sh) — take-it
-#      confirms the isolation contract before a parallel dispatch: Claude
-#      Code's `isolation: "worktree"` is the confirmation and stays unchanged;
-#      on omp it reads three settings, probes one worker, records the outcome,
-#      verifies pushes with a fresh ls-remote, and goes serial (with a
-#      branch-from-default worker step) or stops with `isolation unconfirmed`,
-#      never parallel on a shared tree (issue #451). dispatch-ready §5 does the
-#      same per tick but is stop-only (no serial mode) and ends a stopped loop
-#      through STALLED (issue #452). Also pins the design
-#      doc's corrected claims. Mutation-proven (header lists the mutants).
-#      Source-level, no omp, no gh, no network.
+#  51. isolation-contract tests (scripts/test-isolation-contract.sh) —
+#      real checkout ownership and Git push verification in temporary repos:
+#      contention before reconciliation, token mismatch, dirty/unpushed work,
+#      exact remote-tip comparison, and subsequent-tick progress (#484).
+#      No model/GitHub calls; full dispatcher evidence is in HARNESS-PORTABILITY.md.
 #
 #  52. config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh) —
 #      the "Unrun config line" paragraph is in the four conservative-mode skills
@@ -2126,25 +1969,7 @@ else
 fi
 
 # --- 32. drain terminal-state tests -------------------------------------------
-# Source-level: §7 IS the instruction the loop follows, so there is nothing to
-# run. It pins the state neither terminal state covered (#282), the §2
-# enumeration the held set depends on — on BOTH the board and boardless paths,
-# and without which the tick sees no PR at all and announces a false DRAIN
-# COMPLETE — the one-set invariant tying COMPLETE's veto to that same set, the
-# discriminator and its held-by-default last row, the non-empty held set that
-# stops STALLED being satisfied vacuously, and the four things the fix must NOT
-# have moved: both carve-outs, COMPLETE and its veto, the two-tick confirmation,
-# and the single stop path. It also pins §2's CONFLICTING demotion (#290) —
-# demote on sight, demote ONCE, the failed-write outcome and the §4
-# carry-forward — without which a conflicted PR holds in-flight open forever and
-# no terminal state can fire. It pins the FOURTH terminal state too (#342):
-# a Ready column held entirely by §4's Site filter ends the loop at DRAIN
-# DEFERRED, naming the site and taking COMPLETE's stop path, never as a stall the
-# operator is told to resolve — with the discrimination pinned the other way as
-# well, since a held set carrying anything else is STALLED still. Bound in three
-# layers — canon, inventory, consumption — each added after a review defeated the
-# one before it. Three tracked files — `dispatch-ready/SKILL.md`,
-# `issue-claim.sh` and `merge-shepherd.sh` — no gh, no network.
+# Real subprocesses and scratch Git repos; no model or GitHub calls.
 if bash scripts/test-drain-terminal-states.sh; then
     pass "drain terminal-state tests (scripts/test-drain-terminal-states.sh)"
 else
@@ -2410,8 +2235,7 @@ else
 fi
 
 # --- 51. isolation-contract tests -----------------------------------------------
-# take-it confirms isolation before a parallel dispatch and fails closed; the
-# design doc's claims agree. Source-level, no omp, no network.
+# Durable ownership and independent push verification, not prose snapshots.
 if bash scripts/test-isolation-contract.sh; then
     pass "isolation-contract tests (scripts/test-isolation-contract.sh)"
 else

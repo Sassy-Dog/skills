@@ -105,8 +105,9 @@ last-write-wins run drops one of the two with no error anywhere.
 ### Harness support
 
 Which skills are expected to run outside Claude Code. Statuses are `expected`, `untested` or
-`not supported`. **`untested` is the default**: the plugin installs and loads on [omp](https://omp.sh), but no shipped skill
-has been run end to end through a model there (only narrow probes: toy skills, and two shipped skills stopped before any workflow step, see below), so no omp cell says `expected`. Claude Code is the shipping target. The rows cited are the mechanism
+`not supported`. **`untested` is the default**: installation, narrow runtime probes and offline
+scratch workflows are not certification of a complete live-GitHub shipping flow. Claude Code
+remains the shipping target. The rows cited are the mechanism
 numbers in the inventory of [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md), and each
 skill's rows are the ones whose reproducing command matches files under that skill, except row 14 (`mcp__` literals), which the inventory says is not a dependency and which this matrix omits. The omp spike
 ([#424](https://github.com/Sassy-Dog/skills/issues/424)) reported: row 5 (`${CLAUDE_PLUGIN_ROOT}`)
@@ -122,21 +123,35 @@ was handled correctly in three runs even though its `` !`...` `` line arrives un
 [`docs/HARNESS-PORTABILITY.md`](docs/HARNESS-PORTABILITY.md). Row 5's paragraph has since shipped
 ([#454](https://github.com/Sassy-Dog/skills/issues/454)): every `SKILL.md` that carries `${CLAUDE_PLUGIN_ROOT}` now carries one token-free paragraph before the first fenced command that uses it,
 which tells an agent whose harness leaves the placeholder unexpanded to take the plugin root from the skill's own path line and not to search. On omp it was run out of tree, five runs with one model: on `github-issues` the first command used the right
-root with no search in 3 of 3 runs, and a reference-doc command did too in 2 of 2, but not through the `PLUGIN_ROOT` preamble (see [A‴ in the doc](docs/HARNESS-PORTABILITY.md#token-free-paragraph-at-the-shipping-placement-454)). It is inert in Claude Code, which was checked once. Row 6 has shipped too ([#455](https://github.com/Sassy-Dog/skills/issues/455)): `send-it`, `survey-work`, `groom-backlog` and `tidy-repo`, whose failure on an unrun config line would be silent, carry a paragraph under the `` !`...` `` line that tells an agent whose harness leaves the line as text to read the repo's config file by absolute path, and to treat a missing file as `NO_CONFIG`, never an unrun line as "no config exists". The four skills that stop on `NO_CONFIG` (`take-it`, `dispatch-ready`, `work-recommendations`, `work-fire-watch`) do not carry it: the unchanged `take-it` and `dispatch-ready` were right in 12 of 12 omp runs, config present and absent, on prompts that did not mention config, while `work-recommendations` and `work-fire-watch` were never run and are included by inference from `take-it`'s runs. That was one model, one prompt shape per skill and gh unauthenticated, and the paragraph's absent branch was run once, on `send-it`. No cell below changed, because no shipped skill
-has been run end to end through a model.
+root with no search in 3 of 3 runs, and a reference-doc command did too in 2 of 2, but not through
+the `PLUGIN_ROOT` preamble (see [A‴ in the doc](docs/HARNESS-PORTABILITY.md#token-free-paragraph-at-the-shipping-placement-454)).
+It is inert in Claude Code, which was checked once. Row 6 has shipped too
+([#455](https://github.com/Sassy-Dog/skills/issues/455)): `send-it`, `survey-work`, `groom-backlog`
+and `tidy-repo` explicitly read unexpanded config context. The four `NO_CONFIG` stoppers do not
+carry that paragraph: unchanged `take-it` and `dispatch-ready` read config correctly in 12 omp
+runs, while the two dispatch front-ends were included by inference, not exercised. Those
+config-only probes did not change support status; they stopped before workflow execution.
 
-The dispatch family is `not supported` on omp: it concentrates Agent-tool fan-out (row 1),
-`isolation: "worktree"` (row 3) and skill-to-skill delegation (row 4), whose omp equivalents
-the spike found, and which also need omp settings a plugin cannot ship. #440 probed only row 3, narrowly (two
-isolated `task` calls, one per merge mode: patch mode dirties the parent checkout and branch mode commits onto it).
-[#426](https://github.com/Sassy-Dog/skills/issues/426) then found that `task.isolation.apply: false` left the parent untouched with a verified push, and its contract requires
-`task.isolation.enabled: true`, `task.isolation.apply: false` and `task.isolation.merge: patch`. `take-it` now confirms that contract before a parallel dispatch ([#451](https://github.com/Sassy-Dog/skills/issues/451)) and is written to go serial or stop where it is unconfirmed (the Stop branch was not run), and `dispatch-ready` runs the same confirmation every tick and stops where it is unconfirmed (no serial mode), a stopped tick with nothing in flight ending the loop through `DRAIN STALLED` ([#452](https://github.com/Sassy-Dog/skills/issues/452); its §5 check was prompted six times on one model against an earlier §5 text and not run as a full tick; see the "Not re-run after review" paragraph of the ["Isolation confirmation runs (#452)" section](docs/HARNESS-PORTABILITY.md#isolation-confirmation-runs-452)). No full `take-it` invocation or `dispatch-ready` tick has run on omp, so the matrix keeps `not supported`. The review gate (`pr-review-orchestrator` and the nine `*-reviewer` agents) is
-in that family and follows it.
+The dispatch family's parallel/review/merge flow is not certified on omp: it concentrates
+Agent-tool fan-out (row 1), worktree isolation (row 3) and skill delegation (row 4).
+Parallel dispatch still requires `task.isolation.enabled: true`,
+`task.isolation.apply: false` and `task.isolation.merge: patch`, verified by settings reads,
+an isolated probe and an after-batch check. The plugin does not write operator profiles.
+
+**Disabled isolation no longer means a stalled Ready queue.** `dispatch-ready` can run one
+eligible independent issue synchronously per tick, including an eligible recovery before its
+capacity stop. It reuses take-it's serial contract and a durable checkout guard acquired
+**before reconciliation**. Actual worker exit and an independently verified pushed tip are
+required before checkout reuse. Dirty/unpushed work, active writers and unresolved ownership
+remain visible safety holds; timeout never expires ownership. This is cooperative exclusion,
+not a sandbox. See [runtime evidence and limits](docs/HARNESS-PORTABILITY.md#safe-serial-runtime-checks-484).
+The matrix leaves the full workflow untested rather than treating a serial smoke as proof of
+parallel dispatch, live review or merge behavior.
 
 | Skill | Family | Claude Code | omp | Inventory rows |
 |-------|--------|-------------|-----|----------------|
 | `take-it` | Dispatch | expected | not supported | 1, 3, 4, 5, 6, 7, 13 |
-| `dispatch-ready` | Dispatch | expected | not supported | 1, 3, 4, 5, 6, 7, 11 |
+| `dispatch-ready` | Dispatch | expected | untested | 1, 3, 4, 5, 6, 7, 11 |
 | `send-it` | Dispatch | expected | not supported | 1, 4, 5, 6, 7, 13 |
 | `assess-it` | Dispatch | expected | not supported | 1, 2, 5 |
 | `work-recommendations` | Dispatch | expected | not supported | 4, 5, 6, 7, 13 |

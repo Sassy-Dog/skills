@@ -16,9 +16,9 @@ description: >
 
 One invocation = **one tick** of a drain loop.
 
-All state lives in GitHub — status, assignees, PRs, branches — never in conversation memory,
-because under `/loop` each tick may run with no recollection of the previous one. The contract with
-groom-backlog: **dispatch-ready pulls exclusively from Ready** and trusts that Ready means dispatchable.
+Workflow state lives in GitHub — status, assignees, PRs and recovery — rather than conversation
+memory. Checkout ownership and process evidence are the durable local exception. Each tick may
+remember nothing. **dispatch-ready pulls exclusively from Ready** and trusts that Ready means dispatchable.
 Anything that smells undispatchable gets bounced back, never patched up inline.
 
 > Formerly `drain-it`. The "drain it" trigger still resolves here.
@@ -80,6 +80,22 @@ contract moves.
 every invocation is noise. If declined, carry on and don't raise it again.
 
 ## 2. Reconcile in-flight (always first)
+
+**Checkout ownership is the first precondition, before reconciliation.** Claude Code keeps its
+existing worktree behavior. On every other harness, including confirmed-isolation omp, load
+take-it's isolation reference below and acquire its guard before fetch, branch switches,
+fast-forwards, merges, teardown, or any other shared-checkout mutation. Never let §2 run those
+actions and acquire only at §5. Contention claims nothing and performs no reconciliation
+mutations: report `checkout active writer` or `checkout ownership unresolved`; a dirty or
+unpushed checkout is a specific safety hold, never permission to stash/reset it. Read-only
+diagnostics may still run. The guard is retained across a serial launch and all subsequent local
+work; no coordinator mutation is allowed while that worker is live or its termination uncertain.
+
+Read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md`, including
+**Checkout ownership** and **Synchronous serial execution**, and use its exact guard commands.
+Initialize this tick's serial-worker count to zero; §2 recovery and §5 initial dispatch share
+that same one-worker quota. Release ownership by that contract on every normal exit, including
+§3's capacity exit, only after all local work; failed release retains a visible safety hold.
 
 Find work this loop already started.
 
@@ -599,19 +615,23 @@ section restates none of them and states only what a tick changes:
    or a worker that never returns, ends the tick without the check; the tick report says so and the
    batch's issues stay in flight. On Claude Code nothing here waits: the background `Agent` batch is
    issued as before ("a tick that waits is a loop that stopped").
-3. **Unconfirmed** → **stop, never parallel on a shared tree.** Report `isolation unconfirmed` with
-   the setting or probe that failed, claim **nothing** — **without claiming a single issue**, so no
-   `in-progress` claim is left behind to count as in-flight and block other sessions — and
-   dispatch nothing.
+3. **Unconfirmed** → never parallel on a shared tree. With exclusive checkout ownership, a clean
+   safe checkout, and an available supervised foreground runner, select **serial and not isolated**.
+   Reuse take-it's Serial variant and the reference's synchronous execution contract. Select only
+   one plain independent issue for the entire tick, not a stack, and leave all others unclaimed.
+   If serial cannot be made safe, stop dispatch **without claiming a single issue**, naming the
+   failed prerequisite as well as the isolation setting/probe. Never enable isolation by writing
+   the operator's profile.
 4. **`review_site: agent` is unsatisfiable on omp**, so run the tick with `coordinator` and report
    the override on the tick report's `isolation:` line (appended there; §6's shape is unchanged).
    The override is per tick, never silent, and the config is never edited.
 
-**Why dispatch-ready has no serial mode while take-it does.** take-it waits for each serial worker
-to finish inside one invocation, so the worker never outlives the checkout it shares. A tick-driven
-loop remembers nothing and would have to track, across ticks, a worker sharing the coordinator's
-checkout while later ticks fast-forward, merge and tear down in that same checkout. #452 item 2
-permits "or stop", and stop is what ships; take-it's Serial variant is never sent from here.
+**Serial is synchronous, not an in-flight shared-checkout task.** Write the complete cold-worker
+prompt prescribed by take-it's reference, then invoke its guarded foreground `omp --print`
+command. No detached Agent, task, async shell job or worker process may outlive an ordinary
+successful tick. Await actual process termination, not a PR, RESULT or terminal-failure comment.
+The durable guard survives timeout, coordinator interruption and uncertain child termination;
+a later tick cannot reconcile underneath it. `max_in_flight: 1` alone provides no such protection.
 
 **A §2 redispatch on omp is dispatched within §2, not deferred to this batch.** §3's capacity stop
 ends a tick before this section whenever every slot is held, and a pending redispatch's issue already
@@ -622,37 +642,40 @@ If confirmed, it captures its own baseline (the coordinator's branch, `HEAD` and
 worker-dispatch rule (`isolated: true`), waits for its result (the batch-form `task` call followed
 by `wait`), and runs the doc's after-every-batch check (its §4) against that baseline. Nothing that
 moves the coordinator's `HEAD` or tree runs between this redispatch's baseline and its
-after-batch check; §2 is not reordered, and the baseline is taken after any earlier §2 step has run. The same timeout caveat applies. If unconfirmed it is held — no budget spent, no
-demotion — and §6's `holds:` line names it. On Claude Code it is dispatched in §2 as before.
+after-batch check; §2 is not reordered, and the baseline is taken after any earlier §2 step has run.
+The same timeout caveat applies. If unconfirmed but safe serial is available, resume the existing
+attempt branch using take-it's Serial variant and the guarded foreground runner **here in §2,
+before §3's capacity stop**. Recheck site, dependencies, collision and migration eligibility for
+this repair against other in-flight/held work; do not collide with its own branch. A failed gate
+holds without launching or spending another allowance.
 
-**How a stopped tick ends the loop: DRAIN STALLED, not a fifth state.** A stop with nothing in
-flight would otherwise tick forever, claiming nothing and reporting the same sentence — #282's
-shape. Every Ready item that passed §4's filters is held by this check, with the hold root
-`isolation unconfirmed` (the failed setting or probe is reported detail, never part of the root,
-so it cannot churn the stall comparison). They join the held set, and §7 decides:
-in-flight zero AND dispatched zero AND nothing to advance AND a non-empty held set is STALLED,
-confirmed across two ticks, then the stop path and its cron self-cancel. Not DEFERRED, because
-that state is for a hold this checkout can never clear, and an operator can clear this one from
-here (commit a `.omp/config.yml`). Not a fifth state, because it would be STALLED under a
-different name: the same test, the same two-tick confirmation, the same stop path, and one more
-count to keep honest. The two ticks also keep a transient probe failure from ending a healthy loop.
+Only an authenticated `recovery=pending` reservation from an earlier tick may launch. Leave it
+pending while selecting/checking the execution mode; just before the real launch, durably mark
+that same reservation `recovery=started`, keeping `recovery_used=1`. Mark it `recovery=finished`
+once after verified worker termination with the real outcome; interruption or uncertain exit
+leaves it started and held, never eligible for another dispatch. This consumes the tick's single
+serial-worker quota even on failure: no second §2 repair and no §5 claim/worker this tick.
+Remaining reservations stay pending. A recovery needing a stack, an unsafe checkout or unavailable
+supervision is held with the specific reason, not demoted for disabled isolation.
+On Claude Code recovery dispatch remains in §2 as before.
 
-**Reach.** The check gates **worker dispatch** and nothing else: claims happen only on a confirmed
-tick. On a stopped tick §2's reconcile, its comments and demotions, `pr-shepherd`'s merges with
-their local teardown, and the coordinator-site review dispatch all still run, because no worker
-shares the coordinator's checkout (confirmed workers run in omp's isolated checkouts). A §2
-redispatch is a worker dispatch: it passes the same check, and is dispatched if confirmed (on omp,
-within §2, with its own baseline, wait and check) and otherwise held — no budget spent, no demotion —
-and §6's `holds:` line names it. On omp, a confirmed tick waits for its own batch and runs the
-after-batch check itself; only a timed-out `wait` leaves it owed, and the tick report says so. §7
-is evaluated every tick: with work in flight an unconfirmed tick reaches no terminal state; with none, the
-paragraph above applies. **Known and accepted:** a held redispatch keeps its issue in flight, so a
-PR needing one when isolation is lost sits as a reported hold rather than ending the loop; the
-operator ends it.
+**Reach and holds.** Ownership gates all local reconciliation, not just dispatch. Once acquired,
+an unconfirmed isolation result alone does not prevent safe coordinator review/merge work; but
+no worker may share the checkout during it, and failed serial exit/push checks prohibit it.
+Isolation disabled with a safe serial path is progress, never an `isolation unconfirmed` stall.
+The one-worker quota is scheduling, not a human hold; leave additional eligible Ready issues for
+the next tick. A verified unsafe serial prerequisite (dirty/unpushed work, serial-ineligible
+chain, unavailable runner) is a named execution-safety hold. Active writers are self-resolving,
+and unresolved ownership/termination is unverified state: neither proves a terminal drain state.
+No safety hold authorizes cleanup, a fresh claim, a changed recovery allowance or a profile write.
 
-Use take-it's mechanics verbatim, after the isolation check above: claim → fast-forward the local default branch → one sub-agent per
-issue, `isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
-take-it's self-contained sub-agent prompt.
+For Claude Code and the confirmed parallel path, use take-it's mechanics verbatim after the
+checks above: claim → fast-forward the local default branch → one sub-agent per issue,
+`isolation: "worktree"`, single message, batch manifest in `.git/dispatch-ready-batch.json`,
+take-it's self-contained sub-agent prompt. For serial, apply all §4 filters first; if the shared
+one-worker quota remains unused, claim just the selected independent issue and run take-it's
+Serial variant synchronously. If §2 consumed the quota, claim nothing here. Record the serial
+branch/PR and execution outcome in the same manifest without a `worktreePath`.
 
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
@@ -749,12 +772,29 @@ drop a `declared (PR read failed)` entry — a degraded check is an outcome too.
 declared but the repo is not enabled for the preview, say so once rather than every tick:
 `stacks: #1720→#1722 declared but stacks unavailable in this repo — sequencing by dependency instead`.
 
+Always report the execution mode: `isolation: confirmed` or `isolation: serial and not isolated —
+<failed setting/probe>`, plus any `review_site` override. For serial include the issue, initial
+or recovery attempt, real runner exit, independently verified pushed tip, and ownership
+`released` or `retained — <reason/path>`. Completion means implementation exited, not that its PR
+merged; deferred coordinator review remains held until §2 clears it. Count a real serial launch
+as dispatched/progress even if it fails; never report an intended launch as execution. Show
+dirty/unpushed artifacts, active-writer/unknown-ownership holds and their next actions. Additional
+eligible items waiting on this tick's one-worker quota remain Ready, not STALLED.
+
 ## 7. Terminal states — drain complete, drain deferred, drain stalled, drain degraded
 
 A drain loop ends itself in exactly four states. All must be **confirmed from live GitHub state
 read this tick** — the §2 reconcile plus the §4 read, never a stale or transient one. If live
 state could not be verified this tick — an API failure mid-tick — the tick proves nothing: leave
 the loop alone, write no stall or degraded record, and let the next tick re-check.
+
+Apply checkout-safety evidence before any terminal decision. A live checkout owner is a
+self-resolving hold like a foreign claim: keep the loop alive without mutating the checkout.
+Unresolved ownership or worker termination makes this an unverified tick: no COMPLETE, DEFERRED,
+STALLED or DEGRADED verdict, no confirmation record and no self-cancel. A known dirty/unpushed
+checkout or unavailable serial runner is a visible execution-safety hold; if no work is in flight
+and every remaining item genuinely needs human action, it joins STALLED's existing held set.
+Disabled isolation alone never joins that set while safe serial execution is available.
 
 ### DRAIN DEGRADED
 
@@ -919,7 +959,7 @@ moment the checkout it names ticks — subject there to the §4 filters this tic
 ### DRAIN STALLED
 
 In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**,
-over a **non-empty** held set — every Ready item held by a §4 filter or by §5's isolation check, and every open PR held by the
+over a **non-empty** held set — every Ready item held by a §4 filter or a verified §5 execution-safety gate, and every open PR held by the
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
 reason COMPLETE's condition now states all of its own. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents
@@ -948,7 +988,7 @@ queue that simply finished — must never announce STALLED.
 **A held set of nothing but site holds is DEFERRED, not STALLED**, and that state is evaluated
 first. STALLED's conjuncts match it exactly, so the discrimination is one extra test rather than a
 different one: does the held set contain anything a human could clear? A dependency hold, a
-`blocked` label, a held PR, a collision or migration hold, an `isolation unconfirmed` hold — any one of them and this is STALLED,
+`blocked` label, a held PR, a collision or migration hold, a verified execution-safety hold — any one of them and this is STALLED,
 with the site holds listed among its reasons. Nothing but site holds, and the loop is on the wrong
 machine rather than blocked, which is a different sentence to print and a different thing to do
 about it.
@@ -1076,7 +1116,7 @@ tick as a whole.
 another session that is about to close a dependency, unblock an issue, or merge a PR. Ticks share
 no memory, so persist the observation next to the §5 batch manifest, in
 `.git/dispatch-ready-stall.json`: the held set — held issue numbers AND held PR numbers — with each
-one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, `isolation unconfirmed`, the Blocking finding a held PR carries).
+one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the specific execution-safety prerequisite, the Blocking finding a held PR carries).
 
 **"Matches exactly" compares the identifiers and each one's hold ROOT, never the rendered
 sentence.** Two honest ticks word the same hold differently, and a comparison over free text never
