@@ -16,6 +16,7 @@ Which header to read, keyed by what you are touching:
 |---|---|
 | any pipeline into `grep -q` under `pipefail` (corpus: `scripts/*.sh`, `skills/*/scripts/*.sh`) | `test-pipefail-grep.sh` |
 | Sentry plate rules, the `sentry:` key, the four-key `none` asymmetry | `test-sentry-verification.sh`, `test-sentry-counts.sh` |
+| `sentry-triage` §5's breadcrumb evidence pull and its redaction, `groom-backlog`'s `sentry-source` re-validation, the catalog executor's three-tool limit | `test-sentry-breadcrumbs.sh` |
 | the review gate, `review_agent:` / `review_site:` / `review_surfaces:`, `assess-it`'s audit mode, the nine reviewer agents | `test-review-gate-decisions.sh`, `test-review-orchestrator-allowlist.sh`, `test-audit-lost-reviewer.sh` |
 | `dispatch-ready` terminal states, claim lifecycle, PR polling, platform-degradation probe | `test-drain-terminal-states.sh` (§7's terminal-state canon, including #484's execution-safety and ownership holds), `test-isolation-contract.sh` (the isolation and serial-fallback prose in §5 and the reference doc), `test-checkout-guard.sh` (the guard executed: ownership, worker lifetime, push verification), `test-claim-lifecycle.sh`, `test-poll-queue-eject.sh`, `test-platform-health-probe.sh` |
 | `setup-deps`, `dependabot.yml` rendering, the three workflow templates | `test-dependabot-render.sh`, `test-template-actionlint.sh`, `test-visibility-preconditions.sh`, `test-ownership-matchers.sh` |
