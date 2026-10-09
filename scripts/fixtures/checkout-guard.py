@@ -195,6 +195,82 @@ class Ownership(Scratch):
         self.assertEqual((self.repo / "payload").read_text(), "failed unfinished work\n")
 
 
+    def test_failed_acquire_rolls_back_its_guard(self):
+        # A local-only branch fails the post-publish ancestry probe.
+        self.git("switch", "-c", "local-only")
+        self.denied(self.call("acquire", "--owner", "probe-refused"))
+        self.assertEqual(json.loads(self.call("status").stdout)["ownership"], "free")
+        self.git("switch", "main")
+        self.assertEqual(self.call("release", "--token", self.acquire()).returncode, 0)
+
+    def test_unreachable_origin_acquire_rolls_back(self):
+        url = self.git("remote", "get-url", "origin")
+        self.git("remote", "set-url", "origin", str(self.home / "missing.git"))
+        failed = self.call("acquire", "--owner", "network-blip")
+        self.assertEqual(failed.returncode, 6, failed.stdout + failed.stderr)
+        self.assertEqual(json.loads(self.call("status").stdout)["ownership"], "free")
+        self.git("remote", "set-url", "origin", url)
+        self.assertEqual(self.call("release", "--token", self.acquire()).returncode, 0)
+
+    def test_concurrent_acquires_admit_exactly_one_owner(self):
+        start = self.home / "go"
+        script = ("import os, pathlib, subprocess, sys, time\n"
+                  f"while not pathlib.Path({str(start)!r}).exists(): time.sleep(.005)\n"
+                  "sys.exit(subprocess.run(['bash', sys.argv[1], 'acquire', '--repo', sys.argv[2],"
+                  " '--owner', sys.argv[3]], stdout=subprocess.DEVNULL,"
+                  " stderr=subprocess.DEVNULL).returncode)\n")
+        racers = [subprocess.Popen([sys.executable, "-c", script, str(GUARD), str(self.repo),
+                                    f"racer-{n}"], env=self.env) for n in range(6)]
+        self.children.extend(racers)
+        time.sleep(.3)
+        start.touch()
+        codes = sorted(racer.wait(timeout=30) for racer in racers)
+        self.assertEqual(codes, [0, 3, 3, 3, 3, 3])
+
+    def test_operator_abandons_owner_that_lost_its_token(self):
+        self.acquire()  # the coordinator dies here; its token is gone with it
+        self.denied(self.call("acquire", "--owner", "next-tick"))
+        self.assertEqual(self.call("abandon").returncode, 64)
+        self.assertEqual(self.call("abandon", "--reason", "  ").returncode, 64)
+        result = self.call("abandon", "--reason", "owning session closed")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["result"], "abandoned")
+        self.assertNotIn("token", report)
+        receipt = json.loads((Path(report["receipt"]) / "state.json").read_text())
+        self.assertEqual((receipt["phase"], receipt["abandoned_from"]), ("abandoned", "held"))
+        self.assertEqual(receipt["abandoned_reason"], "owning session closed")
+        self.assertEqual(json.loads(self.call("status").stdout)["ownership"], "free")
+        self.assertEqual(self.call("release", "--token", self.acquire()).returncode, 0)
+
+    def test_abandon_requires_positive_evidence(self):
+        self.acquire()
+        (self.repo / "payload").write_text("operator work\n")
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 5)
+        self.assertEqual((self.repo / "payload").read_text(), "operator work\n")
+        self.git("commit", "-am", "local only")
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 5)
+        self.assertEqual(json.loads(self.call("status").stdout)["ownership"], "held")
+        self.git("push", "origin", "main")
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 0)
+
+    def test_abandon_phase_predicate_decides_a_run_free_guard(self):
+        # With no runs, evidence() has nothing to refuse, so only the phase
+        # predicate separates an acquire that died mid-probe from other phases.
+        self.acquire()
+        state_path = Path(self.git("rev-parse", "--absolute-git-dir")) / "sassy-dog-checkout-guard" / "state.json"
+        state = json.loads(state_path.read_text())
+        for phase, expected in (("timed-out", 4), ("interrupted", 4), ("uncertain", 0)):
+            state_path.write_text(json.dumps(dict(state, phase=phase)))
+            result = self.call("abandon", "--reason", "acquire died mid-probe")
+            self.assertEqual(result.returncode, expected, phase + ": " + result.stdout)
+
+    def test_abandon_on_free_checkout_changes_nothing(self):
+        result = self.call("abandon", "--reason", "nothing held")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["result"], "free")
+
+
 class Lifecycle(Scratch):
     def test_foreground_tool_group_is_verified_after_exit(self):
         token = self.acquire()
@@ -291,6 +367,36 @@ class Lifecycle(Scratch):
         proceed.touch()
         self.assertEqual(process.wait(timeout=20), 0)
         self.assertEqual(self.call("release", "--token", token).returncode, 0)
+
+
+    def test_abandon_cannot_reach_a_live_worker(self):
+        token = self.acquire()
+        process, marker, proceed = self.worker(token, blocking=True)
+        self.wait_for(marker, process)
+        self.assertEqual(self.call("abandon", "--reason", "looks stuck").returncode, 3)
+        status = json.loads(self.call("status").stdout)
+        self.assertEqual(status["ownership"], "active")
+        proceed.touch()
+        self.assertEqual(process.wait(timeout=20), 0)
+
+    def test_abandon_refuses_timed_out_guard(self):
+        token = self.acquire()
+        result = self.call("run", "--token", token, "--branch", "fix/timeout",
+                           "--timeout", "0.4", "--", sys.executable, "-c",
+                           "import time; time.sleep(60)")
+        self.assertEqual(result.returncode, 21, result.stdout + result.stderr)
+        self.assertEqual(self.call("abandon", "--reason", "timer elapsed").returncode, 4)
+        self.assertEqual(json.loads(self.call("status").stdout)["phase"], "timed-out")
+
+    def test_abandon_after_verified_worker_when_coordinator_died(self):
+        token = self.acquire()
+        process, _, _ = self.worker(token)
+        self.assertEqual(process.wait(timeout=20), 0)
+        # Coordinator dies before verify/release; the worker's push is real.
+        result = self.call("abandon", "--reason", "coordinator crashed after the worker")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["abandoned_from"], "completed")
+        self.assertEqual(self.git("branch", "--show-current"), "fix/one")
 
 
 if __name__ == "__main__":

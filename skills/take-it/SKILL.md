@@ -202,7 +202,8 @@ Best-effort, so parallel sessions don't double-pick.
 guard, then select the execution mode using §5's confirmation. This applies to resumed batches
 and §6 recovery too, before fetch, branch switches, merge or teardown. A refused acquisition
 claims nothing and performs no reconciliation mutations; report the specific ownership/dirty
-hold. In serial mode claim only the next eligible independent issue immediately before its
+hold, and for a guard with no live worker name the reference's operator-only `abandon` as the
+next action without running it. In serial mode claim only the next eligible independent issue immediately before its
 foreground launch, not the whole list. Keep ownership through all local coordinator work, and
 release by the shared contract on every normal exit; never remove a guard by hand.
 

@@ -1323,8 +1323,8 @@ them. Row 3 is the mechanism and [Isolation checks (#426)](#isolation-checks-426
 a contract. `take-it` implements its confirmation sequence ([#451](https://github.com/Sassy-Dog/skills/issues/451),
 `skills/take-it/references/isolation-confirmation.md`, read before claims);
 `dispatch-ready` implements it once per tick ([#452](https://github.com/Sassy-Dog/skills/issues/452)).
-The isolation and terminal-state gates now run real checkout-guard processes rather than pin
-these instructions to a second prose copy (#484). Claude Code satisfies parallel isolation through
+`scripts/test-isolation-contract.sh` pins these instructions' prose, including the serial fallback
+added by #484, and `scripts/test-checkout-guard.sh` executes the guard they call. Claude Code satisfies parallel isolation through
 `isolation: "worktree"`, a linked worktree under `.claude/worktrees/` that the coordinator tears down
 (`skills/pr-shepherd/references/worktree-teardown.md`).
 
@@ -1434,6 +1434,13 @@ its existing `Agent` worktree behavior. A confirmed omp batch still uses `isolat
 captures its coordinator baseline, waits for its actual returns and performs the after-batch
 check. A safe unconfirmed checkout instead runs one foreground serial worker to completion.
 
+**Terminal-state decision: an unsafe serial prerequisite or an ownership hold ends the loop through DRAIN STALLED, and no fifth state is added.** #452 first made a stopped tick (isolation unconfirmed, no serial mode) STALLED with the hold root `isolation unconfirmed`, so the loop could self-cancel instead of reporting the same sentence every tick, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. #484 replaced that hold rather than adding to it: disabled isolation with a safe serial path is progress, so STALLED's third conjunct now reads "held by a §4 filter or a verified §5 execution-safety gate", and an ownership hold (a checkout guard with no live worker) is the one entry that waives in-flight zero, recorded with the root `checkout ownership <created_at>`. The route is still the one that gate's header names, to widen an existing state's conjunct, and the reasoning is unchanged:
+
+- **Not DEFERRED.** DEFERRED is for a hold this checkout can never clear (a `site:` label naming another machine) and takes no confirmation tick. An operator can clear either hold from this checkout, so each is a hold a human could clear, which is STALLED's definition.
+- **Not a fifth state.** It would be STALLED under another noun: the same conjuncts, the same stop path and cron self-cancel, and one more count and canon entry that would not behave differently.
+- **The two-tick confirmation is wanted, not tolerated**, so one unverified tick cannot end a healthy loop; the same guard on the next tick does.
+- **Confirmed and serial ticks are unaffected**: they dispatch, which deletes any stall record and resets the clock. A live worker (`ownership=active`) is self-resolving and writes no record.
+
 **Ownership precedes §2, not merely §5.** Every non-Claude coordinator, even one expecting
 parallel isolation, acquires the shared checkout guard before reconciliation can switch,
 fast-forward, merge or tear down. A contender cannot claim or mutate. This is cooperative
@@ -1453,7 +1460,12 @@ merge may delete the issue branch. take-it releases the verified worker epoch an
 fresh merge epoch before merging, so server auto-deletion cannot erase required worker evidence.
 A clean default behind upstream may acquire and fast-forward safely; ahead/diverged work is
 retained. Interrupted/timed-out/uncertain runs retain their durable guard for operator
-investigation; automatic force-unlock is deliberately absent.
+investigation; automatic force-unlock is deliberately absent. A refused acquisition archives
+the guard it had just published, since no token or worker exists yet. A coordinator that dies
+holding the token leaves a `held` guard no later caller can tell from a live one: dispatch-ready
+escalates it to STALLED across two ticks, and only an operator runs `checkout-guard.sh abandon
+--reason`. That command needs no token, but it accepts only `held`/`completed` (or `uncertain` with
+no runs) and repeats every `verify` check before archiving, so it is not a force-unlock either.
 
 **Terminal states still describe the drain, not isolation settings.** Disabled isolation with
 a safe serial path is progress, not STALLED. A known unsafe serial prerequisite is a named
@@ -1463,15 +1475,21 @@ migration, claim, review and merge safeguards remain applicable.
 
 ### Safe serial runtime checks (#484)
 
-The permanent gates execute real foreground processes in temporary Git consumers with local
-bare remotes. `test-isolation-contract.sh` covers cross-worktree contention before reconciliation,
-token rejection, dirty acquisition, behind-default fast-forward, sequential verified pushes,
-server branch deletion after archival, missing/stale remote tips and dirty failure.
-`test-drain-terminal-states.sh` covers a live worker beside a terminal-failure comment,
-killed supervisor, actual runner timeout, timeout signal, competing runners, foreground tool
-groups that exit and a surviving tool group that must retain ownership.
-Neither gate calls a model or GitHub, modifies an operator profile, or claims to verify the
-model's §7 judgement. Whole-paragraph and wording snapshots were removed rather than re-pinned.
+`scripts/test-checkout-guard.sh` is the behavioural gate: it runs real foreground processes in
+temporary Git consumers with local bare remotes, with no model, GitHub or network. It covers
+cross-worktree contention before reconciliation, token rejection, dirty acquisition,
+behind-default fast-forward, sequential verified pushes, server branch deletion after archival,
+missing/stale remote tips and dirty failure (its `Ownership` suite), and a live worker beside a
+terminal-failure comment, a killed supervisor, an actual runner timeout, the timeout signal,
+competing runners, foreground tool groups that exit and a surviving tool group that must retain
+ownership (its `Lifecycle` suite). It does not claim to verify the model's §7 judgement.
+
+The prose gates stay what they were. `scripts/test-isolation-contract.sh` pins the isolation
+contract: the parallel path (#451, #452) unchanged, and #484's serial fallback, its ownership
+holds and its refusal to write an operator profile. `scripts/test-drain-terminal-states.sh` pins §7's
+terminal-state canon, re-derived for the blocks #484 added or reworded, plus the execution-safety
+and ownership holds that replaced #452's `isolation unconfirmed` hold. Neither gate was loosened:
+only the text #484 intentionally replaced was re-pinned.
 
 The foreground CLI is a distinct API from `task`: on omp 18.8.5, `omp --model @task` failed with
 `Model "@task" not found` before any worker ran. The serial contract therefore resolves the

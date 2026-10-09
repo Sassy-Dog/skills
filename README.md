@@ -143,8 +143,11 @@ eligible independent issue synchronously per tick, including an eligible recover
 capacity stop. It reuses take-it's serial contract and a durable checkout guard acquired
 **before reconciliation**. Actual worker exit and an independently verified pushed tip are
 required before checkout reuse. Dirty/unpushed work, active writers and unresolved ownership
-remain visible safety holds; timeout never expires ownership. This is cooperative exclusion,
-not a sandbox. See [runtime evidence and limits](docs/HARNESS-PORTABILITY.md#safe-serial-runtime-checks-484).
+remain visible safety holds; timeout never expires ownership. A guard left by a coordinator that
+died holding it stops the loop through DRAIN STALLED rather than ticking forever, and only the
+operator clears it, with `checkout-guard.sh abandon`, which still requires proven worker exit,
+a clean tree and pushed tips. The guard needs Python 3 alongside Bash, Git and POSIX `ps`.
+This is cooperative exclusion, not a sandbox. See [runtime evidence and limits](docs/HARNESS-PORTABILITY.md#safe-serial-runtime-checks-484).
 The matrix leaves the full workflow untested rather than treating a serial smoke as proof of
 parallel dispatch, live review or merge behavior.
 

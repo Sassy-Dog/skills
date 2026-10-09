@@ -34,20 +34,43 @@ ownership; an object-only fetch may establish ancestry after durable acquisition
 status or local remote-tracking ref alone proves nothing.
 The JSON `result=acquired` includes `token` and `guard`; only exit 0 grants ownership.
 Exit 3 is contention, 4 unresolved/auth/unsafe state, 5 dirty/unpushed work and 6 a probe failure.
+Exit 64 is invalid usage, including a missing Python 3 (the guard needs Bash, Python 3, Git and
+POSIX `ps`): report `checkout guard unavailable` and claim nothing.
 Never infer success from empty stdout. `status` reports `ownership=free|held|active|unresolved`,
 its phase and run records without revealing the token.
-Acquisition writes only ownership metadata, never repairs a checkout. On refusal claim nothing,
-perform no reconciliation mutations and report its actual reason.
+Acquisition writes only ownership metadata, never repairs a checkout. A refused acquisition
+leaves no guard: one that fails its checks after publishing ownership archives itself before
+exiting, since no token or worker exists yet. On refusal claim nothing, perform no reconciliation
+mutations and report its actual reason.
 
 ```bash
 bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" status --repo "$CHECKOUT"
 ```
 
-This is read-only evidence, not permission to steal ownership. `checkout active writer` is
-self-resolving; `checkout ownership unresolved` is unverified. No timer, missing PR, blocked
-issue, terminal comment, clean tree or copied token authorizes release. Interrupted launches and
-uncertain supervisor/worker lifetimes retain durable holds requiring explicit operator
-investigation; do not delete the guard or invent an automatic force-unlock route.
+This is read-only evidence, not permission to steal ownership. Only `ownership=active` (a live
+supervisor running a worker) is `checkout active writer`, which is self-resolving. `held` with no
+live worker, or `unresolved`, is `checkout ownership held` / `checkout ownership unresolved`: its
+owner may be a coordinator that died holding the only token, which no later caller can tell apart
+from one still working. Report its guard path, owner, phase and `age_seconds`, and name the
+operator's next action; never wait it out. No timer, missing PR, blocked issue, terminal comment,
+clean tree or copied token authorizes release. A coordinator never runs `abandon`, deletes the
+guard, or invents an automatic force-unlock route.
+
+**Operator-only abandonment**, after the operator confirms the owning session has ended:
+
+```bash
+bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" abandon \
+  --repo "$CHECKOUT" --reason "<why the owner is known to be gone>"
+```
+
+It needs no token, only positive evidence. It accepts `held` or `completed`, or `uncertain` with
+no runs (an acquisition that died before issuing a token), from the guard's own worktree. It
+re-proves every recorded worker's termination, a clean tree and exact fresh pushed tips as
+`verify` does, then archives the guard with the reason. It refuses `launching`, `running`,
+`timed-out`, `interrupted` and any other uncertain guard: those need investigation of the recorded
+process identities and retained work, and no command guesses termination. Abandoning a guard whose
+coordinator is in fact alive removes that coordinator's exclusion, and its later `verify` or
+`release` fails visibly; that is why this is the operator's decision and never a loop's.
 
 Hold ownership through local coordinator work. No coordinator mutation while the serial child
 is live or uncertain. Before continuing after a child, use `verify` below; after all local work

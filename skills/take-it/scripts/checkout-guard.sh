@@ -7,6 +7,7 @@
 #   run     --repo PATH --token TOKEN --branch BRANCH [--timeout SECONDS] -- CMD ARGS...
 #   verify  --repo PATH --token TOKEN
 #   release --repo PATH --token TOKEN
+#   abandon --repo PATH --reason TEXT      (operator only; never a coordinator)
 #
 # Requires Bash, Python 3, Git and POSIX ps (macOS/Linux); no third-party modules.
 # One JSON object goes to stdout. Worker stdout and stderr both go to stderr;
@@ -51,6 +52,15 @@
 # TTL, force unlock, or automatic crash recovery. Such a hold requires operator
 # investigation of the recorded identities, process tree and retained work;
 # this command intentionally provides no shortcut that guesses termination.
+# A failed acquire archives its own guard: it published ownership before its
+# ancestry probe, but no token or worker exists yet, so nothing can be lost
+# and leaving it would wedge every later caller behind an ownerless record.
+# abandon is the operator's route for a coordinator that died holding the only
+# token. It needs positive evidence, not a token: phase held/completed, or
+# uncertain with no runs (an acquire that died mid-probe), from the guard's
+# own worktree, then every check verify makes. Launching, running, timed-out,
+# interrupted and other uncertain guards stay outside its reach. It cannot tell
+# a dead owner from a live one; that judgement is why only a human runs it.
 # Status is read-only, never reveals the token, and reports an incomplete or
 # unreadable record as ownership=unresolved. A token alone proves no exit.
 #
@@ -108,13 +118,15 @@ class Parser(argparse.ArgumentParser):
 def arguments():
     parser = Parser(description="Durable checkout ownership; no force unlock")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("acquire", "status", "run", "verify", "release"):
+    for name in ("acquire", "status", "run", "verify", "release", "abandon"):
         command = commands.add_parser(name)
         command.add_argument("--repo", required=True)
         if name == "acquire":
             command.add_argument("--owner", required=True)
         if name in ("run", "verify", "release"):
             command.add_argument("--token", required=True)
+        if name == "abandon":
+            command.add_argument("--reason", required=True)
         if name == "run":
             command.add_argument("--branch", required=True)
             command.add_argument("--timeout", type=float)
@@ -122,6 +134,8 @@ def arguments():
     args = parser.parse_args()
     if args.command == "acquire" and not args.owner.strip():
         raise Refusal(64, "--owner must be a unique nonempty coordinator identity")
+    if args.command == "abandon" and not args.reason.strip():
+        raise Refusal(64, "--reason must say why the owner is known to be gone")
     if args.command == "run":
         if not args.worker or args.worker[0] != "--" or len(args.worker) == 1:
             raise Refusal(64, "run requires -- followed by an actual foreground command")
@@ -319,6 +333,9 @@ class Guard:
         if self.state["phase"] not in ("held", "completed"):
             raise Refusal(4, "checkout ownership unresolved: phase " + self.state["phase"]
                           + "; operator investigation required, not elapsed-time reclamation")
+        return self.evidence()
+
+    def evidence(self):
         rows = processes()
         branches = []
         for run in self.state["runs"]:
@@ -366,7 +383,17 @@ class Guard:
                           "token": uuid.uuid4().hex + uuid.uuid4().hex, "phase": "uncertain",
                           "created_at": time.time(), "initial_branch": None, "runs": []}
             self.save()
-            initial = self.current_pushed()
+            try:
+                initial = self.current_pushed()
+            except Refusal as refusal:
+                # No token has left this process and no worker exists, so the
+                # rollback loses nothing; a retained ownerless guard would refuse
+                # every later caller with nobody able to release it.
+                receipt = self.archive(phase="acquire-refused", refused_at=time.time(),
+                                       refused_reason=refusal.reason)
+                self.state = None
+                raise Refusal(refusal.code, refusal.reason + "; guard rolled back to "
+                              + receipt) from refusal
             self.state.update(phase="held", initial_branch=initial)
             self.save()
             emit(dict(self.state, result="acquired"))
@@ -384,13 +411,15 @@ class Guard:
                 row = processes().get(supervisor.get("pid"))
                 if live(row) and identity(row) == supervisor:
                     ownership = "active"
-            emit(dict(self.public(), result="held", ownership=ownership))
+            created = self.state.get("created_at")
+            age = (round(time.time() - created)
+                   if isinstance(created, (int, float)) and math.isfinite(created) else None)
+            emit(dict(self.public(), result="held", ownership=ownership, age_seconds=age))
         except (Refusal, OSError, ValueError, TypeError, AttributeError) as error:
             emit({"result": "held", "ownership": "unresolved", "repo": self.repo,
                   "guard": self.path, "reason": str(error)})
 
-    def release(self):
-        verified = self.verify()
+    def archive(self, **fields):
         history = os.path.join(self.common, "sassy-dog-checkout-history")
         try:
             os.mkdir(history, 0o700)
@@ -399,13 +428,42 @@ class Guard:
         receipt = os.path.join(history, self.state["token"])
         if os.path.lexists(receipt):
             raise Refusal(4, "checkout ownership unresolved: receipt already exists")
-        self.state.update(verified, phase="released", released_at=time.time())
+        self.state.update(fields)
         self.save()
         # Same filesystem + mutex: there is no partially removed reusable guard.
         os.rename(self.path, receipt)
         sync_directory(history)
         sync_directory(self.common)
+        return receipt
+
+    def release(self):
+        verified = self.verify()
+        receipt = self.archive(phase="released", released_at=time.time(), **verified)
         emit(dict(self.public(), result="released", receipt=receipt))
+
+    def abandon(self, reason):
+        with self.mutex():
+            if not os.path.lexists(self.path):
+                emit({"result": "free", "ownership": "free", "repo": self.repo, "guard": self.path})
+                return
+            try:
+                self.read_state()
+            except OSError as error:
+                raise Refusal(4, "checkout ownership unresolved: guard state is unavailable;"
+                              " operator investigation required") from error
+            phase = self.state["phase"]
+            orphaned_acquire = phase == "uncertain" and not self.state["runs"]
+            if phase not in ("held", "completed") and not orphaned_acquire:
+                raise Refusal(4, "checkout ownership unresolved: phase " + phase
+                              + " is outside abandon's reach; investigate the recorded"
+                              " processes and retained work")
+            if self.state["repo"] != self.repo:
+                raise Refusal(4, "checkout ownership belongs to another worktree: "
+                              + self.state["repo"])
+            evidence = self.evidence()
+            receipt = self.archive(phase="abandoned", abandoned_from=phase,
+                                   abandoned_reason=reason, abandoned_at=time.time(), **evidence)
+            emit(dict(self.public(), result="abandoned", receipt=receipt))
 
     def run(self, args, mutex_descriptor):
         self.verify()
@@ -595,6 +653,8 @@ def main():
             guard.status()
         elif args.command == "acquire":
             guard.acquire(args.owner)
+        elif args.command == "abandon":
+            guard.abandon(args.reason)
         else:
             with guard.mutex() as descriptor:
                 guard.authenticate(args.token)
