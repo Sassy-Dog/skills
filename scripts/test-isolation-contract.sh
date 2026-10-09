@@ -8,7 +8,7 @@
 # WHAT #484 CHANGED HERE, AND WHAT IT DID NOT. #452 shipped dispatch-ready with
 # NO serial mode: an unconfirmed tick stopped and claimed nothing. #484 replaced
 # that with a safe synchronous serial fallback behind a durable checkout guard
-# (skills/take-it/scripts/checkout-guard.sh). Properties 2, 8, 9, 13 and 14 used
+# (skills/pr-shepherd/scripts/checkout-guard.sh). Properties 2, 8, 9, 13 and 14 used
 # to pin the stop-only text and now pin its replacement; properties 1, 3-7 and
 # 10-12 pin the PARALLEL contract, which #484 did not touch, and are unchanged.
 # The guard's mechanics are executed, not read, by scripts/test-checkout-guard.sh
@@ -143,7 +143,8 @@
 #       and M58 (reach and holds), M47 (stall-record roots), M55 (isolation-
 #       unconfirmed stall restored), M62 (shared checkout during coordinator
 #       work), M75 (ownership waiver), M76 (only `active` is self-resolving),
-#       M77 (a coordinator never abandons)
+#       M77 (a coordinator never abandons), M81/M82 (the token handoff in take-it §6
+#       and dispatch-ready §2), M83 (repo-cleanup stops on a guard)
 # M45 and M46 (#452's two-tick confirmation and transient-probe rationale) and
 # the numbers that skipped (M28, M29, M36, M41-M44, M48-M52) went with the
 # stop-only text and are not renumbered.
@@ -600,6 +601,28 @@ need("the reference: nothing time-based releases ownership", ref,
 need("the doc records the terminal-state decision", doc,
      "an unsafe serial prerequisite or an ownership hold ends the loop through DRAIN STALLED, and no fifth state is added", 14)
 need("the doc names the behavioural gate that executes the guard", doc, "test-checkout-guard.sh", 14)
+# #486: the guard lives in pr-shepherd, the holder hands its token to pr-shepherd's
+# mutators through the environment, and repo-cleanup stops on any guard.
+t6 = flatten(section(SKILL_RAW, "## 6. Coordinator: watch + merge (delegated)"))
+rc = flatten(read("skills/repo-cleanup/SKILL.md"))
+need("take-it §6: the holder exports the token to pr-shepherd calls", t6,
+     "While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call", 14)
+need("take-it §6: the token never goes on argv", t6, "never put the token on argv", 14)
+need("dispatch-ready §2: the holder exports the token to pr-shepherd calls", d2,
+     "While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call", 14)
+need("dispatch-ready §2: the token never goes on argv", d2, "never put the token on argv", 14)
+need("the reference: the holder exports the token for pr-shepherd's mutators", ref,
+     "The holder therefore exports `SASSY_DOG_CHECKOUT_TOKEN=<token>` to the pr-shepherd calls it makes", 14)
+need("the reference: teardown refuses with exit 7 and the merge is unaffected", ref,
+     "`teardown.sh` makes no local mutation, prints the guard path and `ownership`, and exits 7", 14)
+need("the reference: repo-cleanup never holds a guard or passes a token", ref,
+     "`repo-cleanup` never holds a guard, never passes a token and never runs `abandon`", 14)
+need("repo-cleanup: any ownership other than free stops local mutation", rc,
+     "Any other `ownership` (`held`, `active`, `unresolved`) stops all local mutation", 14)
+need("repo-cleanup: it never passes a token or runs abandon", rc,
+     "never passes `SASSY_DOG_CHECKOUT_TOKEN`, and never runs `abandon`", 14)
+if "skills/take-it/scripts/checkout-guard.sh" in (SKILL_RAW + REF_RAW + DOC_RAW + DR_RAW):
+    problems.append("property 14: the guard moved to pr-shepherd (#486); the old take-it path survives in a pinned document")
 need_re("the doc has the recorded #452 runs section", DOC_RAW,
         r"(?m)^### Isolation confirmation runs \(#452\)$", 14)
 need_re("the doc has the #452 terminal-state section", DOC_RAW,
@@ -620,7 +643,8 @@ fi
 # --- mutation proof: each mutant must FAIL, for its own reason ----------------
 make_copy() {
     local dst="$WORK/$1"
-    mkdir -p "$dst/skills/take-it/references" "$dst/skills/dispatch-ready" "$dst/docs"
+    mkdir -p "$dst/skills/take-it/references" "$dst/skills/dispatch-ready" "$dst/skills/repo-cleanup" "$dst/docs"
+    cp "$ROOT/skills/repo-cleanup/SKILL.md" "$dst/skills/repo-cleanup/SKILL.md"
     cp "$ROOT/skills/take-it/SKILL.md" "$dst/skills/take-it/SKILL.md"
     cp "$ROOT/skills/dispatch-ready/SKILL.md" "$dst/skills/dispatch-ready/SKILL.md"
     cp "$ROOT/skills/take-it/references/isolation-confirmation.md" "$dst/skills/take-it/references/"
@@ -981,6 +1005,18 @@ expect_fail "M79 unbounded serial launch restored" "$d" 'an unattended serial la
 d=$(make_copy m80)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'Make that omp bash call with' 'Make the omp bash call with its default deadline instead of' || bad "M80: mutation did not apply"
 expect_fail "M80 omp tool deadline allowed to pre-empt the guard" "$d" "omp's own tool deadline cannot pre-empt the guard's"
+
+d=$(make_copy m81)
+mutate "$d/skills/take-it/SKILL.md" 'While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call' 'While holding the guard, call pr-shepherd' || bad "M81: mutation did not apply"
+expect_fail "M81 take-it's token handoff removed" "$d" "take-it §6: the holder exports the token to pr-shepherd calls"
+
+d=$(make_copy m82)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call' 'While holding the guard, call pr-shepherd' || bad "M82: mutation did not apply"
+expect_fail "M82 dispatch-ready's token handoff removed" "$d" "dispatch-ready §2: the holder exports the token to pr-shepherd calls"
+
+d=$(make_copy m83)
+mutate "$d/skills/repo-cleanup/SKILL.md" 'stops all local' 'allows all local' || bad "M83: mutation did not apply"
+expect_fail "M83 repo-cleanup's stop-on-guard rule removed" "$d" "repo-cleanup: any ownership other than free stops local mutation"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

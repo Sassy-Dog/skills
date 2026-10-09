@@ -4,6 +4,8 @@
 # Usage:
 #   acquire --repo PATH --owner UNIQUE_COORDINATOR_ID
 #   status  --repo PATH
+#   check   --repo PATH                (read-only gate for other local-checkout mutators;
+#                                       the caller's token comes from SASSY_DOG_CHECKOUT_TOKEN)
 #   run     --repo PATH --token TOKEN --branch BRANCH [--timeout SECONDS] -- CMD ARGS...
 #   verify  --repo PATH --token TOKEN
 #   release --repo PATH --token TOKEN
@@ -78,11 +80,25 @@
 # branch's tip check rather than holding the checkout forever.
 # Status is read-only, never reveals the token, and reports an incomplete or
 # unreadable record as ownership=unresolved. A token alone proves no exit.
+# check is the read-only gate the OTHER local-checkout mutators call before
+# they touch the checkout (pr-shepherd's teardown.sh and merge-shepherd.sh; the
+# repo-cleanup prose uses status). It exits 0 when no guard exists, or when the
+# guard is in phase held/completed AND the token in the environment variable
+# SASSY_DOG_CHECKOUT_TOKEN matches it for this checkout. The token is read from
+# the environment and never from argv, so it is not visible in `ps`; a --token
+# on argv is accepted and ignored on purpose, so a caller cannot believe it
+# authenticated by passing one. It takes no mutex and writes nothing (the mutex
+# file is created on open). A live writer exits 3 whatever token is presented,
+# since even the holder must not move the checkout under its own worker; every
+# other refusal (no/wrong token, unresolved or unreadable state) exits 4. The
+# refusal JSON carries ownership, phase and the guard path, never the token.
 #
 # Exit codes:
 #   0  command succeeded (status may report held/unresolved; inspect its JSON)
 #   3  checkout active writer / existing ownership / concurrent guard operation
+#      (check: a live writer only)
 #   4  checkout ownership unresolved, wrong token/checkout, or unsafe lifecycle
+#      (check: no token, wrong token, or unresolved state)
 #   5  dirty, in-progress Git operation, missing branch, or unpushed work
 #   6  Git/process/filesystem inspection failed; no safety proof obtained
 #  20  worker exited nonzero, with termination positively verified
@@ -115,9 +131,10 @@ from contextlib import contextmanager
 
 
 class Refusal(Exception):
-    def __init__(self, code, reason):
+    def __init__(self, code, reason, extra=None):
         self.code = code
         self.reason = reason
+        self.extra = extra or {}
         super().__init__(reason)
 
 
@@ -133,11 +150,14 @@ class Parser(argparse.ArgumentParser):
 def arguments():
     parser = Parser(description="Durable checkout ownership; no force unlock")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("acquire", "status", "run", "verify", "release", "abandon"):
+    for name in ("acquire", "status", "check", "run", "verify", "release", "abandon"):
         command = commands.add_parser(name)
         command.add_argument("--repo", required=True)
         if name == "acquire":
             command.add_argument("--owner", required=True)
+        if name == "check":
+            # Accepted and never read: the token comes from the environment only.
+            command.add_argument("--token", help=argparse.SUPPRESS)
         if name in ("run", "verify", "release"):
             command.add_argument("--token", required=True)
         if name == "abandon":
@@ -455,19 +475,50 @@ class Guard:
             self.save()
             emit(dict(self.state, result="acquired"))
 
+    def ownership(self):
+        phase = self.state["phase"]
+        ownership = "held" if phase in ("held", "completed") else "unresolved"
+        if phase in ("launching", "running") and self.state["runs"]:
+            supervisor = self.state["runs"][-1].get("supervisor", {})
+            row = processes().get(supervisor.get("pid"))
+            if live(row) and identity(row) == supervisor:
+                ownership = "active"
+        return ownership
+
+    def check(self):
+        if not os.path.lexists(self.path):
+            emit({"result": "ok", "check": "no-guard", "ownership": "free",
+                  "repo": self.repo, "guard": self.path})
+            return
+        unresolved = {"ownership": "unresolved"}
+        try:
+            self.read_state()
+            ownership = self.ownership()
+        except (Refusal, OSError, ValueError, TypeError, AttributeError) as error:
+            raise Refusal(4, "checkout ownership unresolved: guard state is unavailable: "
+                          + str(error), unresolved) from error
+        extra = {"ownership": ownership}
+        if ownership == "active":
+            raise Refusal(3, "checkout active writer: a recorded worker is running", extra)
+        token = os.environ.get("SASSY_DOG_CHECKOUT_TOKEN", "")
+        if not token or not hmac.compare_digest(self.state["token"], token):
+            raise Refusal(4, "checkout ownership held: SASSY_DOG_CHECKOUT_TOKEN is missing or"
+                          " does not own this guard", extra)
+        if self.state["repo"] != self.repo:
+            raise Refusal(4, "checkout ownership belongs to another worktree: "
+                          + self.state["repo"], extra)
+        if self.state["phase"] not in ("held", "completed"):
+            raise Refusal(4, "checkout ownership unresolved: phase " + self.state["phase"], extra)
+        emit({"result": "ok", "check": "token-owner", "ownership": ownership,
+              "phase": self.state["phase"], "repo": self.repo, "guard": self.path})
+
     def status(self):
         if not os.path.lexists(self.path):
             emit({"result": "free", "ownership": "free", "repo": self.repo, "guard": self.path})
             return
         try:
             self.read_state()
-            phase = self.state["phase"]
-            ownership = "held" if phase in ("held", "completed") else "unresolved"
-            if phase in ("launching", "running") and self.state["runs"]:
-                supervisor = self.state["runs"][-1].get("supervisor", {})
-                row = processes().get(supervisor.get("pid"))
-                if live(row) and identity(row) == supervisor:
-                    ownership = "active"
+            ownership = self.ownership()
             created = self.state.get("created_at")
             age = (round(time.time() - created)
                    if isinstance(created, (int, float)) and math.isfinite(created) else None)
@@ -744,6 +795,8 @@ def main():
         guard = Guard(args.repo)
         if args.command == "status":
             guard.status()
+        elif args.command == "check":
+            guard.check()
         elif args.command == "acquire":
             guard.acquire(args.owner)
         elif args.command == "abandon":
@@ -761,6 +814,8 @@ def main():
     except (Refusal, OSError, ValueError) as error:
         code = error.code if isinstance(error, Refusal) else 6
         report = {"result": "refused", "reason": str(error), "exit_code": code}
+        if isinstance(error, Refusal):
+            report.update(error.extra)
         if guard is not None:
             report.update(repo=guard.repo, guard=guard.path)
             if guard.state is not None:

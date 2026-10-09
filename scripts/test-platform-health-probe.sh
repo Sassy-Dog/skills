@@ -2818,7 +2818,7 @@ section_names_probe() { # <file> <heading prefix>
     t="$(section_text "$1" "$2")"
     grep -qF -- "$PROBE_BASENAME" <<<"$t"
 }
-SIBLINGS=(gh-retry.sh merge-shepherd.sh poll-prs.sh poll-queue.sh pr-failure-log.sh stack-probe.sh teardown.sh)
+SIBLINGS=(checkout-guard.sh gh-retry.sh merge-shepherd.sh poll-prs.sh poll-queue.sh pr-failure-log.sh stack-probe.sh teardown.sh)
 # EQUALITY against the TRACKED listing (git ls-files, like every other corpus in
 # this repo), so a new script cannot ship unscanned and an untracked scratch
 # file cannot redden the gate with a message that blames the list.

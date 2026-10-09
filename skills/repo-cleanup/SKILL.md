@@ -47,6 +47,27 @@ missing before acting:
 only on mixed signal — substantive WIP, dep-file touches, abandoned-but-non-trivial work. Asking on
 every `.DS_Store` defeats the purpose; never confirming on a 600-line orphan stash loses real work.
 
+## 0. Stop on a checkout guard (before any local mutation)
+
+A serial worker may own this checkout under the durable checkout guard that `take-it` and
+`dispatch-ready` acquire. Every step below that changes the local checkout (the default-branch
+switch and fast-forward, stash drops, untracked-file discards, worktree removal, local-branch
+deletion) must wait for the guard. Read it first:
+
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/checkout-guard.sh status --repo "$(git rev-parse --show-toplevel)"
+```
+
+`ownership=free` proceeds. Any other `ownership` (`held`, `active`, `unresolved`) stops all local
+mutation: report the guard path, owner, phase and `age_seconds`, and point at the per-phase next
+action in `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` (read it for
+the operator's `abandon` route). This skill never holds a guard, never passes
+`SASSY_DOG_CHECKOUT_TOKEN`, and never runs `abandon`; `pr-shepherd`'s `teardown.sh` also refuses
+(exit `7`) without the holder's token, so step 5 would stop there anyway. Read-only inventory
+(step 2's listings, `gh` reads) may still run and be reported.
+
 ## 1. Sync the default branch and prune
 
 ```bash
@@ -260,8 +281,6 @@ a PR, then returns here.
 The agent-worktree teardown, squash-merge-aware local-branch deletion, ff-reconcile, and
 origin-identical straggler clearing are exactly what `pr-shepherd`'s bundled `teardown.sh --sweep`
 does (it encodes the same "remote branch gone = merged" rule). Reuse it rather than re-implementing:
-
-**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
 ```bash
 DEFAULT_BRANCH="$DEFAULT_BRANCH" \

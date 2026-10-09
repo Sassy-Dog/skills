@@ -1495,7 +1495,13 @@ behind-default fast-forward, sequential verified pushes, server branch deletion 
 missing/stale remote tips and dirty failure (its `Ownership` suite), and a live worker beside a
 terminal-failure comment, a killed supervisor, an actual runner timeout, the timeout signal,
 competing runners, foreground tool groups that exit and a surviving tool group that must retain
-ownership (its `Lifecycle` suite). It does not claim to verify the model's §7 judgement.
+ownership (its `Lifecycle` suite). Since #486 the guard lives in `skills/pr-shepherd/scripts/`
+and exposes a read-only `check` that `teardown.sh` and `merge-shepherd.sh` run before any local
+mutation; its `Check` suite covers no guard, a matching `SASSY_DOG_CHECKOUT_TOKEN`, a missing or
+wrong token, a live writer, an argv token being ignored and unresolved state, each refusal proved
+against a mutant, and `scripts/test-teardown-args.sh` (property 7) shows `teardown.sh` leaving
+branches, HEAD and the worktree list untouched while a guard is held and proceeding once the
+token matches. It does not claim to verify the model's §7 judgement.
 
 The prose gates stay what they were. `scripts/test-isolation-contract.sh` pins the isolation
 contract: the parallel path (#451, #452) unchanged, and #484's serial fallback, its ownership

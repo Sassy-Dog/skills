@@ -1525,7 +1525,7 @@
 #      each of which must be caught. Temp `git init` repos only, no gh, no network.
 #
 #  54. checkout-guard tests (scripts/test-checkout-guard.sh) — the behavioural
-#      half of #484: `skills/take-it/scripts/checkout-guard.sh` run for real
+#      half of #484: `skills/pr-shepherd/scripts/checkout-guard.sh` run for real
 #      against temporary Git consumers with local bare remotes. The `Ownership`
 #      suite covers contention before reconciliation, token rejection, dirty and
 #      unpushed acquisition, behind-default fast-forward, exact fresh remote-tip

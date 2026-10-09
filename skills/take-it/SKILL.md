@@ -567,6 +567,9 @@ In serial mode first apply the reference's process-exit and fresh remote-tip che
 interrupted or uncertain worker check stops local reconciliation; preserve the branch and work,
 report the guard path and next operator action. An issue-only terminal record cannot override
 this hold. Never hand shared-checkout artifacts to teardown before verified push completion.
+While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call
+(`teardown.sh`, `merge-shepherd.sh`) and never put the token on argv: without it their checkout-guard
+`check` refuses (teardown exit 7) and no local mutation happens (the reference's ownership section).
 
 Before the PR-only reconciliation below, apply §5's **Issue-only terminal handoff** to each
 claimed issue in this batch, including returned failures with `pr=none` and resumed attempts.

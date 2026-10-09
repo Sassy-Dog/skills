@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Six properties are asserted:
+# Seven properties are asserted (7 was added by #486):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -31,6 +31,14 @@
 #   6. Source-level: the dispatch no longer keys on `${1:-}` — it pre-scans
 #      "$@". Properties 1-5 exercise behaviour; this one fails the moment the
 #      single-argument shape is reinstated, including in a path they miss.
+#
+#   7. The checkout guard (#486): while a guard is held, teardown refuses with
+#      exit 7 BEFORE any local mutation (branches, HEAD and the worktree list
+#      are unchanged), a wrong token refuses the same way, a matching
+#      SASSY_DOG_CHECKOUT_TOKEN lets it proceed, and a copy with the `check`
+#      call neutered (a mutant) tears the worktree down and so fails the
+#      refusal assertion. merge-shepherd.sh's post-merge teardown carries the
+#      same call; it needs a live GitHub to run, so it is pinned at source level.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -296,6 +304,57 @@ else
     bad "  --reconcile-only touched a worktree or branch"
 fi
 
+# --- 7. the checkout guard (#486) ---------------------------------------------
+echo "7. checkout guard" >&2
+GUARD_SH="$REPO_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh"
+unset SASSY_DOG_CHECKOUT_TOKEN
+D="$(mkscratch guarded 2)"
+printf '.claude/\n' >>"$D/.git/info/exclude"
+ACQ="$(bash "$GUARD_SH" acquire --repo "$D" --owner teardown-test 2>&1)"
+TOKEN="$(python3 -I -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])' <<<"$ACQ" 2>/dev/null || true)"
+if [ -z "$TOKEN" ]; then
+    bad "could not acquire a guard for the fixture: $ACQ"
+else
+    BEFORE="$(snapshot "$D")"; HEAD_BEFORE="$(git -C "$D" rev-parse HEAD)"
+    run_teardown "$D" .claude/worktrees/agent-a01
+    expect_status "held guard, no token: teardown refuses" 7
+    expect "  refusal names the guard path" "sassy-dog-checkout-guard"
+    expect "  refusal names the ownership" '"ownership": "held"'
+    refute "  no explicit phase ran" "$H_EXPLICIT"
+    if [ "$(snapshot "$D")" = "$BEFORE" ] && [ "$(git -C "$D" rev-parse HEAD)" = "$HEAD_BEFORE" ]; then
+        ok "  branches, worktrees and HEAD unchanged"
+    else
+        bad "  teardown mutated the checkout while a guard was held"
+    fi
+    SASSY_DOG_CHECKOUT_TOKEN="not-the-owner" run_teardown "$D" --sweep
+    expect_status "held guard, wrong token: teardown refuses" 7
+    if [ "$(snapshot "$D")" = "$BEFORE" ]; then ok "  checkout unchanged"; else bad "  wrong token still mutated the checkout"; fi
+    # Mutant: the check call neutered. It must tear the worktree down, which is
+    # exactly what the refusal assertions above would then catch.
+    MUT="$WORK/mutant"; mkdir -p "$MUT"; cp "$TEARDOWN" "$GUARD_SH" "$MUT/"
+    sed -i.bak 's/" check --repo/" status --repo/' "$MUT/teardown.sh"
+    if cmp -s "$MUT/teardown.sh" "$TEARDOWN"; then
+        bad "  mutant anchor drifted: the check call was not found in teardown.sh"
+    else
+        OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$MUT/teardown.sh" .claude/worktrees/agent-a02 2>&1)"; STATUS=$?
+        if [ "$STATUS" != "7" ] && [ ! -d "$D/.claude/worktrees/agent-a02" ]; then
+            ok "  mutant without the check call mutates under a guard (the gate bites)"
+        else
+            bad "  mutant did not mutate (exit $STATUS) — the refusal assertions would pass without the check"; dump
+        fi
+    fi
+    SASSY_DOG_CHECKOUT_TOKEN="$TOKEN" run_teardown "$D" .claude/worktrees/agent-a01
+    expect_status "held guard, matching token: teardown proceeds" 0
+    expect "  explicit phase ran" "$H_EXPLICIT 1 worktree(s)"
+    if [ ! -d "$D/.claude/worktrees/agent-a01" ]; then ok "  named worktree removed"; else bad "  matching token did not tear the worktree down"; fi
+    run_teardown "$D" --reconcile-only
+    expect_status "still held, no token: --reconcile-only refuses too" 7
+fi
+D="$(mkscratch unguarded 1)"
+run_teardown "$D" .claude/worktrees/agent-a01
+expect_status "no guard present: teardown behaves as before" 0
+expect "  explicit phase ran" "$H_EXPLICIT 1 worktree(s)"
+
 # --- 6. source-level: the dispatch pre-scans "$@" -----------------------------
 echo "6. source-level shape guard" >&2
 if grep -q 'for arg in "\$@"' "$TEARDOWN"; then
@@ -307,6 +366,13 @@ if grep -qF '${1:-}' "$TEARDOWN"; then
     bad "$TEARDOWN keys a mode on \${1:-} again — that shape only sees the FIRST argument, so a flag anywhere else falls through to the path loop (issue #200)"
 else
     ok "no mode is keyed on the first argument alone"
+fi
+
+MERGE_SHEPHERD="$REPO_ROOT/skills/pr-shepherd/scripts/merge-shepherd.sh"
+if awk '/^teardown\(\)/{f=1} f && /GUARD_SCRIPT" check/{c=NR} f && /worktree remove/{w=NR} END{exit !(c && w && c<w)}' "$MERGE_SHEPHERD"; then
+    ok "merge-shepherd.sh's teardown() runs the guard check before its first mutation"
+else
+    bad "merge-shepherd.sh's teardown() no longer runs the checkout-guard check before it mutates (#486)"
 fi
 
 # ------------------------------------------------------------------------------
