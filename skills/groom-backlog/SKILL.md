@@ -91,6 +91,15 @@ stale promises break dispatch-ready.
 Read each candidate IN FULL — `gh issue view N --comments` — scope often lives in follow-up
 comments.
 
+**Sentry-born candidates are re-validated against live Sentry every pass** (issue #489). For any
+open issue whose body carries a `sentry-source: <SHORT_ID>` marker, re-pull the event list and
+breadcrumbs through `sassy-dog:sentry-triage` (its `references/breadcrumb-evidence.md`: the Sentry
+MCP's tool catalog, `search_sentry_tools` then `execute_sentry_tool`) and report new events, new
+releases and newly available evidence. Any of those makes a parked issue a candidate to unpark. An
+event with no stack trace is not undiagnosable: never park an issue as "needs the Sentry UI" until
+the catalog has been searched. If the catalog lacks the tools, or no Sentry MCP is connected, the
+line reads `sentry: UNKNOWN (<reason>)`, never "needs human". This is read-only against Sentry.
+
 ### Suspected-complete tracking parents (board AND boardless)
 
 An epic that split into children never closes itself. GitHub's automation moves on a merged PR's
@@ -475,6 +484,9 @@ Demotion is the reverse and **requires the reason**: `issue-claim.sh demote N --
 Never a silent strip.
 
 Every promoted issue carries its `touches:` line from rubric #8.
+
+Name every Sentry recurrence from §2 (new events, new releases, newly available evidence) on the
+issue's row, or `sentry: UNKNOWN (<reason>)` where the re-pull could not run.
 
 Final table: issue · verdict (**Ready** / needs-decision / split → children / parked:
 awaiting-user / **parked: operational (site `<x>`)** / parked: reason) · what changed.

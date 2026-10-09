@@ -2489,6 +2489,16 @@ else
     failed "checkout-guard tests (scripts/test-checkout-guard.sh)"
 fi
 
+# --- 55. sentry-breadcrumbs tests -----------------------------------------------
+# sentry-triage's escalation pulls event lists and breadcrumbs through the MCP
+# tool catalog, groom-backlog re-validates sentry-source issues, and a missing
+# catalog tool is UNKNOWN rather than "needs human" (issue #489). Source-level.
+if bash scripts/test-sentry-breadcrumbs.sh; then
+    pass "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
+else
+    failed "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
+fi
+
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
     echo "preflight: all gates green" >&2
