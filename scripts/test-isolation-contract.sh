@@ -138,7 +138,7 @@
 #       restatement injected), M54 (a multi-tick serial record restored), M56
 #       (serial-is-synchronous), M57 (one issue per tick), M59-M61 (halt, wait,
 #       timeout caveat), M63-M68 (the in-§2 redispatch), M74 (profile write),
-#       M79 (the serial launch's timeout)
+#       M79 (the serial launch's timeout), M80 (omp's tool deadline disabled)
 #  14   M33 (disabled isolation joins the held set), M34 (STALLED conjunct), M35
 #       and M58 (reach and holds), M47 (stall-record roots), M55 (isolation-
 #       unconfirmed stall restored), M62 (shared checkout during coordinator
@@ -519,6 +519,10 @@ need("termination is awaited, not inferred from a PR, RESULT or comment", d5,
      "Await actual process termination, not a PR, RESULT or terminal-failure comment.", 13)
 need("an unattended serial launch is always bounded by a timeout", d5,
      "command, always with `--timeout 3600`: an unattended tick must end.", 13)
+need("omp's own tool deadline cannot pre-empt the guard's", d5,
+     "Make that omp bash call with `timeout: 0`, so omp's own 300s default tool deadline cannot kill the supervisor first", 13)
+need("the reference: the omp call that runs the guard disables its tool deadline", ref,
+     "make the bash tool call that runs it with `timeout: 0`", 13)
 need("a serial timeout is reported and follows §7's ownership hold", d5,
      "the retained guard then follows §7's ownership hold rather than a silent wait", 13)
 need("the reference: dispatch-ready always passes the timeout", ref,
@@ -973,6 +977,10 @@ expect_fail "M78 foreground-only launch rule removed" "$d" 'the lifecycle runs a
 d=$(make_copy m79)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'command, always with `--timeout 3600`: an unattended tick must end.' 'command.' || bad "M79: mutation did not apply"
 expect_fail "M79 unbounded serial launch restored" "$d" 'an unattended serial launch is always bounded by a timeout'
+
+d=$(make_copy m80)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'Make that omp bash call with' 'Make the omp bash call with its default deadline instead of' || bad "M80: mutation did not apply"
+expect_fail "M80 omp tool deadline allowed to pre-empt the guard" "$d" "omp's own tool deadline cannot pre-empt the guard's"
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

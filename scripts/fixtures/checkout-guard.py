@@ -284,6 +284,15 @@ class Ownership(Scratch):
             result = self.call("abandon", "--reason", "acquire died mid-probe")
             self.assertEqual(result.returncode, expected, phase + ": " + result.stdout)
 
+    def test_caller_directory_cannot_shadow_the_guards_imports(self):
+        planted = self.home / "planted"
+        planted.mkdir()
+        (planted / "uuid.py").write_text("import sys\nsys.exit(99)\n")
+        result = subprocess.run(["bash", str(GUARD), "status", "--repo", str(self.repo)],
+                                cwd=planted, env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["ownership"], "free")
+
     def test_abandon_on_free_checkout_changes_nothing(self):
         result = self.call("abandon", "--reason", "nothing held")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

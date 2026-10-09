@@ -10,6 +10,8 @@
 #   abandon --repo PATH --reason TEXT [--investigated]   (operator only; never a coordinator)
 #
 # Requires Bash, Python 3, Git and POSIX ps (macOS/Linux); no third-party modules.
+# Python runs isolated (-I): a module in the caller's directory cannot shadow
+# the standard library and turn every status read into an unverified tick.
 # One JSON object goes to stdout. Worker stdout and stderr both go to stderr;
 # worker stdin is /dev/null. CMD is executed directly, never interpreted by a
 # shell. run is synchronous and never accepts a reported RESULT as exit proof.
@@ -45,8 +47,11 @@
 # foreground CLI, not a task handle or self-report.
 #
 # Timeout/SIGINT/SIGTERM/SIGHUP records a durable hold BEFORE signalling the
-# worker group (TERM, then KILL after five seconds). The runner reaps when it
-# can, but interrupted/timed-out/uncertain phases cannot be verified/released.
+# worker's own group (TERM, then KILL after five seconds while the worker is
+# unreaped). Other observed groups are not signalled; any live member is
+# recorded in remaining_processes and keeps the guard held, a fail-safe hold
+# the operator runbook resolves. The runner reaps when it can, but
+# interrupted/timed-out/uncertain phases cannot be verified/released.
 # SIGKILL or a crash can leave a launching/running record and surviving worker;
 # subsequent callers refuse it even if its PID later disappears. There is no
 # TTL, force unlock, or automatic crash recovery. Such a hold requires operator
@@ -91,7 +96,7 @@ if ! command -v python3 >/dev/null 2>&1; then
   printf '%s\n' '{"result":"refused","reason":"Python 3 is required","exit_code":64}'
   exit 64
 fi
-exec python3 - "$@" <<'PY'
+exec python3 -I - "$@" <<'PY'
 import argparse
 import errno
 import fcntl

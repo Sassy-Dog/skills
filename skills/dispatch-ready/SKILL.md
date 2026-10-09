@@ -632,7 +632,9 @@ section restates none of them and states only what a tick changes:
 
 **Serial is synchronous, not an in-flight shared-checkout task.** Write the complete cold-worker
 prompt prescribed by take-it's reference, then invoke its guarded foreground `omp --print`
-command, always with `--timeout 3600`: an unattended tick must end. Exit 21 is reported on the
+command, always with `--timeout 3600`: an unattended tick must end. Make that omp bash call with
+`timeout: 0`, so omp's own 300s default tool deadline cannot kill the supervisor first and leave
+its worker unsupervised; the guard's bound must be the only one. Exit 21 is reported on the
 tick (`serial worker timed out after 3600s — guard retained`), and the retained guard then follows
 §7's ownership hold rather than a silent wait. No detached Agent, task, async shell job or worker process may outlive an ordinary
 successful tick. Await actual process termination, not a PR, RESULT or terminal-failure comment.

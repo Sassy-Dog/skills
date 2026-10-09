@@ -1434,11 +1434,14 @@ its existing `Agent` worktree behavior. A confirmed omp batch still uses `isolat
 captures its coordinator baseline, waits for its actual returns and performs the after-batch
 check. A safe unconfirmed checkout instead runs one foreground serial worker to completion,
 bounded by `--timeout 3600` because an unattended tick must end; a timeout retains the guard and
-reaches DRAIN STALLED through the ownership hold. A refused acquisition (dirty or unpushed
+reaches DRAIN STALLED through the ownership hold. The omp bash call that runs it passes
+`timeout: 0`: on omp 18.8.5 a bash tool call defaults to a 300s deadline and caps any other value
+at 3600s, and a tool deadline that fires first kills the supervisor while its worker, in its own
+session, keeps writing unsupervised. A refused acquisition (dirty or unpushed
 checkout, guard unavailable) blocks reconciliation just as completely, so it takes that hold's
 in-flight waiver rather than ticking forever behind in-flight PRs.
 
-**Terminal-state decision: an unsafe serial prerequisite or an ownership hold ends the loop through DRAIN STALLED, and no fifth state is added.** #452 first made a stopped tick (isolation unconfirmed, no serial mode) STALLED with the hold root `isolation unconfirmed`, so the loop could self-cancel instead of reporting the same sentence every tick, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. #484 replaced that hold rather than adding to it: disabled isolation with a safe serial path is progress, so STALLED's third conjunct now reads "held by a §4 filter or a verified §5 execution-safety gate", and an ownership hold (a checkout guard with no live worker) is the one entry that waives in-flight zero, recorded with the root `checkout ownership <created_at>`. The route is still the one that gate's header names, to widen an existing state's conjunct, and the reasoning is unchanged:
+**Terminal-state decision: an unsafe serial prerequisite or an ownership hold ends the loop through DRAIN STALLED, and no fifth state is added.** #452 first made a stopped tick (isolation unconfirmed, no serial mode) STALLED with the hold root `isolation unconfirmed`, so the loop could self-cancel instead of reporting the same sentence every tick, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. #484 replaced that hold rather than adding to it: disabled isolation with a safe serial path is progress, so STALLED's third conjunct now reads "held by a §4 filter or a verified §5 execution-safety gate", and an ownership hold (a checkout guard with no live worker) waives in-flight zero, recorded with the root `checkout ownership <created_at>`, as does a refused acquisition, recorded with `checkout refused <exit code> <branch>`. The route is still the one that gate's header names, to widen an existing state's conjunct, and the reasoning is unchanged:
 
 - **Not DEFERRED.** DEFERRED is for a hold this checkout can never clear (a `site:` label naming another machine) and takes no confirmation tick. An operator can clear either hold from this checkout, so each is a hold a human could clear, which is STALLED's definition.
 - **Not a fifth state.** It would be STALLED under another noun: the same conjuncts, the same stop path and cron self-cancel, and one more count and canon entry that would not behave differently.
@@ -1478,8 +1481,9 @@ checkout forever.
 
 **Terminal states still describe the drain, not isolation settings.** Disabled isolation with
 a safe serial path is progress, not STALLED. A known unsafe serial prerequisite is a named
-execution-safety hold. An active writer is self-resolving; unresolved ownership or termination
-means the tick cannot prove any terminal state. Existing Ready-only, dependency, collision,
+execution-safety hold. An active writer is self-resolving. A guard with no live worker, held or
+unresolved, is an ownership hold: it proves no COMPLETE, DEFERRED or DEGRADED verdict, but the
+same guard on two ticks confirms STALLED. Only a `status` read that itself fails proves nothing. Existing Ready-only, dependency, collision,
 migration, claim, review and merge safeguards remain applicable.
 
 ### Safe serial runtime checks (#484)

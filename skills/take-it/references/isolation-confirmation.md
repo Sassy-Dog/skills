@@ -217,7 +217,11 @@ on this CLI transport the role resolves to the concrete `TASK_MODEL` selector ab
 3. For recovery, confirm the existing reservation's `started` durable write immediately before
    this one launch, with `recovery_used=1` unchanged. The launcher records ownership before
    child mutation and supervises the actual process group. Use the foreground command and wait
-   for its actual return; do not impose a shorter outer tool timeout or background it:
+   for its actual return; do not impose a shorter outer tool timeout or background it. On omp,
+   make the bash tool call that runs it with `timeout: 0`: omp's default 300s deadline (any
+   other value is capped at 3600s) would kill the supervisor mid-run, leaving its worker, which
+   runs in a session of its own, writing unsupervised and the guard unresolved. The guard's
+   `--timeout` must be the only bound:
 
    ```bash
    bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" run \
