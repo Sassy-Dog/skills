@@ -4,6 +4,8 @@
 # Usage:
 #   acquire --repo PATH --owner UNIQUE_COORDINATOR_ID
 #   status  --repo PATH
+#   check   --repo PATH                (read-only gate for other local-checkout mutators;
+#                                       the caller's token comes from SASSY_DOG_CHECKOUT_TOKEN)
 #   run     --repo PATH --token TOKEN --branch BRANCH [--timeout SECONDS] -- CMD ARGS...
 #   verify  --repo PATH --token TOKEN
 #   release --repo PATH --token TOKEN
@@ -78,11 +80,30 @@
 # branch's tip check rather than holding the checkout forever.
 # Status is read-only, never reveals the token, and reports an incomplete or
 # unreadable record as ownership=unresolved. A token alone proves no exit.
+# check is the read-only gate the OTHER local-checkout mutators call before
+# they touch the checkout (pr-shepherd's teardown.sh and merge-shepherd.sh; the
+# repo-cleanup prose uses status). It exits 0 when no guard exists, or when the
+# guard is in phase held/completed AND the token in the environment variable
+# SASSY_DOG_CHECKOUT_TOKEN matches it for this checkout. The token is read from
+# the environment and never from argv, so it is not visible in `ps`; a --token
+# on argv is accepted and ignored on purpose, so a caller cannot believe it
+# authenticated by passing one. It takes no mutex and writes nothing (the mutex
+# file is created on open). A live writer exits 3 whatever token is presented,
+# since even the holder must not move the checkout under its own worker; every
+# other refusal (no/wrong token, unresolved or unreadable state) exits 4. The
+# refusal JSON carries ownership, phase and the guard path, never the token.
+# `run` removes SASSY_DOG_CHECKOUT_TOKEN from the worker's environment, so a caller
+# that exported it still does not hand the worker the way past the gate. Callers
+# should scope it per call anyway (`SASSY_DOG_CHECKOUT_TOKEN=... bash teardown.sh`).
+# Without Python 3, `check` and `status` still answer "no guard" (a filesystem
+# fact) with the same JSON; a guard that exists fails closed, exit 4.
 #
 # Exit codes:
 #   0  command succeeded (status may report held/unresolved; inspect its JSON)
 #   3  checkout active writer / existing ownership / concurrent guard operation
+#      (check: a live writer only)
 #   4  checkout ownership unresolved, wrong token/checkout, or unsafe lifecycle
+#      (check: no token, wrong token, or unresolved state)
 #   5  dirty, in-progress Git operation, missing branch, or unpushed work
 #   6  Git/process/filesystem inspection failed; no safety proof obtained
 #  20  worker exited nonzero, with termination positively verified
@@ -92,7 +113,48 @@
 # No command stashes, resets, deletes branches, switches or pushes. An object
 # fetch under durable ownership may establish remote ancestry before a later ff.
 set -euo pipefail
+# The guard's directory name is owned HERE and handed to the Python below, so the
+# no-Python fallback and the real implementation cannot disagree about it.
+export CHECKOUT_GUARD_DIR_NAME="sassy-dog-checkout-guard"
 if ! command -v python3 >/dev/null 2>&1; then
+  # Without Python 3 the guard cannot be read, but whether one EXISTS is a plain
+  # filesystem fact. `check` and `status` answer that much so a host with no
+  # Python and no guard behaves exactly as before the guard existed; a guard that
+  # is present there fails closed (exit 4), never open. Everything else is 64.
+  json_str() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+  sub="${1:-}" repo=""
+  if [ "$sub" = check ] || [ "$sub" = status ]; then
+    shift
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --repo) repo="${2:-}"; shift 2 || break ;;
+        --token) shift 2 || break ;;
+        *) shift ;;
+      esac
+    done
+    top="" common=""
+    if [ -n "$repo" ] && top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" \
+       && common="$(git -C "$top" rev-parse --git-common-dir 2>/dev/null)"; then
+      case "$common" in /*) : ;; *) common="$top/$common" ;; esac
+      if common="$(cd -P "$common" 2>/dev/null && pwd -P)"; then
+        top="$(cd -P "$top" && pwd -P)"
+        guard="$common/$CHECKOUT_GUARD_DIR_NAME"
+        if [ -L "$guard" ] || [ -e "$guard" ]; then
+          printf '{"exit_code":4,"guard":"%s","ownership":"unresolved","reason":"checkout ownership unresolved: a guard exists but Python 3 is required to read it","repo":"%s","result":"refused"}\n' \
+            "$(json_str "$guard")" "$(json_str "$top")"
+          exit 4
+        fi
+        if [ "$sub" = check ]; then
+          printf '{"check":"no-guard","guard":"%s","ownership":"free","repo":"%s","result":"ok"}\n' \
+            "$(json_str "$guard")" "$(json_str "$top")"
+        else
+          printf '{"guard":"%s","ownership":"free","repo":"%s","result":"free"}\n' \
+            "$(json_str "$guard")" "$(json_str "$top")"
+        fi
+        exit 0
+      fi
+    fi
+  fi
   printf '%s\n' '{"result":"refused","reason":"Python 3 is required","exit_code":64}'
   exit 64
 fi
@@ -115,10 +177,19 @@ from contextlib import contextmanager
 
 
 class Refusal(Exception):
-    def __init__(self, code, reason):
+    def __init__(self, code, reason, extra=None):
         self.code = code
         self.reason = reason
+        self.extra = extra or {}
         super().__init__(reason)
+
+
+def same_token(recorded, presented):
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str, and an
+    # environment token is attacker-shaped input. surrogateescape round-trips
+    # whatever the OS handed over, so no input can crash the comparison.
+    return hmac.compare_digest(recorded.encode("utf-8", "surrogateescape"),
+                               presented.encode("utf-8", "surrogateescape"))
 
 
 def emit(value):
@@ -133,11 +204,14 @@ class Parser(argparse.ArgumentParser):
 def arguments():
     parser = Parser(description="Durable checkout ownership; no force unlock")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("acquire", "status", "run", "verify", "release", "abandon"):
+    for name in ("acquire", "status", "check", "run", "verify", "release", "abandon"):
         command = commands.add_parser(name)
         command.add_argument("--repo", required=True)
         if name == "acquire":
             command.add_argument("--owner", required=True)
+        if name == "check":
+            # Accepted and never read: the token comes from the environment only.
+            command.add_argument("--token", help=argparse.SUPPRESS)
         if name in ("run", "verify", "release"):
             command.add_argument("--token", required=True)
         if name == "abandon":
@@ -220,9 +294,10 @@ class Guard:
         self.repo = os.path.realpath(self.repo)
         common = self.git("rev-parse", "--git-common-dir").stdout.strip()
         self.common = os.path.realpath(os.path.join(self.repo, common))
-        self.path = os.path.join(self.common, "sassy-dog-checkout-guard")
+        name = os.environ["CHECKOUT_GUARD_DIR_NAME"]
+        self.path = os.path.join(self.common, name)
         self.state_path = os.path.join(self.path, "state.json")
-        self.mutex_path = os.path.join(self.common, "sassy-dog-checkout-guard.lock")
+        self.mutex_path = os.path.join(self.common, name + ".lock")
         self.state = None
 
     def git(self, *argv, accepted=(0,)):
@@ -290,7 +365,7 @@ class Guard:
             self.read_state()
         except OSError as error:
             raise Refusal(4, "checkout ownership unresolved: guard state is unavailable") from error
-        if not hmac.compare_digest(self.state["token"], token):
+        if not same_token(self.state["token"], token):
             raise Refusal(4, "checkout ownership unresolved: token does not own this guard")
         if self.state["repo"] != self.repo:
             raise Refusal(4, "checkout ownership belongs to another worktree: " + self.state["repo"])
@@ -455,19 +530,50 @@ class Guard:
             self.save()
             emit(dict(self.state, result="acquired"))
 
+    def ownership(self):
+        phase = self.state["phase"]
+        ownership = "held" if phase in ("held", "completed") else "unresolved"
+        if phase in ("launching", "running") and self.state["runs"]:
+            supervisor = self.state["runs"][-1].get("supervisor", {})
+            row = processes().get(supervisor.get("pid"))
+            if live(row) and identity(row) == supervisor:
+                ownership = "active"
+        return ownership
+
+    def check(self):
+        if not os.path.lexists(self.path):
+            emit({"result": "ok", "check": "no-guard", "ownership": "free",
+                  "repo": self.repo, "guard": self.path})
+            return
+        unresolved = {"ownership": "unresolved"}
+        try:
+            self.read_state()
+            ownership = self.ownership()
+        except (Refusal, OSError, ValueError, TypeError, AttributeError) as error:
+            raise Refusal(4, "checkout ownership unresolved: guard state is unavailable: "
+                          + str(error), unresolved) from error
+        extra = {"ownership": ownership}
+        if ownership == "active":
+            raise Refusal(3, "checkout active writer: a recorded worker is running", extra)
+        token = os.environ.get("SASSY_DOG_CHECKOUT_TOKEN", "")
+        if not token or not same_token(self.state["token"], token):
+            raise Refusal(4, "checkout ownership held: SASSY_DOG_CHECKOUT_TOKEN is missing or"
+                          " does not own this guard", extra)
+        if self.state["repo"] != self.repo:
+            raise Refusal(4, "checkout ownership belongs to another worktree: "
+                          + self.state["repo"], extra)
+        if self.state["phase"] not in ("held", "completed"):
+            raise Refusal(4, "checkout ownership unresolved: phase " + self.state["phase"], extra)
+        emit({"result": "ok", "check": "token-owner", "ownership": ownership,
+              "phase": self.state["phase"], "repo": self.repo, "guard": self.path})
+
     def status(self):
         if not os.path.lexists(self.path):
             emit({"result": "free", "ownership": "free", "repo": self.repo, "guard": self.path})
             return
         try:
             self.read_state()
-            phase = self.state["phase"]
-            ownership = "held" if phase in ("held", "completed") else "unresolved"
-            if phase in ("launching", "running") and self.state["runs"]:
-                supervisor = self.state["runs"][-1].get("supervisor", {})
-                row = processes().get(supervisor.get("pid"))
-                if live(row) and identity(row) == supervisor:
-                    ownership = "active"
+            ownership = self.ownership()
             created = self.state.get("created_at")
             age = (round(time.time() - created)
                    if isinstance(created, (int, float)) and math.isfinite(created) else None)
@@ -600,6 +706,8 @@ class Guard:
                     os.close(mutex_descriptor)
                     for number in previous:
                         signal.signal(number, signal.SIG_DFL)
+                    # The holder's check token must not reach the worker it supervises.
+                    os.environ.pop("SASSY_DOG_CHECKOUT_TOKEN", None)
                     os.setsid()
                     os.write(ready_write, b"R")
                     os.close(ready_write)
@@ -744,6 +852,8 @@ def main():
         guard = Guard(args.repo)
         if args.command == "status":
             guard.status()
+        elif args.command == "check":
+            guard.check()
         elif args.command == "acquire":
             guard.acquire(args.owner)
         elif args.command == "abandon":
@@ -761,6 +871,8 @@ def main():
     except (Refusal, OSError, ValueError) as error:
         code = error.code if isinstance(error, Refusal) else 6
         report = {"result": "refused", "reason": str(error), "exit_code": code}
+        if isinstance(error, Refusal):
+            report.update(error.extra)
         if guard is not None:
             report.update(repo=guard.repo, guard=guard.path)
             if guard.state is not None:

@@ -148,7 +148,9 @@ died holding it stops the loop through DRAIN STALLED rather than ticking forever
 operator clears it, with `checkout-guard.sh abandon`, which still requires proven worker exit,
 a clean tree and pushed tips; after investigating a timed-out or interrupted run, its
 `--investigated` form replaces only the durable exit record, never the live-process, clean-tree
-or pushed-tip checks. The guard needs Python 3 alongside Bash, Git and POSIX `ps`.
+or pushed-tip checks. The guard (shipped in `pr-shepherd`) needs Python 3 alongside Bash, Git and POSIX `ps`; `pr-shepherd`'s
+`teardown.sh` and `merge-shepherd.sh`'s post-merge teardown, and `repo-cleanup`, refuse to mutate the local
+checkout under a guard they hold no token for.
 This is cooperative exclusion, not a sandbox. See [runtime evidence and limits](docs/HARNESS-PORTABILITY.md#safe-serial-runtime-checks-484).
 The matrix leaves the full workflow untested rather than treating a serial smoke as proof of
 parallel dispatch, live review or merge behavior.

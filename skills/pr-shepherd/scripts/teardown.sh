@@ -66,6 +66,18 @@
 #
 # Worktrees are removed with `-f -f` because the Agent runtime leaves them locked.
 # Stashes are reported but NEVER auto-dropped (destructive — human's call).
+#
+# Checkout guard (#486): every mode below mutates the local checkout (worktree
+# removal, branch deletion, a switch, a fast-forward). A serial worker may be
+# running under a checkout guard (checkout-guard.sh, beside this script), so
+# BEFORE the first mutation this script runs `checkout-guard.sh check`. Exit 0
+# (no guard, or the guard is held/completed and SASSY_DOG_CHECKOUT_TOKEN, read
+# from the environment, matches it) proceeds exactly as before. Anything else
+# performs NO local mutation, prints the check's one JSON line (guard path and
+# ownership) and exits 7. A check that cannot run is a refusal too: unknown is
+# not verified. Claude Code with no guard present behaves as it always did.
+# Exit codes: 0 done · 1 not in a repo / failed --reconcile-only ff · 2 usage ·
+#             7 refused by the checkout guard (nothing was touched).
 set -uo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
@@ -172,6 +184,14 @@ fi
 
 if [ "$RECONCILE_ONLY" = "0" ] && [ "$SWEEP_MODE" = "0" ] && [ "${#PATHS[@]}" -eq 0 ]; then
   echo "teardown: pass worktree path(s), --sweep, or --reconcile-only" >&2; usage; exit 2
+fi
+
+GUARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/checkout-guard.sh"
+if ! GUARD_JSON="$(bash "$GUARD_SCRIPT" check --repo "$ROOT" 2>&1)"; then
+  echo "teardown: refused by the checkout guard — no local mutation was made" >&2
+  echo "  $GUARD_JSON" >&2
+  echo "  where the guard could be read the JSON names its path and ownership; the holder scopes SASSY_DOG_CHECKOUT_TOKEN to this call, anyone else follows skills/take-it/references/isolation-confirmation.md" >&2
+  exit 7
 fi
 
 if [ "${#PATHS[@]}" -gt 0 ]; then

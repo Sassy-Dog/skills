@@ -134,6 +134,10 @@
 #      notice. Assertions read teardown's OWN output, never basename's, whose
 #      BSD/GNU wording differs (that is why it surfaced on macOS only). Scratch
 #      repos with a LOCAL bare origin plus a mock gh: no real repo, no network.
+#      Property 7 (#486) adds the checkout guard: teardown exits 7 with nothing
+#      touched while a guard is held without its token, proceeds with it (also
+#      with python3 off PATH when no guard exists), and merge-shepherd.sh's
+#      teardown() body is pinned with three mutants.
 #  16. markdownlint (pinned markdownlint-cli2 version)
 #  17. actionlint — best-effort locally (binary, else docker); SKIPPED in CI
 #      (CI=true) because the workflow runs it as its own step
@@ -1525,7 +1529,7 @@
 #      each of which must be caught. Temp `git init` repos only, no gh, no network.
 #
 #  54. checkout-guard tests (scripts/test-checkout-guard.sh) — the behavioural
-#      half of #484: `skills/take-it/scripts/checkout-guard.sh` run for real
+#      half of #484: `skills/pr-shepherd/scripts/checkout-guard.sh` run for real
 #      against temporary Git consumers with local bare remotes. The `Ownership`
 #      suite covers contention before reconciliation, token rejection, dirty and
 #      unpushed acquisition, behind-default fast-forward, exact fresh remote-tip
@@ -1534,7 +1538,10 @@
 #      worker beside a terminal-failure comment, a killed supervisor, an actual
 #      runner timeout, competing runners and surviving tool process groups, all
 #      of which must retain ownership, and `abandon` refusing a live or timed-out
-#      worker. It executes the
+#      worker; the `Check` suite (#486) covers the read-only `check` that
+#      teardown.sh and merge-shepherd.sh call: no guard, a matching environment
+#      token, missing/wrong/non-ASCII tokens, a live writer, the phase gate, a
+#      sibling worktree, an argv token ignored, python3 absent. It executes the
 #      guard and says nothing about the prose that tells a model to call it:
 #      entries 32 and 51 pin that. No model, no gh, no network.
 #

@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Six properties are asserted:
+# Seven properties are asserted (7 was added by #486):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -31,6 +31,19 @@
 #   6. Source-level: the dispatch no longer keys on `${1:-}` — it pre-scans
 #      "$@". Properties 1-5 exercise behaviour; this one fails the moment the
 #      single-argument shape is reinstated, including in a path they miss.
+#
+#   7. The checkout guard (#486): while a guard is held, teardown refuses with
+#      exit 7 BEFORE any local mutation (branches, HEAD and the worktree list
+#      are unchanged), a wrong token refuses the same way, a matching
+#      SASSY_DOG_CHECKOUT_TOKEN lets it proceed, and a copy with the `check`
+#      call neutered (a mutant) tears the worktree down and so fails the
+#      refusal assertion. On a host WITHOUT python3 (a PATH built to exclude it)
+#      no guard still means exit 0 and unchanged behaviour, while a held guard
+#      still refuses (fail closed). merge-shepherd.sh's post-merge teardown
+#      carries the same call; it needs a live GitHub to run, so its function
+#      body is pinned at source level: the check precedes the first mutation and
+#      the refusal branch returns. Three mutants (check deleted, check moved
+#      after the remove, `return` dropped) must each fail that pin.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -308,6 +321,141 @@ if grep -qF '${1:-}' "$TEARDOWN"; then
 else
     ok "no mode is keyed on the first argument alone"
 fi
+
+# --- 7. the checkout guard (#486) ---------------------------------------------
+echo "7. checkout guard" >&2
+GUARD_SH="$REPO_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh"
+unset SASSY_DOG_CHECKOUT_TOKEN
+D="$(mkscratch guarded 2)"
+printf '.claude/\n' >>"$D/.git/info/exclude"
+ACQ="$(bash "$GUARD_SH" acquire --repo "$D" --owner teardown-test 2>&1)"
+TOKEN="$(python3 -I -c 'import json,sys; print(json.loads(sys.stdin.read())["token"])' <<<"$ACQ" 2>/dev/null || true)"
+if [ -z "$TOKEN" ]; then
+    bad "could not acquire a guard for the fixture: $ACQ"
+else
+    BEFORE="$(snapshot "$D")"; HEAD_BEFORE="$(git -C "$D" rev-parse HEAD)"
+    run_teardown "$D" .claude/worktrees/agent-a01
+    expect_status "held guard, no token: teardown refuses" 7
+    expect "  refusal names the guard path" "sassy-dog-checkout-guard"
+    expect "  refusal names the ownership" '"ownership": "held"'
+    refute "  no explicit phase ran" "$H_EXPLICIT"
+    if [ "$(snapshot "$D")" = "$BEFORE" ] && [ "$(git -C "$D" rev-parse HEAD)" = "$HEAD_BEFORE" ]; then
+        ok "  branches, worktrees and HEAD unchanged"
+    else
+        bad "  teardown mutated the checkout while a guard was held"
+    fi
+    SASSY_DOG_CHECKOUT_TOKEN="not-the-owner" run_teardown "$D" --sweep
+    expect_status "held guard, wrong token: teardown refuses" 7
+    if [ "$(snapshot "$D")" = "$BEFORE" ]; then ok "  checkout unchanged"; else bad "  wrong token still mutated the checkout"; fi
+    # Mutant: the check call neutered. It must tear the worktree down, which is
+    # exactly what the refusal assertions above would then catch.
+    MUT="$WORK/mutant"; mkdir -p "$MUT"; cp "$TEARDOWN" "$GUARD_SH" "$MUT/"
+    sed -i.bak 's/" check --repo/" status --repo/' "$MUT/teardown.sh"
+    if cmp -s "$MUT/teardown.sh" "$TEARDOWN"; then
+        bad "  mutant anchor drifted: the check call was not found in teardown.sh"
+    else
+        OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$MUT/teardown.sh" .claude/worktrees/agent-a02 2>&1)"; STATUS=$?
+        if [ "$STATUS" != "7" ] && [ ! -d "$D/.claude/worktrees/agent-a02" ]; then
+            ok "  mutant without the check call mutates under a guard (the gate bites)"
+        else
+            bad "  mutant did not mutate (exit $STATUS) — the refusal assertions would pass without the check"; dump
+        fi
+    fi
+    SASSY_DOG_CHECKOUT_TOKEN="$TOKEN" run_teardown "$D" .claude/worktrees/agent-a01
+    expect_status "held guard, matching token: teardown proceeds" 0
+    expect "  explicit phase ran" "$H_EXPLICIT 1 worktree(s)"
+    if [ ! -d "$D/.claude/worktrees/agent-a01" ]; then ok "  named worktree removed"; else bad "  matching token did not tear the worktree down"; fi
+    run_teardown "$D" --reconcile-only
+    expect_status "still held, no token: --reconcile-only refuses too" 7
+fi
+D="$(mkscratch unguarded 1)"
+run_teardown "$D" .claude/worktrees/agent-a01
+expect_status "no guard present: teardown behaves as before" 0
+expect "  explicit phase ran" "$H_EXPLICIT 1 worktree(s)"
+
+
+# No python3 on PATH (a symlink farm of every PATH executable except python*):
+# the host a guard cannot be READ on. No guard must behave as it always did; a
+# held guard must still refuse, never fail open.
+NOPY="$WORK/nopy"
+mkdir -p "$NOPY"
+IFS=: read -r -a pathdirs <<<"$PATH"
+for dir in "${pathdirs[@]}"; do
+    [ -d "$dir" ] || continue
+    for exe in "$dir"/*; do
+        name="${exe##*/}"
+        case "$name" in python*|pypy*) continue ;; esac
+        [ -x "$exe" ] && [ ! -d "$exe" ] && [ ! -e "$NOPY/$name" ] && ln -s "$exe" "$NOPY/$name"
+    done
+done
+if PATH="$NOPY" command -v python3 >/dev/null 2>&1; then
+    bad "the no-python PATH still resolves python3 — the next assertions would prove nothing"
+fi
+D="$(mkscratch nopy-free 1)"
+OUT="$(cd "$D" && PATH="$BIN:$NOPY" bash "$TEARDOWN" .claude/worktrees/agent-a01 2>&1)"; STATUS=$?
+expect_status "no python3, no guard: teardown behaves as before" 0
+expect "  explicit phase ran" "$H_EXPLICIT 1 worktree(s)"
+OUT="$(cd "$D" && PATH="$BIN:$NOPY" bash "$TEARDOWN" --reconcile-only 2>&1)"; STATUS=$?
+expect_status "no python3, no guard: --reconcile-only behaves as before" 0
+D="$(mkscratch nopy-held 1)"
+printf '.claude/\n' >>"$D/.git/info/exclude"
+bash "$GUARD_SH" acquire --repo "$D" --owner teardown-test >/dev/null 2>&1 || bad "could not acquire a guard for the no-python fixture"
+BEFORE="$(snapshot "$D")"
+OUT="$(cd "$D" && PATH="$BIN:$NOPY" bash "$TEARDOWN" .claude/worktrees/agent-a01 2>&1)"; STATUS=$?
+expect_status "no python3, guard held: teardown still refuses (fails closed)" 7
+expect "  the refusal names the missing Python" "Python 3 is required"
+if [ "$(snapshot "$D")" = "$BEFORE" ]; then ok "  checkout unchanged"; else bad "  teardown mutated the checkout with a guard it could not read"; fi
+
+# merge-shepherd.sh's teardown(): source-level pin on the function body only.
+MERGE_SHEPHERD="$REPO_ROOT/skills/pr-shepherd/scripts/merge-shepherd.sh"
+MS_PIN="$WORK/ms_pin.py"
+cat >"$MS_PIN" <<'PIN'
+import re, sys
+text = open(sys.argv[1]).read()
+m = re.search(r'^teardown\(\) \{.*?^\}$', text, re.S | re.M)
+if not m:
+    sys.exit("no teardown() body")
+body = m.group(0)
+check = body.find('"$GUARD_SCRIPT" check')
+remove = body.find('worktree remove')
+refusal = re.search(r'if ! guard_json=.*?\n  fi\n', body, re.S)
+if check < 0 or remove < 0 or not check < remove:
+    sys.exit("the guard check does not precede the first mutation")
+if not refusal or "return 0" not in refusal.group(0):
+    sys.exit("the refusal branch does not return")
+PIN
+MS_MUT="$WORK/ms_mut.py"
+cat >"$MS_MUT" <<'PIN'
+import re, sys
+src, kind, out = sys.argv[1:4]
+text = open(src).read()
+block = re.search(r'  local guard_json\n  if ! guard_json=.*?\n  fi\n', text, re.S).group(0)
+if kind == "deleted":
+    text = text.replace(block, "", 1)
+elif kind == "moved":
+    text = text.replace(block, "", 1)
+    anchor = '  git -C "$MAIN_WT" worktree prune'
+    assert anchor in text
+    text = text.replace(anchor, block + anchor, 1)
+elif kind == "noreturn":
+    text = text.replace(block, block.replace("    return 0\n", "", 1), 1)
+open(out, "w").write(text)
+PIN
+if python3 -I "$MS_PIN" "$MERGE_SHEPHERD"; then
+    ok "merge-shepherd.sh's teardown() checks the guard before its first mutation and returns on refusal"
+else
+    bad "merge-shepherd.sh's teardown() lost its checkout-guard check or its early return (#486)"
+fi
+for kind in deleted moved noreturn; do
+    python3 -I "$MS_MUT" "$MERGE_SHEPHERD" "$kind" "$WORK/ms_$kind.sh" || bad "merge-shepherd mutant $kind did not build"
+    if cmp -s "$WORK/ms_$kind.sh" "$MERGE_SHEPHERD"; then
+        bad "merge-shepherd mutant $kind equals its source"
+    elif python3 -I "$MS_PIN" "$WORK/ms_$kind.sh" 2>/dev/null; then
+        bad "merge-shepherd mutant '$kind' passes the pin — the pin is vacuous"
+    else
+        ok "merge-shepherd mutant '$kind' fails the pin"
+    fi
+done
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

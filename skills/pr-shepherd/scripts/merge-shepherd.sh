@@ -40,6 +40,8 @@
 #             (re-run) · 22 conflicting · 23 blocked by a lower stack layer
 #             (re-run) · 24 stacked under a merge queue (needs a human)
 #             · 1 usage/error/closed
+#   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
+#   refusal skips the local mutations, is reported, and never changes these codes.
 #
 # ENQUEUE PRIMITIVE: the GraphQL `enqueuePullRequest` mutation (PR node id
 # resolved in-script), NOT `gh pr merge --auto`. Some queue configurations
@@ -139,6 +141,7 @@ BRANCH="${DEFAULT_BRANCH:-$(git -C "${MAIN_WT:-.}" symbolic-ref --short refs/rem
 [ -z "$BRANCH" ] && BRANCH=main
 
 ISO_PREFIX="${ISOLATION_BRANCH_PREFIX:-worktree-agent-}"
+GUARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/checkout-guard.sh"
 
 # Retry transient git network failures (the pressure-induced gh-credential
 # subprocess 401, plus 5xx and ref-lock contention). Backs off, then gives up.
@@ -261,6 +264,14 @@ drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isola
 
 teardown() { # idempotent: safe whether or not the worktree/branch still exist
   [ -z "$MAIN_WT" ] && { echo "  (no local checkout — skipping teardown)"; return 0; }
+  # Checkout guard (#486): a serial worker may own this checkout. A refusal (or a
+  # check that cannot run) skips every local mutation below and is reported; it
+  # never fails the merge, which already happened server-side.
+  local guard_json
+  if ! guard_json="$(bash "$GUARD_SCRIPT" check --repo "$MAIN_WT" 2>&1)"; then
+    echo "  ⚠ local teardown skipped — refused by the checkout guard (the merge is unaffected): $guard_json"
+    return 0
+  fi
   local wt_br="" wt_iso=""
   if [ -n "$WT" ]; then
     # Isolation branch the runtime created the worktree on (worktree-<dirname>) —

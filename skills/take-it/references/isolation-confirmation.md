@@ -21,7 +21,7 @@ arbitrary human commands, older plugin coordinators and processes deliberately e
 supervised session can bypass it. Do not run such writers concurrently or claim they are fenced.
 
 ```bash
-bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" acquire \
+bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" acquire \
   --repo "$CHECKOUT" --owner "$COORDINATOR_ID"
 ```
 
@@ -44,7 +44,7 @@ exiting, since no token or worker exists yet. On refusal claim nothing, perform 
 mutations and report its actual reason.
 
 ```bash
-bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" status --repo "$CHECKOUT"
+bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" status --repo "$CHECKOUT"
 ```
 
 This is read-only evidence, not permission to steal ownership. Only `ownership=active` (a live
@@ -66,7 +66,7 @@ next action depends on the phase `status` reports:
 | `launching`, `running`, `timed-out`, `interrupted`, `uncertain` with runs, or an unreadable record | the runbook below, then `abandon --investigated --reason` |
 
 ```bash
-bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" abandon \
+bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" abandon \
   --repo "$CHECKOUT" --reason "<why the owner is known to be gone>"
 ```
 
@@ -94,6 +94,26 @@ operator's decision and never a loop's.
 4. Run `abandon --investigated --reason`, naming what you checked.
 5. Return to the derived default branch and fast-forward only. A run branch left checked out can
    be deleted by a server-side merge, which makes the next acquisition unverifiable.
+
+**Other local-checkout mutators respect the guard.** The guard lives in `pr-shepherd`
+(`skills/pr-shepherd/scripts/checkout-guard.sh`) because pr-shepherd owns the post-merge local
+mutations it governs. Before its first mutation, `teardown.sh` (and `merge-shepherd.sh`'s
+post-merge teardown) runs the read-only `check --repo "$CHECKOUT"`, which passes when no guard
+exists or when the guard is `held`/`completed` and the environment variable
+`SASSY_DOG_CHECKOUT_TOKEN` matches it. The holder therefore passes
+`SASSY_DOG_CHECKOUT_TOKEN=<token>` to the pr-shepherd calls it makes, on a non-Claude harness
+while it holds the guard, as a per-call prefix
+(`SASSY_DOG_CHECKOUT_TOKEN="$TOKEN" bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" ...`)
+and never exported for the session. The token stays out of argv because `ps` shows argv to every
+user; `run` and `verify` still take it on argv (the guard's existing contract), so the environment
+is the quieter channel but not a secret store, and an argv `--token` is ignored by `check`. `run`
+removes the variable from the worker's environment, so even an exported one does not reach the
+worker it supervises. A host without Python 3 still answers `check` for a checkout with no guard
+(a filesystem fact) and refuses with exit 4 when a guard exists. A live worker (exit 3) or any missing or wrong token or
+unresolved state (exit 4) refuses: `teardown.sh` makes no local mutation, prints the guard path
+and `ownership`, and exits 7; the merge itself is unaffected and `merge-shepherd.sh` reports the
+skipped local teardown. `repo-cleanup` never holds a guard, never passes a token and never
+runs `abandon`: any `status` ownership other than `free` stops its local mutation.
 
 Hold ownership through local coordinator work. No coordinator mutation while the serial child
 is live or uncertain. Before continuing after a child, use `verify` below; after all local work
@@ -224,7 +244,7 @@ on this CLI transport the role resolves to the concrete `TASK_MODEL` selector ab
    `--timeout` must be the only bound:
 
    ```bash
-   bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" run \
+   bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" run \
      --repo "$CHECKOUT" --token "$TOKEN" --branch "$BRANCH" -- \
      omp --print --no-session --no-pty --tools read,write,edit,grep,glob,bash \
        --model "$TASK_MODEL" --cwd "$CHECKOUT" "@$WORKER_PROMPT"
@@ -252,7 +272,7 @@ on this CLI transport the role resolves to the concrete `TASK_MODEL` selector ab
 5. Before branch switching, coordinator review/merge/teardown or a later take-it worker:
 
    ```bash
-   bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" verify \
+   bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" verify \
      --repo "$CHECKOUT" --token "$TOKEN"
    ```
 
@@ -280,7 +300,7 @@ on this CLI transport the role resolves to the concrete `TASK_MODEL` selector ab
 7. At the end of ALL local work, before returning:
 
    ```bash
-   bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" release \
+   bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/checkout-guard.sh" release \
      --repo "$CHECKOUT" --token "$TOKEN"
    ```
 
