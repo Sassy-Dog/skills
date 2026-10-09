@@ -499,10 +499,12 @@ launches at most one issue total per tick, including recovery.
 > divergence or an unreadable comparison means stop, preserving everything for the coordinator.
 > Verify `git branch --show-current` names the assigned branch before editing.
 > **Never `git stash`, reset, discard edits, delete a branch or force-push.** Never run an editable
-> or dev install into a shared interpreter or global store; use an env inside the tree instead.
+> or dev install into a shared interpreter or global store; use a throwaway env inside the tree instead.
 > Implement inline: no subagents, detached tasks, background services or asynchronous subprocesses.
 > Run the supplied preflight, reconcile docs, commit with `Closes #{N}`, then
 > `git push -u origin {prefix}/issue-{N}-{slug}` and create or update the assigned PR.
+> On success leave no untracked or modified file behind: remove the throwaway env and any scratch
+> files you created, since the supervisor's clean-tree check holds the checkout for any leftover.
 > Do not review, merge, enqueue or switch back to the default branch. Leave branch and artifacts
 > in place for the supervisor's independent exit and push checks. On failure preserve dirty or
 > unpushed work exactly as it stands, return the honest failure, and exit; never clean up to make

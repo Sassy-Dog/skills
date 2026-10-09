@@ -863,8 +863,8 @@
 #      #484 REPLACED ONE OF THE DECISIONS THIS GATE USED TO PIN and re-derived
 #      the rest. #452's `isolation unconfirmed` hold root (a stopped tick, no
 #      serial mode) gave way to a verified execution-safety gate and an OWNERSHIP
-#      hold — a checkout guard with no live worker, the one STALLED entry that
-#      waives in-flight zero — with disabled isolation alone never joining the
+#      hold — a checkout guard with no live worker, which like a refused
+#      acquisition waives in-flight zero — with disabled isolation alone never joining the
 #      held set while a safe serial path exists. The canon was re-derived only
 #      for the blocks #484 added or reworded (the new opening paragraph, STALLED's
 #      conjunct, the site-hold and stall-record sentences), and a new section

@@ -1432,7 +1432,11 @@ Raising `task.maxRecursionDepth` to 3 is a consumer-side setting the plugin cann
 The isolation settings/probe are still re-derived per tick, before claims. Claude Code keeps
 its existing `Agent` worktree behavior. A confirmed omp batch still uses `isolated: true`,
 captures its coordinator baseline, waits for its actual returns and performs the after-batch
-check. A safe unconfirmed checkout instead runs one foreground serial worker to completion.
+check. A safe unconfirmed checkout instead runs one foreground serial worker to completion,
+bounded by `--timeout 3600` because an unattended tick must end; a timeout retains the guard and
+reaches DRAIN STALLED through the ownership hold. A refused acquisition (dirty or unpushed
+checkout, guard unavailable) blocks reconciliation just as completely, so it takes that hold's
+in-flight waiver rather than ticking forever behind in-flight PRs.
 
 **Terminal-state decision: an unsafe serial prerequisite or an ownership hold ends the loop through DRAIN STALLED, and no fifth state is added.** #452 first made a stopped tick (isolation unconfirmed, no serial mode) STALLED with the hold root `isolation unconfirmed`, so the loop could self-cancel instead of reporting the same sentence every tick, the shape of the #282 bug that `scripts/test-drain-terminal-states.sh` records. #484 replaced that hold rather than adding to it: disabled isolation with a safe serial path is progress, so STALLED's third conjunct now reads "held by a §4 filter or a verified §5 execution-safety gate", and an ownership hold (a checkout guard with no live worker) is the one entry that waives in-flight zero, recorded with the root `checkout ownership <created_at>`. The route is still the one that gate's header names, to widen an existing state's conjunct, and the reasoning is unchanged:
 

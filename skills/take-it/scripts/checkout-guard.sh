@@ -64,7 +64,9 @@
 # recorded processes and retained work. It replaces only the durable proof of
 # termination, never the live checks: every recorded supervisor, child,
 # process group and descendant must be gone now, and the tree must be clean
-# with exact pushed tips. Neither form can tell a dead owner from a live one;
+# with exact pushed tips. An unreadable record names no processes, branches or
+# worktree, so only a clean tree and a published current branch stand behind
+# that form. Neither form can tell a dead owner from a live one;
 # that judgement is why only a human runs it.
 # A run records whether its branch existed before launch. A worker that failed
 # before creating it committed nothing, so verify/release/abandon skip that
@@ -404,7 +406,7 @@ class Guard:
         verified = []
         for branch in branches:
             present = self.git("rev-parse", "--verify", "--quiet",
-                               "refs/heads/" + branch + "^{commit}", accepted=(0, 1, 128))
+                               "refs/heads/" + branch + "^{commit}", accepted=(0, 1))
             runs = [run for run in self.state["runs"] if run.get("branch") == branch]
             if present.returncode and all("branch_before" in run and run["branch_before"] is None
                                           for run in runs):
@@ -554,7 +556,7 @@ class Guard:
         if self.git("check-ref-format", "refs/heads/" + args.branch, accepted=(0, 1)).returncode:
             raise Refusal(64, "--branch is not a valid branch name")
         before = self.git("rev-parse", "--verify", "--quiet",
-                          "refs/heads/" + args.branch + "^{commit}", accepted=(0, 1, 128))
+                          "refs/heads/" + args.branch + "^{commit}", accepted=(0, 1))
         branch_before = before.stdout.strip() if before.returncode == 0 else None
         supervisor = identity(processes()[os.getpid()])
         interrupted = []

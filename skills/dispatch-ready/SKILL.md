@@ -99,7 +99,7 @@ If the plugin-root placeholder in that path reaches you unexpanded, resolve the 
 **Plugin root.** paragraph describes; never search for the file.
 Initialize this tick's serial-worker count to zero; §2 recovery and §5 initial dispatch share
 that same one-worker quota. Release ownership by that contract on every normal exit, including
-§3's capacity exit, only after all local work; failed release retains a visible safety hold.
+§3's capacity exit and a §7 unverified tick, only after all local work; failed release retains a visible safety hold.
 
 Find work this loop already started.
 
@@ -632,7 +632,9 @@ section restates none of them and states only what a tick changes:
 
 **Serial is synchronous, not an in-flight shared-checkout task.** Write the complete cold-worker
 prompt prescribed by take-it's reference, then invoke its guarded foreground `omp --print`
-command. No detached Agent, task, async shell job or worker process may outlive an ordinary
+command, always with `--timeout 3600`: an unattended tick must end. Exit 21 is reported on the
+tick (`serial worker timed out after 3600s — guard retained`), and the retained guard then follows
+§7's ownership hold rather than a silent wait. No detached Agent, task, async shell job or worker process may outlive an ordinary
 successful tick. Await actual process termination, not a PR, RESULT or terminal-failure comment.
 The durable guard survives timeout, coordinator interruption and uncertain child termination;
 a later tick cannot reconcile underneath it. `max_in_flight: 1` alone provides no such protection.
@@ -799,8 +801,8 @@ reports `ownership=active`) is a self-resolving hold like a foreign claim: keep 
 without mutating the checkout, and write no record. A guard with no live worker (`held` or
 `unresolved`) is an **ownership hold**: its owner may have died holding the only token, and no
 tick can tell it from one still working, so waiting is a forever-tick. It proves no COMPLETE,
-DEFERRED or DEGRADED verdict, since nothing local could be reconciled, and it is the one STALLED
-entry that does not wait for in-flight zero: every in-flight item's reconciliation needs that same
+DEFERRED or DEGRADED verdict, since nothing local could be reconciled, and it is a STALLED entry
+that does not wait for in-flight zero: every in-flight item's reconciliation needs that same
 ownership. Record the guard path with root `checkout ownership <created_at>` (`unreadable` when
 `status` cannot read the record); the same guard on two consecutive ticks confirms STALLED through
 the normal stop path, naming the guard, its owner and the reference's next action for its phase.
@@ -811,6 +813,10 @@ any `abandon`, or simply restart the loop once that session finishes. A
 `status` read that itself fails proves nothing: an unverified tick. A known dirty/unpushed
 checkout or unavailable serial runner is a visible execution-safety hold; if no work is in flight
 and every remaining item genuinely needs human action, it joins STALLED's existing held set.
+When that dirty/unpushed checkout, or an unavailable guard (exit 64), refused the acquisition
+itself, no reconciliation could run either: it takes the ownership hold's waiver, recorded with
+root `checkout refused <exit code> <branch>`, so two identical ticks confirm STALLED even with work
+in flight rather than ticking forever.
 Disabled isolation alone never joins that set while safe serial execution is available.
 
 ### DRAIN DEGRADED
@@ -979,8 +985,8 @@ In-flight zero AND dispatched zero this tick AND **nothing this loop is permitte
 over a **non-empty** held set — every Ready item held by a §4 filter or a verified §5 execution-safety gate, and every open PR held by the
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
 reason COMPLETE's condition now states all of its own. One waiver, also stated here: an ownership
-hold (§7's opening) waives in-flight zero, because no in-flight item can advance without the
-checkout ownership it lacks. Nothing
+hold or a refused acquisition (§7's opening) waives in-flight zero, because no in-flight item can
+advance without the checkout ownership the tick lacks. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents
 working, and dependency holds only resolve when a dep closes — with nothing in flight, only
 external or human action closes one. The loop is stalled, not idle; "Ready isn't empty" alone must
@@ -1135,7 +1141,7 @@ tick as a whole.
 another session that is about to close a dependency, unblock an issue, or merge a PR. Ticks share
 no memory, so persist the observation next to the §5 batch manifest, in
 `.git/dispatch-ready-stall.json`: the held set — held issue numbers AND held PR numbers — with each
-one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the specific execution-safety prerequisite, an ownership hold's guard path and `created_at`, the Blocking finding a held PR carries).
+one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the specific execution-safety prerequisite, an ownership hold's guard path and `created_at`, a refused acquisition's exit code and branch, the Blocking finding a held PR carries).
 
 **"Matches exactly" compares the identifiers and each one's hold ROOT, never the rendered
 sentence.** Two honest ticks word the same hold differently, and a comparison over free text never

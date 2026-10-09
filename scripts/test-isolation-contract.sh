@@ -105,9 +105,9 @@
 #      stall): disabled isolation with a safe serial path is progress; a verified
 #      unsafe prerequisite is a named execution-safety hold that joins STALLED's
 #      held set; only a live worker (`ownership=active`) is self-resolving; a
-#      guard with no live worker is an ownership hold, the one STALLED entry that
-#      waives in-flight zero, recorded with root `checkout ownership
-#      <created_at>`; a coordinator never runs `abandon`. §7's wording is pinned
+#      guard with no live worker is an ownership hold, a STALLED entry that
+#      waives in-flight zero (as does a refused acquisition), recorded with root
+#      `checkout ownership <created_at>`; a coordinator never runs `abandon`. §7's wording is pinned
 #      whole by test-drain-terminal-states.sh; the SAME decisions are pinned here
 #      from §5's and the reference doc's side, so neither copy can drift alone.
 #
@@ -137,7 +137,8 @@
 #       sentence), M24-M27, M30 (interim stop restored), M31, M32, M53 (a forbidden
 #       restatement injected), M54 (a multi-tick serial record restored), M56
 #       (serial-is-synchronous), M57 (one issue per tick), M59-M61 (halt, wait,
-#       timeout caveat), M63-M68 (the in-§2 redispatch), M74 (profile write)
+#       timeout caveat), M63-M68 (the in-§2 redispatch), M74 (profile write),
+#       M79 (the serial launch's timeout)
 #  14   M33 (disabled isolation joins the held set), M34 (STALLED conjunct), M35
 #       and M58 (reach and holds), M47 (stall-record roots), M55 (isolation-
 #       unconfirmed stall restored), M62 (shared checkout during coordinator
@@ -516,6 +517,12 @@ need("no detached job may outlive an ordinary successful tick", d5,
      "No detached Agent, task, async shell job or worker process may outlive an ordinary successful tick.", 13)
 need("termination is awaited, not inferred from a PR, RESULT or comment", d5,
      "Await actual process termination, not a PR, RESULT or terminal-failure comment.", 13)
+need("an unattended serial launch is always bounded by a timeout", d5,
+     "command, always with `--timeout 3600`: an unattended tick must end.", 13)
+need("a serial timeout is reported and follows §7's ownership hold", d5,
+     "the retained guard then follows §7's ownership hold rather than a silent wait", 13)
+need("the reference: dispatch-ready always passes the timeout", ref,
+     "dispatch-ready always passes `--timeout 3600`, because an unattended tick must end", 13)
 need("max_in_flight alone is not the protection", d5, "`max_in_flight: 1` alone provides no such protection.", 13)
 need("the serial quota is shared with §2 recovery", d5,
      "This consumes the tick's single serial-worker quota even on failure: no second §2 repair and no §5 claim/worker this tick.", 13)
@@ -560,8 +567,8 @@ need("§7: only ownership=active is a self-resolving hold", d7,
      "Only a live worker (`status` reports `ownership=active`) is a self-resolving hold like a foreign claim", 14)
 need("§7: a guard with no live worker is an ownership hold", d7,
      "A guard with no live worker (`held` or `unresolved`) is an **ownership hold**", 14)
-need("§7: an ownership hold is the one STALLED entry that waives in-flight zero", d7,
-     "it is the one STALLED entry that does not wait for in-flight zero", 14)
+need("§7: an ownership hold is a STALLED entry that waives in-flight zero", d7,
+     "it is a STALLED entry that does not wait for in-flight zero", 14)
 need("§7: an ownership hold is recorded with the checkout ownership root", d7,
      "Record the guard path with root `checkout ownership <created_at>`", 14)
 need("§7: disabled isolation alone never joins the held set while serial is available", d7,
@@ -948,8 +955,8 @@ mutate "$d/skills/dispatch-ready/SKILL.md" "Never enable isolation by writing" '
 expect_fail "M74 profile-write prohibition removed" "$d" "the operator's profile is never written to enable isolation"
 
 d=$(make_copy m75)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'entry that does not wait for in-flight zero' 'entry that waits for in-flight zero' || bad "M75: mutation did not apply"
-expect_fail "M75 ownership-hold waiver removed" "$d" 'an ownership hold is the one STALLED entry that waives in-flight zero'
+mutate "$d/skills/dispatch-ready/SKILL.md" 'that does not wait for in-flight zero' 'that waits for in-flight zero' || bad "M75: mutation did not apply"
+expect_fail "M75 ownership-hold waiver removed" "$d" 'an ownership hold is a STALLED entry that waives in-flight zero'
 
 d=$(make_copy m76)
 mutate "$d/skills/dispatch-ready/SKILL.md" 'Only a live worker (`status`' 'Any held guard (`status`' || bad "M76: mutation did not apply"
@@ -962,6 +969,10 @@ expect_fail "M77 coordinator-abandon prohibition removed" "$d" 'a coordinator ne
 d=$(make_copy m78)
 mutate "$d/$RF" 'Use the foreground CLI below, not an asynchronous `task` or detached shell.' 'Use a task or a detached shell.' || bad "M78: mutation did not apply"
 expect_fail "M78 foreground-only launch rule removed" "$d" 'the lifecycle runs a guarded foreground command'
+
+d=$(make_copy m79)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'command, always with `--timeout 3600`: an unattended tick must end.' 'command.' || bad "M79: mutation did not apply"
+expect_fail "M79 unbounded serial launch restored" "$d" 'an unattended serial launch is always bounded by a timeout'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

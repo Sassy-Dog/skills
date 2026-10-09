@@ -75,8 +75,9 @@ termination record, a clean tree and exact fresh pushed tips as `verify` does, t
 guard with the reason. `--investigated` records the operator's attestation in place of the durable
 termination record only. Every recorded supervisor, child, process group and descendant must still
 be gone now, and the clean-tree and pushed-tip checks still apply; with an unreadable record, only
-the clean tree and a published current branch can be checked. Both forms act only from the
-guard's own worktree. Abandoning a guard whose coordinator is in fact alive removes that
+the clean tree and a published current branch can be checked. A readable record is abandoned
+only from its own worktree; an unreadable one cannot say which worktree owns it, so the operator
+confirms that too. Abandoning a guard whose coordinator is in fact alive removes that
 coordinator's exclusion, and its later `verify` or `release` fails visibly; that is why this is the
 operator's decision and never a loop's.
 
@@ -185,7 +186,8 @@ does not accept `@task` as `--model` (it reports `Model "@task" not found`). Rea
 Report the default-role fallback explicitly; never invent a provider/model or write settings.
 A missing/non-string selector is `serial runner model unresolved`, before any claim.
 Use the foreground CLI below, not an asynchronous `task` or detached shell. This remains the
-caller's terra implementation worker binding; the concrete selector is its CLI transport.
+serial worker, a dispatch at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`);
+on this CLI transport the role resolves to the concrete `TASK_MODEL` selector above.
 
 1. Hold the acquired token. Before each launch confirm `git status --porcelain` is empty;
    never stash, reset or discard work. For a later worker in take-it's list, first verify the
@@ -225,7 +227,8 @@ caller's terra implementation worker binding; the concrete selector is its CLI t
    ```
 
    `run` may take `--timeout <seconds>` before `--`; timeout is a retained safety hold, not
-   successful worker completion. If the harness returns a running tool handle, await that same
+   successful worker completion. dispatch-ready always passes `--timeout 3600`, because an
+   unattended tick must end; take-it may omit it while an operator attends the run. If the harness returns a running tool handle, await that same
    foreground supervisor's completion, launch nothing else and keep ownership. If it cannot be
    awaited, report unresolved ownership; never substitute a task dispatch.
 
