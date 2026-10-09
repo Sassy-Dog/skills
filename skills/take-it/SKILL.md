@@ -197,6 +197,16 @@ consequences, because a filter is only as good as what it lets through:
 
 Best-effort, so parallel sessions don't double-pick.
 
+**Before claims or any local mutation on a non-Claude harness**, read
+`${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md` and acquire its checkout
+guard, then select the execution mode using §5's confirmation. This applies to resumed batches
+and §6 recovery too, before fetch, branch switches, merge or teardown. A refused acquisition
+claims nothing and performs no reconciliation mutations; report the specific ownership/dirty
+hold, and for a guard with no live worker name the reference's operator-only `abandon` as the
+next action without running it. In serial mode claim only the next eligible independent issue immediately before its
+foreground launch, not the whole list. Keep ownership through all local coordinator work, and
+release by the shared contract on every normal exit; never remove a guard by hand.
+
 **With `board:` configured** — set the assignee and move the card to In progress per
 `sassy-dog:github-issues` (`references/board-graphql.md`), using the board IDs from config.
 
@@ -214,8 +224,8 @@ Claim failures are logged, never fatal — the PR's `Closes #N` closes the issue
 
 ## 5. Dispatch sub-agents in parallel
 
-**First, fast-forward the local default branch.** Worktrees branch from local HEAD, not origin; a
-stale base lands the PR `CONFLICTING`:
+**For the parallel path only, after ownership and isolation confirmation, fast-forward the local
+default branch.** Worktrees branch from local HEAD, not origin; a stale base lands the PR `CONFLICTING`:
 
 ```bash
 git fetch origin --quiet
@@ -236,8 +246,9 @@ tree: either run **serial** (plain independent list only, using the **Serial var
 override in §7**; the config itself is never edited, and the override is never silent.
 
 **On Claude Code, or once the confirmation above passed, issue ALL Agent calls in a single message**
-with `isolation: "worktree"`. In serial mode instead, dispatch one worker at a time, each to
-completion before the next, and record `{issue, pr, branch}` (no `worktreePath`). **Record the batch
+with `isolation: "worktree"`. In serial mode instead, use the reference's supervised foreground
+runner one worker at a time, each to verified process completion before the next, and record
+`{issue, pr, branch}` (no `worktreePath`). **Record the batch
 manifest** as results return — `{issue, pr, worktreePath, worktreeBranch}` — somewhere durable such
 as `.git/take-it-batch.json`, so a crashed coordinator's worktrees stay reclaimable.
 
@@ -468,28 +479,36 @@ behind in coordinator-only context.
 
 ### Serial variant (ONLY when §5's isolation confirmation chose serial mode)
 
-Kept out of the template above on purpose, the way the stacked variant is: the template is shared
-with `dispatch-ready`, which confirms isolation every tick but never goes serial, and a worker on Claude Code that received
-this step would fail at its closing `git switch` (a linked worktree cannot switch to a branch
-checked out elsewhere). **It substitutes step 1 of the template only in serial mode. It is never
-sent on Claude Code and never by `dispatch-ready`.** A serial worker shares the coordinator's
-checkout, so it must not assume a private worktree; dispatch one at a time, each to completion
-(see the isolation reference doc), and record `{issue, pr, branch}` for each in the batch manifest
-(there is no `worktreePath`).
+Shared by take-it and dispatch-ready; never sent on Claude Code or the confirmed parallel path.
+It substitutes step 1 of the template only in serial mode. A serial worker shares the
+coordinator's checkout, so it must not assume a private worktree. Use the isolation reference's
+**Synchronous serial execution** contract, not a background Agent or task call. Record
+`{issue, pr, branch}` for each in the batch manifest (there is no `worktreePath`). take-it may
+continue its independent list only after verified completion and push checks; dispatch-ready
+launches at most one issue total per tick, including recovery.
 
 > **Serial-variant step 1.** You share the coordinator's checkout; there is no private worktree.
-> First run `git fetch origin --quiet` and confirm `git status --porcelain` is empty; if it is not,
-> stop and report `status=failed` with the status output. Then start your branch from the freshly
-> fetched default branch, never from whatever `HEAD` holds, and without tracking it:
-> `git switch -c --no-track {prefix}/issue-{N}-{slug} origin/{default_branch}` (`git switch -c`
-> does not require a clean tree, which is why the check comes first; `--no-track` because an
-> upstream of `origin/{default_branch}` makes a plain push fail under `push.default=simple`).
-> Verify `git branch --show-current` names your branch. **Never `git stash`**, and never run an
-> editable or dev install into a shared interpreter or global store: you share the coordinator's
-> interpreter too, so use a throwaway env inside the tree and never commit it. At push time run
-> `git push -u origin {prefix}/issue-{N}-{slug}`. Whatever happens, end with the tree clean:
-> commit WIP to your own branch or discard it explicitly, push, and `git switch {default_branch}`;
-> edits left behind would ride into the next worker's PR.
+> Confirm `git status --porcelain` is empty before any checkout mutation; otherwise stop and
+> report `status=failed` with the status output. Run `git fetch origin --quiet`.
+> For a NEW attempt, start from the freshly fetched default branch, never the previous `HEAD`:
+> `git switch --no-track -c {prefix}/issue-{N}-{slug} origin/{default_branch}`. Refuse an existing
+> branch rather than overwriting it. For RECOVERY, resume the exact branch supplied with the
+> authenticated attempt: never create a replacement. Compare its local tip to the fresh remote
+> tip; if equal, switch to it; if local is strictly behind, fast-forward only. If no local branch
+> exists, create it from that existing remote branch with `--track`. Missing remote, local ahead,
+> divergence or an unreadable comparison means stop, preserving everything for the coordinator.
+> Verify `git branch --show-current` names the assigned branch before editing.
+> **Never `git stash`, reset, discard edits, delete a branch or force-push.** Never run an editable
+> or dev install into a shared interpreter or global store; use a throwaway env inside the tree instead.
+> Implement inline: no subagents, detached tasks, background services or asynchronous subprocesses.
+> Run the supplied preflight, reconcile docs, commit with `Closes #{N}`, then
+> `git push -u origin {prefix}/issue-{N}-{slug}` and create or update the assigned PR.
+> On success leave no untracked or modified file behind: remove the throwaway env and any scratch
+> files you created, since the supervisor's clean-tree check holds the checkout for any leftover.
+> Do not review, merge, enqueue or switch back to the default branch. Leave branch and artifacts
+> in place for the supervisor's independent exit and push checks. On failure preserve dirty or
+> unpushed work exactly as it stands, return the honest failure, and exit; never clean up to make
+> another dispatch possible. A RESULT or terminal comment is not evidence your process exited.
 
 ### Stacked variant (ONLY for a chain resolved in §2)
 
@@ -542,6 +561,12 @@ If a middle layer fails, the layers below it are still valid, independent PRs. R
 stack rather than discarding the work — the coordinator can land what exists and re-dispatch the rest.
 
 ## 6. Coordinator: watch + merge (delegated)
+
+On non-Claude harnesses the checkout guard from §4 must still be held before any reconciliation.
+In serial mode first apply the reference's process-exit and fresh remote-tip checks. A failed,
+interrupted or uncertain worker check stops local reconciliation; preserve the branch and work,
+report the guard path and next operator action. An issue-only terminal record cannot override
+this hold. Never hand shared-checkout artifacts to teardown before verified push completion.
 
 Before the PR-only reconciliation below, apply §5's **Issue-only terminal handoff** to each
 claimed issue in this batch, including returned failures with `pr=none` and resumed attempts.
@@ -666,6 +691,8 @@ If `sassy-dog:pr-shepherd` is not in your available skills, STOP and tell the us
 the plugin (`claude plugin install sassy-dog`) — do not improvise the merge loop from memory.
 
 Run the coordinator synchronously; backgrounding it orphans PRs at "checks pending".
+Release non-Claude checkout ownership only after all local coordinator work, following the
+reference's release contract; a release refusal is a visible hold, never successful cleanup.
 
 ## 7. Final report
 

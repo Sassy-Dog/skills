@@ -860,6 +860,20 @@
 #      needed no widening. §4's POINTER at the new state belongs to the site
 #      filter gate below (`test-site-filter.sh` row R30, deletion- AND
 #      qualification-mutated there) and is deliberately not duplicated here.
+#      #484 REPLACED ONE OF THE DECISIONS THIS GATE USED TO PIN and re-derived
+#      the rest. #452's `isolation unconfirmed` hold root (a stopped tick, no
+#      serial mode) gave way to a verified execution-safety gate and an OWNERSHIP
+#      hold — a checkout guard with no live worker, which like a refused
+#      acquisition waives in-flight zero — with disabled isolation alone never joining the
+#      held set while a safe serial path exists. The canon was re-derived only
+#      for the blocks #484 added or reworded (the new opening paragraph, STALLED's
+#      conjunct, the site-hold and stall-record sentences), and a new section
+#      pins the replacement decisions. Every row, conjunct and carve-out of
+#      #282, #286, #290 and #342 is held exactly as before. A prior edition of
+#      #484 gutted this gate to a one-line wrapper over the behavioural fixture;
+#      that fixture (scripts/test-checkout-guard.sh, entry 54) executes the guard
+#      and cannot see §7's wording, so the two are complementary and neither
+#      replaces the other.
 #  33. audit lost-reviewer tests (scripts/test-audit-lost-reviewer.sh) — the
 #      nine `*-reviewer` agents serve TWO orchestrators and only one of them
 #      scored a reviewer that came back with nothing. `pr-review-orchestrator`
@@ -1483,13 +1497,19 @@
 #      confirms the isolation contract before a parallel dispatch: Claude
 #      Code's `isolation: "worktree"` is the confirmation and stays unchanged;
 #      on omp it reads three settings, probes one worker, records the outcome,
-#      verifies pushes with a fresh ls-remote, and goes serial (with a
-#      branch-from-default worker step) or stops with `isolation unconfirmed`,
-#      never parallel on a shared tree (issue #451). dispatch-ready §5 does the
-#      same per tick but is stop-only (no serial mode) and ends a stopped loop
-#      through STALLED (issue #452). Also pins the design
-#      doc's corrected claims. Mutation-proven (header lists the mutants).
-#      Source-level, no omp, no gh, no network.
+#      verifies pushes with a fresh ls-remote, and, where isolation is
+#      unconfirmed, runs a guarded synchronous serial worker only with exclusive
+#      checkout ownership, a clean checkout and a supervised foreground runner,
+#      or stops naming the failed prerequisite; never parallel on a shared tree
+#      (issues #451 and #484). dispatch-ready §5 does the same per tick, runs at
+#      most ONE serial issue per tick shared with §2 recovery, and treats disabled
+#      isolation with a safe serial path as progress and never an
+#      `isolation unconfirmed` stall (issues #452 and #484). Also pins the design
+#      doc's corrected claims. #484 rewrote the properties that pinned #452's
+#      stop-only text (2, 8, 9, 13, 14) and left the parallel contract (1, 3-7,
+#      10-12) untouched; the guard itself is executed by entry 54, not read here.
+#      Mutation-proven (header lists the mutants). Source-level, no omp, no gh,
+#      no network.
 #
 #  52. config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh) —
 #      the "Unrun config line" paragraph is in the four conservative-mode skills
@@ -1503,6 +1523,20 @@
 #      it; enumerated rows against an independent oracle, the round-2 and
 #      round-3 repros (issue #475), and the self-run mutants its header enumerates,
 #      each of which must be caught. Temp `git init` repos only, no gh, no network.
+#
+#  54. checkout-guard tests (scripts/test-checkout-guard.sh) — the behavioural
+#      half of #484: `skills/take-it/scripts/checkout-guard.sh` run for real
+#      against temporary Git consumers with local bare remotes. The `Ownership`
+#      suite covers contention before reconciliation, token rejection, dirty and
+#      unpushed acquisition, behind-default fast-forward, exact fresh remote-tip
+#      verification, branch deletion after archival, acquire rollback and the
+#      operator-only `abandon` evidence rules; the `Lifecycle` suite covers a live
+#      worker beside a terminal-failure comment, a killed supervisor, an actual
+#      runner timeout, competing runners and surviving tool process groups, all
+#      of which must retain ownership, and `abandon` refusing a live or timed-out
+#      worker. It executes the
+#      guard and says nothing about the prose that tells a model to call it:
+#      entries 32 and 51 pin that. No model, no gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2410,8 +2444,9 @@ else
 fi
 
 # --- 51. isolation-contract tests -----------------------------------------------
-# take-it confirms isolation before a parallel dispatch and fails closed; the
-# design doc's claims agree. Source-level, no omp, no network.
+# take-it confirms isolation before a parallel dispatch and fails closed or runs a
+# guarded serial worker; the design doc's claims agree. Source-level, no omp, no
+# network. The guard's behaviour is entry 54's.
 if bash scripts/test-isolation-contract.sh; then
     pass "isolation-contract tests (scripts/test-isolation-contract.sh)"
 else
@@ -2436,6 +2471,15 @@ if bash scripts/test-tracking-state.sh; then
     pass "tracking-state tests (scripts/test-tracking-state.sh)"
 else
     failed "tracking-state tests (scripts/test-tracking-state.sh)"
+fi
+
+# --- 54. checkout-guard tests ---------------------------------------------------
+# The ownership guard and the foreground runner against real processes, temporary
+# Git consumers and local bare remotes. No model, gh or network.
+if bash scripts/test-checkout-guard.sh; then
+    pass "checkout-guard tests (scripts/test-checkout-guard.sh)"
+else
+    failed "checkout-guard tests (scripts/test-checkout-guard.sh)"
 fi
 
 # ------------------------------------------------------------------------------
