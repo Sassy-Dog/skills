@@ -21,10 +21,17 @@
 #                no guard passes; a matching SASSY_DOG_CHECKOUT_TOKEN in the
 #                environment passes; a missing or wrong token is exit 4; a live
 #                writer is exit 3 even for the holder; unresolved or unreadable
-#                state is exit 4; a --token on argv is ignored; nothing is
-#                written. Each refusal is shown to fail against a mutant copy of
-#                the script with that check removed. teardown.sh's behaviour under
-#                a held guard is executed by test-teardown-args.sh (property 7).
+#                state is exit 4; a token for a sibling worktree's guard is
+#                exit 4; a non-ASCII token is a refusal, not a crash; a --token
+#                on argv is ignored; `run` hides the check token from its worker;
+#                with python3 off PATH a free checkout passes and a present guard
+#                fails closed; nothing is written. A mutant copy with the check
+#                removed is proved to fail for exactly these: the token
+#                comparison, the live-writer refusal (it falls back to exit 4,
+#                ownership=active), the phase gate, the other-worktree refusal
+#                and the argv rule. The unreadable-state refusal has no mutant.
+#                teardown.sh's behaviour under a held guard is executed by
+#                test-teardown-args.sh (property 7).
 #   Lifecycle  — a clean tree plus a terminal-failure comment is not exit
 #                evidence; a live worker excludes release and a concurrent tick; a
 #                killed supervisor, an elapsed timeout or a timeout signal cannot

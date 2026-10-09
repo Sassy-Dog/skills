@@ -1498,10 +1498,14 @@ competing runners, foreground tool groups that exit and a surviving tool group t
 ownership (its `Lifecycle` suite). Since #486 the guard lives in `skills/pr-shepherd/scripts/`
 and exposes a read-only `check` that `teardown.sh` and `merge-shepherd.sh` run before any local
 mutation; its `Check` suite covers no guard, a matching `SASSY_DOG_CHECKOUT_TOKEN`, a missing or
-wrong token, a live writer, an argv token being ignored and unresolved state, each refusal proved
-against a mutant, and `scripts/test-teardown-args.sh` (property 7) shows `teardown.sh` leaving
-branches, HEAD and the worktree list untouched while a guard is held and proceeding once the
-token matches. It does not claim to verify the model's §7 judgement.
+wrong token, a live writer, an argv token being ignored, a token for a sibling worktree's guard,
+a non-ASCII token and unresolved state; the token comparison, live-writer, phase-gate,
+other-worktree and argv-rule refusals are each proved against a mutant (the unreadable-state
+refusal is not), and a host without Python 3 passes a free checkout and fails closed on a guard.
+`run` also hides the check token from the worker it supervises. In addition, `scripts/test-teardown-args.sh` (property 7) shows `teardown.sh` leaving
+branches, HEAD and the worktree list untouched while a guard is held, proceeding once the token
+matches and, with python3 off PATH, proceeding when no guard exists and refusing when one does;
+it also pins `merge-shepherd.sh`'s `teardown()` body with three mutants. It does not claim to verify the model's §7 judgement.
 
 The prose gates stay what they were. `scripts/test-isolation-contract.sh` pins the isolation
 contract: the parallel path (#451, #452) unchanged, and #484's serial fallback, its ownership

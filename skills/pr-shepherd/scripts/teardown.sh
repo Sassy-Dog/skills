@@ -190,7 +190,7 @@ GUARD_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/checkout-guard.sh"
 if ! GUARD_JSON="$(bash "$GUARD_SCRIPT" check --repo "$ROOT" 2>&1)"; then
   echo "teardown: refused by the checkout guard — no local mutation was made" >&2
   echo "  $GUARD_JSON" >&2
-  echo "  the JSON names the guard path and its ownership; the holder exports SASSY_DOG_CHECKOUT_TOKEN, anyone else follows skills/take-it/references/isolation-confirmation.md" >&2
+  echo "  where the guard could be read the JSON names its path and ownership; the holder scopes SASSY_DOG_CHECKOUT_TOKEN to this call, anyone else follows skills/take-it/references/isolation-confirmation.md" >&2
   exit 7
 fi
 

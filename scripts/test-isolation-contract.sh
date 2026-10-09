@@ -606,13 +606,13 @@ need("the doc names the behavioural gate that executes the guard", doc, "test-ch
 t6 = flatten(section(SKILL_RAW, "## 6. Coordinator: watch + merge (delegated)"))
 rc = flatten(read("skills/repo-cleanup/SKILL.md"))
 need("take-it §6: the holder exports the token to pr-shepherd calls", t6,
-     "While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call", 14)
-need("take-it §6: the token never goes on argv", t6, "never put the token on argv", 14)
+     "While holding the guard, pass `SASSY_DOG_CHECKOUT_TOKEN=<token>` to each pr-shepherd call as a per-call", 14)
+need("take-it §6: the token never goes on argv", t6, "never exported for the session and never on argv", 14)
 need("dispatch-ready §2: the holder exports the token to pr-shepherd calls", d2,
-     "While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call", 14)
-need("dispatch-ready §2: the token never goes on argv", d2, "never put the token on argv", 14)
+     "While holding the guard, pass `SASSY_DOG_CHECKOUT_TOKEN=<token>` to each pr-shepherd call as a per-call", 14)
+need("dispatch-ready §2: the token never goes on argv", d2, "never exported for the session and never on argv", 14)
 need("the reference: the holder exports the token for pr-shepherd's mutators", ref,
-     "The holder therefore exports `SASSY_DOG_CHECKOUT_TOKEN=<token>` to the pr-shepherd calls it makes", 14)
+     "The holder therefore passes `SASSY_DOG_CHECKOUT_TOKEN=<token>` to the pr-shepherd calls it makes", 14)
 need("the reference: teardown refuses with exit 7 and the merge is unaffected", ref,
      "`teardown.sh` makes no local mutation, prints the guard path and `ownership`, and exits 7", 14)
 need("the reference: repo-cleanup never holds a guard or passes a token", ref,
@@ -1007,11 +1007,11 @@ mutate "$d/skills/dispatch-ready/SKILL.md" 'Make that omp bash call with' 'Make 
 expect_fail "M80 omp tool deadline allowed to pre-empt the guard" "$d" "omp's own tool deadline cannot pre-empt the guard's"
 
 d=$(make_copy m81)
-mutate "$d/skills/take-it/SKILL.md" 'While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call' 'While holding the guard, call pr-shepherd' || bad "M81: mutation did not apply"
+mutate "$d/skills/take-it/SKILL.md" 'While holding the guard, pass `SASSY_DOG_CHECKOUT_TOKEN=<token>` to each pr-shepherd call as a per-call' 'While holding the guard, call pr-shepherd' || bad "M81: mutation did not apply"
 expect_fail "M81 take-it's token handoff removed" "$d" "take-it §6: the holder exports the token to pr-shepherd calls"
 
 d=$(make_copy m82)
-mutate "$d/skills/dispatch-ready/SKILL.md" 'While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call' 'While holding the guard, call pr-shepherd' || bad "M82: mutation did not apply"
+mutate "$d/skills/dispatch-ready/SKILL.md" 'While holding the guard, pass `SASSY_DOG_CHECKOUT_TOKEN=<token>` to each pr-shepherd call as a per-call' 'While holding the guard, call pr-shepherd' || bad "M82: mutation did not apply"
 expect_fail "M82 dispatch-ready's token handoff removed" "$d" "dispatch-ready §2: the holder exports the token to pr-shepherd calls"
 
 d=$(make_copy m83)

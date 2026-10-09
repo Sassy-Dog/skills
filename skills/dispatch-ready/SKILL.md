@@ -92,9 +92,10 @@ the reference's operator-only next action for that phase — a tick never runs `
 unpushed checkout is a specific safety hold, never permission to stash/reset it. Read-only
 diagnostics may still run. The guard is retained across a serial launch and all subsequent local
 work; no coordinator mutation is allowed while that worker is live or its termination uncertain.
-While holding the guard, export `SASSY_DOG_CHECKOUT_TOKEN=<token>` to every pr-shepherd call
-(`teardown.sh`, `merge-shepherd.sh`) and never put the token on argv: without it their checkout-guard
-`check` refuses (teardown exit 7) and no local mutation happens (the reference's ownership section).
+While holding the guard, pass `SASSY_DOG_CHECKOUT_TOKEN=<token>` to each pr-shepherd call as a per-call
+prefix (`SASSY_DOG_CHECKOUT_TOKEN=<token> bash …/teardown.sh`, likewise `merge-shepherd.sh`), never exported
+for the session and never on argv: without it their checkout-guard `check` refuses (teardown exit 7) and no
+local mutation happens (the reference's ownership section).
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md`, including
 **Checkout ownership** and **Synchronous serial execution**, and use its exact guard commands.

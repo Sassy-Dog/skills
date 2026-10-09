@@ -6,6 +6,7 @@ The model-driven dispatcher evidence lives in docs/HARNESS-PORTABILITY.md.
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -435,7 +436,7 @@ class Check(Scratch):
             self.assertTrue(report["guard"].endswith("sassy-dog-checkout-guard"))
             self.assertNotIn(token, result.stdout)
         # A mutant that skips the token comparison would admit the stranger.
-        mutant = self.mutant("if not token or not hmac.compare_digest(self.state[\"token\"], token):",
+        mutant = self.mutant("if not token or not same_token(self.state[\"token\"], token):",
                              "if False:")
         self.assertEqual(self.check("not-the-owner", guard=mutant).returncode, 0)
         self.assertEqual(self.check(guard=mutant).returncode, 0)
@@ -461,11 +462,14 @@ class Check(Scratch):
         self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["ownership"], "active")
         self.assertEqual(self.git("branch", "--show-current"), branch)
-        # Without the live-writer refusal the code is no longer 3 (the phase
-        # gate still refuses, as unresolved), so the distinction is the check's.
+        # Without the live-writer refusal the phase gate still refuses, as
+        # unresolved: exactly exit 4 with ownership=active and the phase named.
         mutant = self.mutant('raise Refusal(3, "checkout active writer: a recorded worker is running", extra)',
                              "pass")
-        self.assertNotEqual(self.check(token, guard=mutant).returncode, 3)
+        fallback = self.check(token, guard=mutant)
+        self.assertEqual(fallback.returncode, 4, fallback.stdout + fallback.stderr)
+        self.assertEqual(json.loads(fallback.stdout)["ownership"], "active")
+        self.assertIn("phase running", json.loads(fallback.stdout)["reason"])
         proceed.touch()
         self.assertEqual(process.wait(timeout=20), 0)
         self.assertEqual(self.check(token).returncode, 0)
@@ -476,9 +480,85 @@ class Check(Scratch):
         result = self.check(token)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["ownership"], "unresolved")
+        # A matching token must not outrank an unresolved phase. Without the
+        # phase gate this timed-out guard would be admitted.
+        mutant = self.mutant('raise Refusal(4, "checkout ownership unresolved: phase " + self.state["phase"], extra)',
+                             "pass")
+        self.assertEqual(self.check(token, guard=mutant).returncode, 0)
         self.state_path().write_text("not json")
         result = self.check(token)
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+
+    def test_token_for_another_worktrees_guard_is_refused(self):
+        token = self.acquire()
+        sibling = self.home / "sibling"
+        self.git("worktree", "add", "-b", "sibling-branch", str(sibling), "main")
+        # The sibling shares the common-dir guard, and the token is the right one,
+        # but the guard belongs to the checkout that acquired it.
+        env = dict(self.env, SASSY_DOG_CHECKOUT_TOKEN=token)
+        result = self.call("check", repo=sibling, env=env)
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertIn("another worktree", json.loads(result.stdout)["reason"])
+        self.assertEqual(self.call("check", env=env).returncode, 0)
+        mutant = self.mutant('raise Refusal(4, "checkout ownership belongs to another worktree: "\n'
+                             '                          + self.state["repo"], extra)', "pass")
+        self.assertEqual(self.call("check", repo=sibling, env=env, guard=mutant).returncode, 0)
+
+    def test_non_ascii_token_is_a_refusal_not_a_crash(self):
+        self.acquire()
+        result = self.check("t\u00f6k\u00e9n")
+        self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["result"], "refused")
+        self.assertNotIn("Traceback", result.stderr)
+        # The argv form of the same input is a refusal too, not a TypeError.
+        self.assertEqual(self.call("release", "--token", "t\u00f6k\u00e9n").returncode, 4)
+
+    def test_run_does_not_hand_the_worker_the_check_token(self):
+        token = self.acquire()
+        out = self.home / "worker-env.txt"
+        script = self.home / "env_probe.py"
+        script.write_text("import os, pathlib\n"
+                          f"pathlib.Path({str(out)!r}).write_text(repr(os.environ.get('SASSY_DOG_CHECKOUT_TOKEN')))\n")
+        env = dict(self.env, SASSY_DOG_CHECKOUT_TOKEN=token)
+        result = self.call("run", "--token", token, "--branch", "fix/env", "--", sys.executable,
+                           str(script), env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(out.read_text(), "None")
+
+    def test_without_python_a_free_checkout_passes_and_a_guard_fails_closed(self):
+        # A PATH holding only git, sed and a bash that cannot see python3.
+        farm = self.home / "nopython"
+        farm.mkdir()
+        for name in ("git", "sed", "bash"):
+            found = shutil.which(name)
+            self.assertTrue(found, name)
+            (farm / name).symlink_to(found)
+        env = dict(self.env, PATH=str(farm))
+        self.assertIsNone(shutil.which("python3", path=str(farm)))
+        run = lambda command: subprocess.run(
+            [str(farm / "bash"), str(GUARD), command, "--repo", str(self.repo)],
+            env=env, capture_output=True, text=True, timeout=20)
+        for command, key in (("check", "no-guard"), ("status", None)):
+            result = run(command)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["ownership"], "free")
+            self.assertTrue(report["guard"].endswith("sassy-dog-checkout-guard"))
+            if key:
+                self.assertEqual(report["check"], key)
+        # The same answer as the Python path gives, field for field.
+        self.assertEqual(json.loads(run("check").stdout), json.loads(self.call("check").stdout))
+        self.assertEqual(json.loads(run("status").stdout), json.loads(self.call("status").stdout))
+        self.acquire()
+        for command in ("check", "status"):
+            result = run(command)
+            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["ownership"], "unresolved")
+            self.assertIn("Python 3 is required", report["reason"])
+            self.assertTrue(report["guard"].endswith("sassy-dog-checkout-guard"))
+        # Any other command stays the documented 64.
+        self.assertEqual(run("acquire").returncode, 64)
 
 
 class Lifecycle(Scratch):

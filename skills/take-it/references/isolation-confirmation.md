@@ -100,10 +100,16 @@ operator's decision and never a loop's.
 mutations it governs. Before its first mutation, `teardown.sh` (and `merge-shepherd.sh`'s
 post-merge teardown) runs the read-only `check --repo "$CHECKOUT"`, which passes when no guard
 exists or when the guard is `held`/`completed` and the environment variable
-`SASSY_DOG_CHECKOUT_TOKEN` matches it. The holder therefore exports
+`SASSY_DOG_CHECKOUT_TOKEN` matches it. The holder therefore passes
 `SASSY_DOG_CHECKOUT_TOKEN=<token>` to the pr-shepherd calls it makes, on a non-Claude harness
-while it holds the guard; the token is never put on argv, where `ps` would show it, and an argv
-`--token` is ignored by `check`. A live worker (exit 3) or any missing or wrong token or
+while it holds the guard, as a per-call prefix
+(`SASSY_DOG_CHECKOUT_TOKEN="$TOKEN" bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" ...`)
+and never exported for the session. The token stays out of argv because `ps` shows argv to every
+user; `run` and `verify` still take it on argv (the guard's existing contract), so the environment
+is the quieter channel but not a secret store, and an argv `--token` is ignored by `check`. `run`
+removes the variable from the worker's environment, so even an exported one does not reach the
+worker it supervises. A host without Python 3 still answers `check` for a checkout with no guard
+(a filesystem fact) and refuses with exit 4 when a guard exists. A live worker (exit 3) or any missing or wrong token or
 unresolved state (exit 4) refuses: `teardown.sh` makes no local mutation, prints the guard path
 and `ownership`, and exits 7; the merge itself is unaffected and `merge-shepherd.sh` reports the
 skipped local teardown. `repo-cleanup` never holds a guard, never passes a token and never

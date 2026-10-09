@@ -33,6 +33,8 @@ bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" <wt_path_1> <wt_path_
 
 The manifest form and `--sweep` are **not** alternatives: pass both and the named paths are torn down first, then the sweep runs, then the shared prune/reconcile/residual tail — which is what "tear these down, then sweep" should mean in a single invocation. An argument starting with `-` that is neither flag is rejected with a usage error and exit 2 *before* any teardown, never taken for a path (issue #200). `--reconcile-only` is the exception: it skips every worktree/branch phase, so combining it with anything is rejected.
 
+**Checkout guard (exit 7).** Before its first local mutation `teardown.sh` runs `checkout-guard.sh check`. With no guard it proceeds as always. If a serial worker's guard exists and the caller does not hold it, teardown touches nothing, prints the guard path and `ownership`, and exits `7`. The guard's holder passes its token for that call only: `SASSY_DOG_CHECKOUT_TOKEN=<token> bash …/teardown.sh …`, never on argv. Anyone else follows the operator next action in `skills/take-it/references/isolation-confirmation.md`; do not retry in a loop.
+
 The script force-removes each worktree (the Agent runtime leaves them locked, hence `-f -f`), deletes the local branch, prunes, clears origin-identical stragglers, and ff-reconciles the default branch. It reports — but **never auto-drops** — stashes (destructive; human's call).
 
 ## Session drift: two failure modes after sub-agent merges
