@@ -1464,8 +1464,13 @@ investigation; automatic force-unlock is deliberately absent. A refused acquisit
 the guard it had just published, since no token or worker exists yet. A coordinator that dies
 holding the token leaves a `held` guard no later caller can tell from a live one: dispatch-ready
 escalates it to STALLED across two ticks, and only an operator runs `checkout-guard.sh abandon
---reason`. That command needs no token, but it accepts only `held`/`completed` (or `uncertain` with
-no runs) and repeats every `verify` check before archiving, so it is not a force-unlock either.
+--reason`. That command needs no token, but for `held`/`completed` (or `uncertain` with no runs)
+it repeats every `verify` check before archiving. Any other phase, or an unreadable record, needs
+`--investigated` after the operator runbook in the reference: the attestation stands in for the
+durable termination record alone, while every recorded process must be gone now and the tree
+clean with exact pushed tips. Neither form is a force-unlock. A worker that failed before
+creating its branch committed nothing, so that branch needs no tip check and cannot hold the
+checkout forever.
 
 **Terminal states still describe the drain, not isolation settings.** Disabled isolation with
 a safe serial path is progress, not STALLED. A known unsafe serial prerequisite is a named

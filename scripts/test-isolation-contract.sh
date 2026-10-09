@@ -579,7 +579,11 @@ need("the reference: only ownership=active is self-resolving", ref,
 need("the reference: a coordinator never abandons a guard", ref,
      "A coordinator never runs `abandon`, deletes the guard, or invents an automatic force-unlock route.", 14)
 need("the reference: abandonment is the operator's, with positive evidence", ref,
-     "**Operator-only abandonment**, after the operator confirms the owning session has ended:", 14)
+     "**Operator-only abandonment**, after the operator confirms the owning session has ended.", 14)
+need("the reference: --investigated replaces only the durable termination record", ref,
+     "`--investigated` records the operator's attestation in place of the durable termination record only.", 14)
+need("the reference: the attested form keeps the live-process checks", ref,
+     "Every recorded supervisor, child, process group and descendant must still be gone now", 14)
 need("the reference: nothing time-based releases ownership", ref,
      "No timer, missing PR, blocked issue, terminal comment,", 14)
 need("the doc records the terminal-state decision", doc,

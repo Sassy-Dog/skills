@@ -7,7 +7,7 @@
 #   run     --repo PATH --token TOKEN --branch BRANCH [--timeout SECONDS] -- CMD ARGS...
 #   verify  --repo PATH --token TOKEN
 #   release --repo PATH --token TOKEN
-#   abandon --repo PATH --reason TEXT      (operator only; never a coordinator)
+#   abandon --repo PATH --reason TEXT [--investigated]   (operator only; never a coordinator)
 #
 # Requires Bash, Python 3, Git and POSIX ps (macOS/Linux); no third-party modules.
 # One JSON object goes to stdout. Worker stdout and stderr both go to stderr;
@@ -59,8 +59,16 @@
 # token. It needs positive evidence, not a token: phase held/completed, or
 # uncertain with no runs (an acquire that died mid-probe), from the guard's
 # own worktree, then every check verify makes. Launching, running, timed-out,
-# interrupted and other uncertain guards stay outside its reach. It cannot tell
-# a dead owner from a live one; that judgement is why only a human runs it.
+# interrupted and other uncertain guards, and a guard whose state is unreadable,
+# need --investigated: the operator's attestation that they inspected the
+# recorded processes and retained work. It replaces only the durable proof of
+# termination, never the live checks: every recorded supervisor, child,
+# process group and descendant must be gone now, and the tree must be clean
+# with exact pushed tips. Neither form can tell a dead owner from a live one;
+# that judgement is why only a human runs it.
+# A run records whether its branch existed before launch. A worker that failed
+# before creating it committed nothing, so verify/release/abandon skip that
+# branch's tip check rather than holding the checkout forever.
 # Status is read-only, never reveals the token, and reports an incomplete or
 # unreadable record as ownership=unresolved. A token alone proves no exit.
 #
@@ -127,6 +135,7 @@ def arguments():
             command.add_argument("--token", required=True)
         if name == "abandon":
             command.add_argument("--reason", required=True)
+            command.add_argument("--investigated", action="store_true")
         if name == "run":
             command.add_argument("--branch", required=True)
             command.add_argument("--timeout", type=float)
@@ -335,10 +344,42 @@ class Guard:
                           + "; operator investigation required, not elapsed-time reclamation")
         return self.evidence()
 
-    def evidence(self):
+    @staticmethod
+    def recorded_identities(run):
+        identities = [run[key] for key in ("supervisor", "child") if run.get(key) is not None]
+        for key in ("observed_descendants", "remaining_processes"):
+            value = run.get(key, [])
+            if not isinstance(value, list):
+                raise Refusal(4, "checkout ownership unresolved: invalid " + key)
+            identities.extend(value)
+        for value in identities:
+            if (not isinstance(value, dict) or not isinstance(value.get("pid"), int)
+                    or not isinstance(value.get("started"), str)):
+                raise Refusal(4, "checkout ownership unresolved: invalid process identity")
+        return identities
+
+    def evidence(self, attested=False):
         rows = processes()
         branches = []
         for run in self.state["runs"]:
+            if attested:
+                # The operator attests to termination; the live checks remain.
+                if not isinstance(run, dict) or not isinstance(run.get("branch"), str):
+                    raise Refusal(4, "checkout ownership unresolved: invalid run record")
+                groups = run.get("process_groups", [])
+                if (not isinstance(groups, list)
+                        or any(not isinstance(group, int) or group <= 1 for group in groups)):
+                    raise Refusal(4, "checkout ownership unresolved: invalid process group")
+                if any(live(row) and row["pgid"] in groups for row in rows.values()):
+                    raise Refusal(4, "checkout active writer: recorded worker process group exists")
+                for recorded in self.recorded_identities(run):
+                    row = rows.get(recorded["pid"])
+                    if live(row) and identity(row) == recorded:
+                        raise Refusal(4, "checkout active writer: recorded process is alive: "
+                                      + str(recorded["pid"]))
+                if run["branch"] not in branches:
+                    branches.append(run["branch"])
+                continue
             if (not isinstance(run, dict) or run.get("phase") != "completed"
                     or run.get("termination_verified") is not True
                     or not isinstance(run.get("worker_exit"), int)
@@ -362,6 +403,15 @@ class Guard:
         self.clean()
         verified = []
         for branch in branches:
+            present = self.git("rev-parse", "--verify", "--quiet",
+                               "refs/heads/" + branch + "^{commit}", accepted=(0, 1, 128))
+            runs = [run for run in self.state["runs"] if run.get("branch") == branch]
+            if present.returncode and all("branch_before" in run and run["branch_before"] is None
+                                          for run in runs):
+                # Absent before every launch and absent now: nothing was committed.
+                verified.append({"branch": branch, "local": None, "remote": None,
+                                 "created": False})
+                continue
             local = self.local_tip(branch)
             fresh = self.remote_tip("origin", "refs/heads/" + branch)
             if local != fresh:
@@ -419,12 +469,16 @@ class Guard:
             emit({"result": "held", "ownership": "unresolved", "repo": self.repo,
                   "guard": self.path, "reason": str(error)})
 
-    def archive(self, **fields):
+    def history(self):
         history = os.path.join(self.common, "sassy-dog-checkout-history")
         try:
             os.mkdir(history, 0o700)
         except FileExistsError:
             require_directory(history)
+        return history
+
+    def archive(self, **fields):
+        history = self.history()
         receipt = os.path.join(history, self.state["token"])
         if os.path.lexists(receipt):
             raise Refusal(4, "checkout ownership unresolved: receipt already exists")
@@ -441,29 +495,57 @@ class Guard:
         receipt = self.archive(phase="released", released_at=time.time(), **verified)
         emit(dict(self.public(), result="released", receipt=receipt))
 
-    def abandon(self, reason):
+    def abandon(self, reason, investigated):
         with self.mutex():
             if not os.path.lexists(self.path):
                 emit({"result": "free", "ownership": "free", "repo": self.repo, "guard": self.path})
                 return
             try:
                 self.read_state()
-            except OSError as error:
-                raise Refusal(4, "checkout ownership unresolved: guard state is unavailable;"
-                              " operator investigation required") from error
+            except (Refusal, OSError) as error:
+                if not investigated:
+                    raise Refusal(4, "checkout ownership unresolved: guard state is unreadable;"
+                                  " investigate, then abandon --investigated") from error
+                self.abandon_unreadable(reason, str(error))
+                return
             phase = self.state["phase"]
             orphaned_acquire = phase == "uncertain" and not self.state["runs"]
-            if phase not in ("held", "completed") and not orphaned_acquire:
+            if phase not in ("held", "completed") and not orphaned_acquire and not investigated:
                 raise Refusal(4, "checkout ownership unresolved: phase " + phase
-                              + " is outside abandon's reach; investigate the recorded"
-                              " processes and retained work")
+                              + " needs investigation of the recorded processes and retained"
+                              " work, then abandon --investigated")
             if self.state["repo"] != self.repo:
                 raise Refusal(4, "checkout ownership belongs to another worktree: "
                               + self.state["repo"])
-            evidence = self.evidence()
+            evidence = self.evidence(attested=investigated)
             receipt = self.archive(phase="abandoned", abandoned_from=phase,
-                                   abandoned_reason=reason, abandoned_at=time.time(), **evidence)
+                                   abandoned_reason=reason, investigated=investigated,
+                                   abandoned_at=time.time(), **evidence)
             emit(dict(self.public(), result="abandoned", receipt=receipt))
+
+    def abandon_unreadable(self, reason, cause):
+        # No identities can be checked, so only the operator's attestation,
+        # a clean tree and a published current branch stand behind this.
+        require_directory(self.path)
+        self.clean()
+        current = self.current_pushed()
+        receipt = os.path.join(self.history(), "unreadable-" + uuid.uuid4().hex)
+        note = {"phase": "abandoned", "abandoned_from": "unreadable", "unreadable_cause": cause,
+                "abandoned_reason": reason, "investigated": True, "abandoned_at": time.time(),
+                "current_branch": current, "repo": self.repo}
+        temporary = os.path.join(self.path, "abandon.tmp-" + uuid.uuid4().hex)
+        descriptor = os.open(temporary, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(note, stream, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, os.path.join(self.path, "abandon.json"))
+        sync_directory(self.path)
+        os.rename(self.path, receipt)
+        sync_directory(os.path.dirname(receipt))
+        sync_directory(self.common)
+        emit(dict(note, result="abandoned", receipt=receipt, guard=self.path))
 
     def run(self, args, mutex_descriptor):
         self.verify()
@@ -471,6 +553,9 @@ class Guard:
             raise Refusal(64, "--branch must name an ordinary local branch")
         if self.git("check-ref-format", "refs/heads/" + args.branch, accepted=(0, 1)).returncode:
             raise Refusal(64, "--branch is not a valid branch name")
+        before = self.git("rev-parse", "--verify", "--quiet",
+                          "refs/heads/" + args.branch + "^{commit}", accepted=(0, 1, 128))
+        branch_before = before.stdout.strip() if before.returncode == 0 else None
         supervisor = identity(processes()[os.getpid()])
         interrupted = []
 
@@ -481,7 +566,8 @@ class Guard:
         previous = {}
         for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
             previous[number] = signal.signal(number, on_signal)
-        run = {"branch": args.branch, "phase": "launching", "supervisor": supervisor,
+        run = {"branch": args.branch, "branch_before": branch_before,
+               "phase": "launching", "supervisor": supervisor,
                "command": args.worker, "started_at": time.time(), "termination_verified": False,
                "observed_descendants": [], "process_groups": []}
         self.state["runs"].append(run)
@@ -654,7 +740,7 @@ def main():
         elif args.command == "acquire":
             guard.acquire(args.owner)
         elif args.command == "abandon":
-            guard.abandon(args.reason)
+            guard.abandon(args.reason, args.investigated)
         else:
             with guard.mutex() as descriptor:
                 guard.authenticate(args.token)

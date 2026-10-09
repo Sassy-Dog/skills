@@ -146,7 +146,9 @@ required before checkout reuse. Dirty/unpushed work, active writers and unresolv
 remain visible safety holds; timeout never expires ownership. A guard left by a coordinator that
 died holding it stops the loop through DRAIN STALLED rather than ticking forever, and only the
 operator clears it, with `checkout-guard.sh abandon`, which still requires proven worker exit,
-a clean tree and pushed tips. The guard needs Python 3 alongside Bash, Git and POSIX `ps`.
+a clean tree and pushed tips; after investigating a timed-out or interrupted run, its
+`--investigated` form replaces only the durable exit record, never the live-process, clean-tree
+or pushed-tip checks. The guard needs Python 3 alongside Bash, Git and POSIX `ps`.
 This is cooperative exclusion, not a sandbox. See [runtime evidence and limits](docs/HARNESS-PORTABILITY.md#safe-serial-runtime-checks-484).
 The matrix leaves the full workflow untested rather than treating a serial smoke as proof of
 parallel dispatch, live review or merge behavior.

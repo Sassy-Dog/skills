@@ -52,9 +52,11 @@
 # section 2 is the known case; `send-it` is the prose-anchored exception the
 # gate does handle.
 #
-# The paragraph remains immediately before the first fenced token command.
-# assess-it's audit gate also inventories its placement. dispatch-ready's former
-# terminal-state prose inventory was retired in #484; this gate owns placement.
+# Neighbouring pins: the paragraph is a new block in `skills/assess-it/SKILL.md`
+# and in `skills/dispatch-ready/SKILL.md` §4, whose paragraph inventories
+# `test-audit-lost-reviewer.sh` and `test-drain-terminal-states.sh` pin on
+# purpose. Both canon tables carry it (as `skill#b22` and in `sec4_openers`);
+# a new paragraph in either file is a deliberate edit to those tables too.
 #
 # Source-level only: no gh, no network, no mutation of the tree.
 #

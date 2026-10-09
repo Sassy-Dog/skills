@@ -74,6 +74,25 @@ class Scratch(unittest.TestCase):
         self.children.append(process)
         return process, marker, proceed
 
+    def state_path(self):
+        return Path(self.git("rev-parse", "--absolute-git-dir")) / "sassy-dog-checkout-guard" / "state.json"
+
+    def tamper(self, **fields):
+        path = self.state_path()
+        state = json.loads(path.read_text())
+        state.update(fields)
+        path.write_text(json.dumps(state))
+        return state
+
+    def identity_of(self, pid):
+        # Parsed exactly as the guard parses `ps`, so the recorded identity matches.
+        for line in subprocess.check_output(["ps", "-ax", "-o", "pid=", "-o", "ppid=", "-o", "pgid=",
+                                             "-o", "stat=", "-o", "lstart="], text=True).splitlines():
+            fields = line.split(None, 4)
+            if int(fields[0]) == pid:
+                return {"pid": pid, "started": fields[4]}
+        self.fail(f"pid {pid} not in the process table")
+
     def wait_for(self, path, process):
         deadline = time.monotonic() + 15
         while not path.exists():
@@ -271,6 +290,97 @@ class Ownership(Scratch):
         self.assertEqual(json.loads(result.stdout)["result"], "free")
 
 
+    def test_worker_failing_before_branching_does_not_lock_checkout(self):
+        token = self.acquire()
+        result = self.call("run", "--token", token, "--branch", "fix/never-created", "--",
+                           sys.executable, "-c", "raise SystemExit(1)")
+        self.assertEqual(result.returncode, 20, result.stdout + result.stderr)
+        verify = self.call("verify", "--token", token)
+        self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+        self.assertEqual(json.loads(verify.stdout)["verified_branches"][0]["created"], False)
+        self.assertEqual(self.call("release", "--token", token).returncode, 0)
+
+    def test_branch_that_existed_before_launch_must_still_verify(self):
+        self.git("branch", "fix/pre")
+        self.git("push", "origin", "fix/pre")
+        token = self.acquire()
+        result = self.call("run", "--token", token, "--branch", "fix/pre", "--",
+                           "git", "branch", "-D", "fix/pre")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.call("verify", "--token", token).returncode, 5)
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 5)
+
+    def test_unpushed_run_branch_commit_blocks_after_switch_to_default(self):
+        token = self.acquire()
+        process, _, _ = self.worker(token)
+        self.assertEqual(process.wait(timeout=20), 0)
+        (self.repo / "payload").write_text("later commit, never pushed\n")
+        self.git("commit", "-am", "unpushed on run branch")
+        self.git("switch", "main")
+        # Only the per-branch tip check sees this: the current branch is published.
+        self.assertEqual(self.call("verify", "--token", token).returncode, 5)
+        self.assertEqual(self.call("release", "--token", token).returncode, 5)
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 5)
+        self.assertEqual(self.call("abandon", "--reason", "gone", "--investigated").returncode, 5)
+        self.assertNotEqual(self.git("rev-parse", "fix/one"),
+                            self.git("ls-remote", "origin", "refs/heads/fix/one").split()[0])
+
+    def test_acquire_refuses_unfinished_operation_detached_head_and_local_upstream(self):
+        merge_head = Path(self.git("rev-parse", "--absolute-git-dir")) / "MERGE_HEAD"
+        merge_head.write_text(self.git("rev-parse", "HEAD") + "\n")
+        self.assertEqual(self.call("acquire", "--owner", "mid-merge").returncode, 5)
+        merge_head.unlink()
+        self.git("switch", "--detach", "HEAD")
+        self.assertEqual(self.call("acquire", "--owner", "detached").returncode, 5)
+        self.git("switch", "-c", "tracker", "--track", "main")
+        self.assertEqual(self.call("acquire", "--owner", "local-upstream").returncode, 5)
+        self.assertEqual(json.loads(self.call("status").stdout)["ownership"], "free")
+
+    def test_verify_phase_gate_and_live_evidence_checks(self):
+        token = self.acquire()
+        process, _, _ = self.worker(token)
+        self.assertEqual(process.wait(timeout=20), 0)
+        original = json.loads(self.state_path().read_text())
+        run = original["runs"][0]
+        # A completed run whose recorded group is (still) live is not verified.
+        self.tamper(runs=[dict(run, process_groups=run["process_groups"] + [os.getpgrp()])])
+        self.assertEqual(self.call("verify", "--token", token).returncode, 4)
+        # Nor is one whose recorded descendant identity is alive.
+        alive = self.identity_of(os.getpid())
+        self.tamper(runs=[dict(run, observed_descendants=[alive])])
+        self.assertEqual(self.call("verify", "--token", token).returncode, 4)
+        # With no runs, only the phase gate stops verify on an uncertain guard.
+        self.tamper(runs=[], phase="uncertain")
+        self.assertEqual(self.call("verify", "--token", token).returncode, 4)
+        self.state_path().write_text(json.dumps(original))
+        self.assertEqual(self.call("verify", "--token", token).returncode, 0)
+
+    def test_abandon_stays_in_its_own_worktree(self):
+        sibling = self.home / "sibling"
+        self.git("worktree", "add", "-b", "other", str(sibling))
+        self.git("push", "-u", "origin", "other", cwd=sibling)
+        result = self.call("acquire", "--owner", "sibling", repo=sibling)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 4)
+        self.assertEqual(self.call("abandon", "--reason", "gone", "--investigated").returncode, 4)
+        self.assertEqual(self.call("abandon", "--reason", "gone", repo=sibling).returncode, 0)
+
+    def test_unreadable_guard_needs_investigated_abandon(self):
+        self.acquire()
+        self.state_path().write_text("{not json")
+        status = json.loads(self.call("status").stdout)
+        self.assertEqual(status["ownership"], "unresolved")
+        self.assertEqual(self.call("abandon", "--reason", "corrupt").returncode, 4)
+        (self.repo / "payload").write_text("operator work\n")
+        self.assertEqual(self.call("abandon", "--reason", "corrupt", "--investigated").returncode, 5)
+        self.git("checkout", "--", "payload")
+        result = self.call("abandon", "--reason", "corrupt, inspected", "--investigated")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        note = json.loads((Path(json.loads(result.stdout)["receipt"]) / "abandon.json").read_text())
+        self.assertEqual((note["abandoned_from"], note["investigated"]), ("unreadable", True))
+        self.assertEqual(self.call("release", "--token", self.acquire()).returncode, 0)
+
+
 class Lifecycle(Scratch):
     def test_foreground_tool_group_is_verified_after_exit(self):
         token = self.acquire()
@@ -397,6 +507,43 @@ class Lifecycle(Scratch):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["abandoned_from"], "completed")
         self.assertEqual(self.git("branch", "--show-current"), "fix/one")
+
+
+    def test_investigated_abandon_frees_a_dead_timed_out_run(self):
+        token = self.acquire()
+        result = self.call("run", "--token", token, "--branch", "fix/timeout",
+                           "--timeout", "0.4", "--", sys.executable, "-c",
+                           "import time; time.sleep(60)")
+        self.assertEqual(result.returncode, 21, result.stdout + result.stderr)
+        self.assertEqual(self.call("abandon", "--reason", "timed out").returncode, 4)
+        freed = self.call("abandon", "--reason", "timed out; worker reaped", "--investigated")
+        self.assertEqual(freed.returncode, 0, freed.stdout + freed.stderr)
+        self.assertEqual(json.loads(freed.stdout)["abandoned_from"], "timed-out")
+        self.assertEqual(self.call("release", "--token", self.acquire()).returncode, 0)
+
+    def test_investigated_abandon_refuses_a_recorded_process_still_alive(self):
+        token = self.acquire()
+        process, _, _ = self.worker(token)
+        self.assertEqual(process.wait(timeout=20), 0)
+        self.git("switch", "main")
+        survivor = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.children.append(survivor)
+        run = json.loads(self.state_path().read_text())["runs"][0]
+        # A supervisor killed mid-run leaves a running record naming its child.
+        self.tamper(phase="running", runs=[dict(run, phase="running",
+                                                child=self.identity_of(survivor.pid),
+                                                termination_verified=False)])
+        self.assertEqual(self.call("abandon", "--reason", "gone").returncode, 4)
+        self.assertEqual(self.call("abandon", "--reason", "gone", "--investigated").returncode, 4)
+        survivor.kill()
+        survivor.wait()
+        record = json.loads(self.state_path().read_text())["runs"][0]
+        # A live recorded process GROUP refuses too, even with every pid gone.
+        self.tamper(runs=[dict(record, process_groups=[os.getpgrp()])])
+        self.assertEqual(self.call("abandon", "--reason", "gone", "--investigated").returncode, 4)
+        self.tamper(runs=[record])
+        result = self.call("abandon", "--reason", "child confirmed dead", "--investigated")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

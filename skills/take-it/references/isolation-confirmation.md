@@ -51,26 +51,48 @@ This is read-only evidence, not permission to steal ownership. Only `ownership=a
 supervisor running a worker) is `checkout active writer`, which is self-resolving. `held` with no
 live worker, or `unresolved`, is `checkout ownership held` / `checkout ownership unresolved`: its
 owner may be a coordinator that died holding the only token, which no later caller can tell apart
-from one still working. Report its guard path, owner, phase and `age_seconds`, and name the
-operator's next action; never wait it out. No timer, missing PR, blocked issue, terminal comment,
+from one still working — including a live take-it coordinator, which holds a worker-less guard
+through its CI wait and merge. Report its guard path, owner, phase and `age_seconds`, and name the
+operator's next action for that phase (below); never wait it out. No timer, missing PR, blocked issue, terminal comment,
 clean tree or copied token authorizes release. A coordinator never runs `abandon`, deletes the
 guard, or invents an automatic force-unlock route.
 
-**Operator-only abandonment**, after the operator confirms the owning session has ended:
+**Operator-only abandonment**, after the operator confirms the owning session has ended. The
+next action depends on the phase `status` reports:
+
+| Phase | Next action |
+| --- | --- |
+| `held`, `completed`, or `uncertain` with no runs | `abandon --reason` |
+| `launching`, `running`, `timed-out`, `interrupted`, `uncertain` with runs, or an unreadable record | the runbook below, then `abandon --investigated --reason` |
 
 ```bash
 bash "$PLUGIN_ROOT/skills/take-it/scripts/checkout-guard.sh" abandon \
   --repo "$CHECKOUT" --reason "<why the owner is known to be gone>"
 ```
 
-It needs no token, only positive evidence. It accepts `held` or `completed`, or `uncertain` with
-no runs (an acquisition that died before issuing a token), from the guard's own worktree. It
-re-proves every recorded worker's termination, a clean tree and exact fresh pushed tips as
-`verify` does, then archives the guard with the reason. It refuses `launching`, `running`,
-`timed-out`, `interrupted` and any other uncertain guard: those need investigation of the recorded
-process identities and retained work, and no command guesses termination. Abandoning a guard whose
-coordinator is in fact alive removes that coordinator's exclusion, and its later `verify` or
-`release` fails visibly; that is why this is the operator's decision and never a loop's.
+It needs no token. Without `--investigated` it re-proves every recorded worker's durable
+termination record, a clean tree and exact fresh pushed tips as `verify` does, then archives the
+guard with the reason. `--investigated` records the operator's attestation in place of the durable
+termination record only. Every recorded supervisor, child, process group and descendant must still
+be gone now, and the clean-tree and pushed-tip checks still apply; with an unreadable record, only
+the clean tree and a published current branch can be checked. Both forms act only from the
+guard's own worktree. Abandoning a guard whose coordinator is in fact alive removes that
+coordinator's exclusion, and its later `verify` or `release` fails visibly; that is why this is the
+operator's decision and never a loop's.
+
+**Runbook before `--investigated`.**
+
+1. Read `status`. For each run, note `supervisor`, `child`, `process_groups`,
+   `observed_descendants` and `remaining_processes`.
+2. Check each identity with `ps -o pid=,pgid=,lstart= -p <pid>`; a pid with a different start time
+   is a different process. Check `ps -ax -o pid=,pgid=` for any member of a recorded group.
+   A survivor is still a writer: stop it deliberately, or wait, and never abandon around it.
+3. Read `git status --porcelain` and compare each run branch's local tip with
+   `git ls-remote origin refs/heads/<branch>`. Push or otherwise preserve anything unpublished;
+   never stash, reset or discard it.
+4. Run `abandon --investigated --reason`, naming what you checked.
+5. Return to the derived default branch and fast-forward only. A run branch left checked out can
+   be deleted by a server-side merge, which makes the next acquisition unverifiable.
 
 Hold ownership through local coordinator work. No coordinator mutation while the serial child
 is live or uncertain. Before continuing after a child, use `verify` below; after all local work

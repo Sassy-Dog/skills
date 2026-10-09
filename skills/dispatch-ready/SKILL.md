@@ -88,13 +88,15 @@ fast-forwards, merges, teardown, or any other shared-checkout mutation. Never le
 actions and acquire only at §5. A refused acquisition claims nothing and performs no
 reconciliation mutations. Read the guard's `status`: report `checkout active writer` for a live
 worker, or `checkout ownership held`/`unresolved` with its guard path, owner, phase and age, naming
-the reference's operator-only `abandon` as the next action — a tick never runs it. A dirty or
+the reference's operator-only next action for that phase — a tick never runs `abandon` itself. A dirty or
 unpushed checkout is a specific safety hold, never permission to stash/reset it. Read-only
 diagnostics may still run. The guard is retained across a serial launch and all subsequent local
 work; no coordinator mutation is allowed while that worker is live or its termination uncertain.
 
 Read `${CLAUDE_PLUGIN_ROOT}/skills/take-it/references/isolation-confirmation.md`, including
 **Checkout ownership** and **Synchronous serial execution**, and use its exact guard commands.
+If the plugin-root placeholder in that path reaches you unexpanded, resolve the root first as §4's
+**Plugin root.** paragraph describes; never search for the file.
 Initialize this tick's serial-worker count to zero; §2 recovery and §5 initial dispatch share
 that same one-worker quota. Release ownership by that contract on every normal exit, including
 §3's capacity exit, only after all local work; failed release retains a visible safety hold.
@@ -782,7 +784,7 @@ or recovery attempt, real runner exit, independently verified pushed tip, and ow
 merged; deferred coordinator review remains held until §2 clears it. Count a real serial launch
 as dispatched/progress even if it fails; never report an intended launch as execution. Show
 dirty/unpushed artifacts, and active-writer/ownership holds with the guard path, owner, phase, age
-and next action (`abandon` is the operator's, never the tick's). Additional
+and the reference's next action for that phase (`abandon` is the operator's, never the tick's). Additional
 eligible items waiting on this tick's one-worker quota remain Ready, not STALLED.
 
 ## 7. Terminal states — drain complete, drain deferred, drain stalled, drain degraded
@@ -801,7 +803,11 @@ DEFERRED or DEGRADED verdict, since nothing local could be reconciled, and it is
 entry that does not wait for in-flight zero: every in-flight item's reconciliation needs that same
 ownership. Record the guard path with root `checkout ownership <created_at>` (`unreadable` when
 `status` cannot read the record); the same guard on two consecutive ticks confirms STALLED through
-the normal stop path, naming the guard, its owner and the operator's `abandon` next action. A
+the normal stop path, naming the guard, its owner and the reference's next action for its phase.
+**Known and accepted:** a live take-it coordinator holds exactly such a worker-less guard through its
+CI wait and merge, so a loop sharing that omp checkout stops here too. The stop is fail-safe — it
+mutates nothing — and the announcement must say so: confirm the owning session has ended before
+any `abandon`, or simply restart the loop once that session finishes. A
 `status` read that itself fails proves nothing: an unverified tick. A known dirty/unpushed
 checkout or unavailable serial runner is a visible execution-safety hold; if no work is in flight
 and every remaining item genuinely needs human action, it joins STALLED's existing held set.
