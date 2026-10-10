@@ -117,7 +117,8 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp
 ```
 
 Any lane the existing file declares that the fresh render does not is printed as `DIVERGED` and
-fails the run. **That is the stop signal, not a formality.** A file stamped `template-version: N`
+fails the run; so is a `cooldown:` the existing file carries that the fresh render lacks (re-render
+with the same `--cooldown` request, or have a human remove a hand-added one). **That is the stop signal, not a formality.** A file stamped `template-version: N`
 whose content a fresh render of N no longer reproduces is the most dangerous state this generator
 has: the matcher says "mine, reconcile it", the render quietly drops lanes the repo depends on, and
 nothing errors — tailoredtip sat in exactly that state with four correctly-directed lanes under a
@@ -281,6 +282,32 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml
 ```
 
+**Optional per-ecosystem cooldown.** `dependabot.yml` can carry Dependabot's release-age buffer on
+chosen ecosystems: pass `--cooldown ECOSYSTEM=DAYS` (repeatable, one per ecosystem, DAYS an integer
+1..90) to **both** scripts. It cannot be derived from the repo, so ask the user which ecosystems want
+one; absent the flag, nothing is rendered. Example, a 7-day cooldown on routine Bun version updates
+(the first consumer, brewslate#112):
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
+  --detect-json /tmp/deps.json --cooldown bun=7 --out /tmp/dependabot.new.yml
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml \
+  --cooldown bun=7
+```
+
+It renders `cooldown:` / `default-days: N` on **every lane of that ecosystem** (a `bun` request
+covers each bun directory) and on no other entry, and the file header gains a paragraph saying so.
+Dependabot applies `cooldown` to **version updates only**, so security updates still arrive at once
+and the security groups are untouched. Only `default-days` is supported; `semver-*-days`, `include`
+and `exclude` are not rendered. The request is refused, never silently dropped, when DAYS is not
+1..90, an ecosystem is named twice, or the ecosystem has no lane in the render. The validator
+accepts a `cooldown:` only where the same `--cooldown` request says so and fails any other (a
+hand-added one, a different value, a lane missing it, extra keys). The request is not stored in the
+repo, so a later re-render must repeat it: `--compare-to` reports a cooldown the existing file
+carries and the fresh render lacks as `DIVERGED`, naming the flag to pass. With no request the
+output is byte-identical to the previous render (`template-version: 3`); a cooldown render stamps
+`template-version: 4`, set by the renderer.
+
 **Never write a render the validator rejected**, and never "fix" a rejection by editing the output:
 a failing lane means the derivation is wrong, so fix `lib-ecosystems.sh` and re-render. The
 workflow templates stay hand-rendered — they carry no per-location repeat.
@@ -288,7 +315,7 @@ workflow templates stay hand-rendered — they carry no per-location repeat.
 Every template already carries the current `generated-by: sassy-dog:setup-deps` marker, so a
 render normalises a pre-rename file's marker for free — keep the template's marker line verbatim
 rather than preserving whatever the existing file carried. Leave each template's
-`template-version` alone unless the template's *content* changed: the producer rename is an
+`template-version` alone (the one exception is `dependabot.yml`, whose stamp the renderer sets: 3, or 4 when a cooldown is rendered) unless the template's *content* changed: the producer rename is an
 identity change, and the stamp should not move for it. **A bump does not trigger anything** —
 measured while shipping [#316](https://github.com/Sassy-Dog/skills/issues/316): no script
 reads `template-version`, and re-render is decided *solely* by the `generated-by:` ownership
@@ -412,6 +439,8 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never write a `dependabot.yml` that `validate-dependabot.sh` rejected, and never default a lane
   to `directory: "/"` because the location is unclear. A lane pointing at a directory with no
   manifest is the one failure here nothing else surfaces: no error, no PRs, no signal.
+- Never hand-add a `cooldown:` to a rendered `dependabot.yml`, and never render one nobody asked
+  for: the request is `--cooldown ECOSYSTEM=DAYS`, validated with the same flag.
 - Never overwrite an owned file whose committed lanes a fresh render drops (`--compare-to`
   reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which only makes a
   diverged file look current.

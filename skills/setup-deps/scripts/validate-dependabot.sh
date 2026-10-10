@@ -23,9 +23,22 @@
 # existing file has and the fresh render lacks is reported and fails the run —
 # the point is that a human decides, not that the refresh proceeds.
 #
+# COOLDOWN (issue #498). A `cooldown:` block is accepted ONLY where the caller
+# says it was requested: `--cooldown ECOSYSTEM=DAYS` (repeatable) is the same
+# request that was handed to render-dependabot.sh. Every entry of a requested
+# ecosystem must carry exactly `default-days: DAYS` and nothing else, every
+# other entry must carry no cooldown at all, and a requested ecosystem with no
+# entry is a failure. With NO --cooldown flag any cooldown in FILE fails, which
+# is what makes a hand-added one visible. Under --compare-to, a cooldown the
+# existing file carries that the fresh render does not is DIVERGED, like a
+# dropped lane: re-rendering without the request would silently strip it, and
+# a human decides. Only `default-days` is understood; `semver-*-days`,
+# `include` and `exclude` are reported as divergence.
+#
 # Usage:
 #   validate-dependabot.sh FILE [--root DIR] [--files-from LIST]
 #                               [--compare-to EXISTING]
+#                               [--cooldown ECOSYSTEM=DAYS]...
 #   validate-dependabot.sh FILE --pairs-only     # the extracted lanes, nothing
 #                                                # asserted (needs no repo)
 # Exit: 0 every lane is backed by a manifest (and nothing was dropped)
@@ -43,6 +56,7 @@ ROOT_ARG=""
 FILES_FROM=""
 COMPARE_TO=""
 PAIRS_ONLY=0
+COOLDOWNS=""   # newline-separated "ecosystem=days"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -50,13 +64,18 @@ while [ "$#" -gt 0 ]; do
         --files-from) FILES_FROM="${2:-}"; shift 2 || exit 2 ;;
         --compare-to) COMPARE_TO="${2:-}"; shift 2 || exit 2 ;;
         --pairs-only) PAIRS_ONLY=1; shift ;;
+        --cooldown)   COOLDOWNS+="${2:-}"$'\n'; shift 2 || exit 2 ;;
         -*) echo "validate-dependabot: unknown argument '$1'" >&2; exit 2 ;;
         *)  [ -z "$FILE" ] || { echo "validate-dependabot: one file at a time" >&2; exit 2; }
             FILE="$1"; shift ;;
     esac
 done
 
-[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING]" >&2; exit 2; }
+[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING] [--cooldown ECOSYSTEM=DAYS]..." >&2; exit 2; }
+while IFS= read -r req; do
+    [ -n "$req" ] || continue
+    [[ "$req" =~ ^[a-z][a-z-]*=[1-9][0-9]{0,2}$ ]] || { echo "validate-dependabot: --cooldown '$req' must be ECOSYSTEM=DAYS" >&2; exit 2; }
+done <<<"$COOLDOWNS"
 [ -r "$FILE" ] || { echo "validate-dependabot: cannot read '$FILE'" >&2; exit 2; }
 
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
@@ -163,6 +182,60 @@ extract_pairs() {
     fi
 }
 
+# extract_cooldowns <file> — one "ecosystem<TAB>spec" line per package-ecosystem
+# entry, spec being the entry's cooldown keys as sorted `key=value` pairs joined
+# by commas (empty when the entry has no cooldown). Comments are dropped first,
+# so the file header's prose about `cooldown:` is never read as a block.
+extract_cooldowns() {
+    local f="$1" line eco="" have=0 cd_indent=-1 spec="" cd_seen=0 ind k v pair
+    _flush() { [ "$cd_seen" -eq 1 ] && [ -z "$spec" ] && spec="bare=,"; [ "$have" -eq 1 ] && printf '%s\t%s\n' "$eco" "$(tr ',' '\n' <<<"$spec" | grep -v '^$' | sort | paste -sd, -)"; return 0; }
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*package-ecosystem:[[:space:]]*(.*)$ ]]; then
+            _flush
+            eco="$(_scalar "${BASH_REMATCH[1]}")"; have=1; cd_indent=-1; spec=""; cd_seen=0
+            continue
+        fi
+        [ "$have" -eq 1 ] || continue
+        if [[ "$line" =~ ^([[:space:]]*)cooldown:[[:space:]]*(.*)$ ]]; then
+            ind="${BASH_REMATCH[1]}"; v="$(_scalar "${BASH_REMATCH[2]}")"
+            cd_indent=${#ind}
+            if [ -n "$v" ]; then
+                # inline flow form: cooldown: {default-days: 7}
+                v="${v#\{}"; v="${v%\}}"; cd_indent=-1
+                while IFS= read -r pair; do
+                    [ -n "${pair//[[:space:]]/}" ] || continue
+                    k="$(_scalar "${pair%%:*}")"; v="$(_scalar "${pair#*:}")"
+                    spec+="$k=$v,"
+                done <<<"${v//,/$'\n'}"
+                [ -n "$spec" ] || spec="flow=unreadable,"
+            else
+                cd_seen=1   # a bare `cooldown:` is itself a (key-less) cooldown
+            fi
+            continue
+        fi
+        if [ "$cd_indent" -ge 0 ]; then
+            if [[ "$line" =~ ^([[:space:]]*)([A-Za-z0-9_-]+):[[:space:]]*(.*)$ ]] && [ "${#BASH_REMATCH[1]}" -gt "$cd_indent" ]; then
+                spec+="${BASH_REMATCH[2]}=$(_scalar "${BASH_REMATCH[3]}"),"
+            elif [[ "$line" =~ ^([[:space:]]*)- ]] && [ "${#BASH_REMATCH[1]}" -gt "$cd_indent" ]; then
+                :   # a list item under include:/exclude: — the key already counts
+            else
+                cd_indent=-1
+            fi
+        fi
+    done < "$f"
+    _flush
+}
+
+# requested_spec ECOSYSTEM — the spec the caller's --cooldown requests, or empty.
+requested_spec() {
+    local req
+    while IFS= read -r req; do
+        [ "${req%%=*}" = "$1" ] && { echo "default-days=${req#*=}"; return 0; }
+    done <<<"$COOLDOWNS"
+    return 0
+}
+
 fail=0
 ok() { echo "  ok    $1" >&2; }
 bad() { echo "  FAIL  $1" >&2; fail=1; }
@@ -187,6 +260,28 @@ if [ "$PAIRS_ONLY" -eq 1 ]; then
 fi
 
 echo "validate-dependabot: $FILE against $CORPUS_ROOT" >&2
+
+# --- cooldown ----------------------------------------------------------------
+file_cd="$(extract_cooldowns "$FILE_ABS")"
+seen_cd_eco=""
+while IFS=$'\t' read -r eco spec; do
+    [ -n "$eco" ] || continue
+    seen_cd_eco+="$eco"$'\n'
+    want="$(requested_spec "$eco")"
+    if [ "$spec" = "$want" ]; then
+        [ -z "$spec" ] || ok "$eco cooldown $spec (requested)"
+    elif [ -z "$want" ]; then
+        bad "$eco: carries a cooldown ($spec) that was not requested — a hand-added cooldown in an owned file; render it with --cooldown $eco=DAYS or remove it"
+    elif [ -z "$spec" ]; then
+        bad "$eco: cooldown requested ($want) but this entry carries none"
+    else
+        bad "$eco: cooldown '$spec' does not match the request '$want'"
+    fi
+done <<<"$file_cd"
+while IFS= read -r req; do
+    [ -n "$req" ] || continue
+    grep -qxF "${req%%=*}" <<<"$seen_cd_eco" || bad "${req%%=*}: cooldown requested but the file has no such ecosystem entry"
+done <<<"$COOLDOWNS"
 while IFS=$'\t' read -r eco dir; do
     [ -n "$eco" ] || continue
     if [ -z "$dir" ]; then bad "$eco: entry declares an empty directory"; continue; fi
@@ -214,6 +309,17 @@ if [ -n "$COMPARE_ABS" ]; then
         done <<<"$dropped"
     else
         ok "no lane in $COMPARE_TO is dropped by this render"
+    fi
+    existing_cd="$(extract_cooldowns "$COMPARE_ABS" | grep -vE $'\t$' | sort -u)"
+    render_cd="$(printf '%s\n' "$file_cd" | grep -vE $'\t$' | sort -u)"
+    dropped_cd="$(comm -23 <(printf '%s\n' "$existing_cd") <(printf '%s\n' "$render_cd"))"
+    if [ -n "$(tr -d '[:space:]' <<<"$dropped_cd")" ]; then
+        while IFS=$'\t' read -r eco spec; do
+            [ -n "$eco" ] || continue
+            bad "DIVERGED: $COMPARE_TO carries a $eco cooldown ($spec) that this render does not — re-render with --cooldown $eco=DAYS to keep a requested one, or a human removes a hand-added one"
+        done <<<"$dropped_cd"
+    else
+        ok "no cooldown in $COMPARE_TO is dropped by this render"
     fi
     while IFS=$'\t' read -r eco dir; do
         [ -n "$eco" ] || continue
