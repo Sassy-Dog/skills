@@ -1,7 +1,7 @@
 {
   "name": "sassy-dog",
   "displayName": "Sassy Dog",
-  "version": "2026.10.43",
+  "version": "2026.10.45",
   "description": "Reusable AI agent skills for Claude Code, Gemini CLI, and other AI coding tools",
   "license": "Apache-2.0",
   "author": {
