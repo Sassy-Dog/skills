@@ -1,4 +1,4 @@
-# TEMPLATE: dependabot.yml · version 3
+# TEMPLATE: dependabot.yml · version 3 (the renderer stamps 4 when a cooldown is requested; see "v4 adds" below)
 # Rendered by sassy-dog:setup-deps from detect-ecosystems.sh — in practice by
 # scripts/render-dependabot.sh, which implements exactly these three rules.
 #   {{FACT}}                → detected/confirmed value

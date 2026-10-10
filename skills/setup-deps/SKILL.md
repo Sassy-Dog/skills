@@ -113,14 +113,21 @@ is already committed:
 
 ```bash
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml \
-  --compare-to .github/dependabot.yml
+  --compare-to .github/dependabot.yml --cooldown bun=7
 ```
 
+The `--cooldown bun=7` above stands for every cooldown the committed file already carries: the
+request is not stored anywhere but that file, so read each ecosystem's `cooldown:` /
+`default-days:` from `.github/dependabot.yml` and pass it as `--cooldown ECOSYSTEM=DAYS` to **both**
+the render and this validate. Omit the flag when the committed file carries no cooldown.
+
 Any lane the existing file declares that the fresh render does not is printed as `DIVERGED` and
-fails the run; so is a `cooldown:` the existing file carries that the fresh render lacks (re-render
-with the same `--cooldown` request, or have a human remove a hand-added one). **That is the stop signal, not a formality.** A file stamped `template-version: N`
-whose content a fresh render of N no longer reproduces is the most dangerous state this generator
-has: the matcher says "mine, reconcile it", the render quietly drops lanes the repo depends on, and
+fails the run. So is a `cooldown:` the existing file carries that the fresh render lacks, reported
+as `DROPPED`; the likeliest cause is a forgotten `--cooldown`, not a hand-added block. A cooldown
+the render carries at a different value is reported as `CHANGED`. Both are covered under "Changing
+or removing a cooldown" below. **A lost lane is the stop signal, not a formality.** A file stamped
+`template-version: N` whose content a fresh render of 3 or 4, the two current stamps, no longer
+reproduces is the most dangerous state this generator has: the matcher says "mine, reconcile it", the render quietly drops lanes the repo depends on, and
 nothing errors — tailoredtip sat in exactly that state with four correctly-directed lanes under a
 v2 marker. Report the dropped lanes to the user and stop; do not overwrite, and do not "fix" it by
 re-stamping the marker, which only launders a diverged file as current.
@@ -268,7 +275,7 @@ Substitute `{{FACT}}` values and delete the `# {{IF:FLAG}}` / `# {{ENDIF}}` bloc
 apply. Never hand-edit a rendered file to fix a bug; fix the template and re-render.
 
 **`dependabot.yml` is rendered by script, and VALIDATED AFTER RENDER — it is no longer valid by
-construction.** `dependabot.yml.template` v3 repeats a block per (ecosystem, directory) pair, which
+construction.** `dependabot.yml.template` (v3, or v4 when a cooldown is requested) repeats a block per (ecosystem, directory) pair, which
 deletion alone cannot express, so the old static guarantee is gone here on purpose. What replaced
 it is stronger: the render is parsed and every emitted `directory:` is asserted to hold the
 manifest it claims. The old guarantee never caught the bug that forced the change — a v2 render was
@@ -302,11 +309,41 @@ and the security groups are untouched. Only `default-days` is supported; `semver
 and `exclude` are not rendered. The request is refused, never silently dropped, when DAYS is not
 1..90, an ecosystem is named twice, or the ecosystem has no lane in the render. The validator
 accepts a `cooldown:` only where the same `--cooldown` request says so and fails any other (a
-hand-added one, a different value, a lane missing it, extra keys). The request is not stored in the
-repo, so a later re-render must repeat it: `--compare-to` reports a cooldown the existing file
-carries and the fresh render lacks as `DIVERGED`, naming the flag to pass. With no request the
-output is byte-identical to the previous render (`template-version: 3`); a cooldown render stamps
-`template-version: 4`, set by the renderer.
+hand-added one, a different value, a lane missing it, extra keys). Both scripts parse the request
+through one shared function in `lib-ecosystems.sh`, so they refuse the same input. With no request
+the output is byte-identical to the previous render (`template-version: 3`); a cooldown render
+stamps `template-version: 4`, set by the renderer.
+
+**Re-rendering keeps the cooldown only if you carry it.** The request is not stored in the repo;
+the committed `.github/dependabot.yml` is its only record. Before any re-render, read each
+ecosystem's `cooldown:` / `default-days:` from that file and pass it as `--cooldown ECOSYSTEM=DAYS`
+to both scripts. Forgetting it fails closed: the validator reports the dropped cooldown as
+`DROPPED`, naming the forgotten flag, and never writes a file that strips it.
+
+**Changing or removing a cooldown is a deliberate plan item, not drift.** Put it in the plan the
+user approves (`bun` 7 days to 14, or `bun` cooldown removed), then run the sequence below. The
+`--change-cooldown ECOSYSTEM` flag is the explicit acknowledgement that the committed cooldown for
+that one ecosystem is meant to differ; it is accepted only with `--compare-to`, only for an
+ecosystem whose committed cooldown the render really changes or drops, and it waves through nothing
+else. A forgotten `--cooldown` has no such acknowledgement, so it keeps failing. Example, brewslate's
+`bun` 7-day cooldown:
+
+```bash
+# Change 7 -> 14: the NEW value goes to render and validate; the acknowledgement goes to validate.
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
+  --detect-json /tmp/deps.json --cooldown bun=14 --out /tmp/dependabot.new.yml
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml \
+  --cooldown bun=14 --change-cooldown bun --compare-to .github/dependabot.yml
+
+# Remove: no --cooldown for bun at all; the acknowledgement is what permits the drop.
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
+  --detect-json /tmp/deps.json --out /tmp/dependabot.new.yml
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml \
+  --change-cooldown bun --compare-to .github/dependabot.yml
+```
+
+A run that reports `CHANGED` or `DROPPED` for an ecosystem the user did not ask to touch is the
+forgotten-flag case: re-render with the committed value instead of adding `--change-cooldown`.
 
 **Never write a render the validator rejected**, and never "fix" a rejection by editing the output:
 a failing lane means the derivation is wrong, so fix `lib-ecosystems.sh` and re-render. The
@@ -315,8 +352,9 @@ workflow templates stay hand-rendered — they carry no per-location repeat.
 Every template already carries the current `generated-by: sassy-dog:setup-deps` marker, so a
 render normalises a pre-rename file's marker for free — keep the template's marker line verbatim
 rather than preserving whatever the existing file carried. Leave each template's
-`template-version` alone (the one exception is `dependabot.yml`, whose stamp the renderer sets: 3, or 4 when a cooldown is rendered) unless the template's *content* changed: the producer rename is an
-identity change, and the stamp should not move for it. **A bump does not trigger anything** —
+`template-version` alone. The one exception is `dependabot.yml`, whose stamp the renderer sets: 3, or 4
+when a cooldown is rendered. Otherwise move a stamp only when the template's *content* changed. The
+producer rename is an identity change, and the stamp should not move for it. **A bump does not trigger anything** —
 measured while shipping [#316](https://github.com/Sassy-Dog/skills/issues/316): no script
 reads `template-version`, and re-render is decided *solely* by the `generated-by:` ownership
 matcher, so a marker-owned file is reconciled on any run regardless of its stamp and a marker-less
@@ -441,6 +479,9 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
   manifest is the one failure here nothing else surfaces: no error, no PRs, no signal.
 - Never hand-add a `cooldown:` to a rendered `dependabot.yml`, and never render one nobody asked
   for: the request is `--cooldown ECOSYSTEM=DAYS`, validated with the same flag.
+- Never drop or change a committed cooldown without the user's approval of that exact change as a
+  plan item, and never pass `--change-cooldown` to turn a failing run green: a forgotten
+  `--cooldown` is fixed by passing the committed value.
 - Never overwrite an owned file whose committed lanes a fresh render drops (`--compare-to`
   reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which only makes a
   diverged file look current.

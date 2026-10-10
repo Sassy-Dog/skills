@@ -24,6 +24,34 @@
 # EXCLUDE_RE before anything else runs, by DIRECTORY NAME rather than depth, so
 # packages/web/package.json still counts and templates/package.json does not.
 
+# parse_cooldown_requests REQUESTS — the ONE parser for `--cooldown ECOSYSTEM=DAYS`
+# requests (issue #501), called by render-dependabot.sh and validate-dependabot.sh
+# so the two cannot drift: a validator that accepts what the renderer refuses
+# would pass a file no render could have produced. REQUESTS is the caller's
+# newline-separated list. Returns 0 when every request is "ecosystem=days" with
+# DAYS an integer 1..90 (Dependabot's documented range) and no ecosystem is
+# named twice; otherwise returns 1 with the reason in COOLDOWN_ERR. The caller
+# owns the message prefix and the exit code (render exits 1, validate exits 2).
+# shellcheck disable=SC2034  # out-parameter, read by the sourcing scripts
+COOLDOWN_ERR=""
+parse_cooldown_requests() {
+    local req seen=""
+    COOLDOWN_ERR=""
+    while IFS= read -r req; do
+        [ -n "$req" ] || continue
+        if ! [[ "$req" =~ ^([a-z][a-z-]*)=([1-9][0-9]{0,2})$ ]] || [ "${BASH_REMATCH[2]}" -gt 90 ]; then
+            COOLDOWN_ERR="--cooldown '$req' must be ECOSYSTEM=DAYS with DAYS an integer 1..90"
+            return 1
+        fi
+        if grep -qxF "${BASH_REMATCH[1]}" <<<"$seen"; then
+            COOLDOWN_ERR="--cooldown names '${BASH_REMATCH[1]}' twice"
+            return 1
+        fi
+        seen+="${BASH_REMATCH[1]}"$'\n'
+    done <<<"$1"
+    return 0
+}
+
 EXCLUDE_RE='(^|/)(templates?|fixtures?|__fixtures__|testdata|test-?data|examples?|node_modules)(/|$)'
 
 # Populated by load_corpus.

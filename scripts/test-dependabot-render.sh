@@ -65,6 +65,12 @@
 #      accepts exactly the requested cooldown while rejecting an unrequested,
 #      missing, mismatched, one-lane-only, extra-key, flow-form or bare one,
 #      with --compare-to reporting a cooldown a re-render would strip.
+#      (issue #501) The validator refuses the same requests the renderer does
+#      (DAYS > 90, a repeated ecosystem): both call the one parser in
+#      lib-ecosystems.sh. A deliberate change or removal is acknowledged per
+#      ecosystem with `--change-cooldown`, reported as CHANGED or DROPPED, and
+#      the acknowledgement is refused where it is a no-op, so a forgotten
+#      --cooldown still fails closed.
 #
 # Fixtures: scripts/fixtures/dependabot-render/<repo>.corpus is the repo's
 # tracked path list (with the handful of manifest bodies whose CONTENT decides
@@ -409,6 +415,92 @@ else
         bad "cooldown — --compare-to ACCEPTED a hand-added pub cooldown being stripped"
     else
         ok "cooldown — --compare-to reports a hand-added cooldown on a non-requested ecosystem"
+    fi
+
+    # --- parity (issue #501): the validator refuses what the renderer refuses.
+    # Both call parse_cooldown_requests in lib-ecosystems.sh; each case below is
+    # fed to BOTH scripts, and the validator must exit 2 (bad usage) exactly
+    # where the renderer exits 1.
+    for bad_req in "bun=91" "bun=999" "bun=0" "bun=7x" "Bun=7" "bun" "bun=-1"; do
+        bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown "$bad_req" --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+        if [ "$?" = "2" ]; then
+            ok "cooldown parity — the validator refuses '$bad_req' as the renderer does"
+        else
+            bad "cooldown parity — the validator ACCEPTED '$bad_req', which the renderer refuses"
+        fi
+    done
+    bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=7 --cooldown bun=99 --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+    if [ "$?" = "2" ]; then
+        ok "cooldown parity — the validator refuses a repeated ecosystem as the renderer does"
+    else
+        bad "cooldown parity — the validator ACCEPTED a repeated ecosystem (first one wins), which the renderer refuses"
+    fi
+    bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=90 --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+    if [ "$?" != "2" ]; then
+        ok "cooldown parity — 90 days, the documented ceiling, is not refused by the validator"
+    else
+        bad "cooldown parity — the validator refused 90 days, the top of the 1..90 range"
+    fi
+
+    # --- change and removal (issue #501). The committed file is the only record
+    # of the request, so a re-render that does not repeat it must fail closed
+    # (a forgotten flag never strips a cooldown), while a deliberate change or
+    # removal is acknowledged per ecosystem with --change-cooldown.
+    CD14="$WORK/tailoredtip.cd14.yml"
+    bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown bun=14 > "$CD14" 2>/dev/null
+    cmpd() { bash "$SCRIPTS/validate-dependabot.sh" "$@" --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2> "$WORK/chg.err"; }
+
+    if cmpd "$CD14" --cooldown bun=14 --compare-to "$CD"; then
+        bad "cooldown change — an unacknowledged 7 -> 14 change passed --compare-to"
+    elif grep -q 'DIVERGED: .*CHANGED' "$WORK/chg.err" && grep -q -- '--change-cooldown bun' "$WORK/chg.err"; then
+        ok "cooldown change — an unacknowledged change fails as CHANGED and names --change-cooldown"
+    else
+        bad "cooldown change — the unacknowledged change failed, but not with a CHANGED line naming --change-cooldown"
+    fi
+    if cmpd "$CD14" --cooldown bun=14 --change-cooldown bun --compare-to "$CD"; then
+        ok "cooldown change — a deliberate 7 -> 14 change passes with --change-cooldown bun"
+    else
+        bad "cooldown change — a deliberate change was still rejected:"; grep FAIL "$WORK/chg.err" | sed 's/^/        /' >&2
+    fi
+    if cmpd "$GOLDEN" --compare-to "$CD"; then
+        bad "cooldown removal — a render that drops the cooldown passed --compare-to unacknowledged"
+    elif grep -q 'DIVERGED: .*DROPPED' "$WORK/chg.err" && grep -q 'forgotten' "$WORK/chg.err"; then
+        ok "cooldown removal — a dropped cooldown fails as DROPPED and names the forgotten flag as the likely cause"
+    else
+        bad "cooldown removal — the dropped cooldown failed, but not with a DROPPED line naming a forgotten flag"
+    fi
+    if cmpd "$GOLDEN" --change-cooldown bun --compare-to "$CD"; then
+        ok "cooldown removal — a deliberate removal passes with --change-cooldown bun"
+    else
+        bad "cooldown removal — a deliberate removal was still rejected:"; grep FAIL "$WORK/chg.err" | sed 's/^/        /' >&2
+    fi
+    if cmpd "$GOLDEN" --change-cooldown bun --compare-to "$WORK/cd.pub.yml"; then
+        bad "cooldown removal — --change-cooldown bun also waved through a DIFFERENT ecosystem's (pub) dropped cooldown"
+    else
+        ok "cooldown removal — the acknowledgement covers only the ecosystem it names"
+    fi
+    if cmpd "$CD" --cooldown bun=7 --change-cooldown bun --compare-to "$CD"; then
+        bad "cooldown change — --change-cooldown was accepted where nothing changes (a no-op acknowledgement)"
+    else
+        ok "cooldown change — --change-cooldown is refused where the render reproduces the committed cooldown"
+    fi
+    if cmpd "$CD" --cooldown bun=7 --change-cooldown pub --compare-to "$GOLDEN"; then
+        bad "cooldown change — --change-cooldown pub was accepted for an ecosystem with no committed cooldown"
+    else
+        ok "cooldown change — --change-cooldown is refused for an ecosystem with no committed cooldown"
+    fi
+    bash "$SCRIPTS/validate-dependabot.sh" "$GOLDEN" --change-cooldown bun --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+    if [ "$?" = "2" ]; then
+        ok "cooldown change — --change-cooldown without --compare-to is a usage error"
+    else
+        bad "cooldown change — --change-cooldown was accepted with nothing to compare to"
+    fi
+    if cmpd "$CD" --compare-to "$CD" ; then
+        bad "cooldown change — a forgotten --cooldown on a re-render of the same file passed"
+    elif grep -q 'most likely --cooldown bun=DAYS was not passed' "$WORK/chg.err"; then
+        ok "cooldown change — a forgotten flag on validate is blamed on the flag, not only on a hand-added cooldown"
+    else
+        bad "cooldown change — the forgotten-flag failure did not name the likely cause"
     fi
 fi
 
