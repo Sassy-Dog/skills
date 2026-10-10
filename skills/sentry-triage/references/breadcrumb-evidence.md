@@ -61,9 +61,10 @@ truncate**, as the numbered pipeline below. For every crumb keep only:
 - the `data` **keys**, never the values.
 
 Apply this pipeline, in this order, to every kept string. Kept strings include the crumb message,
-the attachment filename and content type, and the release, dist, model and OS version (all
-client-supplied): each goes through all three steps, and each is cut to about 120 characters in
-step 3 (the message limit applies to every kept string, not the message alone):
+crumb category, level and `data` keys, the attachment filename and content type, and the release,
+dist, model and OS version (all client-supplied): each goes through all three steps, and each is
+cut to about 120 characters in step 3 (the message limit applies to every kept string, not the
+message alone):
 
 1. **Redact.** Strip query strings and fragments from every URL; drop Authorization, Cookie,
    `Set-Cookie`, API-key and token-shaped values (long opaque or base64/hex strings, `Bearer ...`);
@@ -74,8 +75,8 @@ step 3 (the message limit applies to every kept string, not the message alone):
    `)` (so HTML cannot render), and write `#` followed by digits as `no.` plus the digits (so it
    cannot auto-link an issue). The masks above contain no angle brackets, so this step cannot
    rewrite them.
-3. **Truncate** each kept string to about 120 characters. Truncation is last: cutting first could split
-   a long opaque token in half so the halves no longer match step 1.
+3. **Truncate** each kept string to about 120 characters. Truncation is last: cutting first could
+   split a long opaque token in half so the halves no longer match step 1.
 
 The preview must **flag the `## Breadcrumbs` block** for the approver ("contains redacted Sentry
 breadcrumbs: confirm nothing sensitive remains") before the user approves filing.
@@ -117,12 +118,12 @@ The event heading carries only the event id (a hex string); release, dist, model
 timestamp sit on the first line inside the fence, and the attachment metadata line (one per
 attachment, omitted when none) sits beside it. Each of those strings goes through Redact, Neutralize
 and Truncate like a crumb message. Release names are client-supplied too, which is why they are
-inside the fence and not in the heading. If
-the trails agree, add the `agreement:` line inside the same fence (a `text` fence opened with four
-or more backticks), never as prose: that line quotes a crumb. If a pull returned `UNKNOWN`, keep
-the heading id-only and put a `breadcrumbs: UNKNOWN (<reason>)` line inside the fence in place of
-the trail, with the reason drawn from the fixed vocabulary `no Sentry MCP`, `catalog has no <tool>`
-or `call failed`. Free-text error output never goes in a heading or outside the fence.
+inside the fence and not in the heading. If the trails agree, add the `agreement:` line inside the
+same fence (a `text` fence opened with four or more backticks), never as prose: that line quotes a
+crumb. If a pull returned `UNKNOWN`, keep the heading id-only and put a
+`breadcrumbs: UNKNOWN (<reason>)` line inside the fence in place of the trail, with the reason
+drawn from the fixed vocabulary `no Sentry MCP`, `catalog has no <tool>` or `call failed`.
+Free-text error output never goes in a heading or outside the fence.
 
 **Not tested by execution.** No script renders this block: the redaction, fencing and ordering
 rules above are prose an agent follows, pinned by `scripts/test-sentry-breadcrumbs.sh` at source
