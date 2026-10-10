@@ -23,9 +23,20 @@
 # manifests, and Dependabot answers that by silently doing nothing.
 # (setup-hooks keeps its deletion-only invariant; it has no per-location
 # repetition and needs none.)
+#   # {{COOLDOWN}}           → a line inside a FOREACH block: replaced by that
+#                             ecosystem's `cooldown:` block when one was
+#                             requested, deleted otherwise.
+#   # {{IF_COOLDOWN}} ... # {{ENDIF_COOLDOWN}}
+#                           → kept only when at least one cooldown was requested.
+#   {{TEMPLATE_VERSION}}    → 3 with no cooldown requested (byte-identical to the
+#                             pre-cooldown render, so a re-render moves nothing),
+#                             4 when any cooldown is rendered.
+#
+# v4 adds the optional per-ecosystem `cooldown:` block. It is a stamp on the
+# RENDER, not a new template: with no cooldown request the output is exactly v3.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: 3
+# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: {{TEMPLATE_VERSION}}
 #
 # GROUPING IS THE POINT OF THIS FILE. Ungrouped, one vulnerable transitive
 # dependency can open a dozen PRs; across this org that turned 74 alerts into a
@@ -45,6 +56,18 @@
 # through as its own security PR — security updates ignore version-update ignore
 # rules, which is the behaviour we want.
 #
+# {{IF_COOLDOWN}}
+# RELEASE-AGE COOLDOWN. An ecosystem entry below carries `cooldown:` because it
+# was requested at render time (render-dependabot.sh --cooldown ECOSYSTEM=DAYS).
+# Dependabot then waits that many days after a version is published before it
+# proposes it, which narrows the window in which a freshly published malicious
+# or broken release can reach a branch with no human in the loop. It applies to
+# VERSION UPDATES ONLY: security updates ignore `cooldown` and arrive at once,
+# and the security groups below are untouched by it. Only `default-days` is
+# rendered; a hand-added cooldown (or one with other keys) in an owned file is
+# reported as divergence by scripts/validate-dependabot.sh, not tolerated.
+#
+# {{ENDIF_COOLDOWN}}
 # ONE ENTRY PER (ECOSYSTEM, DIRECTORY). Dependabot reads the manifest at
 # `directory:` and does NOT recurse, so a monorepo needs one entry per manifest
 # location — the grouping above is per entry, so per-directory entries stay
@@ -63,6 +86,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       actions:
         applies-to: version-updates
@@ -79,6 +103,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       npm-minor-patch:
         applies-to: version-updates
@@ -107,6 +132,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       bun-minor-patch:
         applies-to: version-updates
@@ -133,6 +159,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       nuget-minor-patch:
         applies-to: version-updates
@@ -150,6 +177,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+# {{COOLDOWN}}
     groups:
       pub-minor-patch:
         applies-to: version-updates
@@ -167,6 +195,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       go-minor-patch:
         applies-to: version-updates
@@ -187,6 +216,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+# {{COOLDOWN}}
     groups:
       cargo-minor-patch:
         applies-to: version-updates
@@ -204,6 +234,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+# {{COOLDOWN}}
     groups:
       swift-minor-patch:
         applies-to: version-updates
@@ -224,6 +255,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+# {{COOLDOWN}}
     groups:
       gradle-minor-patch:
         applies-to: version-updates
@@ -241,6 +273,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+# {{COOLDOWN}}
     groups:
       pip-minor-patch:
         applies-to: version-updates
@@ -258,6 +291,7 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+# {{COOLDOWN}}
     groups:
       docker-security:
         applies-to: security-updates

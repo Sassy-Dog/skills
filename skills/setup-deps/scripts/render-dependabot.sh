@@ -18,12 +18,25 @@
 # reported on stderr and its block is DROPPED rather than defaulting to "/" —
 # defaulting to "/" is precisely the bug this replaces.
 #
+# Optional cooldown (issue #498): `--cooldown ECOSYSTEM=DAYS`, repeatable, one
+# per ecosystem, renders Dependabot's `cooldown: default-days: N` on EVERY lane
+# of that ecosystem, and nowhere else. It rides the same per-lane path as the
+# rest of the block (a `# {{COOLDOWN}}` slot in each FOREACH body) so it is never
+# a hand-edit that --compare-to would have to tolerate. Only `default-days` is
+# supported (an integer 1..90, Dependabot's documented range); the optional
+# semver-*-days / include / exclude keys are deliberately not rendered. A
+# request naming an ecosystem that ends up with no lane, a repeated ecosystem,
+# or a bad value is REFUSED (exit 1) rather than silently dropped. With no
+# --cooldown the output is byte-identical to the pre-#498 render
+# (template-version 3); any cooldown stamps template-version 4.
+#
 # ALWAYS pass the result through validate-dependabot.sh before writing it into
 # a repo. Rendering is no longer valid-by-construction (see the template
 # header); the post-render assertion is what took over that job.
 #
 # Usage:
 #   render-dependabot.sh --detect-json FILE [--template FILE] [--out FILE]
+#                        [--cooldown ECOSYSTEM=DAYS]...
 #   detect-ecosystems.sh | render-dependabot.sh --detect-json -
 # Exit: 0 rendered · 1 bad input, malformed template, or a token left behind
 set -uo pipefail
@@ -34,12 +47,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="$SCRIPT_DIR/../references/templates/dependabot.yml.template"
 DETECT=""
 OUT=""
+COOLDOWNS=""   # newline-separated "ecosystem=days"
+BASE_VERSION=3
+COOLDOWN_VERSION=4
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --detect-json) DETECT="${2:-}"; shift 2 || exit 1 ;;
         --template)    TEMPLATE="${2:-}"; shift 2 || exit 1 ;;
         --out)         OUT="${2:-}"; shift 2 || exit 1 ;;
+        --cooldown)    COOLDOWNS+="${2:-}"$'\n'; shift 2 || exit 1 ;;
         *) echo "render-dependabot: unknown argument '$1'" >&2; exit 1 ;;
     esac
 done
@@ -54,6 +71,35 @@ else
     detect_json="$(cat "$DETECT")"
 fi
 jq -e . >/dev/null 2>&1 <<<"$detect_json" || { echo "render-dependabot: --detect-json is not valid JSON" >&2; exit 1; }
+
+# Validate the cooldown requests up front: "ecosystem=days", days 1..90, one
+# request per ecosystem.
+cooldown_seen=""
+while IFS= read -r req; do
+    [ -n "$req" ] || continue
+    if ! [[ "$req" =~ ^([a-z][a-z-]*)=([1-9][0-9]{0,2})$ ]] || [ "${BASH_REMATCH[2]}" -gt 90 ]; then
+        echo "render-dependabot: --cooldown '$req' must be ECOSYSTEM=DAYS with DAYS an integer 1..90" >&2
+        exit 1
+    fi
+    if grep -qxF "${BASH_REMATCH[1]}" <<<"$cooldown_seen"; then
+        echo "render-dependabot: --cooldown names '${BASH_REMATCH[1]}' twice" >&2
+        exit 1
+    fi
+    cooldown_seen+="${BASH_REMATCH[1]}"$'\n'
+done <<<"$COOLDOWNS"
+
+# cooldown_days ECOSYSTEM -> the requested days, or empty.
+cooldown_days() {
+    local req
+    while IFS= read -r req; do
+        [ "${req%%=*}" = "$1" ] && { echo "${req#*=}"; return 0; }
+    done <<<"$COOLDOWNS"
+    return 0
+}
+
+if [ -n "$cooldown_seen" ]; then TEMPLATE_VERSION=$COOLDOWN_VERSION; else TEMPLATE_VERSION=$BASE_VERSION; fi
+cd_skip=0
+emitted=""   # ecosystems that actually got a lane
 
 # flag_to_ecosystem GITHUB_ACTIONS -> github-actions
 flag_to_ecosystem() { echo "$1" | tr '[:upper:]_' '[:lower:]-'; }
@@ -79,6 +125,12 @@ while IFS= read -r line; do
     fi
 
     case "$line" in
+        '# {{IF_COOLDOWN}}')
+            [ -n "$cooldown_seen" ] || cd_skip=1
+            ;;
+        '# {{ENDIF_COOLDOWN}}')
+            cd_skip=0
+            ;;
         '# {{IF:'*'}}')
             if [ "$in_if" = "1" ]; then
                 echo "render-dependabot: nested {{IF}} at '$line' — not supported" >&2
@@ -119,6 +171,12 @@ while IFS= read -r line; do
         '# {{ENDFOREACH}}')
             collecting=0
             if [ "$keep" = "1" ]; then
+                days="$(cooldown_days "$eco")"
+                cd_block=""
+                [ -z "$days" ] || cd_block="    cooldown:"$'\n'"      default-days: $days"$'\n'
+                slot='# {{COOLDOWN}}'$'\n'
+                buf="${buf//"$slot"/$cd_block}"
+                emitted+="$eco"$'\n'
                 while IFS= read -r d; do
                     [ -n "$d" ] || continue
                     rendered+="${buf//\{\{DIRECTORY\}\}/$d}"
@@ -127,6 +185,8 @@ while IFS= read -r line; do
             buf=""
             ;;
         *)
+            [ "$cd_skip" = "0" ] || continue
+            line="${line//\{\{TEMPLATE_VERSION\}\}/$TEMPLATE_VERSION}"
             if [ "$collecting" = "1" ]; then
                 buf+="$line"$'\n'
             elif [ "$keep" = "1" ]; then
@@ -140,6 +200,14 @@ if [ "$in_if" = "1" ] || [ "$collecting" = "1" ]; then
     echo "render-dependabot: template ended inside an unclosed {{IF}}/{{FOREACH}} block" >&2
     fail=1
 fi
+
+while IFS= read -r req; do
+    [ -n "$req" ] || continue
+    if ! grep -qxF "${req%%=*}" <<<"$emitted"; then
+        echo "render-dependabot: --cooldown names '${req%%=*}', which has no lane in this render — refused rather than silently dropped" >&2
+        fail=1
+    fi
+done <<<"$COOLDOWNS"
 
 # A token left behind is a fact nobody substituted — never ship it.
 if grep -nE '\{\{[A-Za-z_]+(:[A-Za-z_]+)?\}\}' <<<"$rendered" >&2; then

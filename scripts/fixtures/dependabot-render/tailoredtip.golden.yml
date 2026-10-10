@@ -1,0 +1,115 @@
+---
+# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: 3
+#
+# GROUPING IS THE POINT OF THIS FILE. Ungrouped, one vulnerable transitive
+# dependency can open a dozen PRs; across this org that turned 74 alerts into a
+# PR flood nobody merges. Each ecosystem below declares TWO groups —
+# `applies-to: version-updates` and `applies-to: security-updates` — because a
+# group with no `applies-to` covers version updates ONLY, silently leaving
+# security PRs ungrouped. That default is the single easiest thing to get wrong
+# here, and it is invisible until the flood arrives.
+#
+# Semver-major is excluded from the routine groups: majors are API breaks that
+# need a human. That exclusion stands on its own and does NOT assume an
+# auto-merge workflow exists — this generator declines to render one for a repo
+# with no merge gate, and for any PUBLIC repo (its org secrets are
+# private-visibility and cannot resolve there; see setup-deps SKILL.md §2). Where
+# the workflow IS rendered it holds majors too, but that is a second belt, not
+# the reason for this rule. A major that is ALSO a security fix still comes
+# through as its own security PR — security updates ignore version-update ignore
+# rules, which is the behaviour we want.
+#
+# ONE ENTRY PER (ECOSYSTEM, DIRECTORY). Dependabot reads the manifest at
+# `directory:` and does NOT recurse, so a monorepo needs one entry per manifest
+# location — the grouping above is per entry, so per-directory entries stay
+# grouped rather than reverting to a flood.
+
+version: 2
+updates:
+  # Workflow YAML only — no lockfile, so these always apply cleanly. Also feeds
+  # SHA-pinning hygiene, since Dependabot rewrites pinned SHAs with a version
+  # comment rather than reverting them to floating tags. Always "/": Dependabot
+  # scans .github/workflows at the repo root only.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+  # Native bun ecosystem (GA 2025-02): Dependabot reads and rewrites the text
+  # bun.lock itself (bun >= 1.1.39), so these PRs arrive frozen-lockfile valid
+  # with no lockfile-sync workflow. Version updates only for now — bun
+  # security updates are not yet supported upstream. The security group is
+  # declared anyway (parity with npm): the applies-to trap is identical, and
+  # this way coverage lands pre-grouped the day GitHub ships it.
+  - package-ecosystem: "bun"
+    directory: "/scripts"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      bun-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Majors are held for a human. Security majors still arrive separately —
+      # security updates deliberately bypass version-update ignore rules.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: "bun"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      bun-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Majors are held for a human. Security majors still arrive separately —
+      # security updates deliberately bypass version-update ignore rules.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: "pub"
+    directory: "/app"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      pub-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      pub-security:
+        applies-to: security-updates
+        patterns: ["*"]
+  # One entry per BUILD ROOT (the directory holding settings.gradle) — an
+  # app/build.gradle beneath it is a module of the same build, and a lane
+  # pointed at it would duplicate the root's PRs.
+  - package-ecosystem: "gradle"
+    directory: "/app/android"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
+    groups:
+      gradle-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      gradle-security:
+        applies-to: security-updates
+        patterns: ["*"]

@@ -56,6 +56,16 @@
 #      which must reject it — otherwise the check that replaced "valid by
 #      construction" is not actually checking anything.
 #
+#   4. (issue #498) The optional per-ecosystem cooldown. A render with no
+#      request is byte-identical to tailoredtip.golden.yml, the pre-cooldown
+#      bytes (the load-bearing "re-render moves nothing" property); `--cooldown
+#      bun=7` lands on every bun lane and nowhere else and leaves every other
+#      non-comment line (security groups included) alone; bad days, a repeated
+#      ecosystem and an ecosystem with no lane are refused; and the validator
+#      accepts exactly the requested cooldown while rejecting an unrequested,
+#      missing, mismatched, one-lane-only, extra-key, flow-form or bare one,
+#      with --compare-to reporting a cooldown a re-render would strip.
+#
 # Fixtures: scripts/fixtures/dependabot-render/<repo>.corpus is the repo's
 # tracked path list (with the handful of manifest bodies whose CONTENT decides
 # the derivation), and <repo>.expected the lanes it must produce, with the
@@ -257,6 +267,149 @@ if [ -r "$TT_FIXTURE" ] && [ -r "$WORK/tailoredtip.pairs" ]; then
     fi
 else
     bad "tailoredtip — missing $TT_FIXTURE or its render; the regression case did not run"
+fi
+
+# --- cooldown (issue #498) ----------------------------------------------------
+# AC4 is byte-level: a render with NO cooldown request must equal the committed
+# pre-#498 bytes, so a consumer who never asks moves nothing on re-render. The
+# golden was produced by the pre-#498 renderer and template at 69f9176.
+GOLDEN="$FIXTURES/tailoredtip.golden.yml"
+TT_TREE="$WORK/tailoredtip/tree"
+TT_FILES="$WORK/tailoredtip.files"
+TT_DETECT="$WORK/tailoredtip.detect.json"
+CD="$WORK/tailoredtip.cd.yml"
+if [ ! -r "$GOLDEN" ] || [ ! -r "$TT_DETECT" ]; then
+    bad "cooldown — missing $GOLDEN or the tailoredtip detect report; the cooldown cases did not run"
+else
+    if cmp -s "$GOLDEN" "$WORK/tailoredtip.yml"; then
+        ok "cooldown — no request renders byte-identical to the committed pre-cooldown bytes (template-version 3)"
+    else
+        bad "cooldown — a render with no cooldown request differs from $GOLDEN:"
+        diff -u "$GOLDEN" "$WORK/tailoredtip.yml" | sed 's/^/        /' >&2
+    fi
+
+    bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown bun=7 > "$CD" 2> "$WORK/cd.err"
+    bun_lanes="$(grep -c 'package-ecosystem: "bun"' "$CD")"
+    if [ "$(grep -c '^      default-days: 7$' "$CD")" = "$bun_lanes" ] && [ "$bun_lanes" -ge 2 ] \
+        && [ "$(grep -c '^    cooldown:$' "$CD")" = "$bun_lanes" ]; then
+        ok "cooldown — bun=7 lands on every bun lane ($bun_lanes) and on nothing else"
+    else
+        bad "cooldown — bun=7 did not render exactly once per bun lane ($bun_lanes lanes)"
+    fi
+    if grep -q 'template-version: 4$' "$CD"; then
+        ok "cooldown — a cooldown render stamps template-version 4"
+    else
+        bad "cooldown — a cooldown render does not stamp template-version 4"
+    fi
+    # Everything that is not a comment or the cooldown block is untouched: the
+    # lanes, groups (security ones included), schedules and majors ignores.
+    strip() { grep -v '^#' "$1" | grep -vE '^    cooldown:$|^      default-days: [0-9]+$'; }
+    if diff <(strip "$GOLDEN") <(strip "$CD") >/dev/null; then
+        ok "cooldown — every non-comment line outside the cooldown block (security groups included) is unchanged"
+    else
+        bad "cooldown — a cooldown render changed something beyond the cooldown block"
+    fi
+
+    # Refusals: the request is validated, never silently dropped.
+    for bad_req in "bun=0" "bun=91" "bun=7x" "Bun=7" "bun" "bun=-1"; do
+        if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown "$bad_req" >/dev/null 2>&1; then
+            bad "cooldown — render ACCEPTED the malformed request '$bad_req'"
+        else
+            ok "cooldown — render refuses '$bad_req'"
+        fi
+    done
+    if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown cargo=7 >/dev/null 2>&1; then
+        bad "cooldown — render ACCEPTED a cooldown for cargo, which has no lane here (silently dropped)"
+    else
+        ok "cooldown — render refuses a cooldown for an ecosystem with no lane"
+    fi
+    if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown bun=7 --cooldown bun=8 >/dev/null 2>&1; then
+        bad "cooldown — render ACCEPTED two requests for bun"
+    else
+        ok "cooldown — render refuses a repeated ecosystem"
+    fi
+
+    vd() { bash "$SCRIPTS/validate-dependabot.sh" "$@" --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2> "$WORK/vd.err"; }
+
+    if vd "$CD" --cooldown bun=7; then
+        ok "cooldown — the validator passes the render when the request is passed"
+    else
+        bad "cooldown — the validator rejected its own cooldown render:"; grep FAIL "$WORK/vd.err" | sed 's/^/        /' >&2
+    fi
+    if vd "$CD"; then
+        bad "cooldown — the validator ACCEPTED a cooldown nobody requested (a hand-added cooldown in an owned file)"
+    else
+        ok "cooldown — the validator fails a cooldown that was not requested"
+    fi
+    if vd "$GOLDEN" --cooldown bun=7; then
+        bad "cooldown — the validator ACCEPTED a render missing a requested cooldown"
+    else
+        ok "cooldown — the validator fails a requested cooldown that is absent"
+    fi
+    if vd "$CD" --cooldown bun=14; then
+        bad "cooldown — the validator ACCEPTED a cooldown whose days differ from the request"
+    else
+        ok "cooldown — the validator fails a cooldown whose days differ from the request"
+    fi
+    if vd "$CD" --cooldown bun=7 --cooldown pub=3; then
+        bad "cooldown — the validator ACCEPTED a request for pub, which carries no cooldown"
+    else
+        ok "cooldown — the validator fails a request the file does not carry"
+    fi
+
+    # Hand-edits to an otherwise valid cooldown render, each of which must fail.
+    # 1: cooldown dropped from ONE bun lane only (the second occurrence).
+    awk '/^    cooldown:$/ { n++; if (n == 2) { getline; next } } { print }' "$CD" > "$WORK/cd.onelane.yml"
+    # 2: an extra, unsupported key.
+    awk '{ print } /^      default-days: 7$/ && !d { print "      semver-major-days: 30"; d=1 }' "$CD" > "$WORK/cd.extrakey.yml"
+    # 3: a cooldown hand-added on a non-bun lane (the pub entry's schedule).
+    awk '{ print } /package-ecosystem: "pub"/ { p=1 } p && /open-pull-requests-limit/ { print "    cooldown:"; print "      default-days: 7"; p=0 }' "$CD" > "$WORK/cd.pub.yml"
+    # 4: the flow form, and a bare key.
+    sed -E 's/^    cooldown:$/    cooldown: {default-days: 7, include: ["a"]}/; /^      default-days: 7$/d' "$CD" > "$WORK/cd.flow.yml"
+    sed -E '/^      default-days: 7$/d' "$CD" > "$WORK/cd.bare.yml"
+    for variant in onelane extrakey pub flow bare; do
+        if vd "$WORK/cd.$variant.yml" --cooldown bun=7; then
+            bad "cooldown — the validator ACCEPTED the hand-edited '$variant' variant"
+        else
+            ok "cooldown — the validator rejects the hand-edited '$variant' variant"
+        fi
+    done
+
+    # A bare `cooldown:` with no keys is still a cooldown: unrequested, it fails.
+    if vd "$WORK/cd.bare.yml"; then
+        bad "cooldown — the validator ACCEPTED a bare 'cooldown:' nobody requested (read as no cooldown)"
+    else
+        ok "cooldown — the validator fails a bare 'cooldown:' that was not requested"
+    fi
+
+    # --compare-to: a cooldown the existing owned file carries that the fresh
+    # render lacks is DIVERGED; a render that merely ADDS one is not.
+    if bash "$SCRIPTS/validate-dependabot.sh" "$GOLDEN" --root "$TT_TREE" --files-from "$TT_FILES" \
+        --compare-to "$CD" >/dev/null 2> "$WORK/cmp.err"; then
+        bad "cooldown — --compare-to ACCEPTED a re-render that silently strips the existing cooldown"
+    elif grep -q 'DIVERGED: .* cooldown' "$WORK/cmp.err"; then
+        ok "cooldown — --compare-to reports DIVERGED when a re-render would strip an existing cooldown"
+    else
+        bad "cooldown — --compare-to failed, but not with a cooldown DIVERGED line"
+    fi
+    if bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=7 --root "$TT_TREE" --files-from "$TT_FILES" \
+        --compare-to "$CD" >/dev/null 2>&1; then
+        ok "cooldown — --compare-to passes when the same request is re-rendered"
+    else
+        bad "cooldown — --compare-to rejected a re-render with the same request"
+    fi
+    if bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=7 --root "$TT_TREE" --files-from "$TT_FILES" \
+        --compare-to "$GOLDEN" >/dev/null 2>&1; then
+        ok "cooldown — --compare-to lets a render ADD a cooldown to an existing file without one"
+    else
+        bad "cooldown — --compare-to rejected a render that only adds a cooldown"
+    fi
+    if bash "$SCRIPTS/validate-dependabot.sh" "$GOLDEN" --root "$TT_TREE" --files-from "$TT_FILES" \
+        --compare-to "$WORK/cd.pub.yml" >/dev/null 2>&1; then
+        bad "cooldown — --compare-to ACCEPTED a hand-added pub cooldown being stripped"
+    else
+        ok "cooldown — --compare-to reports a hand-added cooldown on a non-requested ecosystem"
+    fi
 fi
 
 if [ "$fail" -eq 0 ]; then
