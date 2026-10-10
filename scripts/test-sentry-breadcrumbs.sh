@@ -34,8 +34,8 @@
 # "get_issue_breadcrumbs" in SKILL.md section 5 with "get_sentry_resource".
 #
 # Redaction/untrusted-data/executor mutations (each must turn it red): delete
-# the "Redaction" section or its "strip query strings" / "mask emails" / "data
-# keys" sentences; drop the preview-flag sentence; drop "Redact the crumbs" from
+# the "Redaction" section or its "strip query strings" / "mask emails" / "`data`
+# **keys**, never the values" sentences; drop the preview-flag sentence; drop "Redact the crumbs" from
 # SKILL.md section 5; delete "exactly those three read tools"; reword the
 # groom-backlog UNKNOWN line so only "Unknown is not clean." survives (the
 # UNKNOWN assertions are case-sensitive for that reason).
@@ -46,7 +46,7 @@
 # issue body or comment"; swap "redact first, then truncate" for the reverse;
 # delete the "drop every backtick" sentence; restore the three-backtick text
 # fence or the client-derived "### Event <event_id> · <release>" heading;
-# delete the "inside a fence as well" agreement-line rule; drop the
+# delete the "add the `agreement:` line inside the same fence" rule; drop the
 # groom-backlog "Redaction and Untrusted data sections" sentence. The former
 # unbounded ".*" assertions are now ".{0,N}" spans, so two unrelated mentions
 # far apart no longer satisfy them.
@@ -62,6 +62,16 @@
 # section 4); reorder the Redact/Neutralize/Truncate list; reintroduce <email>,
 # <ip>, <user-id> or <at>; change the template heading to
 # "### Event <event_id> (<release>)"; drop the "breadcrumbs: UNKNOWN" fence rule.
+#
+# Issue #495 mutations (each must turn it red): lengthen the inner template
+# fence to equal the wrapper's six backticks or shorten the wrapper to five (the
+# wrapper must be strictly longer); delete the closing wrapper fence; delete the
+# "attachment: <filename>" line from the template; delete "Kept strings include"
+# or "the attachment filename and content type" from the pipeline intro; reword
+# "Truncate each kept string" back to "the message"; delete groom-backlog's
+# "Epic-split copies no Sentry-derived text" paragraph or its "byte-for-byte"
+# sentence; widen the section 2 claim by deleting "section 5 epic-split writes
+# none" (checked by an awk range over section 5, not file-wide).
 #
 # No execution-level fixture: no script renders the block, so a recorded
 # catalog response would exercise nothing. #489's eval criterion was closed as
@@ -222,6 +232,41 @@ else
 fi
 # The template fence must be longer than a three-backtick run.
 if grep -qE '^`{5}text$' "$REF"; then ok "reference template uses a long fence"; else bad "reference template uses a long fence"; fi
+
+# (The section 5 range ends at the next numbered heading, not any `## `: the
+# section's own `## Children` template sits inside a fence and would end it.)
+# --- 6d. Fence nesting, kept strings, epic-split scope (issue #495) ----------
+# CommonMark: a closing fence needs at least as many backticks as its opener, so
+# an inner fence as long as the wrapper closes the wrapper early and the rest of
+# the file renders as code. Parse the template: wrapper = the ```markdown opener.
+wrap_open="$(grep -nE '^`{3,}markdown$' "$REF" | head -1)"
+wrap_n="$(sed 's/^[0-9]*://' <<<"$wrap_open" | tr -d 'markdown\n' | awk '{print length($0)}')"
+inner_n="$(grep -E '^`{3,}text$' "$REF" | head -1 | tr -d 'text\n' | awk '{print length($0)}')"
+if [ -n "$wrap_n" ] && [ -n "$inner_n" ] && [ "$wrap_n" -gt "$inner_n" ]; then
+    ok "template wrapper fence ($wrap_n) is longer than the inner fence ($inner_n)"
+else
+    bad "template wrapper fence (${wrap_n:-none}) is not longer than the inner fence (${inner_n:-none})"
+fi
+# Every fence in the file must close: walk it with CommonMark's rule.
+if awk 'BEGIN{o=0} /^`{3,}/{ m=$0; sub(/[^`].*$/,"",m); n=length(m);
+        if(!o){o=n; next}
+        if(n>=o && $0 ~ /^`+[ \t]*$/){o=0} } END{exit o?1:0}' "$REF"; then
+    ok "every code fence in the reference closes"
+else
+    bad "a code fence in the reference never closes (rest of file renders as code)"
+fi
+has "reference: attachment filename and content type are kept strings" "$ref_flat" 'Kept strings include.{0,200}the attachment filename and content type.{0,120}release, dist, model and OS version.{0,200}all three steps'
+has "reference: truncate applies to every kept string" "$ref_flat" '3\. \*\*Truncate\*\* each kept string'
+if grep -qE '^attachment: <filename> · <size> · <content-type>$' <(awk '/^`{5}text$/{f=1;next} /^`{5}$/{f=0} f' "$REF"); then
+    ok "template shows the attachment metadata line inside the fence"
+else
+    bad "template does not show the attachment metadata line inside the inner fence"
+fi
+has "reference: metadata strings take Redact, Neutralize and Truncate" "$ref_flat" 'attachment metadata line.{0,200}goes through Redact, Neutralize and Truncate'
+epic="$(awk '/^## 5\. Epic split/{f=1; next} /^## [0-9]/{f=0} f' "$GROOM" | tr '\n' ' ' | tr -s ' ')"
+has "groom-backlog section 5: epic-split copies no Sentry-derived text" "$epic" 'Epic-split copies no Sentry-derived text(.{0,200}){2}never crumb, event or attachment text'
+has "groom-backlog section 5: parent rewrite keeps other lines byte-for-byte" "$epic" 'keep every other line byte-for-byte(.{0,150}){2}Breadcrumbs. block.{0,200}neither dropped, nor re-pulled from Sentry, nor re-typed'
+has "groom-backlog section 2: claim scopes epic-split as writing none" "$groom_flat" 'epic-split writes none.{0,200}copy no crumb, event or attachment text'
 
 # --- 7. Progressive disclosure: the template lives in the reference ----------
 if grep -q '^### Event ' "$SKILL"; then
