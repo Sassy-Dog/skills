@@ -51,6 +51,18 @@
 # unbounded ".*" assertions are now ".{0,N}" spans, so two unrelated mentions
 # far apart no longer satisfy them.
 #
+# Recovery-round mutations (each must turn it red; every #492 assertion above
+# and below is covered by one): delete "At most a metadata line"; delete
+# "keep every Sentry-derived string inside that fence"; drop "four or more
+# backticks" or "longer than any backtick run"; delete "Not tested by
+# execution"; reword SKILL.md section 5's "inside the fence. Redaction runs
+# before truncation" binding; drop the "HTML cannot render" half or the
+# "replace @ with [at]" half of the neutralization step; remove the "Confirm
+# Sentry-derived text" step from groom-backlog section 4 (or move it out of
+# section 4); reorder the Redact/Neutralize/Truncate list; reintroduce <email>,
+# <ip>, <user-id> or <at>; change the template heading to
+# "### Event <event_id> (<release>)"; drop the "breadcrumbs: UNKNOWN" fence rule.
+#
 # No execution-level fixture: no script renders the block, so a recorded
 # catalog response would exercise nothing. #489's eval criterion was closed as
 # accepted (#492); the reference says so.
@@ -184,10 +196,24 @@ has "reference: backticks dropped, @ and HTML neutralized" "$ref_flat" 'drop eve
 has "reference: every Sentry-derived string stays inside the fence" "$ref_flat" 'keep every Sentry-derived string inside that fence'
 has "reference: fence opens with four or more backticks" "$ref_flat" 'four or more backticks.{0,120}longer than any backtick run'
 has "reference: event heading carries only the event id" "$ref_flat" 'heading carries only the event id'
-has "reference: agreement line is fenced, never prose" "$ref_flat" 'inside a fence as well.{0,200}never as prose'
+has "reference: agreement line is fenced, never prose" "$ref_flat" 'add the .agreement:. line inside the same fence.{0,200}never as prose'
 has "reference: states the block is not tested by execution" "$ref_flat" 'Not tested by execution'
 has "sentry-triage section 5 binds fence, order and attachments" "$esc" 'inside the fence\. Redaction runs before truncation, and attachment content never enters the body'
-has "groom-backlog: write path routes through Redaction and Untrusted data" "$groom_flat" 'Redaction and Untrusted data sections.{0,120}flagged for the approver in the preview'
+has "groom-backlog: write path routes through Redaction and Untrusted data" "$groom_flat" 'only place Sentry-derived text is written is the §4 body edit.{0,250}Redaction and Untrusted data sections.{0,200}breadcrumb-evidence\.md.{0,200}Confirm Sentry-derived text'
+# The confirmation step must exist in section 4 itself (a flag bound to a
+# step that does not exist is the defect this pins).
+refine="$(awk '/^## 4\. Refine/{f=1; next} /^## /{f=0} f' "$GROOM" | tr '\n' ' ' | tr -s ' ')"
+has "groom-backlog section 4 has the Confirm Sentry-derived text step" "$refine" '\*\*Confirm Sentry-derived text\.\*\*(.{0,250}){2}confirm nothing sensitive remains.{0,200}explicit confirmation.{0,250}gh issue edit N --body-file'
+has "groom-backlog section 4 confirmation precedes the edit and is conditional" "$refine" 'Only when the rewritten body carries any Sentry-derived text(.{0,250}){3}gh issue edit N --body-file'
+# Pipeline order and placeholders without angle brackets.
+has "reference: numbered pipeline redact, neutralize, truncate" "$ref_flat" '1\. \*\*Redact\.\*\*(.{0,250}){3}2\. \*\*Neutralize\.\*\*(.{0,250}){2}3\. \*\*Truncate\*\*'
+has "reference: masks carry no angle brackets" "$ref_flat" 'as .\[email\]., .\[ip\]., .\[user-id\].'
+has "reference: @ becomes [at]" "$ref_flat" 'replace .@. with .\[at\].'
+if grep -qE '<email>|<ip>|<user-id>|<at>' <<<"$ref_flat"; then bad "reference still has angle-bracket placeholders step 2 would rewrite"; else ok "reference has no angle-bracket placeholders"; fi
+has "reference: UNKNOWN line goes inside the fence, fixed vocabulary" "$ref_flat" 'heading id-only and put a .breadcrumbs: UNKNOWN \(<reason>\). line inside the fence.{0,250}fixed vocabulary'
+# Positive heading check: the heading under ## Breadcrumbs is exactly this.
+tmpl_heading="$(awk '/^## Breadcrumbs$/{f=1; next} f && /^### /{print; exit}' "$REF")"
+if [ "$tmpl_heading" = "### Event <event_id>" ]; then ok "template heading is exactly '### Event <event_id>'"; else bad "template heading is '$tmpl_heading', not exactly '### Event <event_id>'"; fi
 # The template must not put client-derived text in the heading.
 if grep -qE '^### Event <event_id> ·' "$REF"; then
     bad "reference heading carries client-derived text outside the fence"
