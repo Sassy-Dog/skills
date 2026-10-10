@@ -71,6 +71,25 @@
 #      ecosystem with `--change-cooldown`, reported as CHANGED or DROPPED, and
 #      the acknowledgement is refused where it is a no-op, so a forgotten
 #      --cooldown still fails closed.
+#      Mutation proof for #501 (each mutant applied, this gate run, restored,
+#      and the gate confirmed green again; killed by the named cases):
+#        - drop the DAYS > 90 check in parse_cooldown_requests -> "cooldown
+#          parity — 'bun=91'" and 'bun=999' (validator side), plus the
+#          renderer's "render ACCEPTED the malformed request 'bun=91'".
+#        - drop the repeated-ecosystem check there -> "cooldown parity — the
+#          validator ACCEPTED a repeated ecosystem" (bun=7 + bun=14, each valid
+#          alone so the days check cannot mask it), plus the renderer's case.
+#        - make --change-cooldown unscoped (any acknowledgement covers every
+#          ecosystem) -> "cooldown scoping — acknowledging bun alone passed
+#          while pub also dropped its cooldown" (committed file with bun AND pub
+#          cooldowns), plus "--change-cooldown bun also waved through ... pub".
+#        - drop the refusal of an unused acknowledgement -> "--change-cooldown
+#          was accepted where nothing changes" and "--change-cooldown pub was
+#          accepted for an ecosystem with no committed cooldown".
+#        - drop the usage error for --change-cooldown without --compare-to ->
+#          "--change-cooldown was accepted with nothing to compare to".
+#        - drop the ^[a-z][a-z-]*$ name check on --change-cooldown -> the
+#          malformed-name cases 'Bun', 'bun=7' and '1bun' (exit 2 expected).
 #
 # Fixtures: scripts/fixtures/dependabot-render/<repo>.corpus is the repo's
 # tracked path list (with the handful of manifest bodies whose CONTENT decides
@@ -422,15 +441,23 @@ else
     # fed to BOTH scripts, and the validator must exit 2 (bad usage) exactly
     # where the renderer exits 1.
     for bad_req in "bun=91" "bun=999" "bun=0" "bun=7x" "Bun=7" "bun" "bun=-1"; do
+        bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown "$bad_req" >/dev/null 2>&1
+        render_rc="$?"
         bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown "$bad_req" --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
-        if [ "$?" = "2" ]; then
+        valid_rc="$?"
+        if [ "$render_rc" = "1" ] && [ "$valid_rc" = "2" ]; then
             ok "cooldown parity — the validator refuses '$bad_req' as the renderer does"
         else
-            bad "cooldown parity — the validator ACCEPTED '$bad_req', which the renderer refuses"
+            bad "cooldown parity — '$bad_req': the renderer exited $render_rc (want 1) or the validator exited $valid_rc (want 2)"
         fi
     done
-    bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=7 --cooldown bun=99 --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
-    if [ "$?" = "2" ]; then
+    # Two individually VALID values (bun=99 would exit on the days check first
+    # and never reach the repeat check).
+    bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --cooldown bun=7 --cooldown bun=14 >/dev/null 2>&1
+    render_rc="$?"
+    bash "$SCRIPTS/validate-dependabot.sh" "$CD" --cooldown bun=7 --cooldown bun=14 --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+    valid_rc="$?"
+    if [ "$render_rc" = "1" ] && [ "$valid_rc" = "2" ]; then
         ok "cooldown parity — the validator refuses a repeated ecosystem as the renderer does"
     else
         bad "cooldown parity — the validator ACCEPTED a repeated ecosystem (first one wins), which the renderer refuses"
@@ -479,6 +506,31 @@ else
     else
         ok "cooldown removal — the acknowledgement covers only the ecosystem it names"
     fi
+    # Scoping, isolated: BOTH bun and pub carry a cooldown in the committed file
+    # (cd.pub.yml is the bun render plus a hand-added pub block) and the render
+    # drops both. Acknowledging bun alone must still fail on pub, with pub
+    # named as DROPPED; acknowledging both passes. An unscoped acknowledgement
+    # would wave pub through.
+    if cmpd "$GOLDEN" --change-cooldown bun --compare-to "$WORK/cd.pub.yml"; then
+        bad "cooldown scoping — acknowledging bun alone passed while pub also dropped its cooldown"
+    elif grep -q 'DIVERGED: .*pub cooldown.*DROPPED' "$WORK/chg.err" && ! grep -q 'DIVERGED: .*bun cooldown' "$WORK/chg.err"; then
+        ok "cooldown scoping — with bun and pub both dropped, acknowledging bun alone still fails on pub only"
+    else
+        bad "cooldown scoping — the run failed, but not on pub alone"
+    fi
+    if cmpd "$GOLDEN" --change-cooldown bun --change-cooldown pub --compare-to "$WORK/cd.pub.yml"; then
+        ok "cooldown scoping — acknowledging both bun and pub passes when both dropped"
+    else
+        bad "cooldown scoping — acknowledging both dropped ecosystems was still rejected"
+    fi
+    for bad_name in "Bun" "bun=7" "1bun"; do
+        cmpd "$GOLDEN" --change-cooldown "$bad_name" --compare-to "$CD"
+        if [ "$?" = "2" ] && grep -q 'must be an ECOSYSTEM name' "$WORK/chg.err"; then
+            ok "cooldown change — a malformed --change-cooldown name '$bad_name' is a usage error"
+        else
+            bad "cooldown change — a malformed --change-cooldown name '$bad_name' was not refused as a usage error (exit 2)"
+        fi
+    done
     if cmpd "$CD" --cooldown bun=7 --change-cooldown bun --compare-to "$CD"; then
         bad "cooldown change — --change-cooldown was accepted where nothing changes (a no-op acknowledgement)"
     else

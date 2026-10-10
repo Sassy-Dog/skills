@@ -126,11 +126,12 @@ fails the run. So is a `cooldown:` the existing file carries that the fresh rend
 as `DROPPED`; the likeliest cause is a forgotten `--cooldown`, not a hand-added block. A cooldown
 the render carries at a different value is reported as `CHANGED`. Both are covered under "Changing
 or removing a cooldown" below. **A lost lane is the stop signal, not a formality.** A file stamped
-`template-version: N` whose content a fresh render of 3 or 4, the two current stamps, no longer
-reproduces is the most dangerous state this generator has: the matcher says "mine, reconcile it", the render quietly drops lanes the repo depends on, and
-nothing errors — tailoredtip sat in exactly that state with four correctly-directed lanes under a
-v2 marker. Report the dropped lanes to the user and stop; do not overwrite, and do not "fix" it by
-re-stamping the marker, which only launders a diverged file as current.
+`template-version: N` whose content a fresh render no longer reproduces is the most dangerous
+state this generator has: the matcher says "mine, reconcile it", the render quietly drops lanes
+the repo depends on, and nothing errors — tailoredtip sat in exactly that state with four
+correctly-directed lanes under a v2 marker. Report the dropped lanes to the user and stop; do not
+overwrite, and do not "fix" it by re-stamping the marker, which only launders a diverged file as
+current.
 
 **A vendored example manifest is not a project.** Scaffolder templates, test fixtures and sample
 projects commit real-looking manifests, and an unfiltered path match counts them as evidence: a
@@ -275,8 +276,9 @@ Substitute `{{FACT}}` values and delete the `# {{IF:FLAG}}` / `# {{ENDIF}}` bloc
 apply. Never hand-edit a rendered file to fix a bug; fix the template and re-render.
 
 **`dependabot.yml` is rendered by script, and VALIDATED AFTER RENDER — it is no longer valid by
-construction.** `dependabot.yml.template` (v3, or v4 when a cooldown is requested) repeats a block per (ecosystem, directory) pair, which
-deletion alone cannot express, so the old static guarantee is gone here on purpose. What replaced
+construction.** `dependabot.yml.template` (v3, or v4 when a cooldown is requested) repeats a block
+per (ecosystem, directory) pair, which deletion alone cannot express, so the old static guarantee
+is gone here on purpose. What replaced
 it is stronger: the render is parsed and every emitted `directory:` is asserted to hold the
 manifest it claims. The old guarantee never caught the bug that forced the change — a v2 render was
 always valid YAML, it just pointed at directories with no manifests. (`setup-hooks` keeps its
