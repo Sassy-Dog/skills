@@ -44,6 +44,8 @@ set -uo pipefail
 command -v jq >/dev/null 2>&1 || { echo "render-dependabot: jq not on PATH" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib-ecosystems.sh
+. "$SCRIPT_DIR/lib-ecosystems.sh"
 TEMPLATE="$SCRIPT_DIR/../references/templates/dependabot.yml.template"
 DETECT=""
 OUT=""
@@ -72,20 +74,13 @@ else
 fi
 jq -e . >/dev/null 2>&1 <<<"$detect_json" || { echo "render-dependabot: --detect-json is not valid JSON" >&2; exit 1; }
 
-# Validate the cooldown requests up front: "ecosystem=days", days 1..90, one
-# request per ecosystem.
+# Validate the cooldown requests up front through the parser the validator
+# shares (lib-ecosystems.sh): "ecosystem=days", days 1..90, one per ecosystem.
+parse_cooldown_requests "$COOLDOWNS" || { echo "render-dependabot: $COOLDOWN_ERR" >&2; exit 1; }
 cooldown_seen=""
 while IFS= read -r req; do
     [ -n "$req" ] || continue
-    if ! [[ "$req" =~ ^([a-z][a-z-]*)=([1-9][0-9]{0,2})$ ]] || [ "${BASH_REMATCH[2]}" -gt 90 ]; then
-        echo "render-dependabot: --cooldown '$req' must be ECOSYSTEM=DAYS with DAYS an integer 1..90" >&2
-        exit 1
-    fi
-    if grep -qxF "${BASH_REMATCH[1]}" <<<"$cooldown_seen"; then
-        echo "render-dependabot: --cooldown names '${BASH_REMATCH[1]}' twice" >&2
-        exit 1
-    fi
-    cooldown_seen+="${BASH_REMATCH[1]}"$'\n'
+    cooldown_seen+="${req%%=*}"$'\n'
 done <<<"$COOLDOWNS"
 
 # cooldown_days ECOSYSTEM -> the requested days, or empty.

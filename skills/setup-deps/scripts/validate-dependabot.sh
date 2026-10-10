@@ -32,13 +32,26 @@
 # is what makes a hand-added one visible. Under --compare-to, a cooldown the
 # existing file carries that the fresh render does not is DIVERGED, like a
 # dropped lane: re-rendering without the request would silently strip it, and
-# a human decides. Only `default-days` is understood; `semver-*-days`,
+# a human decides. The message says which of two things happened: CHANGED (the
+# render carries the ecosystem's cooldown at a different value) or DROPPED (the
+# render carries none, which is what a forgotten --cooldown looks like — the
+# committed file is the only record of the request, so the message tells the
+# operator to read it from there). A DELIBERATE change or removal is
+# acknowledged per ecosystem with `--change-cooldown ECOSYSTEM` (repeatable,
+# needs --compare-to): it accepts exactly that ecosystem's CHANGED or DROPPED
+# line and nothing else. It is refused when it would be a no-op (the existing
+# file carries no cooldown there, or the render reproduces it unchanged), so a
+# typo cannot silently disarm the guard, and a forgotten --cooldown without it
+# still fails closed. The requests are parsed by parse_cooldown_requests in
+# lib-ecosystems.sh, the same parser render-dependabot.sh uses (DAYS 1..90, one
+# request per ecosystem). Only `default-days` is understood; `semver-*-days`,
 # `include` and `exclude` are reported as divergence.
 #
 # Usage:
 #   validate-dependabot.sh FILE [--root DIR] [--files-from LIST]
 #                               [--compare-to EXISTING]
 #                               [--cooldown ECOSYSTEM=DAYS]...
+#                               [--change-cooldown ECOSYSTEM]...
 #   validate-dependabot.sh FILE --pairs-only     # the extracted lanes, nothing
 #                                                # asserted (needs no repo)
 # Exit: 0 every lane is backed by a manifest (and nothing was dropped)
@@ -57,6 +70,7 @@ FILES_FROM=""
 COMPARE_TO=""
 PAIRS_ONLY=0
 COOLDOWNS=""   # newline-separated "ecosystem=days"
+ACKS=""        # newline-separated ecosystems whose cooldown change/removal is deliberate
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -65,17 +79,20 @@ while [ "$#" -gt 0 ]; do
         --compare-to) COMPARE_TO="${2:-}"; shift 2 || exit 2 ;;
         --pairs-only) PAIRS_ONLY=1; shift ;;
         --cooldown)   COOLDOWNS+="${2:-}"$'\n'; shift 2 || exit 2 ;;
+        --change-cooldown) ACKS+="${2:-}"$'\n'; shift 2 || exit 2 ;;
         -*) echo "validate-dependabot: unknown argument '$1'" >&2; exit 2 ;;
         *)  [ -z "$FILE" ] || { echo "validate-dependabot: one file at a time" >&2; exit 2; }
             FILE="$1"; shift ;;
     esac
 done
 
-[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING] [--cooldown ECOSYSTEM=DAYS]..." >&2; exit 2; }
-while IFS= read -r req; do
-    [ -n "$req" ] || continue
-    [[ "$req" =~ ^[a-z][a-z-]*=[1-9][0-9]{0,2}$ ]] || { echo "validate-dependabot: --cooldown '$req' must be ECOSYSTEM=DAYS" >&2; exit 2; }
-done <<<"$COOLDOWNS"
+[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING] [--cooldown ECOSYSTEM=DAYS]... [--change-cooldown ECOSYSTEM]..." >&2; exit 2; }
+parse_cooldown_requests "$COOLDOWNS" || { echo "validate-dependabot: $COOLDOWN_ERR" >&2; exit 2; }
+while IFS= read -r ack; do
+    [ -n "$ack" ] || continue
+    [[ "$ack" =~ ^[a-z][a-z-]*$ ]] || { echo "validate-dependabot: --change-cooldown '$ack' must be an ECOSYSTEM name" >&2; exit 2; }
+done <<<"$ACKS"
+[ -z "$ACKS" ] || [ -n "$COMPARE_TO" ] || { echo "validate-dependabot: --change-cooldown acknowledges a difference from the committed file, so it needs --compare-to" >&2; exit 2; }
 [ -r "$FILE" ] || { echo "validate-dependabot: cannot read '$FILE'" >&2; exit 2; }
 
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
@@ -271,7 +288,7 @@ while IFS=$'\t' read -r eco spec; do
     if [ "$spec" = "$want" ]; then
         [ -z "$spec" ] || ok "$eco cooldown $spec (requested)"
     elif [ -z "$want" ]; then
-        bad "$eco: carries a cooldown ($spec) that was not requested — a hand-added cooldown in an owned file; render it with --cooldown $eco=DAYS or remove it"
+        bad "$eco: carries a cooldown ($spec) that was not requested — most likely --cooldown $eco=DAYS was not passed (the request is not stored; read default-days from the committed file and pass it to render AND validate); otherwise it is a hand-added cooldown in an owned file"
     elif [ -z "$spec" ]; then
         bad "$eco: cooldown requested ($want) but this entry carries none"
     else
@@ -313,14 +330,32 @@ if [ -n "$COMPARE_ABS" ]; then
     existing_cd="$(extract_cooldowns "$COMPARE_ABS" | grep -vE $'\t$' | sort -u)"
     render_cd="$(printf '%s\n' "$file_cd" | grep -vE $'\t$' | sort -u)"
     dropped_cd="$(comm -23 <(printf '%s\n' "$existing_cd") <(printf '%s\n' "$render_cd"))"
+    acked_used=""
     if [ -n "$(tr -d '[:space:]' <<<"$dropped_cd")" ]; then
         while IFS=$'\t' read -r eco spec; do
             [ -n "$eco" ] || continue
-            bad "DIVERGED: $COMPARE_TO carries a $eco cooldown ($spec) that this render does not — re-render with --cooldown $eco=DAYS to keep a requested one, or a human removes a hand-added one"
+            now="$(awk -F'\t' -v e="$eco" '$1 == e { print $2; exit }' <<<"$render_cd")"
+            if [ -n "$now" ]; then kind="CHANGED"; else kind="DROPPED"; fi
+            if grep -qxF "$eco" <<<"$ACKS"; then
+                acked_used+="$eco"$'\n'
+                if [ "$kind" = "CHANGED" ]; then
+                    ok "$eco cooldown deliberately changed ($spec -> $now), acknowledged by --change-cooldown $eco"
+                else
+                    ok "$eco cooldown ($spec) deliberately removed, acknowledged by --change-cooldown $eco"
+                fi
+            elif [ "$kind" = "CHANGED" ]; then
+                bad "DIVERGED: $COMPARE_TO carries a $eco cooldown ($spec) that this render CHANGED to ($now) — if the change is deliberate, re-run with --change-cooldown $eco; if not, pass the committed value as --cooldown $eco=DAYS"
+            else
+                bad "DIVERGED: $COMPARE_TO carries a $eco cooldown ($spec) that this render DROPPED — most likely --cooldown $eco=DAYS was forgotten (read default-days from $COMPARE_TO and pass it to render AND validate); if removing the cooldown is deliberate, re-run with --change-cooldown $eco"
+            fi
         done <<<"$dropped_cd"
     else
         ok "no cooldown in $COMPARE_TO is dropped by this render"
     fi
+    while IFS= read -r ack; do
+        [ -n "$ack" ] || continue
+        grep -qxF "$ack" <<<"$acked_used" || bad "--change-cooldown $ack acknowledges nothing: $COMPARE_TO carries no $ack cooldown that this render changes or drops"
+    done <<<"$ACKS"
     while IFS=$'\t' read -r eco dir; do
         [ -n "$eco" ] || continue
         echo "  note  this render adds $eco '$dir' (absent from $COMPARE_TO)" >&2
