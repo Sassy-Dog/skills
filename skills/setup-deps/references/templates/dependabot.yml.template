@@ -1,4 +1,4 @@
-# TEMPLATE: dependabot.yml · version 3 (the renderer stamps 4 when a cooldown is requested; see "v4 adds" below)
+# TEMPLATE: dependabot.yml · version 5 (the renderer stamps 6 when a cooldown is requested; see "v4 adds" and "v5" below)
 # Rendered by sassy-dog:setup-deps from detect-ecosystems.sh — in practice by
 # scripts/render-dependabot.sh, which implements exactly these three rules.
 #   {{FACT}}                → detected/confirmed value
@@ -28,12 +28,18 @@
 #                             requested, deleted otherwise.
 #   # {{IF_COOLDOWN}} ... # {{ENDIF_COOLDOWN}}
 #                           → kept only when at least one cooldown was requested.
-#   {{TEMPLATE_VERSION}}    → 3 with no cooldown requested (byte-identical to the
-#                             pre-cooldown render, so a re-render moves nothing),
-#                             4 when any cooldown is rendered.
+#   {{TEMPLATE_VERSION}}    → 5 with no cooldown requested, 6 when any cooldown
+#                             is rendered. The pairs are (3, 4) before v5.
 #
 # v4 adds the optional per-ecosystem `cooldown:` block. It is a stamp on the
-# RENDER, not a new template: with no cooldown request the output is exactly v3.
+# RENDER, not a new template: with no cooldown request the output was exactly v3.
+#
+# v5 makes the github-actions version-updates group (`actions:`) minor/patch
+# only, the shape every other ecosystem's version-updates group already had.
+# v6 is v5 plus a cooldown, as v4 was v3 plus one. A v5 render differs from a
+# v3 render of the same repo by that one `update-types` line, the stamp, and
+# comment text; a v6 render differs from the v5 render only by the `cooldown:`
+# blocks, the cooldown header paragraph and the stamp.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
 # generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: {{TEMPLATE_VERSION}}
@@ -80,6 +86,17 @@ updates:
   # SHA-pinning hygiene, since Dependabot rewrites pinned SHAs with a version
   # comment rather than reverting them to floating tags. Always "/": Dependabot
   # scans .github/workflows at the repo root only.
+  #
+  # The `actions` group is minor/patch only (v5). fetch-metadata reports a
+  # grouped PR's HIGHEST update-type, and where the auto-merge workflow is
+  # rendered it enqueues only an explicit semver-minor or semver-patch. With
+  # no `update-types`, one Actions major in the weekly group held the WHOLE
+  # group for a human, and every minor and patch bump riding with it stalled
+  # (velovate#2391, qr-ninja#914). Now a major falls outside the group and
+  # arrives as its own ungrouped PR for a human to review, while the
+  # minor/patch group stays mergeable. There is deliberately NO semver-major
+  # `ignore:` here, unlike npm and bun: an Actions major should still be
+  # PROPOSED, just never grouped. The security group is unchanged.
 # {{FOREACH:DIRECTORY}}
   - package-ecosystem: "github-actions"
     directory: "{{DIRECTORY}}"
@@ -91,6 +108,7 @@ updates:
       actions:
         applies-to: version-updates
         patterns: ["*"]
+        update-types: ["minor", "patch"]
       actions-security:
         applies-to: security-updates
         patterns: ["*"]

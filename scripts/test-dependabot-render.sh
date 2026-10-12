@@ -57,7 +57,7 @@
 #      construction" is not actually checking anything.
 #
 #   4. (issue #498) The optional per-ecosystem cooldown. A render with no
-#      request is byte-identical to tailoredtip.golden.yml, the pre-cooldown
+#      request is byte-identical to tailoredtip.golden.yml, the committed v5
 #      bytes (the load-bearing "re-render moves nothing" property); `--cooldown
 #      bun=7` lands on every bun lane and nowhere else and leaves every other
 #      non-comment line (security groups included) alone; bad days, a repeated
@@ -90,6 +90,28 @@
 #          "--change-cooldown was accepted with nothing to compare to".
 #        - drop the ^[a-z][a-z-]*$ name check on --change-cooldown -> the
 #          malformed-name cases 'Bun', 'bun=7' and '1bun' (exit 2 expected).
+#
+#   5. Every version-updates group is minor/patch only, github-actions'
+#      `actions` group included (template v5). fetch-metadata reports a grouped
+#      PR's HIGHEST update-type and the auto-merge template enqueues only an
+#      explicit semver-minor/patch, so one Actions major in an unrestricted
+#      group held the whole weekly group (velovate#2391, qr-ninja#914). Read off
+#      EVERY fixture render, so a new ecosystem block inherits the rule, with a
+#      vacuity guard that at least one github-actions group was actually read.
+#      github-actions must also carry no `ignore:` (majors are proposed, just
+#      not grouped) and its security group no `update-types`. The v3 -> v5
+#      delta is pinned too: tailoredtip.v3.golden.yml holds the v3 bytes, and
+#      its non-comment lines must differ from today's no-cooldown render by
+#      exactly the one added `update-types` line, so "nothing else moved" is
+#      checked rather than asserted in prose.
+#      Mutation proof (each applied, this gate run, restored, green again):
+#        - delete the actions group's `update-types` line from the template ->
+#          "version-updates groups — ... github-actions/actions" plus the golden
+#          and v3 -> v5 delta cases.
+#        - widen it to ["major", "minor", "patch"] -> the same
+#          version-updates-groups case (the match is exact, not a substring).
+#        - add a semver-major `ignore:` to the github-actions block -> "the
+#          github-actions entry carries an ignore:".
 #
 # Fixtures: scripts/fixtures/dependabot-render/<repo>.corpus is the repo's
 # tracked path list (with the handful of manifest bodies whose CONTENT decides
@@ -157,6 +179,7 @@ materialize() {
 
 v2_rejected=0
 v2_exempt=0
+rendered_names=""
 for corpus in $corpora; do
     name="$(basename "$corpus" .corpus)"
     expected="$FIXTURES/$name.expected"
@@ -185,6 +208,7 @@ for corpus in $corpora; do
         bad "$name — render-dependabot.sh failed: $(tail -n1 "$WORK/$name.render.err")"
         continue
     fi
+    rendered_names+="$name"$'\n'
 
     # 1. the lanes the render declares
     if ! bash "$SCRIPTS/validate-dependabot.sh" "$WORK/$name.yml" --pairs-only \
@@ -296,8 +320,10 @@ fi
 
 # --- cooldown (issue #498) ----------------------------------------------------
 # AC4 is byte-level: a render with NO cooldown request must equal the committed
-# pre-#498 bytes, so a consumer who never asks moves nothing on re-render. The
-# golden was produced by the pre-#498 renderer and template at 69f9176.
+# golden bytes, so a consumer who never asks moves nothing on re-render. The
+# golden holds the v5 render (the github-actions group made minor/patch only);
+# tailoredtip.v3.golden.yml keeps the v3 bytes the pre-#498 renderer and
+# template produced at 69f9176, and section 5 pins the v3 -> v5 delta.
 GOLDEN="$FIXTURES/tailoredtip.golden.yml"
 TT_TREE="$WORK/tailoredtip/tree"
 TT_FILES="$WORK/tailoredtip.files"
@@ -307,7 +333,7 @@ if [ ! -r "$GOLDEN" ] || [ ! -r "$TT_DETECT" ]; then
     bad "cooldown — missing $GOLDEN or the tailoredtip detect report; the cooldown cases did not run"
 else
     if cmp -s "$GOLDEN" "$WORK/tailoredtip.yml"; then
-        ok "cooldown — no request renders byte-identical to the committed pre-cooldown bytes (template-version 3)"
+        ok "cooldown — no request renders byte-identical to the committed golden bytes (template-version 5)"
     else
         bad "cooldown — a render with no cooldown request differs from $GOLDEN:"
         diff -u "$GOLDEN" "$WORK/tailoredtip.yml" | sed 's/^/        /' >&2
@@ -321,10 +347,15 @@ else
     else
         bad "cooldown — bun=7 did not render exactly once per bun lane ($bun_lanes lanes)"
     fi
-    if grep -q 'template-version: 4$' "$CD"; then
-        ok "cooldown — a cooldown render stamps template-version 4"
+    if grep -q 'template-version: 6$' "$CD"; then
+        ok "cooldown — a cooldown render stamps template-version 6"
     else
-        bad "cooldown — a cooldown render does not stamp template-version 4"
+        bad "cooldown — a cooldown render does not stamp template-version 6"
+    fi
+    if grep -q 'template-version: 5$' "$WORK/tailoredtip.yml"; then
+        ok "cooldown — a render with no cooldown stamps template-version 5"
+    else
+        bad "cooldown — a render with no cooldown does not stamp template-version 5"
     fi
     # Everything that is not a comment or the cooldown block is untouched: the
     # lanes, groups (security ones included), schedules and majors ignores.
@@ -553,6 +584,97 @@ else
         ok "cooldown change — a forgotten flag on validate is blamed on the flag, not only on a hand-added cooldown"
     else
         bad "cooldown change — the forgotten-flag failure did not name the likely cause"
+    fi
+fi
+
+# --- 5. every version-updates group is minor/patch only (template v5) -------
+# vu_groups FILE — one line per group under an entry's `groups:`, as
+# "<RESTRICTED|UNRESTRICTED|SECURITY-RESTRICTED|security><TAB>ecosystem/group".
+# A group with no `applies-to` covers version updates (Dependabot's default),
+# so only an explicit `applies-to: security-updates` exempts one. The
+# restriction must be exactly ["minor", "patch"]: a widened list fails.
+vu_groups() {
+    awk '
+    function flush() {
+        if (g != "") {
+            if (sec) print (mp ? "SECURITY-RESTRICTED" : "security") "\t" eco "/" g
+            else     print (mp ? "RESTRICTED" : "UNRESTRICTED") "\t" eco "/" g
+        }
+        g = ""; sec = 0; mp = 0
+    }
+    /^[[:space:]]*#/ { next }
+    /^  - package-ecosystem:/ {
+        flush(); eco = $0
+        sub(/.*package-ecosystem:[[:space:]]*/, "", eco); gsub(/"/, "", eco)
+        ingroups = 0; next
+    }
+    /^    groups:[[:space:]]*$/ { flush(); ingroups = 1; next }
+    /^    [^ ]/ { flush(); ingroups = 0; next }
+    ingroups && /^      [A-Za-z0-9_-]+:[[:space:]]*$/ { flush(); g = $1; sub(/:$/, "", g); next }
+    ingroups && /^        applies-to:[[:space:]]*security-updates[[:space:]]*$/ { sec = 1; next }
+    ingroups && /^        update-types:[[:space:]]*\[[[:space:]]*"minor",[[:space:]]*"patch"[[:space:]]*\][[:space:]]*$/ { mp = 1; next }
+    END { flush() }
+    ' "$1"
+}
+
+vu_checked=0
+actions_checked=0
+vu_bad=""
+while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    groups_out="$(vu_groups "$WORK/$name.yml")"
+    vu_checked=$((vu_checked + $(grep -cE '^(RESTRICTED|UNRESTRICTED)' <<<"$groups_out")))
+    actions_checked=$((actions_checked + $(grep -cE $'^(RESTRICTED|UNRESTRICTED)\tgithub-actions/' <<<"$groups_out")))
+    while IFS=$'\t' read -r verdict grp; do
+        case "$verdict" in
+            UNRESTRICTED) vu_bad+="$name: $grp (version updates, no update-types [\"minor\", \"patch\"])"$'\n' ;;
+            SECURITY-RESTRICTED) vu_bad+="$name: $grp (a security group restricted to minor/patch would drop security majors)"$'\n' ;;
+        esac
+    done <<<"$groups_out"
+done <<<"$rendered_names"
+if [ "$vu_checked" -eq 0 ] || [ "$actions_checked" -eq 0 ]; then
+    bad "version-updates groups — read $vu_checked group(s), $actions_checked github-actions; nothing to check means the rule is unproven"
+elif [ -n "$vu_bad" ]; then
+    bad "version-updates groups — majors would ride in (and hold) these groups:"
+    printf '%s' "$vu_bad" | sed 's/^/        /' >&2
+else
+    ok "version-updates groups — all $vu_checked are minor/patch only ($actions_checked github-actions), security groups unrestricted"
+fi
+
+# github-actions proposes majors as their own PRs: an `ignore:` would stop
+# them being proposed at all, which is not the fix.
+actions_ignore=""
+while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if awk '/^[[:space:]]*#/ { next }
+            /^  - package-ecosystem:/ { a = ($0 ~ /"github-actions"/); next }
+            a && /^    ignore:/ { found = 1 }
+            END { exit !found }' "$WORK/$name.yml"; then
+        actions_ignore+="$name "
+    fi
+done <<<"$rendered_names"
+if [ -n "$actions_ignore" ]; then
+    bad "version-updates groups — the github-actions entry carries an ignore: in $actions_ignore(majors must still be proposed, just not grouped)"
+else
+    ok "version-updates groups — no github-actions entry carries an ignore:, so majors are still proposed"
+fi
+
+# The v3 -> v5 delta: comments aside, exactly one added line, and it is the
+# actions group's restriction. Anything else moving is an undocumented change.
+V3_GOLDEN="$FIXTURES/tailoredtip.v3.golden.yml"
+if [ ! -r "$V3_GOLDEN" ] || [ ! -r "$WORK/tailoredtip.yml" ]; then
+    bad "v3 -> v5 delta — missing $V3_GOLDEN or the tailoredtip render; the case did not run"
+else
+    delta="$(diff <(grep -v '^[[:space:]]*#' "$V3_GOLDEN") <(grep -v '^[[:space:]]*#' "$WORK/tailoredtip.yml") | grep -E '^[<>]')"
+    # One added line, and the group it landed in is the actions group: the
+    # only group whose verdict moved from UNRESTRICTED (v3) to RESTRICTED.
+    moved="$(diff <(vu_groups "$V3_GOLDEN") <(vu_groups "$WORK/tailoredtip.yml") | grep -E '^[<>]')"
+    if [ "$delta" = '>         update-types: ["minor", "patch"]' ] \
+        && [ "$moved" = $'< UNRESTRICTED\tgithub-actions/actions\n> RESTRICTED\tgithub-actions/actions' ]; then
+        ok "v3 -> v5 delta — the only non-comment change is the actions group's update-types line"
+    else
+        bad "v3 -> v5 delta — the non-comment diff against $V3_GOLDEN is not exactly the one update-types line:"
+        printf '%s\n' "$delta" | sed 's/^/        /' >&2
     fi
 fi
 

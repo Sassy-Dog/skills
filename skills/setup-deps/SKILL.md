@@ -276,7 +276,7 @@ Substitute `{{FACT}}` values and delete the `# {{IF:FLAG}}` / `# {{ENDIF}}` bloc
 apply. Never hand-edit a rendered file to fix a bug; fix the template and re-render.
 
 **`dependabot.yml` is rendered by script, and VALIDATED AFTER RENDER — it is no longer valid by
-construction.** `dependabot.yml.template` (v3, or v4 when a cooldown is requested) repeats a block
+construction.** `dependabot.yml.template` (v5, or v6 when a cooldown is requested) repeats a block
 per (ecosystem, directory) pair, which deletion alone cannot express, so the old static guarantee
 is gone here on purpose. What replaced
 it is stronger: the render is parsed and every emitted `directory:` is asserted to hold the
@@ -290,6 +290,17 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
   --detect-json /tmp/deps.json --out /tmp/dependabot.new.yml
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml
 ```
+
+**Why the github-actions group is minor/patch only.** Every version-updates group the template
+declares carries `update-types: ["minor", "patch"]`, the github-actions `actions` group included
+(since v5). fetch-metadata reports a grouped PR's **highest** update-type, and the auto-merge
+workflow enqueues only an explicit semver-minor or semver-patch. So one Actions major in a group
+with no `update-types` held the whole weekly group for a human, and the minor and patch bumps riding
+with it stalled (velovate#2391 and qr-ninja#914 were fixed by hand). With the restriction, a major
+falls outside the group and arrives as its own ungrouped PR, which a human reviews. github-actions
+deliberately carries **no** semver-major `ignore:` (npm and bun do): an Actions major should still
+be proposed, just never grouped. `test-dependabot-render.sh` fails a render whose version-updates
+group lacks the restriction.
 
 **Optional per-ecosystem cooldown.** `dependabot.yml` can carry Dependabot's release-age buffer on
 chosen ecosystems: pass `--cooldown ECOSYSTEM=DAYS` (repeatable, one per ecosystem, DAYS an integer
@@ -312,9 +323,13 @@ and `exclude` are not rendered. The request is refused, never silently dropped, 
 1..90, an ecosystem is named twice, or the ecosystem has no lane in the render. The validator
 accepts a `cooldown:` only where the same `--cooldown` request says so and fails any other (a
 hand-added one, a different value, a lane missing it, extra keys). Both scripts parse the request
-through one shared function in `lib-ecosystems.sh`, so they refuse the same input. With no request
-the output is byte-identical to the previous render (`template-version: 3`); a cooldown render
-stamps `template-version: 4`, set by the renderer.
+through one shared function in `lib-ecosystems.sh`, so they refuse the same input. The cooldown is
+purely additive: a render with no request carries none of it and stamps `template-version: 5`, and
+a cooldown render adds only the `cooldown:` blocks and their header paragraph and stamps
+`template-version: 6`, both set by the renderer. (The pair was 3 and 4 until v5 made the
+github-actions group minor/patch only; see "Why the github-actions group is minor/patch only"
+below. A v5 render of a repo differs from its v3 render by that one line, the stamp and comment
+text, and nothing else.)
 
 **Re-rendering keeps the cooldown only if you carry it.** The request is not stored in the repo;
 the committed `.github/dependabot.yml` is its only record. Before any re-render, read each
@@ -354,8 +369,10 @@ workflow templates stay hand-rendered — they carry no per-location repeat.
 Every template already carries the current `generated-by: sassy-dog:setup-deps` marker, so a
 render normalises a pre-rename file's marker for free — keep the template's marker line verbatim
 rather than preserving whatever the existing file carried. Leave each template's
-`template-version` alone. The one exception is `dependabot.yml`, whose stamp the renderer sets: 3, or 4
-when a cooldown is rendered. Otherwise move a stamp only when the template's *content* changed. The
+`template-version` alone. The one exception is `dependabot.yml`, whose stamp the renderer sets: 5, or 6
+when a cooldown is rendered (`BASE_VERSION` / `COOLDOWN_VERSION` in `render-dependabot.sh`). A
+content change to that template moves **both**, to the next unused pair, since every render
+changes whether or not it carries a cooldown. Otherwise move a stamp only when the template's *content* changed. The
 producer rename is an identity change, and the stamp should not move for it. **A bump does not trigger anything** —
 measured while shipping [#316](https://github.com/Sassy-Dog/skills/issues/316): no script
 reads `template-version`, and re-render is decided *solely* by the `generated-by:` ownership
@@ -470,6 +487,10 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
   that as `!= semver-major`: fetch-metadata emits an empty update-type when it cannot classify a
   bump, which that condition merges. The merge step matches semver-minor or semver-patch
   explicitly and everything else is held with a comment.
+- Never let a version-updates group admit majors, github-actions included. fetch-metadata
+  classifies a grouped PR by its highest bump, so one major in the group holds every minor and
+  patch beside it. Restrict the group to `update-types: ["minor", "patch"]` so the major arrives
+  on its own; do not add an actions `ignore:` to get there, since a major should still be proposed.
 - Never gate auto-merge on the PR author alone. A human or agent pushing to a Dependabot branch
   triggers a run the author check admits; the job also requires `github.actor == 'dependabot[bot]'`.
 - Never widen the `dependabot[bot]` actor gate on a `pull_request_target` workflow — that gate is
