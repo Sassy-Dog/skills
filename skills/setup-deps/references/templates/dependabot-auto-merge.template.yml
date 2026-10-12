@@ -1,4 +1,4 @@
-# TEMPLATE: dependabot-auto-merge · version 3
+# TEMPLATE: dependabot-auto-merge · version 4
 # Rendered by sassy-dog:setup-deps.
 #   {{FACT}}              → replace with the detected/confirmed value
 #   {{RUNNER}}            → runs-on value. Default [self-hosted, linux, sassy-dog]
@@ -10,13 +10,27 @@
 #                           and every render is valid by construction.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 3
+# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 4
 #
 # Auto-merge green Dependabot PRs so security bumps do not rot in the queue.
 #
 # Policy: minor/patch merge automatically — the required checks are the gate.
 # Semver-major is NEVER auto-merged; it gets a comment and waits for a human,
 # because a major is an API break that a green build does not disprove.
+#
+# FAIL CLOSED, in two places (template version 4, 2026-10-11):
+#   - The merge step matches update-type EXPLICITLY: semver-minor or
+#     semver-patch, nothing else. Versions 1-3 merged on `!= semver-major`, so
+#     an empty or unrecognised update-type — the value fetch-metadata emits when
+#     it cannot classify a bump — enqueued unreviewed. Everything that is not
+#     an explicit minor/patch gets the "held for a human" comment instead,
+#     naming the update-type it saw. Docker digest bumps report semver-patch,
+#     so this holds nothing that merged cleanly before.
+#   - The job requires BOTH the PR author AND the triggering actor to be
+#     dependabot[bot]. Author alone admits a human (or agent) who pushes a
+#     commit to a Dependabot branch: the `synchronize` run is theirs, it mints
+#     the write token, and their unreviewed commit is enqueued. The lockfile
+#     templates have gated on github.actor all along; this one now matches.
 #
 # Why a minted GitHub App token instead of GITHUB_TOKEN:
 #   Dependabot-triggered runs get a READ-ONLY GITHUB_TOKEN by design, and
@@ -40,7 +54,7 @@ permissions:
 
 jobs:
   auto-merge:
-    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' }}
+    if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' }}
     runs-on: {{RUNNER}}
     steps:
       - name: Fetch Dependabot metadata
@@ -88,7 +102,7 @@ jobs:
       # the required checks in the merge_group and ejects anything that goes red,
       # so nothing merges unverified.
       - name: Enqueue minor/patch
-        if: ${{ steps.meta.outputs.update-type != 'version-update:semver-major' }}
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -100,18 +114,21 @@ jobs:
       # least one required status check — without a required check, --auto
       # merges immediately and the gate is imaginary.
       - name: Auto-merge minor/patch once checks pass
-        if: ${{ steps.meta.outputs.update-type != 'version-update:semver-major' }}
+        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: gh pr merge --auto --squash --delete-branch "$PR_URL"
 # {{ENDIF}}
 
-      - name: Hold semver-major for a human
-        if: ${{ steps.meta.outputs.update-type == 'version-update:semver-major' }}
+      # The exact complement of the merge condition above, so every PR either
+      # merges or is held with a reason — never silently neither.
+      - name: Hold anything that is not an explicit minor/patch
+        if: ${{ steps.meta.outputs.update-type != 'version-update:semver-minor' && steps.meta.outputs.update-type != 'version-update:semver-patch' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
         run: |
           gh pr comment "$PR_URL" --body \
-            "dependabot-auto-merge: **held for a human** (semver-major). A green build does not prove a major is safe. Review, then merge manually."
+            "dependabot-auto-merge: **held for a human** (update-type: ${UPDATE_TYPE:-unknown}). Only an explicit semver-minor or semver-patch auto-merges; a green build does not prove a major is safe, and an unclassified bump is not known to be minor. Review, then merge manually."
