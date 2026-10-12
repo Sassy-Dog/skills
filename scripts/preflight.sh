@@ -1544,6 +1544,13 @@
 #      sibling worktree, an argv token ignored, python3 absent. It executes the
 #      guard and says nothing about the prose that tells a model to call it:
 #      entries 32 and 51 pin that. No model, no gh, no network.
+#  56. auto-merge policy tests (scripts/test-auto-merge-policy.sh) — the
+#      dependabot-auto-merge template must FAIL CLOSED: merge only on an
+#      explicit semver-minor/patch (versions 1-3 merged on `!= semver-major`,
+#      which an empty update-type satisfies), gate the job on the triggering
+#      actor as well as the PR author, and hold everything else with a comment.
+#      actionlint cannot see either defect — the expressions are valid, just
+#      permissive. Source-level, with three mutation checks.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2497,6 +2504,15 @@ if bash scripts/test-sentry-breadcrumbs.sh; then
     pass "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
 else
     failed "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
+fi
+
+# --- 56. auto-merge policy tests ------------------------------------------------
+# The auto-merge template merges only an explicit minor/patch and only on a
+# Dependabot-triggered run; everything else is held. Source-level, no network.
+if bash scripts/test-auto-merge-policy.sh; then
+    pass "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
+else
+    failed "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
 fi
 
 # ------------------------------------------------------------------------------

@@ -466,7 +466,12 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
   the credential, not to one workflow: scoping it to auto-merge left the two templates that check
   out PR head ungated (#186). For the lockfile ones, report the consequence and the manual
   regenerate-and-push path too — dropping them is not free the way dropping auto-merge was.
-- Never auto-merge semver-major. A green build does not disprove an API break.
+- Never auto-merge semver-major. A green build does not disprove an API break. And never express
+  that as `!= semver-major`: fetch-metadata emits an empty update-type when it cannot classify a
+  bump, which that condition merges. The merge step matches semver-minor or semver-patch
+  explicitly and everything else is held with a comment.
+- Never gate auto-merge on the PR author alone. A human or agent pushing to a Dependabot branch
+  triggers a run the author check admits; the job also requires `github.actor == 'dependabot[bot]'`.
 - Never widen the `dependabot[bot]` actor gate on a `pull_request_target` workflow — that gate is
   what keeps contributor code out of a write-capable context.
 - Never inline `github.event.pull_request.head.ref` into a `run:` shell; funnel it through `env:`.
