@@ -482,11 +482,14 @@ which it enqueues. It is two files, rendered together and owned together:
   facts and is identical in every repo. A `schedule:` is attributed to whoever last touched its
   file, so a third-party `uses:` here would let a Dependabot bump re-attribute the cron to
   `dependabot[bot]`, and the schedule would stop firing silently.
-- `deps-cadence-impl.yml` — every real step. One `run:` loops over an env line such as
-  `LANES: "bun:/web bun:/scripts pub:/app"` with one `case` arm per ecosystem: `bun update`,
-  `npm update`, `flutter pub upgrade`, `cargo update`. Other detected ecosystems (gradle, nuget,
-  docker, github-actions, cocoapods, …) have no refresh command and are listed in the file header as
-  a deliberate absence.
+- `deps-cadence-impl.yml` — every real step, in three jobs (see "Credential-bearing workflows" below
+  for why they are separate). The refresh is one `run:` looping over an env line such as
+  `LANES: "bun:/web bun:/scripts pub:/app"` with one `case` arm per ecosystem: `bun update`
+  (`bun update --recursive` when the lane's `package.json` declares `workspaces`, since a plain
+  `bun update` at a workspace root moves only the root's own dependencies), `npm update`,
+  `flutter pub upgrade`, `cargo update`. Other detected ecosystems (gradle, nuget, docker,
+  github-actions, cocoapods, …) have no refresh command and are listed in the file header as a
+  deliberate absence.
 
 ```bash
 gh repo view --json visibility --jq .visibility          # → --visibility
@@ -525,7 +528,16 @@ What it derives, from the repo only:
   by the impl's own reader steps, which the renderer also runs on each candidate, so render time and
   run time cannot read a pin differently. A missing pin, a floating one (`1.3.x`, `latest`,
   `stable`, a bare major) or two that disagree **refuses** with exit `4`, so the failure lands at
-  render time and not at 09:00 on the 1st.
+  render time and not at 09:00 on the 1st. CI pins are read in **every YAML form** the fleet's
+  workflows use, not only a key at the start of a line: block (`bun-version: 1.4.0`, quoted or not),
+  flow mapping (`with: { bun-version: latest }`), a quoted key, a flow sequence (each element is a
+  pin) and an expression (`${{ matrix.bun }}`, which refuses). Comments are dropped first. A
+  line-start reader once saw only what2wear's one block-style `1.4.0` and missed six
+  `with: { bun-version: latest }`, so it rendered where it had to refuse.
+- **bun on a workspace root needs 1.4.0 or later.** `bun update --recursive` is in `--help` from
+  bun 1.2.20, but on 1.2.20 to 1.3.14 it moves no workspace member (checked on 1.2.20, 1.3.5 and
+  1.3.14: only the root's dependencies changed); 1.4.0 and 1.4.2 move every member. A
+  workspace-root lane pinned below 1.4.0 refuses with exit `4`.
 - **Runner**: none to derive. The impl hard-codes `runs-on: ubuntu-latest`, and `--runner` is
   refused (exit `1`). Every lane installs its toolchain through an action (setup-bun, setup-node,
   subosito/flutter-action, which supports Linux, and dtolnay/rust-toolchain), so nothing needs the
@@ -535,38 +547,65 @@ What it derives, from the repo only:
 
 A generated workflow that **both** runs package-manager code **and** holds the org-wide
 `PLATFORM_WRITER_APP_*` token (contents and pull-request write on every installed repo) runs only
-on an ephemeral GitHub-hosted runner, never on the self-hosted fleet. The fleet is persistent and
+on ephemeral GitHub-hosted runners, never on the self-hosted fleet. The fleet is persistent and
 shared: any earlier job on the same machine, including another repo's PR CI and the dependency
 install scripts it runs, can leave behind a PATH-shadowing `git`, `gh`, `bun` or `cargo`, a global
 gitconfig with `core.hooksPath`, `core.fsmonitor` or a credential helper, or a modified tool-cache
-SDK. Any of those captures the token the moment this job uses it. A GitHub-hosted VM starts clean
-and is destroyed after the job. `deps-cadence` follows it from template version 2, after a security
-review of version 1, and three further rules keep the exposure small:
+SDK. Any of those captures the token the moment the job uses it. A GitHub-hosted VM starts clean
+and is destroyed after the job.
 
-- **Mint late.** The App token is minted after every package-manager step (refresh and exact-pin
-  report), right before the PR step. Earlier reads (the default branch, this month's branch, its
-  open PR) use the built-in token, whose permissions are `contents: read` and
-  `pull-requests: read`, so it can never stand in for the App token as a write fallback. The
-  credential presence check still runs first, so a missing secret fails fast.
+**And the package managers never share a VM with the token.** Template version 2 minted the token
+late but in the same job. A process the package managers started, or a poisoned tool cache, can
+outlive its step and read the token from `/proc/*/environ`, `$RUNNER_TEMP` or step files. So version
+3 splits the work into three jobs, each on its own fresh `ubuntu-latest` VM:
+
+| Job | Runs | Holds |
+| --- | --- | --- |
+| `plan` | no checkout, no repo code: the credential presence check and the month plan (default branch, this month's branch, its open PR) | the secret values for the presence test only; `contents: read`, `pull-requests: read` |
+| `refresh` | the package managers and the exact-pin report, then uploads one artifact: `git diff --cached --binary` of the recorded lane files, plus `lanes.md` and `pins.md` | **no secret at all**; `contents: read` |
+| `open-pr` | no package-manager or repo code: checkout, download the artifact, validate and apply it, then mint the App token, commit, push, open the PR and enqueue it | the App token, minted only after the patch is applied |
+
+**The artifact is untrusted.** `open-pr` re-derives the allowed paths from `LANES` with the same
+mapping as the refresh's case arms (bun: any `package.json` under the lane plus its `bun.lock`;
+npm: `package.json`, `package-lock.json`; pub: `pubspec.yaml`, `pubspec.lock`; cargo:
+`Cargo.lock`), then asks git what the patch would do and rejects it, before anything is applied, when:
+
+- `git apply --summary` reports anything: a create, delete, rename, copy or mode change;
+- `git apply --numstat` shows a binary hunk, an unusual path (quoted, `..`, characters outside
+  `[A-Za-z0-9._/@+-]`) or a path outside the allowed set (`.github/**` included);
+- a path is not a tracked regular file in the checkout (mode `100644` / `100755`), which is how a
+  symlink (`120000`) or a submodule (`160000`) is refused.
+
+It then runs `git apply --index` with hooks and fsmonitor off, and re-checks that only allowed
+paths are staged and nothing else changed.
+
+The token rules from version 2 still hold inside `open-pr`:
+
 - **Never put the token in argv or a git config file.** The push reads it through a one-shot
   credential helper (`credential.helper=!f() { … echo "password=$GH_TOKEN"; }; f`, single-quoted so
   git's own shell expands it), with an empty `credential.helper=` clearing any other helper first.
   `checkout` keeps `persist-credentials: false`.
-- **Ignore inherited git config and hooks.** The PR step exports `GIT_CONFIG_NOSYSTEM=1` and
-  `GIT_CONFIG_GLOBAL=/dev/null`, and every git call that could run a hook or an fsmonitor program
-  passes `-c core.hooksPath=/dev/null -c core.fsmonitor=false`. A hook inherits the step's
-  environment, `GH_TOKEN` included.
+- **Ignore inherited git config and hooks.** The validate and PR steps export
+  `GIT_CONFIG_NOSYSTEM=1` and `GIT_CONFIG_GLOBAL=/dev/null`, and every git call that could run a hook
+  or an fsmonitor program passes `-c core.hooksPath=/dev/null -c core.fsmonitor=false`. A hook
+  inherits the step's environment, `GH_TOKEN` included.
+- **Read-only built-in token.** The workflow grants `contents: read`, and only the `plan` job adds
+  `pull-requests: read`, so the built-in token can never stand in for the App token as a write
+  fallback.
 
-`scripts/test-deps-cadence-policy.sh` pins all four. It fails a self-hosted or templated
-`runs-on`, a mint before the refresh, the token in a push URL or expanded into argv (a logging
-`git` wrapper sees every argv), and a poisoned global gitconfig or repo hook that captures the
-token.
+`scripts/test-deps-cadence-policy.sh` pins all of it. Statically, it checks secrets per job, the
+single mint in `open-pr` after validation, the actions `open-pr` may use, no package-manager command
+in `open-pr`, and hosted runners. Executed, the refresh and package steps run in one scratch repo,
+the validate and PR steps run in a fresh clone (as `open-pr` does), and hostile patches (a
+`.github/` edit, a rename, a mode change, a symlink retarget, a new file, a binary hunk, a path
+outside every lane) must each be rejected with the tree untouched. A logging `git` wrapper and a
+poisoned global gitconfig prove the token reaches no argv and no hook.
 
 The three Dependabot workflow templates still default to the fleet. Whether this rule should
 reach them is a separate decision that this section does not make.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
-exits `0` with a `::notice::` and no PR; this month's `chore/deps-YYYY-MM` already existing exits
+exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
 `0` with a notice naming its open PR, so a re-dispatch never stacks branches; **any failed refresh
 fails the job**; only the lanes' manifests and lockfiles are staged; the PR body lists each lane's
 delta plus an **exact-pin report** for bun and npm lanes. That report also goes to the job summary
@@ -575,7 +614,8 @@ and a stale one is a finding, not a clean month. pub and cargo exact pins are no
 version.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (both `2`; version 1 ran on the fleet and minted the token first). The ownership rules in §1 apply to each. Re-render owned files with
+`template-version` (both `3`: version 1 ran on the fleet and minted the token first; version 2 ran
+the package managers and the token in one job). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
@@ -671,9 +711,11 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never let a failed `deps-cadence` refresh skip its lane and carry on, never stage beyond the
   lanes' manifests and lockfiles, never add `--label` to its PR (a missing label fails
   `gh pr create`), and never give its `gh pr merge --auto` a method flag.
-- Never run `deps-cadence` on a self-hosted runner, mint its App token before a package-manager
-  step, or let the token reach argv, a URL, a git config file or a git hook. It runs repo and
-  dependency tooling, then holds a write token for every installed repo.
+- Never run `deps-cadence` on a self-hosted runner, reference a secret or mint the App token in its
+  `refresh` job, run any package-manager or repo code in `open-pr`, apply the refresh's patch
+  without re-deriving its allowed paths from `LANES`, or let the token reach argv, a URL, a git
+  config file or a git hook. It runs repo and dependency tooling, then holds a write token for every
+  installed repo.
 - Never put a third-party `uses:` in `deps-cadence.yml`. It carries the `schedule:`; everything
   else lives in the impl.
 - Never render `deps-cadence` from a floating or guessed toolchain pin. A refusal (exit `4`) is

@@ -1562,6 +1562,10 @@
 #      ephemeral GitHub-hosted runner, the App token minted after every
 #      package-manager step, and the token kept out of git argv, hooks and
 #      global git config (a logging git wrapper and a poisoned gitconfig).
+#      Since version 3 the package managers run in a secret-free job and a
+#      separate open-pr job validates the refresh's patch as untrusted (hostile
+#      patches executed) before it mints the token; a workspace-root bun lane
+#      must run `bun update --recursive`.
 #      Mutation checks are listed at the end of the script. No network.
 #  58. deps-cadence render tests (scripts/test-deps-cadence-render.sh) —
 #      render-cadence.sh against synthetic trees: LANES from the dependabot

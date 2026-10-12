@@ -21,6 +21,12 @@
 #      pubspec environment.flutter; Rust from rust-toolchain(.toml). A missing,
 #      floating or disagreeing pin REFUSES the render (exit 4, no files), and
 #      setup-deps' own rendered workflows are not read as the repo's pins.
+#   3a. CI pins are read in every YAML form the fleet uses: block, flow
+#      mapping (`with: { bun-version: latest }`), quoted, flow sequence and
+#      expression; a commented-out pin is not one. A line-start-only reader
+#      (mutation) renders what2wear's disagreeing pins instead of refusing.
+#   3c. A workspace-root bun lane needs bun >= 1.4.0 (`bun update --recursive`
+#      moves no member before it), refused otherwise.
 #   3b. No runner fact: --runner is refused and the render runs on
 #      ubuntu-latest (template version 2; the job holds the org-wide App token
 #      after running package-manager code, so never the self-hosted fleet).
@@ -161,7 +167,7 @@ Cargo.lock	lock
 rust-toolchain.toml	[toolchain]\nchannel = "1.85.0"\ncomponents = ["clippy"]
 android/settings.gradle	include ':app'
 android/build.gradle	// build
-.bun-version	1.3.5
+.bun-version	1.4.0
 .github/workflows/ci.yml	jobs:\n  t:\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version-file: .bun-version
 .github/workflows/dependabot-bun-lockfile.yml	---\n# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 10\njobs:\n  x:\n    steps:\n      - with:\n          bun-version: latest
 EOF
@@ -255,6 +261,35 @@ printf 'package.json\t{"packageManager":"bun@1.2.3+sha512.abc"}\n' | bun_case "b
 printf 'package.json\t{"name":"r"}\n' | bun_case "bun-no-pin" 4 "bun: no pin"
 printf '.bun-version\tlatest\n' | bun_case "bun-file-floating" 4 ".bun-version pins it, but not as an exact version"
 
+# Every YAML form a CI pin takes in the fleet's workflows, not just a key at
+# the start of a line. The disagree case is what2wear's real shape: six
+# `with: { bun-version: latest }` and one block-style `bun-version: 1.4.0`.
+printf '%s\t      - with: { bun-version: 1.4.0 }\n' "$CI" | bun_case "bun-ci-inline" 0 "bun-version: '1.4.0'"
+printf '%s\t      - with: {bun-version: "1.4.0", no-cache: true}\n' "$CI" | bun_case "bun-ci-inline-multikey" 0 "bun-version: '1.4.0'"
+printf '%s\t      - with: { bun-version: latest }\\n      - with: { bun-version: latest }\\n      - with:\\n          bun-version: 1.4.0\n' "$CI" \
+    | bun_case "bun-ci-inline-disagree" 4 "2 different versions"
+printf '%s\t      - with: { bun-version: latest }\n' "$CI" | bun_case "bun-ci-inline-latest" 4 "latest"
+printf '%s\t      - with: { bun-version-file: .bun-version }\n.bun-version\t1.4.0\n' "$CI" | bun_case "bun-ci-inline-file" 0 "bun-version-file: '.bun-version'"
+printf '%s\t      # with: { bun-version: latest }\\n      - with:\\n          bun-version: 1.4.0\n' "$CI" | bun_case "bun-ci-comment-ignored" 0 "bun-version: '1.4.0'"
+# shellcheck disable=SC2016  # a literal GitHub expression, not shell
+printf '%s\t      - with: { bun-version: ${{ matrix.bun }} }\n' "$CI" | bun_case "bun-ci-expression" 4 'matrix.bun'
+printf '%s\t    strategy:\\n      matrix:\\n        bun-version: [1.4.0, latest]\n' "$CI" | bun_case "bun-ci-flow-sequence" 4 "2 different versions"
+
+# A workspace-root bun lane runs `bun update --recursive`, which moves the
+# members only from bun 1.4.0 (1.3.5 and 1.3.14 accept the flag and move none).
+ws_case() {
+    local name="$1" ver="$2" rc="$3" want="$4"
+    printf 'package.json\t{"name":"r","workspaces":["apps/*"]}\nbun.lock\tlock\napps/a/package.json\t{"name":"a"}\n.bun-version\t%s\n' "$ver" | tree "$name"
+    run_render "$name"
+    expect_rc "$name" "$rc" || return
+    if [ "$rc" -eq 0 ]; then ok "$name: bun $ver renders a workspace-root lane"
+    elif grep -qF -- "$want" <<<"$ERR"; then ok "$name refused (exit $rc): bun $ver on a workspace root"
+    else bad "$name: refusal does not mention '$want': $ERR"; fi
+}
+ws_case "bun-workspace-1.3.14" 1.3.14 4 "moves workspace members only from bun 1.4.0"
+ws_case "bun-workspace-1.3.5" 1.3.5 4 "moves workspace members only from bun 1.4.0"
+ws_case "bun-workspace-1.4.0" 1.4.0 0 ""
+
 # flutter_case <name> <expect-rc> <want> — a pub lane at /app plus stdin files.
 flutter_case() {
     local name="$1" rc="$2" want="$3"
@@ -306,6 +341,9 @@ npm_case() {
 printf '.nvmrc\t24\n' | npm_case "node-major-only" 4 ".nvmrc pins it, but not as an exact version"
 printf '.nvmrc\tv24.1.0\n' | npm_case "node-nvmrc" 0 "node-version-file: '.nvmrc'"
 printf '%s\t      - with:\\n          node-version: 22.11.0\n' "$CI" | npm_case "node-ci-literal" 0 "node-version: '22.11.0'"
+printf '%s\t      - with: { node-version: 22.11.0 }\n' "$CI" | npm_case "node-ci-inline" 0 "node-version: '22.11.0'"
+printf '%s\t      - with: { node-version-file: .nvmrc }\n.nvmrc\t24.1.0\n' "$CI" | npm_case "node-ci-inline-file" 0 "node-version-file: '.nvmrc'"
+printf '%s\t      - with: { node-version: "24" }\\n      - with:\\n          node-version: 22.11.0\n' "$CI" | npm_case "node-ci-inline-disagree" 4 "2 different versions"
 
 # --- 4. declines -------------------------------------------------------------------
 run_render mono --visibility public
@@ -341,6 +379,22 @@ fi
 run_render mono --compare-to "$WORK/committed-subset.yml"
 expect_rc "compare-to, lanes added" 0 && ok "a re-render that only adds lanes passes --compare-to"
 
+# --- mutation: a line-start-only pin reader must miss what2wear's shape ------------
+MUTPLUG="$WORK/mutplug/skills/setup-deps"
+mkdir -p "$MUTPLUG"; cp -R "$ROOT/skills/setup-deps/scripts" "$ROOT/skills/setup-deps/references" "$MUTPLUG/"
+FROM='(?:^|[\s{,])' TO='^\s*' perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$MUTPLUG/scripts/render-cadence.sh"
+if cmp -s "$MUTPLUG/scripts/render-cadence.sh" "$RENDER"; then
+    bad "mutation (inline pin ignored) changed nothing, so it proves nothing"
+else
+    REAL_RENDER="$RENDER"; RENDER="$MUTPLUG/scripts/render-cadence.sh"
+    run_render bun-ci-inline-disagree
+    RENDER="$REAL_RENDER"
+    if [ "$RC" -eq 4 ]; then
+        bad "mutation (inline pin ignored) still refused the what2wear shape; the case cannot tell the readers apart"
+    else
+        ok "mutation (inline pin ignored) renders the what2wear shape (exit $RC), which the real reader refuses"
+    fi
+fi
 # --- 6. mutation: an unknown token must fail the render -----------------------------
 sed 's/^name: Dependency cadence (impl)$/name: Dependency cadence (impl) {{UNKNOWN_FACT}}/' "$IMPL_TPL" > "$WORK/mut-token.yml"
 if cmp -s "$WORK/mut-token.yml" "$IMPL_TPL"; then
