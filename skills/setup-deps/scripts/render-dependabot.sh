@@ -26,9 +26,12 @@
 # supported (an integer 1..90, Dependabot's documented range); the optional
 # semver-*-days / include / exclude keys are deliberately not rendered. A
 # request naming an ecosystem that ends up with no lane, a repeated ecosystem,
-# or a bad value is REFUSED (exit 1) rather than silently dropped. With no
-# --cooldown the output is byte-identical to the pre-#498 render
-# (template-version 3); any cooldown stamps template-version 4.
+# or a bad value is REFUSED (exit 1) rather than silently dropped. The
+# cooldown is purely additive: with no --cooldown the output carries none of
+# it and stamps BASE_VERSION; any cooldown stamps COOLDOWN_VERSION and adds
+# only the cooldown blocks and their header paragraph. The pair was (3, 4)
+# until the template's github-actions group became minor/patch only, which
+# changed every render's content and moved it to (5, 6).
 #
 # ALWAYS pass the result through validate-dependabot.sh before writing it into
 # a repo. Rendering is no longer valid-by-construction (see the template
@@ -50,8 +53,8 @@ TEMPLATE="$SCRIPT_DIR/../references/templates/dependabot.yml.template"
 DETECT=""
 OUT=""
 COOLDOWNS=""   # newline-separated "ecosystem=days"
-BASE_VERSION=3
-COOLDOWN_VERSION=4
+BASE_VERSION=5
+COOLDOWN_VERSION=6
 
 while [ "$#" -gt 0 ]; do
     case "$1" in

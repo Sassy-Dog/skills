@@ -1,5 +1,5 @@
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: 3
+# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: 5
 #
 # GROUPING IS THE POINT OF THIS FILE. Ungrouped, one vulnerable transitive
 # dependency can open a dozen PRs; across this org that turned 74 alerts into a
@@ -30,6 +30,17 @@ updates:
   # SHA-pinning hygiene, since Dependabot rewrites pinned SHAs with a version
   # comment rather than reverting them to floating tags. Always "/": Dependabot
   # scans .github/workflows at the repo root only.
+  #
+  # The `actions` group is minor/patch only (v5). fetch-metadata reports a
+  # grouped PR's HIGHEST update-type, and where the auto-merge workflow is
+  # rendered it enqueues only an explicit semver-minor or semver-patch. With
+  # no `update-types`, one Actions major in the weekly group held the WHOLE
+  # group for a human, and every minor and patch bump riding with it stalled
+  # (velovate#2391, qr-ninja#914). Now a major falls outside the group and
+  # arrives as its own ungrouped PR for a human to review, while the
+  # minor/patch group stays mergeable. There is deliberately NO semver-major
+  # `ignore:` here, unlike npm and bun: an Actions major should still be
+  # PROPOSED, just never grouped. The security group is unchanged.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -39,6 +50,7 @@ updates:
       actions:
         applies-to: version-updates
         patterns: ["*"]
+        update-types: ["minor", "patch"]
       actions-security:
         applies-to: security-updates
         patterns: ["*"]
