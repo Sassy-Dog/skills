@@ -51,6 +51,19 @@
 #          pre-commit / pre-push hook that would each dump GH_TOKEN must
 #          capture nothing; and the credential helper, run on its own through
 #          `git credential fill`, must answer the token from the environment.
+#  10. THREE JOBS, AND THE PATCH IS UNTRUSTED (version 3). Static: the refresh
+#      job references no secret and mints nothing; the plan job references the
+#      secrets only in its presence check; the App token is minted once, in
+#      open-pr, after the validate step; open-pr uses only checkout,
+#      download-artifact and the token action and runs no package manager.
+#      Executed: the refresh and package steps run in one scratch repo, and the
+#      validate/apply and PR steps run in a FRESH clone of it, as open-pr does.
+#      Hostile patches built in a third clone (a .github/ edit, a rename, a
+#      mode change, a symlink, a new file on an allowed path, a binary hunk)
+#      must each be rejected with the tree left untouched.
+#  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
+#      `bun update` there moves only the root's own dependencies). Executed: a
+#      fake bun logs its argv.
 #   8. The exact-pin report (ported from a consumer's deps-update script): its
 #      `bun outdated` table parser against VERBATIM bun 1.4.2 captures in
 #      scripts/fixtures/deps-cadence/ (plain, workspaces with the extra column,
@@ -94,10 +107,21 @@ done
 REFRESH_STEP="Refresh each lane within its declared ranges"
 REPORT_STEP="Report exact pins (bun and npm lanes)"
 PR_STEP="Open the refresh PR and enqueue it"
+PACKAGE_STEP="Package the refresh as a patch"
+VALIDATE_STEP="Validate and apply the refresh patch"
 
 # code <file> — the template body (after `---`) without comment-only lines.
 # Comments explain the rules in the very words the checks forbid.
 code() { sed -n '/^---$/,$p' "$1" | grep -vE '^[[:space:]]*#'; }
+
+# job_block <file> <job> — one job's lines under `jobs:`, comments included.
+job_block() {
+    awk -v want="  $2:" '
+        $0 == want { f = 1; print; next }
+        f && /^  [a-z][a-z0-9_-]*:$/ { exit }
+        f && /^[a-z]/ { exit }
+        f { print }' "$1"
+}
 
 # step_block <file> <name> — one step's lines, from `- name:` to the next step.
 step_block() {
@@ -123,6 +147,7 @@ mkdir -p "$BIN"
 cat > "$BIN/bun" <<'SH'
 #!/usr/bin/env bash
 # FAKE_BUN_MODE: ok | fail ; FAKE_BUN_OUTDATED: file to print for `outdated`
+printf '%s\n' "$*" >> "${FAKE_BUN_LOG:-/dev/null}"
 case "$1" in
     update)
         [ "${FAKE_BUN_MODE:-ok}" = "fail" ] && { echo "error: registry unreachable" >&2; exit 1; }
@@ -175,13 +200,16 @@ new_repo() {
         cd "$d" || exit 1
         git init -q -b main
         git config user.name t; git config user.email t@example.com
-        echo '{"name":"web","dependencies":{"is-number":"6.0.0","left-pad":"^1.1.0"},"devDependencies":{"kind-of":"=6.0.3"}}' > web/package.json
+        echo '{"name":"web","workspaces":["pkg"],"dependencies":{"is-number":"6.0.0","left-pad":"^1.1.0"},"devDependencies":{"kind-of":"=6.0.3"}}' > web/package.json
         echo 'lock' > web/bun.lock
         echo '{"name":"pkg"}' > web/pkg/package.json
         echo 'readme' > web/README.md
         echo '[package]' > Cargo.toml
         echo 'lock' > Cargo.lock
         echo 'fn main() {}' > src/main.rs
+        mkdir -p .github/workflows web/sym
+        echo 'name: ci' > .github/workflows/ci.yml
+        ln -s ../package.json web/sym/package.json
         git add -A && git commit -qm init
     )
 }
@@ -197,8 +225,41 @@ check() {
     if grep -qE 'GITHUB_TOKEN' <<<"$c"; then
         echo "impl reads GITHUB_TOKEN outside a comment (no fallback credential)"; rc=1
     fi
-    if grep -qE '^[[:space:]]+[a-z-]+:[[:space:]]*write' <<<"$(sed -n '/^permissions:/,/^[a-z]/p' <<<"$c")"; then
+    if grep -qE ':[[:space:]]*write([[:space:]]|$)' <<<"$c"; then
         echo "impl permissions grant the built-in token write"; rc=1
+    fi
+
+    # 10 (static). secrets only in the plan job's presence check and open-pr;
+    # one mint, in open-pr; open-pr runs nothing but git, gh and three actions.
+    local jplan jrefresh jopen
+    jplan="$(job_block "$impl" plan | grep -vE '^[[:space:]]*#')"
+    jrefresh="$(job_block "$impl" refresh | grep -vE '^[[:space:]]*#')"
+    jopen="$(job_block "$impl" open-pr | grep -vE '^[[:space:]]*#')"
+    if [ -z "$jplan" ] || [ -z "$jrefresh" ] || [ -z "$jopen" ]; then
+        echo "could not slice the plan, refresh and open-pr jobs (renamed?)"; rc=1
+    fi
+    if grep -qE 'secrets\.|create-github-app-token|app_token' <<<"$jrefresh"; then
+        echo "the refresh job references a secret or the App token; it runs package managers and must hold neither"; rc=1
+    fi
+    if grep -qE 'create-github-app-token|app_token' <<<"$jplan"; then
+        echo "the plan job mints or reads the App token"; rc=1
+    fi
+    if [ "$(grep -cE 'secrets\.' <<<"$jplan")" -ne "$(grep -cE 'secrets\.' <<<"$(step_block "$impl" "Require the app credentials")")" ]; then
+        echo "the plan job references a secret outside its presence check"; rc=1
+    fi
+    if [ "$(grep -cE 'actions/create-github-app-token@' <<<"$c")" -ne 1 ] || ! grep -qE 'actions/create-github-app-token@' <<<"$jopen"; then
+        echo "the App token must be minted exactly once, in open-pr"; rc=1
+    fi
+    local u
+    while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        case "$u" in
+            actions/checkout@*|actions/download-artifact@*|actions/create-github-app-token@*) ;;
+            *) echo "open-pr uses '$u'; it may use only checkout, download-artifact and the token action"; rc=1 ;;
+        esac
+    done < <(sed -nE 's/^[[:space:]]*(- )?uses:[[:space:]]*([^[:space:]]+).*/\2/p' <<<"$jopen")
+    if grep -qE '(^|[;&|({[:space:]])(bun|bunx|npm|npx|yarn|pnpm|node|flutter|dart|cargo|rustup|pod|make|python3?|pip3?)([[:space:]]|$)' <<<"$jopen"; then
+        echo "open-pr runs a package manager or interpreter: $(grep -E '(^|[;&|({[:space:]])(bun|bunx|npm|npx|yarn|pnpm|node|flutter|dart|cargo|rustup|pod|make|python3?|pip3?)([[:space:]]|$)' <<<"$jopen" | head -1 | tr -s ' ')"; rc=1
     fi
     if [ "$(grep -cE 'github\.token' <<<"$c")" -gt 1 ] \
         || ! grep -qE '^          GH_TOKEN: \$\{\{ github\.token \}\}$' <<<"$(step_block "$impl" "Plan this month's run")" \
@@ -287,23 +348,26 @@ check() {
 
     # 9 (static). hosted runner; late mint; no token in a URL.
     c="$(code "$impl")"
-    if [ "$(grep -cE '^[[:space:]]*runs-on:' <<<"$c")" -ne 1 ] \
-        || ! grep -qE '^[[:space:]]*runs-on:[[:space:]]*ubuntu-(latest|[0-9]+\.[0-9]+)[[:space:]]*$' <<<"$c"; then
-        echo "runs-on must be one GitHub-hosted ubuntu label, never self-hosted or a render-time fact: $(grep -E 'runs-on:' <<<"$c" | tr -s ' ')"; rc=1
+    local runs
+    runs="$(grep -E '^[[:space:]]*runs-on:' <<<"$c")"
+    if [ "$(grep -c . <<<"$runs")" -ne 3 ] \
+        || grep -vqE '^[[:space:]]*runs-on:[[:space:]]*ubuntu-(latest|[0-9]+\.[0-9]+)[[:space:]]*$' <<<"$runs"; then
+        echo "each of the three jobs must run on a GitHub-hosted ubuntu label, never self-hosted or a render-time fact: $(grep -E 'runs-on:' <<<"$c" | tr -s ' ' | tr '\n' ' ')"; rc=1
     fi
     if grep -qiE 'self-hosted' <<<"$c"; then
         echo "the impl names a self-hosted runner"; rc=1
     fi
-    local mint_ln refresh_ln report_ln pr_ln first_ref
+    local mint_ln refresh_ln report_ln pr_ln first_ref validate_ln
     mint_ln="$(grep -nE 'actions/create-github-app-token@' "$impl" | head -1 | cut -d: -f1)"
     refresh_ln="$(grep -nF "      - name: $REFRESH_STEP" "$impl" | cut -d: -f1)"
     report_ln="$(grep -nF "      - name: $REPORT_STEP" "$impl" | cut -d: -f1)"
     pr_ln="$(grep -nF "      - name: $PR_STEP" "$impl" | cut -d: -f1)"
+    validate_ln="$(grep -nF "      - name: $VALIDATE_STEP" "$impl" | cut -d: -f1)"
     first_ref="$(grep -nE 'steps\.app_token\.' "$impl" | head -1 | cut -d: -f1)"
-    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$pr_ln" ]; then
-        echo "could not locate the mint, refresh, report and PR steps to order them"; rc=1
-    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
-        echo "the App token is minted at line $mint_ln, not after every package-manager step (refresh $refresh_ln, report $report_ln) and before the PR step ($pr_ln)"; rc=1
+    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$pr_ln" ] || [ -z "$validate_ln" ]; then
+        echo "could not locate the mint, refresh, report, validate and PR steps to order them"; rc=1
+    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -lt "$validate_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
+        echo "the App token is minted at line $mint_ln, not after the package managers (refresh $refresh_ln, report $report_ln) and the patch validation ($validate_ln), before the PR step ($pr_ln)"; rc=1
     elif [ -n "$first_ref" ] && [ "$first_ref" -lt "$mint_ln" ]; then
         echo "a step before the mint reads steps.app_token (line $first_ref)"; rc=1
     fi
@@ -313,10 +377,13 @@ check() {
 
     # --- executed ---------------------------------------------------------------
     refresh="$WORK/refresh.sh"; report="$WORK/report.sh"; prstep="$WORK/pr.sh"
+    local package="$WORK/package.sh" validate="$WORK/validate.sh"
     step_run "$impl" "$REFRESH_STEP" > "$refresh"
     step_run "$impl" "$REPORT_STEP" > "$report"
     step_run "$impl" "$PR_STEP" > "$prstep"
-    for f in "$refresh" "$report" "$prstep"; do
+    step_run "$impl" "$PACKAGE_STEP" > "$package"
+    step_run "$impl" "$VALIDATE_STEP" > "$validate"
+    for f in "$refresh" "$report" "$prstep" "$package" "$validate"; do
         [ -s "$f" ] || { echo "could not slice $(basename "$f" .sh) step's run block (renamed?)"; return 1; }
     done
 
@@ -342,15 +409,32 @@ check() {
     done
     printf '[core]\n\thooksPath = %s\n\tfsmonitor = %s\n[credential]\n\thelper = !%s\n' \
         "$d.hooks" "$d.hooks/steal" "$d.hooks/steal" > "$d.gitconfig"
-    if ! out="$(cd "$d" && gh_shell "$refresh" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" 2>&1)"; then
+    : > "$d.bunlog"
+    if ! out="$(cd "$d" && gh_shell "$refresh" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" FAKE_BUN_LOG="$d.bunlog" 2>&1)"; then
         echo "the refresh step failed on a healthy scratch repo: $(tail -n1 <<<"$out")"; rc=1
     else
+        # 11. a workspace root refreshes recursively.
+        grep -qxF 'update --recursive --ignore-scripts' "$d.bunlog" \
+            || { echo "the workspace-root bun lane ran '$(head -1 "$d.bunlog")', not 'update --recursive --ignore-scripts'"; rc=1; }
         local staged
         staged="$(tr '\0' '\n' < "$d.tmp/deps-cadence/stage.z" | sort -u | tr '\n' ' ')"
         if [ "$staged" != "Cargo.lock web/bun.lock web/pkg/package.json " ]; then
             echo "the refresh recorded paths other than the lanes' manifests and lockfiles: $staged"; rc=1
         fi
         echo "report" > "$d.tmp/deps-cadence/pins.md"
+        # The refresh job's last step, then the artifact hand-off to a FRESH
+        # clone: open-pr never sees the refresh job's tree.
+        if ! out="$(cd "$d" && gh_shell "$package" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GITHUB_OUTPUT="$d.out" 2>&1)"; then
+            echo "the package step failed: $(tail -n1 <<<"$out")"; rc=1
+        fi
+        grep -qx 'changed=true' "$d.out" 2>/dev/null || { echo "the package step did not report changed=true"; rc=1; }
+        rm -rf "$d.b" "$d.btmp"; git clone -q "$d" "$d.b"
+        mkdir -p "$d.btmp"; cp -R "$d.tmp/deps-cadence-out" "$d.btmp/deps-cadence-in"
+        for h in pre-commit pre-push post-commit reference-transaction; do cp "$d.hooks/steal" "$d.b/.git/hooks/$h"; done
+        if ! out="$(cd "$d.b" && gh_shell "$validate" RUNNER_TEMP="$d.btmp" LANES="bun:/web cargo:/" GIT_CONFIG_GLOBAL="$d.gitconfig" 2>&1)"; then
+            echo "the validate step rejected the refresh's own patch: $(grep -m1 '::error::' <<<"$out")"; rc=1
+        fi
+        d="$d.b"
         : > "$d.ghlog"
         : > "$d.gitlog"
         # The push target is redirected to a local bare repo through
@@ -358,15 +442,15 @@ check() {
         # for both the clean URL and a token-bearing one, so a token-in-URL
         # mutant still pushes and is caught by the argv log, not by a network
         # failure.
-        if ! out="$(cd "$d" && gh_shell "$prstep" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GH_TOKEN="$SENTINEL" APP_SLUG=cadence-app \
+        if ! out="$(cd "$d" && gh_shell "$prstep" RUNNER_TEMP="${d%.b}.btmp" LANES="bun:/web cargo:/" GH_TOKEN="$SENTINEL" APP_SLUG=cadence-app \
                 BRANCH=chore/deps-2026-10 MONTH=2026-10 DEFAULT_BRANCH=main GITHUB_REPOSITORY=o/r \
-                GIT_CONFIG_GLOBAL="$d.gitconfig" FAKE_GH_LOG="$d.ghlog" FAKE_GIT_LOG="$d.gitlog" \
-                GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0="url.$d.bare.insteadOf" GIT_CONFIG_VALUE_0="https://github.com/o/r.git" \
-                GIT_CONFIG_KEY_1="url.$d.bare.insteadOf" GIT_CONFIG_VALUE_1="https://x-access-token:$SENTINEL@github.com/o/r.git" 2>&1)"; then
+                GIT_CONFIG_GLOBAL="${d%.b}.gitconfig" FAKE_GH_LOG="$d.ghlog" FAKE_GIT_LOG="$d.gitlog" \
+                GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0="url.${d%.b}.bare.insteadOf" GIT_CONFIG_VALUE_0="https://github.com/o/r.git" \
+                GIT_CONFIG_KEY_1="url.${d%.b}.bare.insteadOf" GIT_CONFIG_VALUE_1="https://x-access-token:$SENTINEL@github.com/o/r.git" 2>&1)"; then
             echo "the PR step failed: $(tail -n2 <<<"$out" | tr '\n' ' ')"; rc=1
         else
             local committed
-            committed="$(git -C "$d.bare" diff-tree --no-commit-id --name-only -r refs/heads/chore/deps-2026-10 2>/dev/null | sort | tr '\n' ' ')"
+            committed="$(git -C "${d%.b}.bare" diff-tree --no-commit-id --name-only -r refs/heads/chore/deps-2026-10 2>/dev/null | sort | tr '\n' ' ')"
             if [ "$committed" != "Cargo.lock web/bun.lock web/pkg/package.json " ]; then
                 echo "the pushed commit holds files beyond the lanes' manifests and lockfiles: ${committed:-<nothing pushed>}"; rc=1
             fi
@@ -383,7 +467,7 @@ check() {
             elif grep -qF "$SENTINEL" "$d.gitlog"; then
                 echo "the App token appeared in a git argv: $(grep -F "$SENTINEL" "$d.gitlog" | head -1 | sed "s/$SENTINEL/<TOKEN>/g")"; rc=1
             fi
-            if [ -s "$d.captured" ]; then
+            if [ -s "${d%.b}.captured" ]; then
                 echo "a global gitconfig program or a git hook ran with the token in its environment"; rc=1
             fi
         fi
@@ -400,15 +484,21 @@ check() {
         fi
     fi
 
-    # 7 (executed). nothing moved: exit 0, notice, no PR.
+    # 7 (executed). nothing moved: exit 0, notice, changed=false, so open-pr
+    # never runs and no token is minted.
     d="$WORK/x-none"; rm -rf "$d" "$d.tmp"; new_repo "$d"
-    mkdir -p "$d.tmp/deps-cadence"; : > "$d.tmp/deps-cadence/stage.z"; : > "$d.ghlog"
-    if ! out="$(cd "$d" && gh_shell "$prstep" RUNNER_TEMP="$d.tmp" LANES="bun:/web" GH_TOKEN=tok APP_SLUG=a \
-            BRANCH=b MONTH=m DEFAULT_BRANCH=main GITHUB_REPOSITORY=o/r FAKE_GH_LOG="$d.ghlog" 2>&1)"; then
-        echo "nothing moved, yet the PR step failed"; rc=1
-    elif ! grep -q '::notice::Nothing moved' <<<"$out" || grep -q '^pr create' "$d.ghlog"; then
-        echo "nothing moved must be a ::notice:: and no PR"; rc=1
+    mkdir -p "$d.tmp/deps-cadence"; : > "$d.tmp/deps-cadence/stage.z"; : > "$d.tmp/deps-cadence/lanes.md"; : > "$d.tmp/deps-cadence/pins.md"
+    if ! out="$(cd "$d" && gh_shell "$package" RUNNER_TEMP="$d.tmp" LANES="bun:/web" GITHUB_OUTPUT="$d.out" 2>&1)"; then
+        echo "nothing moved, yet the package step failed"; rc=1
+    elif ! grep -q '::notice::Nothing moved' <<<"$out" || ! grep -qx 'changed=false' "$d.out"; then
+        echo "nothing moved must be a ::notice:: and changed=false"; rc=1
     fi
+    if ! grep -qF "needs.refresh.outputs.changed == 'true'" <<<"$(job_block "$impl" open-pr)"; then
+        echo "open-pr is not gated on the refresh having changed something"; rc=1
+    fi
+
+    # 10 (executed). hostile patches are rejected before anything is applied.
+    hostile_checks "$validate" || rc=1
 
     # 8. the exact-pin report.
     report_checks "$impl" "$report" || rc=1
@@ -455,10 +545,48 @@ report_checks() {
     elif ! grep -q 'Could not evaluate' "$d.tmp/deps-cadence/pins.md" || grep -q 'No exact pin is behind' "$d.tmp/deps-cadence/pins.md"; then
         echo "a failing bun outdated was not reported as 'could not evaluate'"; rc=1
     fi
-    # The report never waits on a change: its only condition is the month skip.
+    # The report never waits on a change: it carries no condition at all.
     cond="$(step_block "$impl" "$REPORT_STEP" | sed -n 's/^        if: //p')"
-    [ "$cond" = "\${{ steps.plan.outputs.skip != 'true' }}" ] \
+    [ -z "$cond" ] \
         || { echo "the report step's condition is '$cond'; it must run whether or not anything moved"; rc=1; }
+    return "$rc"
+}
+
+# hostile_checks <validate-script> — each hostile patch, built in a clone of a
+# scratch repo, must be rejected by the validate step and leave a fresh clone
+# untouched. Hostile = anything the refresh could never legitimately produce.
+hostile_checks() {
+    local validate="$1" rc=0 base="$WORK/h-base" name d out
+    rm -rf "$base"; new_repo "$base"
+    # name|shell run inside the hostile clone to produce the change
+    local cases=(
+        'a .github/ edit|echo "on: push" >> .github/workflows/ci.yml; echo x >> web/bun.lock'
+        'a rename on allowed paths|git mv web/pkg/package.json web/package2.json; mkdir -p web/pkg2; git mv web/package2.json web/pkg2/package.json'
+        'a mode change|chmod +x web/bun.lock'
+        'a symlink retarget|rm web/sym/package.json; ln -s ../../Cargo.toml web/sym/package.json'
+        'a new file on an allowed path|mkdir -p web/new; echo "{}" > web/new/package.json; git add -N web/new/package.json'
+        'a binary hunk|printf "lock\000bin\n" > web/bun.lock'
+        'a path outside every lane|echo x >> src/main.rs'
+    )
+    local c
+    for c in "${cases[@]}"; do
+        name="${c%%|*}"
+        d="$WORK/h-$RANDOM"
+        rm -rf "$d" "$d.mk" "$d.tmp"
+        git clone -q "$base" "$d.mk"
+        (cd "$d.mk" && bash -c "${c#*|}" && git add -A && git diff --cached --binary -M > "$WORK/hostile.patch") >/dev/null 2>&1
+        if [ ! -s "$WORK/hostile.patch" ]; then echo "hostile case '$name' produced no patch (fixture broken)"; rc=1; continue; fi
+        git clone -q "$base" "$d"
+        mkdir -p "$d.tmp/deps-cadence-in"; cp "$WORK/hostile.patch" "$d.tmp/deps-cadence-in/cadence.patch"
+        if out="$(cd "$d" && gh_shell "$validate" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" 2>&1)"; then
+            echo "the validate step ACCEPTED $name"; rc=1
+        elif ! grep -q '::error::Rejected the refresh patch' <<<"$out"; then
+            echo "$name failed without a rejection message: $(tail -n1 <<<"$out")"; rc=1
+        elif [ -n "$(git -C "$d" status --porcelain)" ]; then
+            echo "$name was rejected only AFTER changing the tree: $(git -C "$d" status --porcelain | tr '\n' ' ')"; rc=1
+        fi
+        rm -f "$WORK/hostile.patch"
+    done
     return "$rc"
 }
 
@@ -498,11 +626,11 @@ APP='GH_TOKEN: ${{ steps.app_token.outputs.token }}'
 mutate "GITHUB_TOKEN fallback"       impl    "$APP" 'GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}'
 mutate "PAT credential"              impl    "$APP" 'GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}'
 mutate "trigger secrets: inherit"    trigger $'    secrets:\n      PLATFORM_WRITER_APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n      PLATFORM_WRITER_APP_PRIVATE_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}' '    secrets: inherit'
-mutate "refresh failure swallowed"   impl    '(cd "./$rel" && bun update --ignore-scripts)' '(cd "./$rel" && bun update --ignore-scripts) || true'
+mutate "refresh failure swallowed"   impl    '(cd "./$rel" && bun update --recursive --ignore-scripts)' '(cd "./$rel" && bun update --recursive --ignore-scripts) || true'
 mutate "unknown ecosystem tolerated" impl    $'                echo "::error::LANES names \'$eco\', which has no refresh command here. Re-render with sassy-dog:setup-deps."\n                exit 1 ;;' $'                echo "::warning::skipping $eco"\n                continue ;;'
 mutate "continue-on-error"           impl    $'        id: refresh\n' $'        id: refresh\n        continue-on-error: true\n'
 mutate "--label on the PR"           impl    '--title "$title" --body-file' '--title "$title" --label dependencies --body-file'
-mutate "git add -A"                  impl    'git "${nohooks[@]}" add --pathspec-from-file="$work/stage.z" --pathspec-file-nul' 'git "${nohooks[@]}" add -A'
+mutate "git add -A"                  impl    'git add --pathspec-from-file="$work/stage.z" --pathspec-file-nul' 'git add -A'
 mutate "bun lane stages its whole dir" impl  '":(glob)${prefix}**/package.json"' '":(glob)${prefix}**"'
 mutate "non-local uses in trigger"   trigger 'uses: ./.github/workflows/deps-cadence-impl.yml' 'uses: octo-org/shared/.github/workflows/deps-cadence-impl.yml@v1'
 mutate "schedule in the impl"        impl    $'on:\n  workflow_call:' $'on:\n  schedule:\n    - cron: "0 9 1 * *"\n  workflow_call:'
@@ -513,11 +641,18 @@ mutate "token expanded into argv"    impl    $'-c \'credential.helper=!f() { ech
 mutate "global git config honoured"  impl    $'          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null\n' ''
 mutate "hooks run on commit"         impl    'git "${nohooks[@]}" commit' 'git commit'
 mutate "hooks run on branch switch"  impl    'git "${nohooks[@]}" switch' 'git switch'
-mutate "App token minted early"      impl    $'      - name: Plan this month\'s run' "$(sed -n '/^      - name: Mint GitHub App token$/,/^          private-key:/p' "$IMPL")"$'\n\n      - name: Plan this month\'s run'
+MINT="$(sed -n '/^      - name: Mint GitHub App token$/,/^          private-key:/p' "$IMPL")"
+mutate "App token minted early"      impl    $'      - name: Plan this month\'s run' "$MINT"$'\n\n      - name: Plan this month\'s run'
+mutate "token minted in the refresh job" impl "      - name: $REFRESH_STEP" "$MINT"$'\n\n'"      - name: $REFRESH_STEP"
+mutate "secrets in the refresh job"  impl    $'        id: refresh\n' $'        id: refresh\n        env:\n          KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n'
+mutate "open-pr runs a package manager" impl "      - name: $VALIDATE_STEP"$'\n' $'      - name: Install dependencies\n        run: bun install --frozen-lockfile\n\n'"      - name: $VALIDATE_STEP"$'\n'
+mutate "allowed paths widened (.github/ passes)" impl 'allowed+="^${p}(.*/)?package\\.json\$|' 'allowed+=".*|'
+mutate "patch-path validation removed" impl  $'[[ "$path" =~ $allowed ]] || reject "$path is outside the lanes\' manifests and lockfiles"' 'true'
+mutate "plain bun update on a workspace root" impl '(cd "./$rel" && bun update --recursive --ignore-scripts)' '(cd "./$rel" && bun update --ignore-scripts)'
 mutate "PR step on the built-in token" impl  "$APP" 'GH_TOKEN: ${{ github.token }}'
-mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n  pull-requests: read' $'permissions:\n  contents: write\n  pull-requests: read'
+mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n\njobs:' $'permissions:\n  contents: write\n\njobs:'
 mutate "merge method flag"           impl    'gh pr merge --auto "$url"' 'gh pr merge --auto --squash "$url"'
 mutate "parser ignores U+2502"       impl    's/\x1b\[[0-9;]*m//g; s/\xe2\x94\x82/|/g' 's/\x1b\[[0-9;]*m//g'
-mutate "report waits on a change"    impl    $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.plan.outputs.skip != \'true\' }}' $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.plan.outputs.skip != \'true\' && steps.refresh.outputs.changed == \'true\' }}'
+mutate "report waits on a change"    impl    $'      - name: Report exact pins (bun and npm lanes)\n' $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.patch.outputs.changed == \'true\' }}\n'
 
 exit "$fail"

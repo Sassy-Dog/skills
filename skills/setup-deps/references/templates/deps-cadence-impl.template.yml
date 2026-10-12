@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 2
+# TEMPLATE: deps-cadence-impl · version 3
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -29,9 +29,22 @@
 # or a modified tool cache from any earlier job, and that would capture the
 # token. Every toolchain here is installed by an action, so nothing needs the
 # fleet. render-cadence.sh refuses --runner.
+#
+# THREE JOBS (version 3). Version 2 minted the token late but in the SAME job,
+# on the SAME VM, as the package managers, and a process they started (or a
+# poisoned tool cache) could outlive its step and read the token from
+# /proc/*/environ, $RUNNER_TEMP or step files. Now:
+#   plan     no repo code: the credential presence check and the month plan.
+#   refresh  no secrets, contents: read: runs the package managers and the
+#            exact-pin report, then uploads a patch of the lane files plus the
+#            report as an artifact. Nothing it produces is trusted.
+#   open-pr  a fresh VM that runs no package-manager or repo code: it checks
+#            the patch against paths re-derived from LANES, applies it with
+#            hooks off, and only then mints the App token, commits, pushes,
+#            opens the PR and enqueues it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 2
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 3
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -56,9 +69,14 @@
 #   - No --label: a label the repo lacks makes `gh pr create` fail.
 #   - Plain `gh pr merge --auto`, no method flag: the merge queue picks the
 #     method, and a method flag stops the PR entering the queue.
-#   - An EPHEMERAL GITHUB-HOSTED runner only, and the App token minted AFTER
-#     every package-manager step, right before the PR step. Earlier steps read
-#     with the built-in read-only token.
+#   - An EPHEMERAL GITHUB-HOSTED runner only. The secrets are referenced only
+#     in the plan job's presence check and in open-pr, and the App token is
+#     minted in open-pr, after the untrusted patch is validated and applied.
+#     The package managers run in a job that never sees a secret.
+#   - The refresh's patch is UNTRUSTED: open-pr rejects any path outside the
+#     lanes' manifests and lockfiles, any create, delete, rename, copy or mode
+#     change, any binary hunk, and any path that is not a tracked regular file
+#     (a symlink or a submodule).
 #   - The token never reaches argv or a git config file: the push reads it
 #     from the environment through a one-shot credential helper, with system
 #     and global git config ignored and hooks disabled.
@@ -83,25 +101,31 @@ on:
 
 # The built-in token only READS (the checkout, the default branch, this
 # month's branch and PR). Every write (push, PR, enqueue) uses the App token
-# minted below, so a fallback to the built-in token could not write anyway.
+# minted in open-pr, so a fallback to the built-in token could not write
+# anyway. Each job grants itself no more than this.
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  refresh:
-    name: Refresh lockfiles
-    # Ephemeral and GitHub-hosted, never the self-hosted fleet: see the rules
-    # above. Flutter, Rust, bun and node all install through actions here.
+  # No checkout and no repo code: safe to hold the secret values for the
+  # presence check, and a missing secret fails before the refresh spends time.
+  plan:
+    name: Plan this month's run
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      LANES: "{{LANES}}"
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      month: ${{ steps.plan.outputs.month }}
+      branch: ${{ steps.plan.outputs.branch }}
+      default_branch: ${{ steps.plan.outputs.default_branch }}
     steps:
       # A secret this repo cannot reach resolves to the EMPTY STRING, never an
-      # error, so the mint below would fail as an opaque auth error. Name the
-      # cause here and fail FAST: the mint itself waits until after every
-      # package-manager step. There is no fallback credential by design.
+      # error, so the mint in open-pr would fail as an opaque auth error. Name
+      # the cause here and fail FAST, before the refresh. There is no fallback
+      # credential by design.
       - name: Require the app credentials
         env:
           APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
@@ -118,8 +142,7 @@ jobs:
 
       # Run from the default branch only, and never stack a second branch in
       # one month: a re-dispatch after this month's PR opened exits 0 with a
-      # notice naming that PR. Reads only, with the built-in read-only token:
-      # the App token does not exist yet.
+      # notice naming that PR. Reads only, with the built-in read-only token.
       - name: Plan this month's run
         id: plan
         env:
@@ -148,12 +171,25 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # persist-credentials: false. Nothing between checkout and the push needs
-      # write, so no credential sits in .git/config while the refresh runs the
-      # repo's package managers. The push authenticates through a credential
-      # helper that reads its own step env:.
+  # Runs the repo's package managers. It references NO secret and can only
+  # read: everything it hands on (the patch, the reports) is treated as
+  # untrusted by open-pr.
+  refresh:
+    name: Refresh lockfiles
+    needs: plan
+    if: ${{ needs.plan.outputs.skip != 'true' }}
+    # Ephemeral and GitHub-hosted, never the self-hosted fleet: see the rules
+    # above. Flutter, Rust, bun and node all install through actions here.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+    env:
+      LANES: "{{LANES}}"
+    steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           persist-credentials: false
 
@@ -162,7 +198,6 @@ jobs:
       # different lockfile from the one CI then validates.
 # {{IF:BUN_PIN_FILE}}
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           bun-version-file: '{{BUN_VERSION_FILE}}'
 
@@ -170,14 +205,12 @@ jobs:
 # {{IF:BUN_PIN_LITERAL}}
       # CI pins bun as a literal, so this copy of it moves only on a re-render.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           bun-version: '{{BUN_VERSION}}'
 
 # {{ENDIF}}
 # {{IF:NODE_PIN_FILE}}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           node-version-file: '{{NODE_VERSION_FILE}}'
 
@@ -185,7 +218,6 @@ jobs:
 # {{IF:NODE_PIN_LITERAL}}
       # CI pins node as a literal, so this copy of it moves only on a re-render.
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           node-version: '{{NODE_VERSION}}'
 
@@ -196,7 +228,6 @@ jobs:
       # Flutter the repo did not choose.
       - name: Read the Flutter pin
         id: flutter_pin
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         env:
           PIN_FILE: '{{FLUTTER_PIN_FILE}}'
         run: |
@@ -220,7 +251,6 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
       - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           flutter-version: ${{ steps.flutter_pin.outputs.version }}
 
@@ -231,7 +261,6 @@ jobs:
       # present on a runner that has never seen it.
       - name: Read the Rust toolchain pin
         id: rust_pin
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         env:
           PIN_FILE: '{{RUST_PIN_FILE}}'
         run: |
@@ -255,7 +284,6 @@ jobs:
       # Pinned to a commit of the action; the toolchain input below, not the
       # action's ref, decides which Rust is installed.
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
           toolchain: ${{ steps.rust_pin.outputs.toolchain }}
 
@@ -267,7 +295,6 @@ jobs:
       # and files outside the lanes are never committed.
       - name: Refresh each lane within its declared ranges
         id: refresh
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/deps-cadence"
@@ -282,7 +309,15 @@ jobs:
             echo "::group::$eco lane $dir"
             case "$eco" in
               bun)
-                (cd "./$rel" && bun update --ignore-scripts)
+                # A workspace root's plain `bun update` moves only the root's
+                # own dependencies; --recursive moves every member too. It is
+                # effective from bun 1.4.0 (1.2.20-1.3.14 accept the flag and
+                # move no member), which render-cadence.sh enforces.
+                if [ "$(jq -r 'if .workspaces then "yes" else "no" end' "./$rel/package.json")" = "yes" ]; then
+                  (cd "./$rel" && bun update --recursive --ignore-scripts)
+                else
+                  (cd "./$rel" && bun update --ignore-scripts)
+                fi
                 set -- ":(glob)${prefix}**/package.json" ":(literal)${prefix}bun.lock" ;;
               npm)
                 (cd "./$rel" && npm update --ignore-scripts)
@@ -313,7 +348,6 @@ jobs:
       # human decision, but an INVISIBLE stale one is a bug. A manifest the tool
       # could not evaluate is reported as such, never as current.
       - name: Report exact pins (bun and npm lanes)
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         run: |
           set -euo pipefail
           command -v jq >/dev/null 2>&1 || { echo "::error::jq is required for the exact-pin report."; exit 1; }
@@ -434,26 +468,137 @@ jobs:
           fi
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
-      # Minted only now, after every step that runs a package manager, so no
-      # repo or dependency code ever runs while the org-wide App token exists
-      # in this job. The token lives one hour; the 45-minute job timeout keeps
-      # every use inside that.
+      # The ONLY thing that leaves this job: the lane files' diff, staged from
+      # the recorded lane paths (the single `git add`), plus the two reports.
+      # --no-renames, --no-ext-diff and --no-textconv keep the patch a plain
+      # one; open-pr re-checks every line of it anyway.
+      - name: Package the refresh as a patch
+        id: patch
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/deps-cadence"
+          out="$RUNNER_TEMP/deps-cadence-out"
+          mkdir -p "$out"
+          cp "$work/lanes.md" "$work/pins.md" "$out/"
+          if [ ! -s "$work/stage.z" ]; then
+            echo "::notice::Nothing moved within declared ranges in any lane ($LANES), so no PR. The exact-pin report is in the job summary."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git add --pathspec-from-file="$work/stage.z" --pathspec-file-nul
+          git diff --cached --binary --no-renames --no-ext-diff --no-textconv > "$out/cadence.patch"
+          if [ ! -s "$out/cadence.patch" ]; then
+            echo "::error::The refresh recorded changed lane files but produced an empty patch."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ steps.patch.outputs.changed == 'true' }}
+        with:
+          name: deps-cadence
+          path: ${{ runner.temp }}/deps-cadence-out/
+          retention-days: 1
+          if-no-files-found: error
+
+  # A FRESH VM that runs no package-manager or repo code. The refresh job's
+  # output is untrusted: the patch is checked against paths re-derived from
+  # LANES and applied with hooks off BEFORE the App token exists.
+  open-pr:
+    name: Open the refresh PR
+    needs: [plan, refresh]
+    if: ${{ needs.plan.outputs.skip != 'true' && needs.refresh.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      LANES: "{{LANES}}"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deps-cadence
+          path: ${{ runner.temp }}/deps-cadence-in
+
+      # Every rule here is about the patch, not about who made it. The allowed
+      # paths are re-derived from LANES with the SAME mapping as the refresh
+      # step's case arms (test-deps-cadence-policy.sh executes both against the
+      # same scratch repo), and git itself reports what the patch would do.
+      - name: Validate and apply the refresh patch
+        run: |
+          set -euo pipefail
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          patch="$RUNNER_TEMP/deps-cadence-in/cadence.patch"
+          reject() { echo "::error::Rejected the refresh patch: $1"; exit 1; }
+          [ -s "$patch" ] || reject "the artifact holds no patch"
+
+          allowed=""
+          for lane in $LANES; do
+            eco="${lane%%:*}"
+            dir="${lane#*:}"
+            rel="${dir#/}"
+            [[ "$rel" =~ ^[A-Za-z0-9._/@+-]*$ ]] || reject "lane directory '$dir' is not a plain path"
+            p="$(printf '%s' "$rel" | sed 's/[.+]/\\&/g')"
+            p="${p:+$p/}"
+            case "$eco" in
+              bun)   allowed+="^${p}(.*/)?package\\.json\$|^${p}bun\\.lock\$|" ;;
+              npm)   allowed+="^${p}package\\.json\$|^${p}package-lock\\.json\$|" ;;
+              pub)   allowed+="^${p}pubspec\\.yaml\$|^${p}pubspec\\.lock\$|" ;;
+              cargo) allowed+="^${p}Cargo\\.lock\$|" ;;
+              *)     reject "LANES names '$eco', which has no lane files" ;;
+            esac
+          done
+          allowed="${allowed%|}"
+          [ -n "$allowed" ] || reject "LANES is empty"
+
+          # git's own reading of the patch: any create, delete, rename, copy
+          # or mode change shows up in --summary.
+          summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
+          [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
+          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
+          [ -n "$numstat" ] || reject "it changes nothing"
+          while IFS=$'\t' read -r added _ path; do
+            [ "$added" != "-" ] || reject "$path is a binary change; lane files are text"
+            if ! [[ "$path" =~ ^[A-Za-z0-9._/@+-]+$ ]] || [[ "$path" == *..* ]]; then
+              reject "unusual path '$path'"
+            fi
+            [[ "$path" =~ $allowed ]] || reject "$path is outside the lanes' manifests and lockfiles"
+            mode="$(git ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
+            [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
+              || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
+          done <<<"$numstat"
+
+          git "${nohooks[@]}" apply --index -- "$patch"
+          # Belt and braces: what is staged, and only that, is lane files.
+          while IFS= read -r path; do
+            [[ "$path" =~ $allowed ]] || reject "after applying, $path is staged"
+          done < <(git "${nohooks[@]}" diff --cached --name-only)
+          if [ -n "$(git "${nohooks[@]}" status --porcelain --untracked-files=all | grep -v '^M  ' || true)" ]; then
+            reject "after applying, the tree holds changes outside the index"
+          fi
+
+      # Minted only now: after the patch is validated and applied, on a VM that
+      # never ran a package manager. The token lives one hour, far longer than
+      # this job's timeout.
       - name: Mint GitHub App token
         id: app_token
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
 
       - name: Open the refresh PR and enqueue it
-        if: ${{ steps.plan.outputs.skip != 'true' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
-          BRANCH: ${{ steps.plan.outputs.branch }}
-          MONTH: ${{ steps.plan.outputs.month }}
-          DEFAULT_BRANCH: ${{ steps.plan.outputs.default_branch }}
+          BRANCH: ${{ needs.plan.outputs.branch }}
+          MONTH: ${{ needs.plan.outputs.month }}
+          DEFAULT_BRANCH: ${{ needs.plan.outputs.default_branch }}
         run: |
           set -euo pipefail
           # Git reads no system or global config here (no credential helper,
@@ -462,19 +607,15 @@ jobs:
           # nohooks: either would inherit GH_TOKEN from this step's environment.
           export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
           nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
-          work="$RUNNER_TEMP/deps-cadence"
-          if [ ! -s "$work/stage.z" ]; then
-            echo "::notice::Nothing moved within declared ranges in any lane ($LANES), so no PR. The exact-pin report is in the job summary."
-            exit 0
-          fi
+          work="$RUNNER_TEMP/deps-cadence-in"
           title="chore(deps): monthly lockfile refresh ${MONTH}"
           bot_id="$(gh api "users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          # The validated patch is already in the index; nothing else is.
           git "${nohooks[@]}" switch -c "$BRANCH"
-          git "${nohooks[@]}" add --pathspec-from-file="$work/stage.z" --pathspec-file-nul
           if git "${nohooks[@]}" diff --cached --quiet; then
-            echo "::error::The refresh recorded changed lane files but nothing staged."
+            echo "::error::The validated patch left nothing staged."
             exit 1
           fi
           git "${nohooks[@]}" commit -q -m "$title" -m "Monthly refresh of each lane within its declared ranges, opened by deps-cadence (sassy-dog:setup-deps)."
@@ -490,12 +631,14 @@ jobs:
             echo
             echo "### Lockfile delta per lane"
             echo
-            cat "$work/lanes.md"
+            # Untrusted text from the refresh job: passed only as a file,
+            # never through a shell, and capped below GitHub's body limit.
+            head -c 20000 "$work/lanes.md"
             echo
-            cat "$work/pins.md"
-          } > "$work/body.md"
+            head -c 40000 "$work/pins.md"
+          } > "$RUNNER_TEMP/body.md"
           url="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$DEFAULT_BRANCH" --head "$BRANCH" \
-            --title "$title" --body-file "$work/body.md")"
+            --title "$title" --body-file "$RUNNER_TEMP/body.md")"
           echo "Opened $url"
           # Plain --auto: the merge queue runs the required checks and picks
           # the method. A method flag or --delete-branch keeps it out of the

@@ -68,6 +68,7 @@ set -uo pipefail
 export LC_ALL=C
 
 command -v jq >/dev/null 2>&1 || { echo "render-cadence: jq not on PATH" >&2; exit 1; }
+command -v perl >/dev/null 2>&1 || { echo "render-cadence: perl not on PATH (reads CI pins in every YAML form)" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib-ecosystems.sh
@@ -207,13 +208,38 @@ while IFS= read -r wf; do
 done < <(grep -E '^\.github/workflows/[^/]+\.ya?ml$' <<<"$ALL_FILES")
 
 # ci_values <key> — "value<TAB>workflow" for every `<key>:` in a CI workflow,
-# with the comment, quotes and surrounding space removed.
+# with the comment, quotes and surrounding space removed. Every YAML form the
+# fleet's workflows use counts, not just a key at the start of a line (#509:
+# what2wear pins `with: { bun-version: latest }` in six places, and a
+# line-start match saw only its one block-style `bun-version: 1.4.0`):
+#   block            bun-version: 1.4.0   "1.4.0"   '1.4.0'
+#   flow mapping     with: { bun-version: latest, no-cache: true }
+#   quoted key       "bun-version": 1.4.0
+#   flow sequence    bun-version: [1.3.5, latest]   (each element is a value)
+#   expression       bun-version: ${{ matrix.bun }}   (kept as-is, so it refuses)
+#   block value      bun-version:   (followed by a block list or map: reported
+#                    as "(block value)", which refuses rather than guesses)
+# Comments are dropped first, so a key named in a comment is not a pin.
 ci_values() {
     local key="$1" wf
     while IFS= read -r wf; do
         [ -n "$wf" ] || continue
-        grep -E "^[[:space:]]*-?[[:space:]]*${key}:" "$ROOT/$wf" \
-            | sed -E "s/^[[:space:]]*-?[[:space:]]*${key}:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^[\"']//; s/[\"'][[:space:]]*$//; s/[[:space:]]+$//" \
+        perl -ne '
+            BEGIN { $k = shift @ARGV }
+            s/(^|\s)#.*$//;
+            while (/(?:^|[\s{,])(["\x27]?)\Q$k\E\1\s*:(?=\s|$)\s*(\$\{\{.*?\}\}|"[^"]*"|\x27[^\x27]*\x27|\[[^\]]*\]|[^,}\s][^,}]*?)?\s*(?=$|,|\})/g) {
+                my $v = defined $2 ? $2 : "";
+                if ($v eq "") { print "(block value)\n"; next }
+                if ($v =~ /^\[(.*)\]$/) {
+                    for my $e (split /,/, $1) {
+                        $e =~ s/^\s+|\s+$//g; $e =~ s/^(["\x27])(.*)\1$/$2/;
+                        print "$e\n" if length $e;
+                    }
+                    next;
+                }
+                $v =~ s/\s+$//; $v =~ s/^(["\x27])(.*)\1$/$2/;
+                print "$v\n";
+            }' "$key" "$ROOT/$wf" \
             | while IFS= read -r v; do printf '%s\t%s\n' "$v" "$wf"; done
     done <<<"$CI_FILES"
 }
@@ -369,6 +395,18 @@ derive_file_pin() {
     return 0
 }
 
+# version_lt <a> <b> — true when dotted version a sorts before b.
+version_lt() {
+    awk -v a="$1" -v b="$2" 'BEGIN {
+        na = split(a, x, "."); nb = split(b, y, ".")
+        for (i = 1; i <= (na > nb ? na : nb); i++) {
+            if ((x[i] + 0) < (y[i] + 0)) exit 0
+            if ((x[i] + 0) > (y[i] + 0)) exit 1
+        }
+        exit 1 }'
+}
+BUN_RECURSIVE_MIN="1.4.0"
+
 # by_depth — sort paths shallowest first, then by name.
 by_depth() { awk -F/ '{print NF "\t" $0}' | sort -t$'\t' -k1,1n -k2 | cut -f2-; }
 
@@ -386,6 +424,19 @@ if grep -qx bun <<<"$TOOLCHAINS"; then
         if [ "$PIN_KIND" = "file" ]; then FLAGS+=",BUN_PIN_FILE"; BUN_VERSION_FILE="$PIN_VALUE"
         else FLAGS+=",BUN_PIN_LITERAL"; BUN_VERSION="$PIN_VALUE"; fi
         add_tc_json bun "$PIN_KIND" "$PIN_VALUE" "$PIN_VERSION" "$PIN_FROM"
+        # A workspace-root lane runs `bun update --recursive`, which moves the
+        # members only from bun 1.4.0: 1.2.20-1.3.14 accept the flag and leave
+        # every member where it was (verified on 1.3.5 and 1.3.14), so an older
+        # pin would ship a refresh that silently skips most of the repo.
+        for l in $LANES; do
+            case "$l" in bun:*) ;; *) continue ;; esac
+            d="${l#bun:}"
+            if [ "$d" = "/" ]; then m="package.json"; else m="${d#/}/package.json"; fi
+            if [ "$(jq -r 'if .workspaces then "yes" else "no" end' "$ROOT/$m" 2>/dev/null)" = "yes" ] \
+                && version_lt "$PIN_VERSION" "$BUN_RECURSIVE_MIN"; then
+                refuse "bun: $l is a workspace root, so its refresh runs \`bun update --recursive\`, which moves workspace members only from bun $BUN_RECURSIVE_MIN; the pinned bun is $PIN_VERSION ($PIN_FROM). Pin bun >= $BUN_RECURSIVE_MIN, then re-render."
+            fi
+        done
     fi
 fi
 if grep -qx node <<<"$TOOLCHAINS"; then
