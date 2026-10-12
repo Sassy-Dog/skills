@@ -6,10 +6,11 @@ description: >
   up the dependency workflows", "add dependabot config here", "wire up dependabot auto-merge",
   "group the dependabot PRs", "stop the dependabot PR flood", "why do dependabot PRs keep failing
   CI", "fix the bun.lock dependabot problem", "regenerate lockfiles on dependabot PRs", or
-  "standardize dependency updates across our repos". Generates and re-syncs a repo's
-  `.github/dependabot.yml` plus its dependency automation workflows (auto-merge, bun.lock sync,
-  pod lockfile sync) from detected ecosystems. Run from inside the target repository; re-runnable
-  as the stack evolves.
+  "standardize dependency updates across our repos", "set up the monthly dependency cadence", or
+  "add the monthly lockfile refresh". Generates and re-syncs a repo's `.github/dependabot.yml`
+  plus its dependency automation workflows (auto-merge, bun.lock sync, pod lockfile sync, the
+  monthly deps-cadence lockfile refresh) from detected ecosystems. Run from inside the target
+  repository; re-runnable as the stack evolves.
 ---
 
 <!-- generated-by-companion: templates in references/templates/ -->
@@ -20,7 +21,7 @@ Generator/refresher for a repo's dependency automation, in the same family as
 `setup-config` and `setup-hooks`: detect the stack, render from templates,
 reconcile only what this generator owns.
 
-It renders up to three things:
+It renders these files:
 
 | File | When |
 |---|---|
@@ -28,10 +29,13 @@ It renders up to three things:
 | `.github/workflows/dependabot-auto-merge.yml` | when the repo has a merge gate **AND is not public** — two preconditions, see §2 |
 | `.github/workflows/dependabot-bun-lockfile.yml` | legacy fallback — only when npm has `lockfile_risk` (binary `bun.lockb`, or a repo deliberately on npm + sync) **AND the repo is not public**; a text `bun.lock` renders the native `bun` ecosystem instead, no sync workflow. One per bun install root, not one per repo |
 | `.github/workflows/dependabot-pod-lockfile.yml` | when cocoapods is detected **and** the app's `ios/Podfile.lock` is tracked (see §3) **AND the repo is not public** |
+| `.github/workflows/deps-cadence.yml` + `deps-cadence-impl.yml` | the monthly lockfile refresh, rendered as a pair by `render-cadence.sh` — when a bun, npm, pub or cargo lane tracks its lockfile, every such lane's toolchain is pinned, the merge gate is a queue, **AND the repo is not public** (see "The monthly lockfile refresh" in §3) |
 
 Bundled scripts (`scripts/`): `detect-ecosystems.sh` (probe), `render-dependabot.sh` (render),
-`validate-dependabot.sh` (post-render assertion + divergence check), and `lib-ecosystems.sh` — the
-one ecosystem table all three read, so the validator can never agree with a renderer that is wrong.
+`validate-dependabot.sh` (post-render assertion + divergence check), `render-cadence.sh` (the
+deps-cadence pair), and `lib-ecosystems.sh` — the one ecosystem table all four read, so the
+validator can never agree with a renderer that is wrong and the cadence's lanes can never disagree
+with Dependabot's about where a project lives.
 
 Ownership marker: the `generated-by:` comment on the first non-blank line after the YAML document
 start. Re-runs reconcile **only** files carrying that marker — a hand-written `dependabot.yml` is
@@ -215,15 +219,19 @@ every arm below.**
 gh repo view "${REPO}" --json visibility --jq .visibility
 ```
 
-`public` → **do not render ANY of the three App-token workflows**, whatever the gate says:
-`dependabot-auto-merge.yml`, `dependabot-bun-lockfile.yml`, and `dependabot-pod-lockfile.yml`.
+`public` → **do not render ANY of the App-token workflows**, whatever the gate says:
+`dependabot-auto-merge.yml`, `dependabot-bun-lockfile.yml`, `dependabot-pod-lockfile.yml`, and the
+`deps-cadence.yml` pair. `render-cadence.sh` enforces its half itself: `--visibility public` exits
+`3` before reading anything else. Dependency automation for public repos runs from
+`Sassy-Dog/platform` instead, where the App key stays at `private` visibility
+([Sassy-Dog/platform#1054](https://github.com/Sassy-Dog/platform/issues/1054)).
 
-**The precondition belongs to the credential, not to the auto-merge workflow.** All three mint a
+**The precondition belongs to the credential, not to the auto-merge workflow.** All four mint a
 GitHub App token from the same two org secrets, and org secrets at `private` visibility (= private +
 internal) **exclude public repos** — in the Actions store *and* the Dependabot store alike. Rendered
 anyway, `secrets.*` resolves to the empty string and `create-github-app-token` fails, but not until
-that repo's next Dependabot PR — days or weeks later, as an auth error that looks unrelated to the
-render that caused it. Scoping this rule to auto-merge alone is what shipped the identical failure
+that repo's next Dependabot PR (or, for `deps-cadence`, the 1st of the next month) — days or weeks
+later, as an auth error that looks unrelated to the render that caused it. Scoping this rule to auto-merge alone is what shipped the identical failure
 through two other doors ([#186](https://github.com/Sassy-Dog/skills/issues/186)).
 
 The two lockfile templates are the **worse** case, and the ordering is worth noticing:
@@ -276,7 +284,9 @@ The `private`/`internal` case falls through to the gate classification below, un
 
 Classify into exactly one:
 
-- **merge queue** → render the `MERGE_QUEUE` arm (plain `--auto`, no method flag).
+- **merge queue** → render the `MERGE_QUEUE` arm (plain `--auto`, no method flag). This is the
+  only arm that also renders the `deps-cadence` pair: it enqueues with plain `gh pr merge --auto`
+  too, so `render-cadence.sh --merge-gate` declines (exit `3`) every other classification.
 - **required checks, no queue** → render the `DIRECT_MERGE` arm, and confirm
   `allow_auto_merge` is on (`gh api repos/${REPO} --jq .allow_auto_merge`); enable it if not.
 - **no gate at all** → **do not render the auto-merge workflow.** Render `dependabot.yml`, plus any
@@ -384,8 +394,9 @@ A run that reports `CHANGED` or `DROPPED` for an ecosystem the user did not ask 
 forgotten-flag case: re-render with the committed value instead of adding `--change-cooldown`.
 
 **Never write a render the validator rejected**, and never "fix" a rejection by editing the output:
-a failing lane means the derivation is wrong, so fix `lib-ecosystems.sh` and re-render. The
-workflow templates stay hand-rendered — they carry no per-location repeat.
+a failing lane means the derivation is wrong, so fix `lib-ecosystems.sh` and re-render. The three
+Dependabot workflow templates stay hand-rendered — they carry no per-location repeat. The
+`deps-cadence` pair does not: `render-cadence.sh` renders it (below).
 
 Every template already carries the current `generated-by: sassy-dog:setup-deps` marker, so a
 render normalises a pre-rename file's marker for free — keep the template's marker line verbatim
@@ -457,6 +468,84 @@ report why the pod workflow was skipped, so the next refresh skips it deliberate
 shipping a red workflow. If the repo later wants a committed pod pin (velovate's posture), tracking
 the lock is the prerequisite change — the template becomes renderable the moment it lands.
 
+### The monthly lockfile refresh (`deps-cadence`)
+
+Dependabot proposes version updates; nothing refreshes a lockfile **within** its declared ranges
+unless something runs the package manager. `deps-cadence` does that once a month (09:00 UTC on the
+1st, plus `workflow_dispatch`) and opens one PR, `chore(deps): monthly lockfile refresh YYYY-MM`,
+which it enqueues. It is two files, rendered together and owned together:
+
+- `deps-cadence.yml` — **thin trigger only**: the `schedule:`, `workflow_dispatch` and a call to
+  `./.github/workflows/deps-cadence-impl.yml`, passing exactly the two App secrets. It carries no
+  facts and is identical in every repo. A `schedule:` is attributed to whoever last touched its
+  file, so a third-party `uses:` here would let a Dependabot bump re-attribute the cron to
+  `dependabot[bot]`, and the schedule would stop firing silently.
+- `deps-cadence-impl.yml` — every real step. One `run:` loops over an env line such as
+  `LANES: "bun:/web bun:/scripts pub:/app"` with one `case` arm per ecosystem: `bun update`,
+  `npm update`, `flutter pub upgrade`, `cargo update`. Other detected ecosystems (gradle, nuget,
+  docker, github-actions, cocoapods, …) have no refresh command and are listed in the file header as
+  a deliberate absence.
+
+```bash
+gh repo view --json visibility --jq .visibility          # → --visibility
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-cadence.sh \
+  --detect-json /tmp/deps.json --visibility "$VISIBILITY" --merge-gate merge-queue \
+  --out-dir /tmp/cadence [--compare-to .github/workflows/deps-cadence-impl.yml]
+```
+
+`--merge-gate` is the §2 classification (`merge-queue`, `direct`, `none` or `unavailable`). The
+script prints a JSON summary (lanes, `not_refreshed`, `no_refresh_command`, each toolchain's source
+and version, `refusals`) and writes both files only when every check passes. Put the summary in the
+plan; on a refusal it still prints, so the plan can name exactly what the repo is missing.
+
+| Exit | Means | What to do |
+| --- | --- | --- |
+| `0` | rendered | copy both files into `.github/workflows/` |
+| `3` | declined: public repo, merge gate not a queue, or no lane to refresh | report the skip and its reason; nothing to fix here |
+| `4` | refused: a toolchain pin is missing, floating or disagrees | report each `REFUSED` line; the repo needs the pin first |
+| `5` | `--compare-to`: a committed lane is missing from the fresh render | report the `DIVERGED` lanes and stop |
+| `1` | bad input or a malformed template | fix the input; never hand-render instead |
+
+What it derives, from the repo only:
+
+- **Lanes** come from the same `detect-ecosystems.sh` locations as `dependabot.yml` (no second
+  ecosystem table), restricted to bun, npm, pub and cargo, and to directories that **track** that
+  ecosystem's lockfile. A location without one is reported under `not_refreshed` and never
+  refreshed into a brand-new lockfile.
+- **Toolchains**, each set up only when a lane needs it and always from the repo's own pin. A
+  different bun, npm, Flutter or cargo can write a different lockfile from the one CI validates.
+  bun and node use the pin CI uses: a `bun-version-file:` / `node-version-file:` CI reads
+  (rendered as that file, so a bump needs no re-render), else CI's `bun-version:` /
+  `node-version:` literal (rendered as-is, so **a CI pin bump needs a re-render**), else
+  `.bun-version` / `package.json` `packageManager`, or `.nvmrc` / `.node-version`. Flutter comes
+  from `.fvmrc`, `.fvm/fvm_config.json` or an exact `environment.flutter` in a pub lane's
+  `pubspec.yaml`, and Rust from `rust-toolchain.toml` / `rust-toolchain`. Both are read at run time
+  by the impl's own reader steps, which the renderer also runs on each candidate, so render time and
+  run time cannot read a pin differently. A missing pin, a floating one (`1.3.x`, `latest`,
+  `stable`, a bare major) or two that disagree **refuses** with exit `4`, so the failure lands at
+  render time and not at 09:00 on the 1st.
+- **Runner**: `--runner`, defaulting to `[self-hosted, linux, sassy-dog]` like the other templates.
+  setup-bun on the fleet swaps the image's bun and its warm cache for the pinned one; that costs
+  minutes once a month, which is the price of the pin.
+
+Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
+exits `0` with a `::notice::` and no PR; this month's `chore/deps-YYYY-MM` already existing exits
+`0` with a notice naming its open PR, so a re-dispatch never stacks branches; **any failed refresh
+fails the job**; only the lanes' manifests and lockfiles are staged; the PR body lists each lane's
+delta plus an **exact-pin report** for bun and npm lanes. That report also goes to the job summary
+and is written even in a month where nothing moved, because an exact pin never moves within a range
+and a stale one is a finding, not a clean month. pub and cargo exact pins are not reported in this
+version.
+
+**Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
+`template-version` (both `1`). The ownership rules in §1 apply to each. Re-render owned files with
+`--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
+`DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
+**without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
+predate this template and carry a PAT or `GITHUB_TOKEN` fallback) is a plan item the user approves
+by name, never an automatic overwrite. Never edit a rendered file; change the template and
+re-render.
+
 ## 4. Prerequisites the render assumes
 
 - **`PLATFORM_WRITER_APP_CLIENT_ID` / `PLATFORM_WRITER_APP_PRIVATE_KEY` in the DEPENDABOT secrets store**,
@@ -478,6 +567,11 @@ the lock is the prerequisite change — the template becomes renderable the mome
   `gh api /orgs/<org>/installations`; it already exists in both org stores at `private`. A new org
   adds it to Doppler `_scm/github` and syncs, never by hand — and note `gh api …/secrets` pages at
   30, so check with `--paginate` before concluding it is absent.
+- **For `deps-cadence`: the same two App credentials in the ACTIONS secrets store.** It is a
+  scheduled run, not a Dependabot-triggered one, so it reads the Actions store; both names exist
+  there at org level with `private` visibility. A missing one fails the run at its first step, by
+  design: there is no fallback credential. The App also needs `contents` and `pull-requests` write
+  on the repo to push the branch, open the PR and enqueue it.
 - **`allow_auto_merge`** on the repo, for the direct-merge arm.
 - A **CI workflow** whose check is actually required. If `detect_failures` reports no conventional
   CI workflow, that repo needs one before auto-merge means anything.
@@ -498,8 +592,8 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 ## Guardrails
 
 - Never render the auto-merge workflow into a repo with no required check.
-- Never render **any App-token workflow** — auto-merge, bun lockfile-sync, or pod lockfile-sync —
-  into a **public** repo. Their org secrets are `private`-visibility and cannot resolve there, so
+- Never render **any App-token workflow** — auto-merge, bun lockfile-sync, pod lockfile-sync, or
+  the `deps-cadence` pair — into a **public** repo. Their org secrets are `private`-visibility and cannot resolve there, so
   the render produces a workflow that fails late and looks unrelated. The precondition belongs to
   the credential, not to one workflow: scoping it to auto-merge left the two templates that check
   out PR head ungated (#186). For the lockfile ones, report the consequence and the manual
@@ -534,6 +628,16 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never overwrite an owned file whose committed lanes or `ignore:` rules a fresh render drops
   (`--compare-to` reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which
   only makes a diverged file look current.
+- Never give `deps-cadence` a fallback credential. No PAT and no `GITHUB_TOKEN`: a PR opened with
+  `GITHUB_TOKEN` never fires CI, so a fallback turns a missing secret into a green run that needs a
+  human every month. No App secret fails the run.
+- Never let a failed `deps-cadence` refresh skip its lane and carry on, never stage beyond the
+  lanes' manifests and lockfiles, never add `--label` to its PR (a missing label fails
+  `gh pr create`), and never give its `gh pr merge --auto` a method flag.
+- Never put a third-party `uses:` in `deps-cadence.yml`. It carries the `schedule:`; everything
+  else lives in the impl.
+- Never render `deps-cadence` from a floating or guessed toolchain pin. A refusal (exit `4`) is
+  fixed in the repo by pinning, never by hand-editing the render.
 - Never re-render an owned `dependabot.yml` without `--keep-ignores-from .github/dependabot.yml`,
   and never retire a hand-added hold by letting a re-render drop it. Removing a hold is its own
   reviewed edit to the committed file, made before the re-render.

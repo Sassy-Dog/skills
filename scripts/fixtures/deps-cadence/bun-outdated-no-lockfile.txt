@@ -1,0 +1,3 @@
+bun outdated v1.4.2 (43848b5a7)
+error: missing lockfile, nothing outdated
+note: run 'bun install' first

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # lib-ecosystems.sh — the ONE ecosystem table for setup-deps, sourced by
-# detect-ecosystems.sh, render-dependabot.sh and validate-dependabot.sh.
+# detect-ecosystems.sh, render-dependabot.sh, validate-dependabot.sh and
+# render-cadence.sh.
 # Sourced, never executed.
 #
 # Why a shared lib: detection ("does this repo have npm?"), location derivation
@@ -212,6 +213,45 @@ eco_manifest_re() {
         docker)         echo '^Dockerfile[^/]*$' ;;
         cocoapods)      echo '^Podfile$' ;;
         *)              return 1 ;;
+    esac
+}
+
+# ---------------------------------------------------------------------------
+# Monthly deps-cadence lanes (issue #509).
+#
+# The cadence renders its LANES from the SAME (ecosystem, directory) locations
+# this file derives for dependabot.yml, so the two can never disagree about
+# where a project lives. What it adds is which ecosystems have a refresh
+# command at all, the lockfile that command rewrites (a lane is rendered only
+# where that lockfile is tracked), and the toolchain it needs.
+# Every other detected ecosystem (gradle, nuget, docker, github-actions, …) is
+# Dependabot-only: the rendered file lists it as a deliberate absence.
+#
+# The refresh COMMANDS live in deps-cadence-impl.template.yml's case arms,
+# because they run in the consumer repo. scripts/test-deps-cadence-render.sh
+# fails when those arms and CADENCE_ECOSYSTEMS name different sets.
+# ---------------------------------------------------------------------------
+CADENCE_ECOSYSTEMS="bun npm pub cargo"
+
+# cadence_lockfile <ecosystem> — the lockfile basename the refresh rewrites.
+cadence_lockfile() {
+    case "$1" in
+        bun)   echo 'bun.lock' ;;
+        npm)   echo 'package-lock.json' ;;
+        pub)   echo 'pubspec.lock' ;;
+        cargo) echo 'Cargo.lock' ;;
+        *)     return 1 ;;
+    esac
+}
+
+# cadence_toolchain <ecosystem> — the toolchain whose pin the lane needs.
+cadence_toolchain() {
+    case "$1" in
+        bun)   echo 'bun' ;;
+        npm)   echo 'node' ;;
+        pub)   echo 'flutter' ;;
+        cargo) echo 'rust' ;;
+        *)     return 1 ;;
     esac
 }
 
