@@ -97,9 +97,9 @@ VARIANTS=(
     # actionlint resolves the trigger's local `uses: ./…impl.yml` against the
     # impl it is rendered beside. Two shapes put every toolchain arm ON once.
     "cadence-files|deps-cadence.template.yml||"
-    "cadence-files|deps-cadence-impl.template.yml|BUN_PIN_FILE,NODE_PIN_LITERAL,FLUTTER,RUST|RUNNER=[self-hosted, linux, sassy-dog];LANES=bun:/web npm:/tools pub:/app cargo:/;NO_REFRESH=github-actions, gradle;NOT_REFRESHED=none;BUN_VERSION_FILE=.bun-version;NODE_VERSION=22.11.0;FLUTTER_PIN_FILE=app/.fvmrc;RUST_PIN_FILE=rust-toolchain.toml"
+    "cadence-files|deps-cadence-impl.template.yml|BUN_PIN_FILE,NODE_PIN_LITERAL,FLUTTER,RUST|LANES=bun:/web npm:/tools pub:/app cargo:/;NO_REFRESH=github-actions, gradle;NOT_REFRESHED=none;BUN_VERSION_FILE=.bun-version;NODE_VERSION=22.11.0;FLUTTER_PIN_FILE=app/.fvmrc;RUST_PIN_FILE=rust-toolchain.toml"
     "cadence-literals|deps-cadence.template.yml||"
-    "cadence-literals|deps-cadence-impl.template.yml|BUN_PIN_LITERAL,NODE_PIN_FILE|RUNNER=ubuntu-latest;LANES=bun:/ npm:/;NO_REFRESH=none;NOT_REFRESHED=none;BUN_VERSION=1.3.5;NODE_VERSION_FILE=.nvmrc"
+    "cadence-literals|deps-cadence-impl.template.yml|BUN_PIN_LITERAL,NODE_PIN_FILE|LANES=bun:/ npm:/;NO_REFRESH=none;NOT_REFRESHED=none;BUN_VERSION=1.3.5;NODE_VERSION_FILE=.nvmrc"
 )
 
 # The one expected finding: `sassy-dog` is a custom self-hosted label actionlint

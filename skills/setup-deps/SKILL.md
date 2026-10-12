@@ -434,7 +434,9 @@ directory that does not exist and fired the workflow on `scripts/package.json`, 
 cannot handle. **One rendered workflow per install root** — a repo with two independent
 `bun.lock` files needs two, each owning its own lockfile.
 
-`{{RUNNER}}` defaults to the Sassy Dog self-hosted fleet — `[self-hosted, linux, sassy-dog]`, or
+`{{RUNNER}}` (the three Dependabot workflow templates only; `deps-cadence` has no runner fact, see
+"Credential-bearing workflows that run package-manager code" below) defaults to the Sassy Dog
+self-hosted fleet — `[self-hosted, linux, sassy-dog]`, or
 `[self-hosted, macOS, sassy-dog]` for the pod template, which **must** have macOS to run
 `pod install`. Both org runner groups are `visibility=all`, so every repo can reach the fleet.
 Prefer those label forms over the legacy product-scoped ones (`velovate`, `qr-ninja`): the runners
@@ -524,9 +526,44 @@ What it derives, from the repo only:
   run time cannot read a pin differently. A missing pin, a floating one (`1.3.x`, `latest`,
   `stable`, a bare major) or two that disagree **refuses** with exit `4`, so the failure lands at
   render time and not at 09:00 on the 1st.
-- **Runner**: `--runner`, defaulting to `[self-hosted, linux, sassy-dog]` like the other templates.
-  setup-bun on the fleet swaps the image's bun and its warm cache for the pinned one; that costs
-  minutes once a month, which is the price of the pin.
+- **Runner**: none to derive. The impl hard-codes `runs-on: ubuntu-latest`, and `--runner` is
+  refused (exit `1`). Every lane installs its toolchain through an action (setup-bun, setup-node,
+  subosito/flutter-action, which supports Linux, and dtolnay/rust-toolchain), so nothing needs the
+  fleet. The rule is below.
+
+#### Credential-bearing workflows that run package-manager code use ephemeral GitHub-hosted runners
+
+A generated workflow that **both** runs package-manager code **and** holds the org-wide
+`PLATFORM_WRITER_APP_*` token (contents and pull-request write on every installed repo) runs only
+on an ephemeral GitHub-hosted runner, never on the self-hosted fleet. The fleet is persistent and
+shared: any earlier job on the same machine, including another repo's PR CI and the dependency
+install scripts it runs, can leave behind a PATH-shadowing `git`, `gh`, `bun` or `cargo`, a global
+gitconfig with `core.hooksPath`, `core.fsmonitor` or a credential helper, or a modified tool-cache
+SDK. Any of those captures the token the moment this job uses it. A GitHub-hosted VM starts clean
+and is destroyed after the job. `deps-cadence` follows it from template version 2, after a security
+review of version 1, and three further rules keep the exposure small:
+
+- **Mint late.** The App token is minted after every package-manager step (refresh and exact-pin
+  report), right before the PR step. Earlier reads (the default branch, this month's branch, its
+  open PR) use the built-in token, whose permissions are `contents: read` and
+  `pull-requests: read`, so it can never stand in for the App token as a write fallback. The
+  credential presence check still runs first, so a missing secret fails fast.
+- **Never put the token in argv or a git config file.** The push reads it through a one-shot
+  credential helper (`credential.helper=!f() { … echo "password=$GH_TOKEN"; }; f`, single-quoted so
+  git's own shell expands it), with an empty `credential.helper=` clearing any other helper first.
+  `checkout` keeps `persist-credentials: false`.
+- **Ignore inherited git config and hooks.** The PR step exports `GIT_CONFIG_NOSYSTEM=1` and
+  `GIT_CONFIG_GLOBAL=/dev/null`, and every git call that could run a hook or an fsmonitor program
+  passes `-c core.hooksPath=/dev/null -c core.fsmonitor=false`. A hook inherits the step's
+  environment, `GH_TOKEN` included.
+
+`scripts/test-deps-cadence-policy.sh` pins all four. It fails a self-hosted or templated
+`runs-on`, a mint before the refresh, the token in a push URL or expanded into argv (a logging
+`git` wrapper sees every argv), and a poisoned global gitconfig or repo hook that captures the
+token.
+
+The three Dependabot workflow templates still default to the fleet. Whether this rule should
+reach them is a separate decision that this section does not make.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::` and no PR; this month's `chore/deps-YYYY-MM` already existing exits
@@ -538,7 +575,7 @@ and a stale one is a finding, not a clean month. pub and cargo exact pins are no
 version.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (both `1`). The ownership rules in §1 apply to each. Re-render owned files with
+`template-version` (both `2`; version 1 ran on the fleet and minted the token first). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
@@ -634,6 +671,9 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never let a failed `deps-cadence` refresh skip its lane and carry on, never stage beyond the
   lanes' manifests and lockfiles, never add `--label` to its PR (a missing label fails
   `gh pr create`), and never give its `gh pr merge --auto` a method flag.
+- Never run `deps-cadence` on a self-hosted runner, mint its App token before a package-manager
+  step, or let the token reach argv, a URL, a git config file or a git hook. It runs repo and
+  dependency tooling, then holds a write token for every installed repo.
 - Never put a third-party `uses:` in `deps-cadence.yml`. It carries the `schedule:`; everything
   else lives in the impl.
 - Never render `deps-cadence` from a floating or guessed toolchain pin. A refusal (exit `4`) is

@@ -1558,7 +1558,11 @@
 #      with only local `uses:`, plain `gh pr merge --auto`, and the exact-pin
 #      report's parser against verbatim `bun outdated` captures. Source-level
 #      plus the real step bodies executed against scratch repos with fake
-#      package managers and gh; fourteen mutation checks. No network.
+#      package managers and gh. Since template version 2 it also pins an
+#      ephemeral GitHub-hosted runner, the App token minted after every
+#      package-manager step, and the token kept out of git argv, hooks and
+#      global git config (a logging git wrapper and a poisoned gitconfig).
+#      Mutation checks are listed at the end of the script. No network.
 #  58. deps-cadence render tests (scripts/test-deps-cadence-render.sh) —
 #      render-cadence.sh against synthetic trees: LANES from the dependabot
 #      detection, the template's case arms equal to the lib's cadence table,
