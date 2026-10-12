@@ -113,6 +113,32 @@
 #        - add a semver-major `ignore:` to the github-actions block -> "the
 #          github-actions entry carries an ignore:".
 #
+#   6. (issue #508) ignore: rules survive a re-render. what2wear's owned file
+#      carries 11 hand-added Expo SDK / React holds on its bun lane, and a
+#      re-render stripped them while --compare-to exited 0. Built from that
+#      shape (what2wear-ignores.committed.yml, whose rule set is copied from the
+#      real file): a plain re-render must FAIL --compare-to with one DIVERGED
+#      line per dropped rule naming each of the 11; `--keep-ignores-from`
+#      must carry all of them (comments included, the template's own "*" hold
+#      not duplicated) and pass, and carrying again from that output is
+#      byte-identical. A rule whose update-types merely narrowed counts as
+#      dropped. A rule on a lane with no template ignore: (github-actions) is
+#      carried under a new ignore: key. Refused, never partial: a flow-form
+#      ignore:, a rule indented unlike the template, a rule whose lane the
+#      render lacks, and a template whose ignore: is not its entry's last key.
+#      Mutation proof (each applied, this gate run, restored, green again):
+#        - drop the ignore comparison in validate-dependabot.sh (empty
+#          dropped_ign) -> "ignore rules — a plain re-render passed --compare-to".
+#        - key a rule by its dependency-name line alone (drop continuation
+#          lines from the key in extract_ignore_rules) -> "ignore rules — a
+#          rule whose update-types narrowed passed".
+#        - make carry_ignores return the body unchanged -> "ignore rules —
+#          --keep-ignores-from render failed --compare-to" and the 12-rule case.
+#        - skip carry_ignores' filter of rules the body already renders ->
+#          "ignore rules — the template's own "*" hold appears 2 times".
+#        - drop the renderer's end-of-render check for rules no lane received
+#          -> "ignore rules — a rule for a lane the render lacks was accepted".
+#
 # Fixtures: scripts/fixtures/dependabot-render/<repo>.corpus is the repo's
 # tracked path list (with the handful of manifest bodies whose CONTENT decides
 # the derivation), and <repo>.expected the lanes it must produce, with the
@@ -675,6 +701,149 @@ else
     else
         bad "v3 -> v5 delta — the non-comment diff against $V3_GOLDEN is not exactly the one update-types line:"
         printf '%s\n' "$delta" | sed 's/^/        /' >&2
+    fi
+fi
+
+# --- 6. ignore: rules survive a re-render (issue #508) -----------------------
+IGN_COMMITTED="$FIXTURES/what2wear-ignores.committed.yml"
+W_TREE="$WORK/what2wear/tree"
+W_FILES="$WORK/what2wear.files"
+W_DETECT="$WORK/what2wear.detect.json"
+W_PLAIN="$WORK/what2wear.yml"
+W_KEPT="$WORK/what2wear.kept.yml"
+HOLDS='react-native react-native-* @react-native/* react react-dom react-test-renderer @sentry/react-native expo expo-* @expo/* jest-expo'
+if [ ! -r "$IGN_COMMITTED" ] || [ ! -r "$W_DETECT" ] || [ ! -r "$W_PLAIN" ]; then
+    bad "ignore rules — missing $IGN_COMMITTED or the what2wear render; the cases did not run"
+else
+    # shellcheck source=../skills/setup-deps/scripts/lib-ecosystems.sh
+    . "$SCRIPTS/lib-ecosystems.sh"
+    rules_of() { extract_ignore_rules "$1" | cut -f1,2,4 | sort -u; }
+    wval() { bash "$SCRIPTS/validate-dependabot.sh" "$@" --root "$W_TREE" --files-from "$W_FILES" >/dev/null 2> "$WORK/ign.err"; }
+
+    n_committed="$(rules_of "$IGN_COMMITTED" | grep -c .)"
+    if [ "$n_committed" = "12" ]; then
+        ok "ignore rules — the what2wear-shape fixture declares 12 rules (the template hold + 11)"
+    else
+        bad "ignore rules — the fixture declares $n_committed rules, not 12; the cases below would prove less than they claim"
+    fi
+
+    # a. the original failure: a plain re-render strips the 11 holds.
+    if wval "$W_PLAIN" --compare-to "$IGN_COMMITTED"; then
+        bad "ignore rules — a plain re-render passed --compare-to while dropping the 11 holds (the #508 failure)"
+    else
+        n_div="$(grep -c 'DIVERGED: .* ignore rule' "$WORK/ign.err")"
+        missing=""
+        for h in $HOLDS; do
+            grep -qF "ignore rule (dependency-name:$h)" "$WORK/ign.err" \
+                || grep -qF "ignore rule (dependency-name:$h;" "$WORK/ign.err" || missing+="$h "
+        done
+        if [ "$n_div" = "11" ] && [ -z "$missing" ]; then
+            ok "ignore rules — a plain re-render fails --compare-to with 11 DIVERGED lines, one per hold, each named"
+        else
+            bad "ignore rules — a plain re-render failed, but with $n_div DIVERGED ignore lines (want 11); unnamed: ${missing:-none}"
+        fi
+    fi
+
+    # b. --keep-ignores-from carries every rule, comments included, once.
+    if ! bash "$SCRIPTS/render-dependabot.sh" --detect-json "$W_DETECT" --keep-ignores-from "$IGN_COMMITTED" \
+        > "$W_KEPT" 2> "$WORK/ign.render.err"; then
+        bad "ignore rules — --keep-ignores-from render failed: $(tail -n1 "$WORK/ign.render.err")"
+    else
+        if wval "$W_KEPT" --compare-to "$IGN_COMMITTED"; then
+            ok "ignore rules — the --keep-ignores-from render passes --compare-to"
+        else
+            bad "ignore rules — --keep-ignores-from render failed --compare-to:"; grep FAIL "$WORK/ign.err" | sed 's/^/        /' >&2
+        fi
+        if diff <(rules_of "$IGN_COMMITTED") <(rules_of "$W_KEPT") >/dev/null; then
+            ok "ignore rules — the carried render declares exactly the committed 12 rules"
+        else
+            bad "ignore rules — the carried render's rules differ from the committed 12"
+        fi
+        stars="$(grep -c '^      - dependency-name: "\*"$' "$W_KEPT")"
+        if [ "$stars" = "1" ]; then
+            ok "ignore rules — the template's own \"*\" hold is not duplicated by the carry"
+        else
+            bad "ignore rules — the template's own \"*\" hold appears $stars times"
+        fi
+        if grep -q 'EXPO SDK PINS' "$W_KEPT" && grep -q 'The Expo major IS the SDK version' "$W_KEPT"; then
+            ok "ignore rules — a carried rule keeps the comments above it"
+        else
+            bad "ignore rules — the carried rules lost their comments"
+        fi
+        bash "$SCRIPTS/render-dependabot.sh" --detect-json "$W_DETECT" --keep-ignores-from "$W_KEPT" > "$WORK/w.kept2.yml" 2>/dev/null
+        if cmp -s "$W_KEPT" "$WORK/w.kept2.yml"; then
+            ok "ignore rules — carrying again from the carried render is byte-identical"
+        else
+            bad "ignore rules — carrying from the carried render changed it (not idempotent)"
+        fi
+
+        # d. identity includes update-types: narrowing one is a dropped rule.
+        sed 's/\["version-update:semver-minor", "version-update:semver-major"\]/["version-update:semver-major"]/' \
+            "$W_KEPT" > "$WORK/w.narrowed.yml"
+        if cmp -s "$W_KEPT" "$WORK/w.narrowed.yml"; then
+            bad "ignore rules — the narrowing edit matched nothing; the case proves nothing"
+        elif wval "$WORK/w.narrowed.yml" --compare-to "$IGN_COMMITTED"; then
+            bad "ignore rules — a rule whose update-types narrowed passed --compare-to"
+        elif grep -q 'DIVERGED: .*ignore rule (dependency-name:@sentry/react-native;update-types:\[version-update:semver-minor' "$WORK/ign.err"; then
+            ok "ignore rules — narrowing a rule's update-types is reported as dropping that rule"
+        else
+            bad "ignore rules — the narrowed rule failed, but not as a DIVERGED @sentry/react-native rule"
+        fi
+    fi
+
+    # h. a rule whose lane the render does not emit is refused, not dropped.
+    sed 's#^    directory: "/"$#    directory: "/apps/mobile"#' "$IGN_COMMITTED" > "$WORK/w.otherlane.yml"
+    if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$W_DETECT" --keep-ignores-from "$WORK/w.otherlane.yml" >/dev/null 2> "$WORK/ign.render.err"; then
+        bad "ignore rules — a rule for a lane the render lacks was accepted (and dropped)"
+    elif grep -q 'no bun ./apps/mobile. lane to carry it into' "$WORK/ign.render.err"; then
+        ok "ignore rules — a rule for a lane the render lacks is refused"
+    else
+        bad "ignore rules — the lane-less rule was refused, but not with the no-lane message"
+    fi
+
+    # e/f/g. github-actions has no template ignore:, so a carried rule needs a
+    # new key; a flow-form or differently indented one is refused.
+    ga_ignore() {   # FILE BODY... — the tailoredtip golden with BODY after actions-security's patterns
+        # ENVIRON, not -v: BSD awk rejects a newline inside a -v value.
+        IGN_BODY="$2" awk '{ print } /^      actions-security:$/ { s = 1 } s && /^        patterns:/ { print ENVIRON["IGN_BODY"]; s = 0 }' "$GOLDEN" > "$1"
+    }
+    TT_DETECT="$WORK/tailoredtip.detect.json"
+    ttval() { bash "$SCRIPTS/validate-dependabot.sh" "$@" --root "$WORK/tailoredtip/tree" --files-from "$WORK/tailoredtip.files" >/dev/null 2> "$WORK/ign.err"; }
+    ga_ignore "$WORK/tt.ga.yml" $'    ignore:\n      - dependency-name: "actions/upload-artifact"\n        versions: [">= 5"]'
+    ga_ignore "$WORK/tt.flow.yml" '    ignore: [{dependency-name: "actions/upload-artifact"}]'
+    ga_ignore "$WORK/tt.indent.yml" $'    ignore:\n    - dependency-name: "actions/upload-artifact"'
+    if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --keep-ignores-from "$WORK/tt.ga.yml" > "$WORK/tt.ga.out" 2>/dev/null \
+        && ttval "$WORK/tt.ga.out" --compare-to "$WORK/tt.ga.yml" \
+        && awk '/package-ecosystem: "github-actions"/ { a = 1; next } /package-ecosystem:/ { a = 0 } a && /^    ignore:$/ { f = 1 } END { exit !f }' "$WORK/tt.ga.out"; then
+        ok "ignore rules — a github-actions rule is carried under a new ignore: key and passes --compare-to"
+    else
+        bad "ignore rules — a github-actions rule (no template ignore:) was not carried cleanly"
+    fi
+    if ttval "$WORK/tailoredtip.yml" --compare-to "$WORK/tt.flow.yml"; then
+        bad "ignore rules — a flow-form ignore: in the committed file was dropped silently"
+    elif grep -q 'DIVERGED: .*ignore rule (!unparsed:' "$WORK/ign.err"; then
+        ok "ignore rules — a flow-form ignore: that a render drops is DIVERGED, not skipped"
+    else
+        bad "ignore rules — the flow-form case failed, but not as an unparsed DIVERGED rule"
+    fi
+    for v in flow indent; do
+        if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$TT_DETECT" --keep-ignores-from "$WORK/tt.$v.yml" >/dev/null 2>&1; then
+            bad "ignore rules — the renderer carried a $v ignore: it should refuse"
+        else
+            ok "ignore rules — the renderer refuses to carry a $v ignore:"
+        fi
+    done
+
+    # i. appending only works while ignore: is the entry's last key.
+    awk '{ print } /^        update-types: \["version-update:semver-major"\]$/ { print "    versioning-strategy: increase" }' \
+        skills/setup-deps/references/templates/dependabot.yml.template > "$WORK/notlast.template"
+    if bash "$SCRIPTS/render-dependabot.sh" --detect-json "$W_DETECT" --template "$WORK/notlast.template" \
+        --keep-ignores-from "$IGN_COMMITTED" >/dev/null 2> "$WORK/ign.render.err"; then
+        bad "ignore rules — rules were appended after a key that follows ignore: (they would land in the wrong key)"
+    elif grep -q 'is not the last key' "$WORK/ign.render.err"; then
+        ok "ignore rules — the carry refuses a template whose ignore: is not its entry's last key"
+    else
+        bad "ignore rules — the not-last template was refused, but not for that reason"
     fi
 fi
 
