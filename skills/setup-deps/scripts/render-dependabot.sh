@@ -33,6 +33,20 @@
 # until the template's github-actions group became minor/patch only, which
 # changed every render's content and moved it to (5, 6).
 #
+# Carried ignore rules (issue #508): `--keep-ignores-from EXISTING` copies every
+# `ignore:` rule the committed file declares for an (ecosystem, directory) into
+# that lane of the render, verbatim, with the comments above it. A rule the
+# template already renders for that lane (the npm/bun semver-major hold) is not
+# duplicated. Rules are read by extract_ignore_rules in lib-ecosystems.sh, the
+# same reader validate-dependabot.sh --compare-to uses to fail a render that
+# drops one. Holds such as what2wear's Expo SDK pins cannot be derived from the
+# repo, and the committed file is their only record, so a re-render carries
+# them instead of stripping them. The carry is REFUSED (exit 1), never partial,
+# when a rule belongs to a lane this render does not emit, when a rule is
+# flow-form `ignore: [...]` (it cannot be split into rules), when a rule is not
+# indented like the template's (six spaces), or when the template's ignore: is
+# not the last key of that lane's entry (appending would land in another key).
+#
 # ALWAYS pass the result through validate-dependabot.sh before writing it into
 # a repo. Rendering is no longer valid-by-construction (see the template
 # header); the post-render assertion is what took over that job.
@@ -40,6 +54,7 @@
 # Usage:
 #   render-dependabot.sh --detect-json FILE [--template FILE] [--out FILE]
 #                        [--cooldown ECOSYSTEM=DAYS]...
+#                        [--keep-ignores-from EXISTING]
 #   detect-ecosystems.sh | render-dependabot.sh --detect-json -
 # Exit: 0 rendered · 1 bad input, malformed template, or a token left behind
 set -uo pipefail
@@ -53,6 +68,7 @@ TEMPLATE="$SCRIPT_DIR/../references/templates/dependabot.yml.template"
 DETECT=""
 OUT=""
 COOLDOWNS=""   # newline-separated "ecosystem=days"
+KEEP_FROM=""   # a committed dependabot.yml whose ignore: rules are carried
 BASE_VERSION=5
 COOLDOWN_VERSION=6
 
@@ -62,6 +78,7 @@ while [ "$#" -gt 0 ]; do
         --template)    TEMPLATE="${2:-}"; shift 2 || exit 1 ;;
         --out)         OUT="${2:-}"; shift 2 || exit 1 ;;
         --cooldown)    COOLDOWNS+="${2:-}"$'\n'; shift 2 || exit 1 ;;
+        --keep-ignores-from) KEEP_FROM="${2:-}"; shift 2 || exit 1 ;;
         *) echo "render-dependabot: unknown argument '$1'" >&2; exit 1 ;;
     esac
 done
@@ -76,6 +93,55 @@ else
     detect_json="$(cat "$DETECT")"
 fi
 jq -e . >/dev/null 2>&1 <<<"$detect_json" || { echo "render-dependabot: --detect-json is not valid JSON" >&2; exit 1; }
+
+# The committed file's ignore: rules, one line per source line (see
+# extract_ignore_rules). carried_ids collects the rules that reached a lane, so
+# a rule left behind is refused at the end rather than silently dropped.
+keep_rules=""
+carried_ids=""
+carry_tmp=""
+if [ -n "$KEEP_FROM" ]; then
+    [ -r "$KEEP_FROM" ] || { echo "render-dependabot: cannot read --keep-ignores-from '$KEEP_FROM'" >&2; exit 1; }
+    keep_rules="$(extract_ignore_rules "$KEEP_FROM")"
+    carry_tmp="$(mktemp)" || exit 1
+    trap 'rm -f "$carry_tmp"' EXIT
+fi
+
+# carry_ignores ECOSYSTEM DIRECTORY BODY — BODY (one rendered entry) with the
+# committed rules for that lane appended, minus any the body already renders.
+# Prints the new body; returns 1 (reason on stderr) when it must refuse.
+carry_ignores() {
+    local e="$1" d="$2" body="$3" have want extra
+    want="$(awk -F'\t' -v e="$e" -v d="$d" '$1 == e && $2 == d' <<<"$keep_rules")"
+    if [ -z "$want" ]; then printf '%s' "$body"; return 0; fi
+    have="$(extract_ignore_rules - <<<"$body" | cut -f4 | sort -u)"
+    extra="$(awk -F'\t' 'NR == FNR { if ($0 != "") have[$0] = 1; next } !($4 in have)' \
+        <(printf '%s\n' "$have") <(printf '%s\n' "$want"))"
+    carried_ids+="$(cut -f3 <<<"$want" | sort -u)"$'\n'
+    if [ -z "$extra" ]; then printf '%s' "$body"; return 0; fi
+    local keys indents after
+    keys="$(cut -f4 <<<"$extra")"
+    indents="$(cut -f5 <<<"$extra")"
+    if grep -q '^!unparsed:' <<<"$keys"; then
+        echo "render-dependabot: $KEEP_FROM declares a flow-form ignore: for $e '$d' — it cannot be split into rules, so it is not carried; rewrite it as a block list" >&2
+        return 1
+    fi
+    if grep -qvx '6' <<<"$indents"; then
+        echo "render-dependabot: $KEEP_FROM indents a $e '$d' ignore rule differently from the template (six spaces) — not carried, since mixing indents breaks the list; re-indent it in the committed file" >&2
+        return 1
+    fi
+    if grep -q '^    ignore:[[:space:]]*$' <<<"$body"; then
+        after="$(sed -n '/^    ignore:[[:space:]]*$/,$p' <<<"$body" | tail -n +2)"
+        if grep -q '^    [^ #]' <<<"$after"; then
+            echo "render-dependabot: the template's $e ignore: is not the last key of its entry — carried rules cannot be appended" >&2
+            return 1
+        fi
+    else
+        body+="    ignore:"$'\n'
+    fi
+    printf '%s' "$body"
+    cut -f6- <<<"$extra"
+}
 
 # Validate the cooldown requests up front through the parser the validator
 # shares (lib-ecosystems.sh): "ecosystem=days", days 1..90, one per ecosystem.
@@ -177,7 +243,16 @@ while IFS= read -r line; do
                 emitted+="$eco"$'\n'
                 while IFS= read -r d; do
                     [ -n "$d" ] || continue
-                    rendered+="${buf//\{\{DIRECTORY\}\}/$d}"
+                    entry_body="${buf//\{\{DIRECTORY\}\}/$d}"
+                    if [ -n "$keep_rules" ]; then
+                        # $(...) would drop the counter update, so read it back via a file.
+                        if carry_ignores "$eco" "$d" "$entry_body" > "$carry_tmp"; then
+                            entry_body="$(cat "$carry_tmp"; printf x)"; entry_body="${entry_body%x}"
+                        else
+                            fail=1
+                        fi
+                    fi
+                    rendered+="$entry_body"
                 done <<<"$dirs"
             fi
             buf=""
@@ -206,6 +281,17 @@ while IFS= read -r req; do
         fail=1
     fi
 done <<<"$COOLDOWNS"
+
+# Every committed rule must have reached a lane. One whose (ecosystem,
+# directory) this render does not emit would otherwise vanish without a word.
+if [ -n "$keep_rules" ]; then
+    while IFS=$'\t' read -r e d id key _; do
+        [ -n "$id" ] || continue
+        grep -qxF "$id" <<<"$carried_ids" && continue
+        echo "render-dependabot: $KEEP_FROM declares a $e '$d' ignore rule ($key), but this render has no $e '$d' lane to carry it into — refused rather than dropped" >&2
+        fail=1
+    done < <(cut -f1-4 <<<"$keep_rules" | sort -u)
+fi
 
 # A token left behind is a fact nobody substituted — never ship it.
 if grep -nE '\{\{[A-Za-z_]+(:[A-Za-z_]+)?\}\}' <<<"$rendered" >&2; then

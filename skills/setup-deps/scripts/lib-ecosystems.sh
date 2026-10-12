@@ -52,6 +52,111 @@ parse_cooldown_requests() {
     return 0
 }
 
+# extract_ignore_rules FILE — the ONE reader of a dependabot.yml's `ignore:`
+# rules (issue #508), called by render-dependabot.sh (--keep-ignores-from, to
+# carry a committed file's rules into the render) and validate-dependabot.sh
+# (--compare-to, to fail a render that drops one). Sharing it matters for the
+# reason parse_cooldown_requests is shared: a carry and a check that read rules
+# differently would let the check agree with a carry that lost something.
+# FILE may be "-" for stdin.
+#
+# One line per source line of every rule, tab-separated:
+#   ecosystem  directory  rule-id  key  dash-indent  source-line
+# - rule-id is unique per rule within the file; all of a rule's lines share it.
+# - key is the rule's identity: its content lines (comments dropped, the list
+#   dash dropped, whitespace and quotes removed) joined by ";", e.g.
+#   `dependency-name:expo;update-types:[version-update:semver-major]`. It
+#   covers dependency-name, update-types AND versions, so a rule whose
+#   update-types narrowed is a different rule, not the same one.
+# - source-line is verbatim. Comment and blank lines immediately above a rule
+#   belong to it (that is where a hold's explanation lives), so a carried rule
+#   keeps its reasoning; trailing ones before the next key belong to nothing.
+# An entry with several directories emits each rule once per directory, since
+# the renderer writes one entry per (ecosystem, directory). An entry with no
+# directory reports it as "" so it can never match a rendered lane.
+#
+# FAIL CLOSED: a flow-form `ignore: [...]` cannot be split into rules, so the
+# whole value becomes one rule keyed `!unparsed:<value>`. It still counts as a
+# rule the render must carry (so the validator reports it), and the renderer
+# refuses to carry it rather than guess.
+extract_ignore_rules() {
+    awk '
+    function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+    function ind(s,   m) { match(s, /^ */); return RLENGTH }
+    function unq(s) {
+        s = trim(s); sub(/[ \t]+#.*$/, "", s)
+        if (s ~ /^".*"$/ || s ~ /^\047.*\047$/) s = substr(s, 2, length(s) - 2)
+        return s
+    }
+    function normdir(d) { while (length(d) > 1 && substr(d, length(d)) == "/") d = substr(d, 1, length(d) - 1); return d }
+    function keypart(s) { sub(/^[ \t]*-[ \t]*/, "", s); sub(/[ \t]+#.*$/, "", s); gsub(/[ \t"\047]/, "", s); return s }
+    function close_rule() {
+        if (rtext != "") { n_rules++; rk[n_rules] = rkey; rt[n_rules] = rtext; rdi[n_rules] = di }
+        rtext = ""; rkey = ""
+    }
+    function end_ignore() { close_rule(); pending = ""; inign = 0 }
+    function flush_entry(   i, j, k, nl, lines, d) {
+        if (inign) end_ignore()
+        if (have) {
+            if (n_dirs == 0) { n_dirs = 1; dirs[1] = "" }
+            for (i = 1; i <= n_rules; i++) {
+                nl = split(rt[i], lines, "\n")
+                for (j = 1; j <= n_dirs; j++)
+                    for (k = 1; k < nl; k++)
+                        printf "%s\t%s\t%d.%d\t%s\t%d\t%s\n", eco, dirs[j], entry, i, rk[i], rdi[i], lines[k]
+            }
+        }
+        have = 0; n_rules = 0; n_dirs = 0; inign = 0; indirs = 0; pending = ""
+    }
+    {
+        line = $0
+        if (indirs) {
+            if (line ~ /^[ \t]*-[ \t]*["\047]?\//) { v = line; sub(/^[ \t]*-[ \t]*/, "", v); dirs[++n_dirs] = normdir(unq(v)); next }
+            indirs = 0
+        }
+        if (inign) {
+            if (line ~ /^[ \t]*$/) { pending = pending line "\n"; next }
+            if (line ~ /^[ \t]*#/) {
+                if (ind(line) > ii) { pending = pending line "\n"; next }
+                end_ignore()
+            } else if (line ~ /^ *- / && (di < 0 ? ind(line) >= ii : ind(line) == di)) {
+                close_rule(); if (di < 0) di = ind(line)
+                rtext = pending line "\n"; pending = ""; rkey = keypart(line); next
+            } else if (rtext != "" && ind(line) > di) {
+                rtext = rtext pending line "\n"; pending = ""; rkey = rkey ";" keypart(line); next
+            } else {
+                end_ignore()
+            }
+        }
+        if (line ~ /^[ \t]*#/ || line ~ /^[ \t]*$/) next
+        if (line ~ /^[ \t]*-[ \t]*package-ecosystem:/) {
+            flush_entry(); v = line; sub(/^[^:]*package-ecosystem:/, "", v)
+            eco = unq(v); have = 1; entry++; next
+        }
+        if (line ~ /^[^ ]/) { flush_entry(); next }
+        if (!have) next
+        if (line ~ /^ +directory:/) { v = line; sub(/^ +directory:/, "", v); dirs[++n_dirs] = normdir(unq(v)); next }
+        if (line ~ /^ +directories:/) {
+            v = line; sub(/^ +directories:/, "", v); v = unq(v)
+            if (v == "") { indirs = 1; next }
+            gsub(/^\[|\]$/, "", v); nd = split(v, parts, ",")
+            for (p = 1; p <= nd; p++) { d = unq(parts[p]); if (d != "") dirs[++n_dirs] = normdir(d) }
+            next
+        }
+        if (line ~ /^ +ignore:/) {
+            v = line; sub(/^ +ignore:/, "", v); v = unq(v)
+            if (v != "") {
+                n_rules++; rk[n_rules] = "!unparsed:" v; rt[n_rules] = line "\n"; rdi[n_rules] = -1
+                next
+            }
+            inign = 1; ii = ind(line); di = -1; pending = ""; rtext = ""
+            next
+        }
+    }
+    END { flush_entry() }
+    ' "$1"
+}
+
 EXCLUDE_RE='(^|/)(templates?|fixtures?|__fixtures__|testdata|test-?data|examples?|node_modules)(/|$)'
 
 # Populated by load_corpus.

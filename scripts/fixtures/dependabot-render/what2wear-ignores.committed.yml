@@ -1,0 +1,84 @@
+# fixture-for: scripts/test-dependabot-render.sh, the ignore-rule cases (issue #508)
+# fixture-shape: Sassy-Dog/what2wear's committed .github/dependabot.yml at
+#   template-version 3: an owned file whose one bun lane at "/" carries the
+#   template's semver-major hold plus 11 hand-added Expo SDK / React holds
+#   (what2wear#244, what2wear#257). The rule set (names AND update-types) is
+#   copied from that file; the comments are paraphrased, since what2wear is
+#   internal and only the rules matter here. It renders the same lane as
+#   what2wear.corpus, so the only thing a re-render can drop is the 11 rules.
+# Everything above the --- line is fixture metadata, not part of the file.
+---
+# generated-by: sassy-dog:setup-deps | template: dependabot.yml | template-version: 3
+#
+# GROUPING IS THE POINT OF THIS FILE. Ungrouped, one vulnerable transitive
+# dependency can open a dozen PRs; across this org that turned 74 alerts into a
+# PR flood nobody merges. Each ecosystem below declares TWO groups —
+# `applies-to: version-updates` and `applies-to: security-updates` — because a
+# group with no `applies-to` covers version updates ONLY, silently leaving
+# security PRs ungrouped. That default is the single easiest thing to get wrong
+# here, and it is invisible until the flood arrives.
+#
+# Semver-major is excluded from the routine groups: majors are API breaks that
+# need a human. That exclusion stands on its own and does NOT assume an
+# auto-merge workflow exists — this generator declines to render one for a repo
+# with no merge gate, and for any PUBLIC repo (its org secrets are
+# private-visibility and cannot resolve there; see setup-deps SKILL.md §2). Where
+# the workflow IS rendered it holds majors too, but that is a second belt, not
+# the reason for this rule. A major that is ALSO a security fix still comes
+# through as its own security PR — security updates ignore version-update ignore
+# rules, which is the behaviour we want.
+#
+# ONE ENTRY PER (ECOSYSTEM, DIRECTORY). Dependabot reads the manifest at
+# `directory:` and does NOT recurse, so a monorepo needs one entry per manifest
+# location — the grouping above is per entry, so per-directory entries stay
+# grouped rather than reverting to a flood.
+
+version: 2
+updates:
+  # Native bun ecosystem (GA 2025-02): Dependabot reads and rewrites the text
+  # bun.lock itself (bun >= 1.1.39), so these PRs arrive frozen-lockfile valid
+  # with no lockfile-sync workflow. Version updates only for now — bun
+  # security updates are not yet supported upstream. The security group is
+  # declared anyway (parity with npm): the applies-to trap is identical, and
+  # this way coverage lands pre-grouped the day GitHub ships it.
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      bun-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      bun-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      # Majors are held for a human. Security majors still arrive separately —
+      # security updates deliberately bypass version-update ignore rules.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+      # EXPO SDK PINS, kept across re-renders. These move only in an Expo SDK
+      # upgrade, never one package at a time: a minor/patch group bump of
+      # react-native broke the mobile jest harness (what2wear#238).
+      - dependency-name: "react-native"
+      - dependency-name: "react-native-*"
+      # Scoped, so the pattern above does not cover them.
+      - dependency-name: "@react-native/*"
+      # The SDK pins the exact React patch; a different one splits `expo`.
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-test-renderer"
+      - dependency-name: "@sentry/react-native"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # The Expo major IS the SDK version.
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "jest-expo"
+        update-types: ["version-update:semver-major"]

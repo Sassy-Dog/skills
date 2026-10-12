@@ -47,6 +47,21 @@
 # request per ecosystem). Only `default-days` is understood; `semver-*-days`,
 # `include` and `exclude` are reported as divergence.
 #
+# IGNORE RULES (issue #508). Under --compare-to, every `ignore:` rule the
+# existing file declares for an (ecosystem, directory) must also be in the
+# render, or the run fails with one DIVERGED line per dropped rule. A rule's
+# identity is its whole content (dependency-name, update-types, versions), so a
+# narrowed or widened rule counts as dropped. Before this, lanes and cooldowns
+# were compared and ignore: rules were not: re-rendering what2wear stripped its
+# 11 Expo SDK / React holds and this script exited 0. The fix for a dropped
+# rule is to re-render with `render-dependabot.sh --keep-ignores-from
+# EXISTING`, which carries the rules; a rule nobody wants any more is removed
+# from the committed file as its own reviewed change, so there is no
+# acknowledgement flag that waves a drop through. Rules are read by
+# extract_ignore_rules in lib-ecosystems.sh, the reader the renderer's carry
+# uses. A flow-form `ignore: [...]` cannot be split, so it is compared as one
+# opaque rule and reported if the render does not reproduce it.
+#
 # Usage:
 #   validate-dependabot.sh FILE [--root DIR] [--files-from LIST]
 #                               [--compare-to EXISTING]
@@ -56,7 +71,7 @@
 #                                                # asserted (needs no repo)
 # Exit: 0 every lane is backed by a manifest (and nothing was dropped)
 #       1 a lane points at nothing, the file is structurally unreadable, or a
-#         comparison found dropped lanes
+#         comparison found a dropped lane, cooldown or ignore: rule
 #       2 bad usage
 set -uo pipefail
 export LC_ALL=C   # comm needs both sides sorted the same way
@@ -356,6 +371,17 @@ if [ -n "$COMPARE_ABS" ]; then
         [ -n "$ack" ] || continue
         grep -qxF "$ack" <<<"$acked_used" || bad "--change-cooldown $ack acknowledges nothing: $COMPARE_TO carries no $ack cooldown that this render changes or drops"
     done <<<"$ACKS"
+    existing_ign="$(extract_ignore_rules "$COMPARE_ABS" | cut -f1,2,4 | sort -u)"
+    render_ign="$(extract_ignore_rules "$FILE_ABS" | cut -f1,2,4 | sort -u)"
+    dropped_ign="$(comm -23 <(printf '%s\n' "$existing_ign") <(printf '%s\n' "$render_ign"))"
+    if [ -n "$(tr -d '[:space:]' <<<"$dropped_ign")" ]; then
+        while IFS=$'\t' read -r eco dir key; do
+            [ -n "$eco" ] || continue
+            bad "DIVERGED: $COMPARE_TO declares a $eco '$dir' ignore rule ($key) that this render drops — re-render with --keep-ignores-from $COMPARE_TO to carry it; to retire the hold, remove it from the committed file first, as its own reviewed change"
+        done <<<"$dropped_ign"
+    else
+        ok "no ignore rule in $COMPARE_TO is dropped by this render ($(grep -c . <<<"$existing_ign") compared)"
+    fi
     while IFS=$'\t' read -r eco dir; do
         [ -n "$eco" ] || continue
         echo "  note  this render adds $eco '$dir' (absent from $COMPARE_TO)" >&2

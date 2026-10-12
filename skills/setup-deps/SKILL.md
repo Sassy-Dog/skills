@@ -112,9 +112,23 @@ Before reconciling an owned `dependabot.yml`, render the fresh one (§3) and com
 is already committed:
 
 ```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-dependabot.sh \
+  --detect-json /tmp/deps.json --keep-ignores-from .github/dependabot.yml --cooldown bun=7 \
+  --out /tmp/dependabot.new.yml
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp/dependabot.new.yml \
   --compare-to .github/dependabot.yml --cooldown bun=7
 ```
+
+**Always pass `--keep-ignores-from .github/dependabot.yml` when re-rendering an owned file.** It
+carries every `ignore:` rule the committed file declares into the same (ecosystem, directory) lane
+of the render, verbatim and with the comments above it, without duplicating a rule the template
+already renders there (the npm/bun semver-major hold). Hand-added holds cannot be derived from the
+repo, and the committed file is their only record: what2wear's bun lane carries 11 Expo SDK and
+React holds (what2wear#244, what2wear#257) whose loss once let a minor/patch group break its mobile test
+harness (what2wear#238). The renderer refuses the carry rather than doing part of it when a rule's
+lane is not in the render, when a rule is a flow-form `ignore: [...]`, or when it is indented
+differently from the template's six spaces. Fix the committed file or stop; never edit the render.
+Carrying is a no-op on a file with no hand-added rules, so the flag is always safe to pass.
 
 The `--cooldown bun=7` above stands for every cooldown the committed file already carries: the
 request is not stored anywhere but that file, so read each ecosystem's `cooldown:` /
@@ -122,7 +136,12 @@ request is not stored anywhere but that file, so read each ecosystem's `cooldown
 the render and this validate. Omit the flag when the committed file carries no cooldown.
 
 Any lane the existing file declares that the fresh render does not is printed as `DIVERGED` and
-fails the run. So is a `cooldown:` the existing file carries that the fresh render lacks, reported
+fails the run. So is every `ignore:` rule the existing file declares for a lane that the render
+does not reproduce exactly, one `DIVERGED` line per rule. A rule's identity is its whole content
+(`dependency-name`, `update-types`, `versions`), so a narrowed rule counts as dropped. The likeliest
+cause is a forgotten `--keep-ignores-from`. To retire a hold deliberately, remove it from the
+committed file as its own reviewed change, then re-render; there is no flag that waves a dropped
+rule through. So is a `cooldown:` the existing file carries that the fresh render lacks, reported
 as `DROPPED`; the likeliest cause is a forgotten `--cooldown`, not a hand-added block. A cooldown
 the render carries at a different value is reported as `CHANGED`. Both are covered under "Changing
 or removing a cooldown" below. **A lost lane is the stop signal, not a formality.** A file stamped
@@ -335,7 +354,9 @@ text, and nothing else.)
 the committed `.github/dependabot.yml` is its only record. Before any re-render, read each
 ecosystem's `cooldown:` / `default-days:` from that file and pass it as `--cooldown ECOSYSTEM=DAYS`
 to both scripts. Forgetting it fails closed: the validator reports the dropped cooldown as
-`DROPPED`, naming the forgotten flag, and never writes a file that strips it.
+`DROPPED`, naming the forgotten flag, and never writes a file that strips it. Hand-added `ignore:`
+rules have the same single record and the same fail-closed check: pass `--keep-ignores-from
+.github/dependabot.yml` to the render (see "The diverged-but-owned case" in §1).
 
 **Changing or removing a cooldown is a deliberate plan item, not drift.** Put it in the plan the
 user approves (`bun` 7 days to 14, or `bun` cooldown removed), then run the sequence below. The
@@ -510,6 +531,9 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never drop or change a committed cooldown without the user's approval of that exact change as a
   plan item, and never pass `--change-cooldown` to turn a failing run green: a forgotten
   `--cooldown` is fixed by passing the committed value.
-- Never overwrite an owned file whose committed lanes a fresh render drops (`--compare-to`
-  reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which only makes a
-  diverged file look current.
+- Never overwrite an owned file whose committed lanes or `ignore:` rules a fresh render drops
+  (`--compare-to` reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which
+  only makes a diverged file look current.
+- Never re-render an owned `dependabot.yml` without `--keep-ignores-from .github/dependabot.yml`,
+  and never retire a hand-added hold by letting a re-render drop it. Removing a hold is its own
+  reviewed edit to the committed file, made before the re-render.
