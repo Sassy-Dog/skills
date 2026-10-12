@@ -44,8 +44,9 @@
 #
 #   1. SKILL.md probes visibility (`gh repo view … --json visibility`).
 #   2. SKILL.md states the public → do-not-render rule.
-#   3. The veto names ALL THREE templates, not just auto-merge (#186).
-#   4. The render table carries the precondition on all three rows (#186).
+#   3. The veto names ALL FOUR App-token outputs, not just auto-merge (#186);
+#      deps-cadence (#509) joined the three Dependabot workflows.
+#   4. The render table carries the precondition on all four rows (#186).
 #   5. The Guardrails section carries it as a standing rule covering the
 #      lockfile templates too — guardrails are what a hurried reader checks.
 #   6. The no-gate arm does not instruct an unconditional lockfile-sync render.
@@ -125,7 +126,7 @@ fi
 # 3. (#186) The veto must name all three templates. This is the assertion the
 #    pre-#186 file fails: its visibility section spoke only of the auto-merge
 #    workflow, so both lockfile templates rendered into public repos.
-for tpl in auto-merge bun-lockfile pod-lockfile; do
+for tpl in auto-merge bun-lockfile pod-lockfile deps-cadence; do
     if printf '%s' "$visibility_section" | grep -qE "$tpl"; then
         ok "visibility veto names $tpl"
     else
@@ -143,7 +144,7 @@ while IFS= read -r row; do
     else
         bad "render table row for $file has no visibility precondition"
     fi
-done < <(grep -E '^\| `\.github/workflows/dependabot-(auto-merge|bun-lockfile|pod-lockfile)\.yml`' "$SKILL")
+done < <(grep -E '^\| `\.github/workflows/(dependabot-(auto-merge|bun-lockfile|pod-lockfile)|deps-cadence)\.yml`' "$SKILL")
 
 # 5. The standing guardrail, scoped to the Guardrails section only. It must now
 #    cover the lockfile templates: a guardrail naming only auto-merge is what

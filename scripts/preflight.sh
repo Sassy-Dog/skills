@@ -1551,6 +1551,19 @@
 #      actor as well as the PR author, and hold everything else with a comment.
 #      actionlint cannot see either defect — the expressions are valid, just
 #      permissive. Source-level, with three mutation checks.
+#  57. deps-cadence policy tests (scripts/test-deps-cadence-policy.sh) — the
+#      monthly lockfile-refresh templates (issue #509): one App-token credential
+#      with no GITHUB_TOKEN or PAT fallback, a failed refresh fails the job, no
+#      --label, git add limited to the lanes' files, a schedule-bearing trigger
+#      with only local `uses:`, plain `gh pr merge --auto`, and the exact-pin
+#      report's parser against verbatim `bun outdated` captures. Source-level
+#      plus the real step bodies executed against scratch repos with fake
+#      package managers and gh; fourteen mutation checks. No network.
+#  58. deps-cadence render tests (scripts/test-deps-cadence-render.sh) —
+#      render-cadence.sh against synthetic trees: LANES from the dependabot
+#      detection, the template's case arms equal to the lib's cadence table,
+#      toolchain sources derived and refused when missing/floating/disagreeing,
+#      the public and no-merge-queue declines, and --compare-to divergence.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2513,6 +2526,25 @@ if bash scripts/test-auto-merge-policy.sh; then
     pass "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
 else
     failed "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
+fi
+
+# --- 57. deps-cadence policy tests ---------------------------------------------
+# The monthly refresh opens its PR with the App token only, fails on a failed
+# refresh, stages only lane files and enqueues with plain --auto. Executed
+# against scratch repos; no network.
+if bash scripts/test-deps-cadence-policy.sh; then
+    pass "deps-cadence policy tests (scripts/test-deps-cadence-policy.sh)"
+else
+    failed "deps-cadence policy tests (scripts/test-deps-cadence-policy.sh)"
+fi
+
+# --- 58. deps-cadence render tests ---------------------------------------------
+# render-cadence.sh derives LANES and toolchain sources from the repo, and
+# refuses or declines rather than guessing. Synthetic trees; no network.
+if bash scripts/test-deps-cadence-render.sh; then
+    pass "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
+else
+    failed "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
 fi
 
 # ------------------------------------------------------------------------------

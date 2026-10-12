@@ -1,0 +1,53 @@
+# TEMPLATE: deps-cadence · version 1
+# Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, together
+# with deps-cadence-impl.template.yml. Never hand-render it: the pair is one
+# unit, and the renderer refuses a public repo, a repo without a merge queue
+# and a lane whose toolchain has no pin before it writes either file.
+#
+# This file carries NO facts and NO {{IF:FLAG}} blocks: it is byte-identical in
+# every repo. Everything that varies lives in the impl file.
+#
+# THE THIN-TRIGGER RULE (the reason this file exists at all): GitHub attributes
+# a `schedule:` to whoever last touched the file that carries it. If this file
+# referenced a third-party action, a Dependabot bump of that action would
+# re-attribute the cron to dependabot[bot] and it would stop firing, with
+# nothing red anywhere. So the schedule-bearing file may reference ONLY the
+# local `./` impl workflow, which Dependabot never edits as a cron owner.
+# scripts/test-deps-cadence-policy.sh fails a render with any other `uses:`.
+# Delete this header block from the rendered output; keep the generated-by line.
+---
+# generated-by: sassy-dog:setup-deps | template: deps-cadence | template-version: 1
+#
+# Monthly lockfile refresh: THIN TRIGGER ONLY. The schedule lives here and the
+# work lives in deps-cadence-impl.yml. Keep this file free of third-party
+# `uses:`: a Dependabot bump to one would re-attribute the cron to
+# dependabot[bot], and a schedule owned by a bot stops firing silently.
+#
+# Re-render with sassy-dog:setup-deps instead of editing; edits to an owned
+# file are overwritten on the next refresh.
+
+name: Dependency cadence
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of every month.
+    - cron: "0 9 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One cadence run at a time: a manual dispatch never stacks on the cron.
+concurrency:
+  group: deps-cadence
+  cancel-in-progress: false
+
+jobs:
+  cadence:
+    name: Monthly lockfile refresh
+    uses: ./.github/workflows/deps-cadence-impl.yml
+    # Passed by name, never `secrets: inherit`: the impl declares exactly the
+    # two App credentials it needs and receives nothing else.
+    secrets:
+      PLATFORM_WRITER_APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
+      PLATFORM_WRITER_APP_PRIVATE_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}

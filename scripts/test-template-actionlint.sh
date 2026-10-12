@@ -4,7 +4,7 @@
 #
 # Why this exists: `actionlint` is the gate this repo relies on for workflow
 # correctness, and bare `actionlint` lints the real `.github/workflows/*`,
-# including ci.yml and the release-lag reminder. The three workflow templates
+# including ci.yml and the release-lag reminder. The workflow templates
 # setup-deps renders into every consumer repo were otherwise linted by nothing,
 # while being the highest-consequence YAML in the tree:
 # `pull_request_target`, a minted PLATFORM_WRITER_APP_* token, and a push to a
@@ -44,7 +44,7 @@
 #   - every tracked *.template.yml is covered by the matrix, and every matrix
 #     entry names a tracked template (a NEW template is unlinted otherwise)
 #   - every `{{IF:FLAG}}` appearing in a template is ON in some variant (a new
-#     arm is otherwise rendered away in all six variants and never linted)
+#     arm is otherwise rendered away in every variant and never linted)
 #   - a render carrying a leftover `{{TOKEN}}` or marker fails
 #   - the rendered bun step restores the fetched base lock while its origin is
 #     unreachable, proving it performs no post-checkout authenticated fetch
@@ -84,7 +84,8 @@ echo "template-actionlint tests (work: $WORK)" >&2
 # --- the render matrix -------------------------------------------------------
 # variant|template|ON-flags (comma-separated)|TOKEN=VALUE;TOKEN=VALUE
 # One entry per documented render shape. The two lockfile templates each render
-# nested and at the repo root; auto-merge renders one arm per merge strategy.
+# nested and at the repo root; auto-merge renders one arm per merge strategy;
+# the deps-cadence trigger and impl render as a pair per shape.
 VARIANTS=(
     "auto-merge-queue|dependabot-auto-merge.template.yml|MERGE_QUEUE|RUNNER=[self-hosted, linux, sassy-dog]"
     "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|RUNNER=ubuntu-latest"
@@ -92,6 +93,13 @@ VARIANTS=(
     "bun-root|lockfile-sync-bun.template.yml||RUNNER=[self-hosted, linux, sassy-dog];PKG_DIR=."
     "pod-nested|lockfile-sync-pod.template.yml|NESTED_APP|RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=app;FLUTTER_VERSION=3.35.1"
     "pod-root|lockfile-sync-pod.template.yml||RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=.;FLUTTER_VERSION=3.35.1"
+    # The deps-cadence pair renders into ONE variant directory per shape, so
+    # actionlint resolves the trigger's local `uses: ./…impl.yml` against the
+    # impl it is rendered beside. Two shapes put every toolchain arm ON once.
+    "cadence-files|deps-cadence.template.yml||"
+    "cadence-files|deps-cadence-impl.template.yml|BUN_PIN_FILE,NODE_PIN_LITERAL,FLUTTER,RUST|RUNNER=[self-hosted, linux, sassy-dog];LANES=bun:/web npm:/tools pub:/app cargo:/;NO_REFRESH=github-actions, gradle;NOT_REFRESHED=none;BUN_VERSION_FILE=.bun-version;NODE_VERSION=22.11.0;FLUTTER_PIN_FILE=app/.fvmrc;RUST_PIN_FILE=rust-toolchain.toml"
+    "cadence-literals|deps-cadence.template.yml||"
+    "cadence-literals|deps-cadence-impl.template.yml|BUN_PIN_LITERAL,NODE_PIN_FILE|RUNNER=ubuntu-latest;LANES=bun:/ npm:/;NO_REFRESH=none;NOT_REFRESHED=none;BUN_VERSION=1.3.5;NODE_VERSION_FILE=.nvmrc"
 )
 
 # The one expected finding: `sassy-dog` is a custom self-hosted label actionlint
@@ -216,7 +224,7 @@ else
 fi
 
 # --- 2. flag coverage --------------------------------------------------------
-# An IF-arm that is OFF in every variant is rendered away six times and never
+# An IF-arm that is OFF in every variant is rendered away every time and never
 # linted — the same vacuous green one directory up.
 # Scanned in the BODY only (the region a render keeps): every template header
 # spells the marker syntax out as a literal `# {{IF:FLAG}}` example, and no
