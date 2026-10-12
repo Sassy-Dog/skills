@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence · version 1
+# TEMPLATE: deps-cadence · version 2
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, together
 # with deps-cadence-impl.template.yml. Never hand-render it: the pair is one
 # unit, and the renderer refuses a public repo, a repo without a merge queue
@@ -16,7 +16,7 @@
 # scripts/test-deps-cadence-policy.sh fails a render with any other `uses:`.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence | template-version: 1
+# generated-by: sassy-dog:setup-deps | template: deps-cadence | template-version: 2
 #
 # Monthly lockfile refresh: THIN TRIGGER ONLY. The schedule lives here and the
 # work lives in deps-cadence-impl.yml. Keep this file free of third-party
@@ -34,8 +34,11 @@ on:
     - cron: "0 9 1 * *"
   workflow_dispatch:
 
+# Caps the called workflow's built-in token: read-only. Writes use the App
+# token the impl mints.
 permissions:
   contents: read
+  pull-requests: read
 
 # One cadence run at a time: a manual dispatch never stacks on the cron.
 concurrency:

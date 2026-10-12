@@ -21,6 +21,9 @@
 #      pubspec environment.flutter; Rust from rust-toolchain(.toml). A missing,
 #      floating or disagreeing pin REFUSES the render (exit 4, no files), and
 #      setup-deps' own rendered workflows are not read as the repo's pins.
+#   3b. No runner fact: --runner is refused and the render runs on
+#      ubuntu-latest (template version 2; the job holds the org-wide App token
+#      after running package-manager code, so never the self-hosted fleet).
 #   4. The two declines (exit 3, no files): a PUBLIC repo (org secrets do not
 #      reach it; Sassy-Dog/platform#1054 owns that case) and a merge gate that
 #      is not a queue. A repo with nothing to refresh declines too.
@@ -317,6 +320,15 @@ expect_rc "direct-merge repo" 3 && ok "a repo without a merge queue is declined 
 printf 'android/settings.gradle\tinclude\nandroid/build.gradle\t// b\n' | tree gradle-only
 run_render gradle-only
 expect_rc "nothing to refresh" 3 && ok "a repo with nothing to refresh is declined (exit 3)"
+
+run_render mono --runner '[self-hosted, linux, sassy-dog]'
+if expect_rc "--runner" 1; then
+    grep -qF 'GitHub-hosted' <<<"$ERR" && ok "--runner is refused (exit 1): the cadence renders only for an ephemeral GitHub-hosted runner" \
+        || bad "--runner refusal does not say why: $ERR"
+fi
+run_render mono
+grep -qE '^[[:space:]]*runs-on: ubuntu-latest$' "$OUTDIR/deps-cadence-impl.yml" && [ "$(jqv .runner)" = "ubuntu-latest" ] \
+    && ok "the render runs on ubuntu-latest, never the fleet" || bad "the render's runs-on is not ubuntu-latest"
 
 # --- 5. --compare-to ----------------------------------------------------------------
 printf -- '---\njobs:\n  refresh:\n    env:\n      LANES: "bun:/ bun:/tools pub:/app cargo:/ bun:/gone"\n' > "$WORK/committed-extra.yml"

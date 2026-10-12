@@ -1,10 +1,8 @@
-# TEMPLATE: deps-cadence-impl · version 1
+# TEMPLATE: deps-cadence-impl · version 2
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
 # {{TOKEN}}), and derives every fact below from the repo:
-#   {{RUNNER}}            runs-on. Default [self-hosted, linux, sassy-dog], the
-#                         same default as the other setup-deps workflows.
 #   {{LANES}}             space-separated <ecosystem>:<directory> pairs, from the
 #                         SAME detection that renders dependabot.yml's lanes
 #                         (lib-ecosystems.sh). A lane is rendered only when its
@@ -23,9 +21,17 @@
 # A lane whose toolchain has no exact pin REFUSES the render: a floating
 # toolchain writes a lockfile CI's toolchain may reject, and that failure would
 # otherwise surface at 09:00 on the 1st instead of at render time.
+#
+# runs-on is NOT a fact (version 2). This job runs package-manager code and
+# then holds the org-wide platform-writer App token, so it runs only on an
+# ephemeral GitHub-hosted runner: a persistent shared runner can carry a
+# PATH-shadowing git/gh/bun/cargo, a global gitconfig hook or credential helper,
+# or a modified tool cache from any earlier job, and that would capture the
+# token. Every toolchain here is installed by an action, so nothing needs the
+# fleet. render-cadence.sh refuses --runner.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 1
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 2
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -50,6 +56,12 @@
 #   - No --label: a label the repo lacks makes `gh pr create` fail.
 #   - Plain `gh pr merge --auto`, no method flag: the merge queue picks the
 #     method, and a method flag stops the PR entering the queue.
+#   - An EPHEMERAL GITHUB-HOSTED runner only, and the App token minted AFTER
+#     every package-manager step, right before the PR step. Earlier steps read
+#     with the built-in read-only token.
+#   - The token never reaches argv or a git config file: the push reads it
+#     from the environment through a one-shot credential helper, with system
+#     and global git config ignored and hooks disabled.
 #
 # The App credentials come from the ACTIONS secrets store (org-level, private
 # visibility). This is a scheduled run, not a Dependabot-triggered one, so the
@@ -69,24 +81,27 @@ on:
       PLATFORM_WRITER_APP_PRIVATE_KEY:
         required: true
 
-# The built-in token only reads the checkout. Every write (push, PR, enqueue)
-# uses the App token minted below.
+# The built-in token only READS (the checkout, the default branch, this
+# month's branch and PR). Every write (push, PR, enqueue) uses the App token
+# minted below, so a fallback to the built-in token could not write anyway.
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   refresh:
     name: Refresh lockfiles
-    runs-on: {{RUNNER}}
-    # The App token is minted first and lives one hour. Keep this timeout
-    # under that, or a slow refresh would reach the push with an expired token.
+    # Ephemeral and GitHub-hosted, never the self-hosted fleet: see the rules
+    # above. Flutter, Rust, bun and node all install through actions here.
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       LANES: "{{LANES}}"
     steps:
       # A secret this repo cannot reach resolves to the EMPTY STRING, never an
       # error, so the mint below would fail as an opaque auth error. Name the
-      # cause here and fail. There is no fallback credential by design.
+      # cause here and fail FAST: the mint itself waits until after every
+      # package-manager step. There is no fallback credential by design.
       - name: Require the app credentials
         env:
           APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
@@ -101,20 +116,14 @@ jobs:
           fi
           echo "App credentials present."
 
-      - name: Mint GitHub App token
-        id: app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
-
       # Run from the default branch only, and never stack a second branch in
       # one month: a re-dispatch after this month's PR opened exits 0 with a
-      # notice naming that PR.
+      # notice naming that PR. Reads only, with the built-in read-only token:
+      # the App token does not exist yet.
       - name: Plan this month's run
         id: plan
         env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           default_branch="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch)"
@@ -139,10 +148,10 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # No token: and persist-credentials: false. Nothing between checkout and
-      # the push needs write, so no credential sits in .git/config while the
-      # refresh runs the repo's package managers. The push authenticates from
-      # its own step env:.
+      # persist-credentials: false. Nothing between checkout and the push needs
+      # write, so no credential sits in .git/config while the refresh runs the
+      # repo's package managers. The push authenticates through a credential
+      # helper that reads its own step env:.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: ${{ steps.plan.outputs.skip != 'true' }}
         with:
@@ -425,6 +434,18 @@ jobs:
           fi
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
 
+      # Minted only now, after every step that runs a package manager, so no
+      # repo or dependency code ever runs while the org-wide App token exists
+      # in this job. The token lives one hour; the 45-minute job timeout keeps
+      # every use inside that.
+      - name: Mint GitHub App token
+        id: app_token
+        if: ${{ steps.plan.outputs.skip != 'true' }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
+
       - name: Open the refresh PR and enqueue it
         if: ${{ steps.plan.outputs.skip != 'true' }}
         env:
@@ -435,6 +456,12 @@ jobs:
           DEFAULT_BRANCH: ${{ steps.plan.outputs.default_branch }}
         run: |
           set -euo pipefail
+          # Git reads no system or global config here (no credential helper,
+          # hooksPath, fsmonitor or insteadOf left behind by anything else), and
+          # every git call that could run a hook or an fsmonitor program passes
+          # nohooks: either would inherit GH_TOKEN from this step's environment.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
           work="$RUNNER_TEMP/deps-cadence"
           if [ ! -s "$work/stage.z" ]; then
             echo "::notice::Nothing moved within declared ranges in any lane ($LANES), so no PR. The exact-pin report is in the job summary."
@@ -444,14 +471,20 @@ jobs:
           bot_id="$(gh api "users/${APP_SLUG}[bot]" --jq .id)"
           git config user.name "${APP_SLUG}[bot]"
           git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git add --pathspec-from-file="$work/stage.z" --pathspec-file-nul
-          if git diff --cached --quiet; then
+          git "${nohooks[@]}" switch -c "$BRANCH"
+          git "${nohooks[@]}" add --pathspec-from-file="$work/stage.z" --pathspec-file-nul
+          if git "${nohooks[@]}" diff --cached --quiet; then
             echo "::error::The refresh recorded changed lane files but nothing staged."
             exit 1
           fi
-          git commit -q -m "$title" -m "Monthly refresh of each lane within its declared ranges, opened by deps-cadence (sassy-dog:setup-deps)."
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${BRANCH}"
+          git "${nohooks[@]}" commit -q -m "$title" -m "Monthly refresh of each lane within its declared ranges, opened by deps-cadence (sassy-dog:setup-deps)."
+          # The token is never in argv or a URL: the single-quoted helper is
+          # expanded by the shell git spawns, which reads GH_TOKEN from the
+          # environment at run time. The empty helper first clears any other.
+          # shellcheck disable=SC2016  # deliberately unexpanded: git's shell expands it
+          git "${nohooks[@]}" -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push "https://github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${BRANCH}"
           {
             echo "Monthly lockfile refresh, opened by \`deps-cadence\` (rendered by \`sassy-dog:setup-deps\`). Each lane was refreshed within its declared ranges; exact pins never move here."
             echo

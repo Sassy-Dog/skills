@@ -34,6 +34,23 @@
 #      at least one such call exists. Executed: the fake gh must receive
 #      exactly `pr merge --auto <url>`.
 #   7. Nothing moved: exit 0 with a notice and no PR. Executed.
+#   9. EPHEMERAL GITHUB-HOSTED RUNNER, LATE MINT, NO TOKEN IN ARGV (version 2,
+#      after a security review of #512). The job runs package-manager code and
+#      then holds the ORG-WIDE platform-writer App token, so:
+#        - runs-on is a GitHub-hosted ubuntu label, never self-hosted and never
+#          a render-time fact: a persistent shared runner can carry a
+#          PATH-shadowing git/gh/bun/cargo, a global gitconfig hook or
+#          credential helper, or a modified tool cache from any earlier job;
+#        - the mint step comes AFTER every package-manager step (refresh and
+#          report) and before the PR step, and nothing before it reads
+#          steps.app_token; earlier reads use the built-in token, whose
+#          permissions grant no write, so it cannot serve as a fallback;
+#        - executed: a `git` wrapper on PATH logs every git argv in the PR
+#          step, and the sentinel token must appear in none of them; a global
+#          gitconfig (core.fsmonitor, hooksPath, credential.helper) and a repo
+#          pre-commit / pre-push hook that would each dump GH_TOKEN must
+#          capture nothing; and the credential helper, run on its own through
+#          `git credential fill`, must answer the token from the environment.
 #   8. The exact-pin report (ported from a consumer's deps-update script): its
 #      `bun outdated` table parser against VERBATIM bun 1.4.2 captures in
 #      scripts/fixtures/deps-cadence/ (plain, workspaces with the extra column,
@@ -136,7 +153,15 @@ case "$1 $2" in
 esac
 exit 0
 SH
+# git: the real one, with every argv logged, so a token in argv is visible.
+REAL_GIT="$(command -v git)"
+cat > "$BIN/git" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "\${FAKE_GIT_LOG:-/dev/null}"
+exec "$REAL_GIT" "\$@"
+SH
 chmod +x "$BIN"/*
+SENTINEL="ghs_SENTINELtoken9f3a"
 
 # gh_shell <script> [env…] — run a step body the way GitHub does.
 gh_shell() { local s="$1"; shift; env "$@" PATH="$BIN:$PATH" bash --noprofile --norc -eo pipefail "$s"; }
@@ -166,10 +191,22 @@ new_repo() {
 check() {
     local trig="$1" impl="$2" rc=0 c line n refresh report prstep d out
 
-    # 1. one credential
+    # 1. one WRITE credential. The built-in token may only read: it appears
+    #    solely as the plan step's GH_TOKEN, and the permissions grant no write.
     c="$(code "$impl")"
-    if grep -qE 'GITHUB_TOKEN|github\.token' <<<"$c"; then
+    if grep -qE 'GITHUB_TOKEN' <<<"$c"; then
         echo "impl reads GITHUB_TOKEN outside a comment (no fallback credential)"; rc=1
+    fi
+    if grep -qE '^[[:space:]]+[a-z-]+:[[:space:]]*write' <<<"$(sed -n '/^permissions:/,/^[a-z]/p' <<<"$c")"; then
+        echo "impl permissions grant the built-in token write"; rc=1
+    fi
+    if [ "$(grep -cE 'github\.token' <<<"$c")" -gt 1 ] \
+        || ! grep -qE '^          GH_TOKEN: \$\{\{ github\.token \}\}$' <<<"$(step_block "$impl" "Plan this month's run")" \
+            && grep -qE 'github\.token' <<<"$c"; then
+        echo "the built-in token may appear only as the plan step's read-only GH_TOKEN"; rc=1
+    fi
+    if ! grep -qE '^          GH_TOKEN: \$\{\{ steps\.app_token\.outputs\.token \}\}$' <<<"$(step_block "$impl" "$PR_STEP")"; then
+        echo "the PR step's GH_TOKEN is not exactly the minted App token"; rc=1
     fi
     local used
     used="$(grep -oE 'secrets\.[A-Za-z_][A-Za-z0-9_]*' <<<"$c" | sort -u)"
@@ -182,8 +219,8 @@ check() {
     fi
     while IFS= read -r line; do
         [ -n "$line" ] || continue
-        if ! [[ "$line" =~ ^[[:space:]]*GH_TOKEN:[[:space:]]*\$\{\{[[:space:]]*steps\.app_token\.outputs\.token[[:space:]]*\}\}[[:space:]]*$ ]]; then
-            echo "GH_TOKEN is not exactly the minted App token: $line"; rc=1
+        if ! [[ "$line" =~ ^[[:space:]]*GH_TOKEN:[[:space:]]*\$\{\{[[:space:]]*(steps\.app_token\.outputs\.token|github\.token)[[:space:]]*\}\}[[:space:]]*$ ]]; then
+            echo "GH_TOKEN is neither the minted App token nor the read-only built-in one (a fallback?): $line"; rc=1
         fi
     done < <(grep -E '^[[:space:]]*GH_TOKEN:' <<<"$c")
     c="$(code "$trig")"
@@ -209,11 +246,11 @@ check() {
 
     # 4 (static). exactly one git add, from the recorded pathspec file.
     c="$(code "$impl")"
-    n="$(grep -cE '(^|[^a-z-])git add' <<<"$c")"
-    if [ "$n" -ne 1 ] || ! grep -qE 'git add --pathspec-from-file="\$work/stage\.z" --pathspec-file-nul[[:space:]]*$' <<<"$c"; then
+    n="$(grep -cE '(^|[^a-z-])git( [^ |;&]+)* add( |$)' <<<"$c")"
+    if [ "$n" -ne 1 ] || ! grep -qE 'git( [^ ]+)* add --pathspec-from-file="\$work/stage\.z" --pathspec-file-nul[[:space:]]*$' <<<"$c"; then
         echo "git add must appear once, staging only the recorded lane paths (\$work/stage.z); found $n"; rc=1
     fi
-    if grep -qE 'git add[^\n]*( -A| --all| -u| --update| \.( |$))|git commit[^\n]*( -a| --all| -[a-zA-Z]*a)' <<<"$c"; then
+    if grep -qE 'git( [^ ]+)* add[^\n]*( -A| --all| -u| --update| \.( |$))|git( [^ ]+)* commit[^\n]*( -a| --all| -[a-zA-Z]*a)' <<<"$c"; then
         echo "a git add/commit stages beyond the lanes' files (-A / . / -u / commit -a)"; rc=1
     fi
 
@@ -248,6 +285,32 @@ check() {
         fi
     done < <(grep -E 'gh pr merge' <<<"$c")
 
+    # 9 (static). hosted runner; late mint; no token in a URL.
+    c="$(code "$impl")"
+    if [ "$(grep -cE '^[[:space:]]*runs-on:' <<<"$c")" -ne 1 ] \
+        || ! grep -qE '^[[:space:]]*runs-on:[[:space:]]*ubuntu-(latest|[0-9]+\.[0-9]+)[[:space:]]*$' <<<"$c"; then
+        echo "runs-on must be one GitHub-hosted ubuntu label, never self-hosted or a render-time fact: $(grep -E 'runs-on:' <<<"$c" | tr -s ' ')"; rc=1
+    fi
+    if grep -qiE 'self-hosted' <<<"$c"; then
+        echo "the impl names a self-hosted runner"; rc=1
+    fi
+    local mint_ln refresh_ln report_ln pr_ln first_ref
+    mint_ln="$(grep -nE 'actions/create-github-app-token@' "$impl" | head -1 | cut -d: -f1)"
+    refresh_ln="$(grep -nF "      - name: $REFRESH_STEP" "$impl" | cut -d: -f1)"
+    report_ln="$(grep -nF "      - name: $REPORT_STEP" "$impl" | cut -d: -f1)"
+    pr_ln="$(grep -nF "      - name: $PR_STEP" "$impl" | cut -d: -f1)"
+    first_ref="$(grep -nE 'steps\.app_token\.' "$impl" | head -1 | cut -d: -f1)"
+    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$pr_ln" ]; then
+        echo "could not locate the mint, refresh, report and PR steps to order them"; rc=1
+    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
+        echo "the App token is minted at line $mint_ln, not after every package-manager step (refresh $refresh_ln, report $report_ln) and before the PR step ($pr_ln)"; rc=1
+    elif [ -n "$first_ref" ] && [ "$first_ref" -lt "$mint_ln" ]; then
+        echo "a step before the mint reads steps.app_token (line $first_ref)"; rc=1
+    fi
+    if grep -qE 'x-access-token:\$|https://[^ "]*\$\{?GH_TOKEN' <<<"$c"; then
+        echo "the token is interpolated into a URL"; rc=1
+    fi
+
     # --- executed ---------------------------------------------------------------
     refresh="$WORK/refresh.sh"; report="$WORK/report.sh"; prstep="$WORK/pr.sh"
     step_run "$impl" "$REFRESH_STEP" > "$refresh"
@@ -267,9 +330,18 @@ check() {
     fi
 
     # 4 + 6 (executed). stage only lane files; push; plain --auto; no --label.
-    d="$WORK/x-ok"; rm -rf "$d" "$d.bare" "$d.tmp"; new_repo "$d"
+    d="$WORK/x-ok"; rm -rf "$d" "$d.bare" "$d.tmp" "$d.hooks" "$d.captured"; new_repo "$d"
     git init -q --bare "$d.bare"
-    printf '[url "%s"]\n\tinsteadOf = https://x-access-token:tok@github.com/o/r.git\n' "$d.bare" > "$d.gitconfig"
+    # A poisoned runner: a global gitconfig whose fsmonitor, hooksPath and
+    # credential helper each dump GH_TOKEN, plus repo-local hooks that do too.
+    mkdir -p "$d.hooks"
+    printf '#!/bin/sh\necho "$GH_TOKEN" >> "%s"\nexit 0\n' "$d.captured" > "$d.hooks/steal"
+    chmod +x "$d.hooks/steal"
+    for h in pre-commit pre-push post-commit reference-transaction; do
+        cp "$d.hooks/steal" "$d.hooks/$h"; cp "$d.hooks/steal" "$d/.git/hooks/$h"
+    done
+    printf '[core]\n\thooksPath = %s\n\tfsmonitor = %s\n[credential]\n\thelper = !%s\n' \
+        "$d.hooks" "$d.hooks/steal" "$d.hooks/steal" > "$d.gitconfig"
     if ! out="$(cd "$d" && gh_shell "$refresh" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" 2>&1)"; then
         echo "the refresh step failed on a healthy scratch repo: $(tail -n1 <<<"$out")"; rc=1
     else
@@ -280,9 +352,17 @@ check() {
         fi
         echo "report" > "$d.tmp/deps-cadence/pins.md"
         : > "$d.ghlog"
-        if ! out="$(cd "$d" && gh_shell "$prstep" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GH_TOKEN=tok APP_SLUG=cadence-app \
+        : > "$d.gitlog"
+        # The push target is redirected to a local bare repo through
+        # environment config (which a global-config override does not remove),
+        # for both the clean URL and a token-bearing one, so a token-in-URL
+        # mutant still pushes and is caught by the argv log, not by a network
+        # failure.
+        if ! out="$(cd "$d" && gh_shell "$prstep" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GH_TOKEN="$SENTINEL" APP_SLUG=cadence-app \
                 BRANCH=chore/deps-2026-10 MONTH=2026-10 DEFAULT_BRANCH=main GITHUB_REPOSITORY=o/r \
-                GIT_CONFIG_GLOBAL="$d.gitconfig" FAKE_GH_LOG="$d.ghlog" 2>&1)"; then
+                GIT_CONFIG_GLOBAL="$d.gitconfig" FAKE_GH_LOG="$d.ghlog" FAKE_GIT_LOG="$d.gitlog" \
+                GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0="url.$d.bare.insteadOf" GIT_CONFIG_VALUE_0="https://github.com/o/r.git" \
+                GIT_CONFIG_KEY_1="url.$d.bare.insteadOf" GIT_CONFIG_VALUE_1="https://x-access-token:$SENTINEL@github.com/o/r.git" 2>&1)"; then
             echo "the PR step failed: $(tail -n2 <<<"$out" | tr '\n' ' ')"; rc=1
         else
             local committed
@@ -298,6 +378,25 @@ check() {
             if grep -qE -- '--label|--add-label' <<<"$creates"; then
                 echo "gh pr create received a --label"; rc=1
             fi
+            if [ ! -s "$d.gitlog" ]; then
+                echo "the git argv log is empty: the wrapper saw no git call, so the argv check covers nothing"; rc=1
+            elif grep -qF "$SENTINEL" "$d.gitlog"; then
+                echo "the App token appeared in a git argv: $(grep -F "$SENTINEL" "$d.gitlog" | head -1 | sed "s/$SENTINEL/<TOKEN>/g")"; rc=1
+            fi
+            if [ -s "$d.captured" ]; then
+                echo "a global gitconfig program or a git hook ran with the token in its environment"; rc=1
+            fi
+        fi
+        # The helper, run on its own, must answer the token from the env.
+        local helper answer
+        helper="$(sed -n "s/.*-c '\(credential\.helper=![^']*\)'.*/\1/p" "$prstep" | head -1)"
+        if [ -z "$helper" ]; then
+            echo "no single-quoted credential.helper=!… in the PR step"; rc=1
+        else
+            answer="$(printf 'protocol=https\nhost=github.com\n\n' | GH_TOKEN="$SENTINEL" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+                git -c credential.helper= -c "$helper" credential fill 2>/dev/null)"
+            grep -qxF "password=$SENTINEL" <<<"$answer" \
+                || { echo "the credential helper does not answer the token from GH_TOKEN"; rc=1; }
         fi
     fi
 
@@ -403,10 +502,20 @@ mutate "refresh failure swallowed"   impl    '(cd "./$rel" && bun update --ignor
 mutate "unknown ecosystem tolerated" impl    $'                echo "::error::LANES names \'$eco\', which has no refresh command here. Re-render with sassy-dog:setup-deps."\n                exit 1 ;;' $'                echo "::warning::skipping $eco"\n                continue ;;'
 mutate "continue-on-error"           impl    $'        id: refresh\n' $'        id: refresh\n        continue-on-error: true\n'
 mutate "--label on the PR"           impl    '--title "$title" --body-file' '--title "$title" --label dependencies --body-file'
-mutate "git add -A"                  impl    'git add --pathspec-from-file="$work/stage.z" --pathspec-file-nul' 'git add -A'
+mutate "git add -A"                  impl    'git "${nohooks[@]}" add --pathspec-from-file="$work/stage.z" --pathspec-file-nul' 'git "${nohooks[@]}" add -A'
 mutate "bun lane stages its whole dir" impl  '":(glob)${prefix}**/package.json"' '":(glob)${prefix}**"'
 mutate "non-local uses in trigger"   trigger 'uses: ./.github/workflows/deps-cadence-impl.yml' 'uses: octo-org/shared/.github/workflows/deps-cadence-impl.yml@v1'
 mutate "schedule in the impl"        impl    $'on:\n  workflow_call:' $'on:\n  schedule:\n    - cron: "0 9 1 * *"\n  workflow_call:'
+mutate "self-hosted runs-on"         impl    'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
+mutate "runner as a render fact"     impl    'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
+mutate "token in the push URL"       impl    $'git "${nohooks[@]}" -c credential.helper= \\\n            -c \'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\' \\\n            push "https://github.com/${GITHUB_REPOSITORY}.git"' 'git "${nohooks[@]}" push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"'
+mutate "token expanded into argv"    impl    $'-c \'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\'' $'-c "credential.helper=!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"'
+mutate "global git config honoured"  impl    $'          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null\n' ''
+mutate "hooks run on commit"         impl    'git "${nohooks[@]}" commit' 'git commit'
+mutate "hooks run on branch switch"  impl    'git "${nohooks[@]}" switch' 'git switch'
+mutate "App token minted early"      impl    $'      - name: Plan this month\'s run' "$(sed -n '/^      - name: Mint GitHub App token$/,/^          private-key:/p' "$IMPL")"$'\n\n      - name: Plan this month\'s run'
+mutate "PR step on the built-in token" impl  "$APP" 'GH_TOKEN: ${{ github.token }}'
+mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n  pull-requests: read' $'permissions:\n  contents: write\n  pull-requests: read'
 mutate "merge method flag"           impl    'gh pr merge --auto "$url"' 'gh pr merge --auto --squash "$url"'
 mutate "parser ignores U+2502"       impl    's/\x1b\[[0-9;]*m//g; s/\xe2\x94\x82/|/g' 's/\x1b\[[0-9;]*m//g'
 mutate "report waits on a change"    impl    $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.plan.outputs.skip != \'true\' }}' $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.plan.outputs.skip != \'true\' && steps.refresh.outputs.changed == \'true\' }}'

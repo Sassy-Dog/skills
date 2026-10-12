@@ -42,6 +42,11 @@
 #                         Without a queue that either fails (no method flag) or,
 #                         with no required check, merges at once, unreviewed.
 #
+# There is no runner fact. The job runs package-manager code and then holds the
+# org-wide App token, so the template hard-codes an ephemeral GitHub-hosted
+# runner, and --runner is refused rather than ignored (a self-hosted runner can
+# carry a poisoned git, gh, toolchain or global git config from an earlier job).
+#
 # --compare-to <committed deps-cadence-impl.yml> fails (exit 5, DIVERGED) when
 # the committed LANES names a lane the fresh render drops: an owned file whose
 # lanes a re-render loses is the state that once hid four lanes behind a
@@ -49,7 +54,7 @@
 #
 # Usage:
 #   render-cadence.sh --detect-json FILE --visibility VIS --merge-gate GATE
-#                     --out-dir DIR [--runner VALUE] [--compare-to FILE]
+#                     --out-dir DIR [--compare-to FILE]
 #   render-cadence.sh ... --files-from LIST --root DIR   (test hook only, as in
 #                     detect-ecosystems.sh; nothing in SKILL.md uses it)
 # Writes DIR/deps-cadence.yml and DIR/deps-cadence-impl.yml only when every
@@ -75,7 +80,6 @@ DETECT=""
 VISIBILITY=""
 MERGE_GATE=""
 OUT_DIR=""
-RUNNER="[self-hosted, linux, sassy-dog]"
 COMPARE_TO=""
 FILES_FROM=""
 ROOT_ARG=""
@@ -88,7 +92,7 @@ while [ "$#" -gt 0 ]; do
         --visibility)    VISIBILITY="$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]')"; shift 2 || exit 1 ;;
         --merge-gate)    MERGE_GATE="${2:-}"; shift 2 || exit 1 ;;
         --out-dir)       OUT_DIR="${2:-}"; shift 2 || exit 1 ;;
-        --runner)        RUNNER="${2:-}"; shift 2 || exit 1 ;;
+        --runner)        die "--runner is not accepted: deps-cadence runs package-manager code and then holds the org-wide App token, so it renders only for an ephemeral GitHub-hosted runner (ubuntu-latest). A persistent self-hosted runner can carry a poisoned git, gh, toolchain or global git config from an earlier job." ;;
         --compare-to)    COMPARE_TO="${2:-}"; shift 2 || exit 1 ;;
         --files-from)    FILES_FROM="${2:-}"; shift 2 || exit 1 ;;
         --root)          ROOT_ARG="${2:-}"; shift 2 || exit 1 ;;
@@ -99,7 +103,6 @@ done
 
 [ -n "$DETECT" ]  || die "--detect-json is required"
 [ -n "$OUT_DIR" ] || die "--out-dir is required"
-[ -n "$RUNNER" ]  || die "--runner must not be empty"
 case "$VISIBILITY" in
     public|private|internal) ;;
     "") die "--visibility is required (gh repo view --json visibility --jq .visibility)" ;;
@@ -426,7 +429,7 @@ fi
 # WOULD get and exactly what it is missing.
 summary() {
     jq -n --argjson lanes "$lanes_json" --argjson skipped "$skipped_json" \
-        --arg norefresh "$NO_REFRESH" --argjson tc "$toolchains_json" --arg runner "$RUNNER" \
+        --arg norefresh "$NO_REFRESH" --argjson tc "$toolchains_json" --arg runner "ubuntu-latest" \
         --arg refusals "$1" \
         '{lanes: $lanes, lanes_line: ($lanes | join(" ")), not_refreshed: $skipped,
           no_refresh_command: ($norefresh | split(", ") | map(select(length > 0))),
@@ -473,7 +476,6 @@ render() { # <template> <flags-csv>
             '# {{ENDIF}}') keep=1; continue ;;
         esac
         [ "$keep" = "1" ] || continue
-        line="${line//\{\{RUNNER\}\}/$RUNNER}"
         line="${line//\{\{LANES\}\}/$LANES}"
         line="${line//\{\{NO_REFRESH\}\}/${NO_REFRESH:-none}}"
         line="${line//\{\{NOT_REFRESHED\}\}/${NOT_REFRESHED:-none}}"
