@@ -153,8 +153,10 @@ It applies the renderer's own rule (`bun_cover_root` in `lib-ecosystems.sh`, the
   human). An owned one is re-rendered on every run anyway; the v4 template conditions on no
   ecosystem. A hand-written one is replaced by the template render as a plan item approved by name.
 - `REFUSED …` (exit `1`, nothing written) — an `npm` `directories:` list naming a covered directory,
-  an `npm` entry whose list item does not start with `package-ecosystem:`, or a member rule that
-  cannot be appended without mixing indents. Fix the committed file by hand,
+  an `npm` entry whose list item does not start with `package-ecosystem:`, a member rule that
+  cannot be appended without mixing indents, or a directory or workflow name outside a conservative
+  charset (`/[A-Za-z0-9._@+/-]*`, no `..`). Paths come from the target repo and are untrusted; the
+  script never places them in a sed/awk program and refuses rather than escaping them. Fix the committed file by hand,
   then re-run.
 
 Carry every finding line into the run report verbatim, whether or not the change is applied —

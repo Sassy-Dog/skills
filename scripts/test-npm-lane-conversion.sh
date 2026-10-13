@@ -41,7 +41,12 @@
 #   5. The owned-file path: an owned what2wear-shape file whose bun lane is
 #      npm FAILS a plain --compare-to with the converter hint, and passes once
 #      the converter's output is the --keep-ignores-from / --compare-to input.
-#   6. The script's ownership regex equals the one SKILL.md documents.
+#   6. The script reads its ownership regex from SKILL.md (no copy), and a
+#      SKILL.md without it is exit 2.
+#   7. Hostile paths: a bun.lock root named `x#w <path>#` (the sed `w` injection
+#      the first version had), `a&b`, `a/../b`, `a\1b`, and a payload-bearing
+#      sync workflow name are each REFUSED with nothing written and no marker
+#      file; a static check keeps repo values out of awk -v and sed programs.
 #
 # Mutation proof (each applied, this gate run, restored, green again):
 #   - bun_cover_root returns nothing for members (membership test removed) ->
@@ -50,6 +55,7 @@
 #     OBSOLETE" and the nested-sync case.
 #   - the carry of a collapsed member's ignore rules skipped -> "collapse —
 #     the member's new rule is carried".
+#   - safe_dir made to accept everything -> the four "hostile path" cases.
 #
 # Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-npm-lane-conversion.sh
@@ -412,12 +418,57 @@ else
 fi
 
 # --- 6. one ownership regex ----------------------------------------------------
-skill_re="$(grep -E '^generated-by: \(' skills/setup-deps/SKILL.md | head -n1)"
-script_re="$(sed -nE "s/^OWNED_RE='(.*)'$/\\1/p" "$CONVERT")"
-if [ -n "$skill_re" ] && [ "$skill_re" = "$script_re" ]; then
-    ok "ownership — the converter's regex is SKILL.md's"
+# The converter READS SKILL.md's regex rather than carrying a copy; prove it
+# reads that file (a SKILL.md without the line is exit 2, not a guess).
+if grep -q 'SCRIPT_DIR/../SKILL.md' "$CONVERT" && ! grep -qE "^OWNED_RE='" "$CONVERT"; then
+    ok "ownership — the converter reads SKILL.md's regex instead of carrying a copy"
 else
-    bad "ownership — the converter's regex ('$script_re') differs from SKILL.md's ('$skill_re')"
+    bad "ownership — the converter carries its own ownership regex"
+fi
+CP="$WORK/copy/skills/setup-deps"; mkdir -p "$CP/scripts"
+cp "$SCRIPTS"/*.sh "$CP/scripts/"; grep -vE '^generated-by: \(' skills/setup-deps/SKILL.md > "$CP/SKILL.md"
+bash "$CP/scripts/convert-npm-lanes.sh" --root "$WORK/allow" --files-from "$WORK/allow.files" --in "$WORK/allow.in.yml" --out "$WORK/x.yml" >/dev/null 2>&1
+[ $? -eq 2 ] && ok "ownership — a SKILL.md without the regex is exit 2, not a guess" || bad "ownership — a missing regex did not exit 2"
+
+# --- 7. hostile paths (untrusted repo data never reaches a program) ------------
+# A bun.lock root whose name carries sed syntax. The first version put the root
+# into `sed "s#…#$r#"`, where `x#w <path>#` became a sed `w` — a file write.
+# Each case must REFUSE (exit 1), write no --out and create no marker file.
+hostile() {   # hostile <name> <root-relative-dir>
+    local name="$1" R="$2" T="$WORK/$1"
+    mkdir -p "$T"
+    mk "$T" "$R/bun.lock"; mk "$T" "$R/package.json" '{"workspaces":["m"]}'; mk "$T" "$R/m/package.json"
+    printf 'version: 2\nupdates:\n  - package-ecosystem: "npm"\n    directory: "/%s/m"\n' "$R" > "$WORK/$name.in.yml"
+    convert "$name" "$T" "$T.files" "$WORK/$name.in.yml"
+    if [ "$rc" -eq 1 ] && [ ! -e "$WORK/$name.yml" ] && has_line "$name" '^REFUSED .*outside \[A-Za-z0-9' \
+        && [ -z "$(find "$WORK" -maxdepth 1 -name 'pwned*' 2>/dev/null)" ]; then
+        ok "hostile path — '$R' is REFUSED: exit 1, nothing written, no marker file"
+    else
+        bad "hostile path — '$R' was not refused cleanly (exit $rc):"; sed 's/^/        /' "$WORK/$name.out" "$WORK/$name.err" >&2
+    fi
+}
+# "x#w $WORK/pwned#" is a real relative path ("x#w " / var / … / "pwned#"),
+# and as a sed replacement it ends the s-command and runs `w $WORK/pwned#…`:
+# the pre-fix script created that file (checked against it by hand).
+hostile sedw "x#w $WORK/pwned#"
+hostile amp "a&b"
+hostile dotdot "a/../b"
+hostile bslash 'a\1b'
+# A sync workflow whose name carries the same kind of payload is refused too.
+T="$WORK/wfname"
+mk "$T" bun.lock; mk "$T" package.json
+mk "$T" '.github/workflows/dependabot-bun-lockfile#x.yml'
+printf 'version: 2\nupdates:\n  - package-ecosystem: "bun"\n    directory: "/"\n' > "$WORK/wfname.in.yml"
+convert wfname "$T" "$T.files" "$WORK/wfname.in.yml"
+[ "$rc" -eq 1 ] && [ ! -e "$WORK/wfname.yml" ] && has_line wfname '^REFUSED workflow' \
+    && ok "hostile path — a sync workflow with a payload-bearing name is REFUSED, nothing written" \
+    || bad "hostile path — a payload-bearing workflow name was not refused (exit $rc)"
+# No repo-derived value inside a sed/awk program: no `-v` other than the
+# numeric ids, and no `$` expansion inside a sed s-command's text.
+if grep -nE "awk[^|]*-v [a-z]+=\"\\\$(r|d|wroot|dir|wf|line)\"" "$CONVERT" || grep -nE 'sed -E "s#' "$CONVERT"; then
+    bad "audit — a repo-derived value is passed into an awk -v or a double-quoted sed program"
+else
+    ok "audit — no repo-derived value in an awk -v or a double-quoted sed s-command"
 fi
 
 if [ "$fail" -eq 0 ]; then

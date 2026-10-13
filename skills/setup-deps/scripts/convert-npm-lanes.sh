@@ -43,6 +43,16 @@
 # appended to the root lane without mixing indents or splitting a flow-form
 # ignore:.
 #
+# UNTRUSTED INPUT. Every path, file name and ecosystem name here comes from the
+# TARGET repo. None of it is ever placed inside a sed, awk or grep PROGRAM:
+# values reach awk through ENVIRON or as numeric -v ids, grep as a -F/-x
+# argument, and the one rewrite that inserts a directory is bash string
+# surgery on an already-extracted line. On top of that, every directory this
+# script writes or reports must pass safe_dir (/[A-Za-z0-9._@+/-]*, no `..`)
+# and every workflow file name [A-Za-z0-9._-]+; anything else is REFUSED.
+# The first version interpolated a bun.lock root into `sed "s#…#$r#"`, and a
+# directory named like `x#w <path>#` turned it into a sed `w` (file write).
+#
 # WORKFLOW FINDINGS, read from the tracked .github/workflows/ (nothing edited):
 #   OBSOLETE — a bun.lock sync workflow (dependabot-bun-lockfile*.yml, or any
 #     file carrying the lockfile-sync-bun template marker) whose install root
@@ -81,10 +91,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./lib-ecosystems.sh
 . "$SCRIPT_DIR/lib-ecosystems.sh"
 
-# The ownership regex documented in SKILL.md §"Ownership marker" (every
-# namespace × producer name this generator has emitted).
-# scripts/test-npm-lane-conversion.sh fails when this and SKILL.md differ.
-OWNED_RE='generated-by: (sassy-dog|ai-agent-skills):(setup-deps|refresh-deps|refresh-sassydog-deps)'
+# The ownership regex is READ from SKILL.md, where it is documented as a lone
+# fenced line (every namespace × producer name this generator has emitted), so
+# there is one copy. Unreadable -> exit 2: a check that cannot tell owned from
+# hand-written must not guess.
+OWNED_RE="$(grep -m1 -E '^generated-by: \(' "$SCRIPT_DIR/../SKILL.md" 2>/dev/null)"
+[ -n "$OWNED_RE" ] || { echo "convert-npm-lanes: cannot read the ownership regex from SKILL.md" >&2; exit 2; }
+
+# safe_dir <display-dir> — the ONLY directory values this script will write
+# into a file or a report: absolute, from a conservative charset, no `..`
+# segment. Directory names come from the TARGET repo (its tracked paths and
+# its dependabot.yml), so they are untrusted: a `#`, `&` or `\` once reached a
+# sed program here, which made a crafted path a `w <file>` command. Anything
+# else is REFUSED, never escaped and carried on.
+safe_dir() {
+    [[ "$1" =~ ^/[A-Za-z0-9._@+/-]*$ ]] || return 1
+    [[ "$1" =~ (^|/)\.\.(/|$) ]] && return 1
+    return 0
+}
 
 IN=""
 OUT=""
@@ -121,7 +145,8 @@ _bun_load_roots
 # An entry whose list item does not START with package-ecosystem (`- directory:`
 # first) is invisible to this reader, as it is to validate-dependabot.sh and
 # extract_ignore_rules. Refuse rather than leave an npm lane unexamined.
-if grep -vE '^[[:space:]]*#' "$IN" | grep -qE '^[[:space:]]+package-ecosystem:[[:space:]]*["'\'']?npm["'\'']?[[:space:]]*(#.*)?$'; then
+in_code="$(grep -vE '^[[:space:]]*#' "$IN")"
+if grep -qE '^[[:space:]]+package-ecosystem:[[:space:]]*["'\'']?npm["'\'']?[[:space:]]*(#.*)?$' <<<"$in_code"; then
     echo "REFUSED $IN has an npm entry whose list item does not start with package-ecosystem: — move that key first, then re-run"
     echo "convert-npm-lanes: refused — nothing written" >&2
     exit 1
@@ -222,6 +247,10 @@ while IFS=$'\t' read -r idx eco _ d _ multi _; do
     [ "$d" != "-" ] || continue
     r="$(bun_cover_root "$d")"
     [ -n "$r" ] || continue
+    if ! safe_dir "$d" || ! safe_dir "$r"; then
+        refuse "npm entry #$idx: directory '$d' or its bun.lock root '$r' is outside [A-Za-z0-9._@+/-] or has a '..' segment — this script writes no such path; rename it or convert that lane by hand"
+        continue
+    fi
     moves+="$idx"$'\t'"$r"$'\n'
 done <<<"$entries"
 
@@ -234,10 +263,10 @@ n_coll=0
 roots="$(cut -f2 <<<"$moves" | grep -v '^$' | sort -u)"
 while IFS= read -r r; do
     [ -n "$r" ] || continue
-    movers="$(awk -F'\t' -v r="$r" '$2 == r { print $1 }' <<<"$moves")"
+    movers="$(R="$r" awk -F'\t' '$2 == ENVIRON["R"] { print $1 }' <<<"$moves")"
     # The keeper: an existing bun lane at the root, else the npm lane at the
     # root, else the first member lane in file order.
-    keeper="$(awk -F'\t' -v r="$r" '$2 == "bun" && $4 == r && $6 == 0 { print $1; exit }' <<<"$entries")"
+    keeper="$(R="$r" awk -F'\t' '$2 == "bun" && $4 == ENVIRON["R"] && $6 == 0 { print $1; exit }' <<<"$entries")"
     keeper_was_bun=1
     if [ -z "$keeper" ]; then
         keeper_was_bun=0
@@ -259,8 +288,15 @@ while IFS= read -r r; do
             n_conv=$((n_conv + 1))
             findings+="CONVERTED npm '$r' -> bun '$r': '$r' holds a text bun.lock, which Dependabot's npm_and_yarn updater refuses (misconfigured_tooling) — every run of this lane failed and opened nothing. Every key of the lane is kept; only package-ecosystem changes"$'\n'
         else
+            # Bash string surgery on the extracted line: $r is data, never part
+            # of a sed or awk program (safe_dir has already vetted it too).
             line="$(sed -n "${k_dir_line}p" "$IN")"
-            new="$(sed -E "s#(directory:[[:space:]]*[\"']?)[^\"' ]*([\"']?)#\\1$r\\2#" <<<"$line")"
+            re='^([[:space:]]*directory:[[:space:]]*["'\'']?)[^"'\''[:space:]#]*(.*)$'
+            if ! [[ "$line" =~ $re ]]; then
+                refuse "npm '$k_dir': cannot read its directory: line to retarget it — convert it by hand"
+                continue
+            fi
+            new="${BASH_REMATCH[1]}$r${BASH_REMATCH[2]}"
             edits+="$k_dir_line"$'\t'"S"$'\t'"$new"$'\n'
             n_coll=$((n_coll + 1))
             findings+="COLLAPSED npm '$k_dir' -> bun '$r': workspace member of the text bun.lock root '$r', which has no lane of its own here — this entry becomes the root's bun lane (directory retargeted; every other key kept)"$'\n'
@@ -327,8 +363,12 @@ done <<<"$roots"
 [ "$refused" -eq 0 ] || { echo "convert-npm-lanes: refused — nothing written" >&2; exit 1; }
 
 # --- 3. apply ---------------------------------------------------------------
+# Into a scratch file; --out is written only at the very end, once nothing
+# below has refused, so a refusal never leaves a half-made file behind.
+TMP_OUT="$(mktemp)" || exit 2
+trap 'rm -f "$TMP_OUT"' EXIT
 if [ -z "$edits" ]; then
-    cp "$IN" "$OUT_ABS" || exit 2
+    cp "$IN" "$TMP_OUT" || exit 2
 else
     awk -F'\t' '
         NR == FNR {
@@ -340,12 +380,12 @@ else
         {
             if (!(FNR in del)) print ((FNR in sub_) ? sub_[FNR] : $0)
             for (k = 1; k <= na[FNR]; k++) print app[FNR, k]
-        }' <(printf '%s' "$edits") "$IN" > "$OUT_ABS" || exit 2
+        }' <(printf '%s' "$edits") "$IN" > "$TMP_OUT" || exit 2
 fi
 
 # --- 4. workflows the conversion leaves stale -------------------------------
 lanes_after="$(awk '/^[ \t]*#/ {next} /^[ \t]*-[ \t]*package-ecosystem:/ {
-        v = $0; sub(/^[^:]*package-ecosystem:/, "", v); gsub(/[ \t"\047]/, "", v); sub(/#.*/, "", v); print v }' "$OUT_ABS" | sort -u)"
+        v = $0; sub(/^[^:]*package-ecosystem:/, "", v); gsub(/[ \t"\047]/, "", v); sub(/#.*/, "", v); print v }' "$TMP_OUT" | sort -u)"
 
 ownership() { if grep -qE "$OWNED_RE" "$1"; then echo "owned"; else echo "hand-written"; fi; }
 
@@ -361,11 +401,22 @@ while IFS= read -r wf; do
     [ -n "$wf" ] || continue
     [ -r "$CORPUS_ROOT/$wf" ] || continue
     base="${wf##*/}"
-    if [[ "$base" =~ ^dependabot-bun-lockfile.*\.ya?ml$ ]] || grep -q 'template: lockfile-sync-bun' "$CORPUS_ROOT/$wf"; then
+    is_sync=0; is_am=0
+    if [[ "$base" =~ ^dependabot-bun-lockfile.*\.ya?ml$ ]] || grep -q 'template: lockfile-sync-bun' "$CORPUS_ROOT/$wf"; then is_sync=1; fi
+    [[ "$base" =~ ^dependabot-auto-merge\.ya?ml$ ]] && is_am=1
+    [ "$is_sync$is_am" != "00" ] || continue
+    # A file name is repo data that lands in the report: vet it like a path.
+    if ! [[ "$base" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        refuse "workflow '$wf' has a name outside [A-Za-z0-9._-] — this script reports no such file; rename it, then re-run"
+        continue
+    fi
+    if [ "$is_sync" -eq 1 ]; then
         wd="$(sed -nE "s/^[[:space:]]*working-directory:[[:space:]]*[\"']?([^\"' #]*)[\"']?.*$/\\1/p" "$CORPUS_ROOT/$wf" | head -n1)"
         wd="${wd#./}"; wd="${wd%/}"
         if [ -z "$wd" ] || [ "$wd" = "." ]; then wroot="/"; else wroot="/$wd"; fi
-        if grep -qxF -- "$wroot" <<<"$BUN_TEXT_DIRS"; then
+        if grep -qxF -- "$wroot" <<<"$BUN_TEXT_DIRS" && ! safe_dir "$wroot"; then
+            refuse "$wf syncs '$wroot', a text bun.lock root outside [A-Za-z0-9._@+/-] or with a '..' segment — review and remove it by hand"
+        elif grep -qxF -- "$wroot" <<<"$BUN_TEXT_DIRS"; then
             own="$(ownership "$CORPUS_ROOT/$wf")"
             if [ "$own" = "owned" ]; then
                 act="this generator no longer renders it there, so delete it in this run"
@@ -375,8 +426,10 @@ while IFS= read -r wf; do
             findings+="OBSOLETE $wf: syncs bun.lock for '$wroot', which holds a text bun.lock — the native bun lane rewrites that lockfile in the PR itself, so this workflow has nothing left to do but mint the org App token on every Dependabot package.json PR. $own: $act"$'\n'
         fi
     fi
-    if [ "$base" = "dependabot-auto-merge.yml" ] || [ "$base" = "dependabot-auto-merge.yaml" ]; then
-        named="$(grep -v '^[[:space:]]*#' "$CORPUS_ROOT/$wf" | grep -oE "package-ecosystem[[:space:]]*[!=]=[[:space:]]*'[^']*'" \
+    if [ "$is_am" -eq 1 ]; then
+        # Names are matched as [a-z_]+ only, so nothing else from the file
+        # reaches the report.
+        named="$(grep -v '^[[:space:]]*#' "$CORPUS_ROOT/$wf" | grep -oE "package-ecosystem[[:space:]]*[!=]=[[:space:]]*'[a-z_]+'" \
             | sed -E "s/.*'([^']*)'/\\1/" | sort -u)"
         if [ -n "$named" ]; then
             # Flagged only when the gate actually holds a lane's PRs: an
@@ -384,7 +437,7 @@ while IFS= read -r wf; do
             # repo's choice, not a defect.
             missing=""
             while IFS= read -r e; do
-                [ -n "$e" ] || continue
+                [[ "$e" =~ ^[a-z][a-z-]*$ ]] || continue
                 f="$(fm_name "$e")"
                 grep -qxF -- "$f" <<<"$named" || missing+="${missing:+, }$f"
             done <<<"$lanes_after"
@@ -398,6 +451,12 @@ while IFS= read -r wf; do
         fi
     fi
 done < <(grep -E '^\.github/workflows/[^/]+\.ya?ml$' <<<"$FILES")
+
+if [ "$refused" -ne 0 ]; then
+    echo "convert-npm-lanes: refused — nothing written" >&2
+    exit 1
+fi
+cp "$TMP_OUT" "$OUT_ABS" || exit 2
 
 printf '%s' "$findings"
 if [ -z "$findings" ]; then
