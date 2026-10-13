@@ -335,8 +335,15 @@ if [ -n "$COMPARE_ABS" ]; then
     dropped="$(comm -23 <(printf '%s\n' "$existing") <(printf '%s\n' "$pairs"))"
     added="$(comm -13 <(printf '%s\n' "$existing") <(printf '%s\n' "$pairs"))"
     if [ -n "$(tr -d '[:space:]' <<<"$dropped")" ]; then
+        _bun_load_roots
         while IFS=$'\t' read -r eco dir; do
             [ -n "$eco" ] || continue
+            if [ "$eco" = "npm" ] && [ -n "$(bun_cover_root "$dir")" ]; then
+                # Not a lost lane but a dead one: Dependabot refuses npm on a
+                # text bun.lock. The converter is the fix, never this render.
+                bad "DIVERGED: $COMPARE_TO declares npm '$dir', which a text bun.lock covers — Dependabot refuses that lane (misconfigured_tooling). Run convert-npm-lanes.sh first and pass its --out file as --keep-ignores-from and --compare-to"
+                continue
+            fi
             bad "DIVERGED: $COMPARE_TO declares $eco '$dir', which this render does not — reconciling would drop that lane silently"
         done <<<"$dropped"
     else

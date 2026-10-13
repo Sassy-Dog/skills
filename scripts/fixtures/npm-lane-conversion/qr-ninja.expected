@@ -1,0 +1,6 @@
+# fixture-expectation-for: Sassy-Dog/qr-ninja
+# fixture-expectation-source: the lanes of .github/dependabot.yml @ 11ede2a0d9fd748b58f544a9e4cce73b39ee4cae, the merge commit of qr-ninja#919 (the hand fix)
+#   that the converter must reproduce from qr-ninja.committed.yml.
+# ---8<--- ecosystem<TAB>directory, one lane per line
+bun	/
+github-actions	/

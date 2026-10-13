@@ -93,7 +93,9 @@ stale exact pins. Its
 `generated-by:` marker is committed inside every consumer repo's `.github/`, so the same ownership
 rule applies: the matcher accepts every producer name this generator has ever emitted, in either
 marker namespace, normalising to the current form on write, while a file with no marker at all is
-reported as hand-written and never overwritten.
+reported as hand-written and never overwritten. The one exception is an `npm` lane on a text
+`bun.lock`, which Dependabot refuses outright: `convert-npm-lanes.sh` rewrites exactly those lanes as
+`bun`, in an owned or hand-written file alike, the latter only as a change the user approves.
 
 `setup-repo` sits above all three as the umbrella entry point, and owns the broad *"set up this
 repo"* intent so nobody reaches for one generator and silently gets a third of a setup. It holds no

@@ -1572,6 +1572,16 @@
 #      detection, the template's case arms equal to the lib's cadence table,
 #      toolchain sources derived and refused when missing/floating/disagreeing,
 #      the public and no-merge-queue declines, and --compare-to divergence.
+#  59. npm-lane conversion tests (scripts/test-npm-lane-conversion.sh) —
+#      convert-npm-lanes.sh: an `npm` Dependabot lane on a text bun.lock (which
+#      Dependabot's npm_and_yarn updater refuses, `misconfigured_tooling`)
+#      becomes the native `bun` lane with every key kept, and workspace-member
+#      lanes fold into their root. Against the pre-fix configs of qr-ninja,
+#      francisco and velovate, each output must equal the lanes their hand
+#      fixes landed (qr-ninja#919, francisco#182, velovate#2400); plus the
+#      OBSOLETE bun.lock sync and STALE ecosystem-gated auto-merge findings,
+#      the bun.lockb-only boundary, refusals, idempotence and the owned-file
+#      render path. Three mutation checks in its header. No network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2553,6 +2563,15 @@ if bash scripts/test-deps-cadence-render.sh; then
     pass "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
 else
     failed "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
+fi
+
+# --- 59. npm-lane conversion tests ---------------------------------------------
+# convert-npm-lanes.sh rewrites npm lanes on a text bun.lock as native bun and
+# reports the sync and auto-merge workflows that leaves stale. No network.
+if bash scripts/test-npm-lane-conversion.sh; then
+    pass "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
+else
+    failed "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
 fi
 
 # ------------------------------------------------------------------------------

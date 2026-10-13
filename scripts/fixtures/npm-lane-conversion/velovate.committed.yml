@@ -1,0 +1,280 @@
+# fixture-source-repo: Sassy-Dog/velovate
+# fixture-source-path: .github/dependabot.yml @ 9a33d9d0834f4065f147bfc16284b3a7a608369a (the parent of velovate#2400)
+# fixture-shape: HAND-WRITTEN (no generated-by marker). Every key and value is verbatim; full-line comments are
+#   stripped (the repo is internal and only the lanes matter here): grep -vE '^[[:space:]]*#' | cat -s
+# ---8<--- the committed file below this line
+
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@eslint/js"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitejs/plugin-react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "graphql"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@graphql-codegen/client-preset"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/web"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:20"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(web)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/apps/web-e2e"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:40"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(e2e)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/libs/brand"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(brand)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "nuget"
+    rebase-strategy: "disabled"  # see npm block comment — queue churn
+    directories:
+      - "/apps/api/Velovate.Api"
+      - "/apps/api/Velovate.Api.Tests"
+      - "/apps/api/Velovate.Api.IntegrationTests"
+      - "/apps/api/Velovate.Application"
+      - "/apps/api/Velovate.Contracts"
+      - "/apps/api/Velovate.Domain"
+      - "/apps/api/Velovate.Integrations"
+      - "/apps/api/Velovate.Jobs"
+      - "/apps/api/Velovate.Sync"
+      - "/apps/api/Velovate.Workers"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:20"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(api/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "HotChocolate.*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "nuget"
+    rebase-strategy: "disabled"  # see npm block comment — queue churn
+    directories:
+      - "/apps/cli/Velovate.Cli"
+      - "/apps/cli/Velovate.Cli.Tests"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:40"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(cli/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pub"
+    directory: "/apps/mobile"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(mobile/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "clerk_flutter"
+        versions: ["0.0.15-beta"]
+      - dependency-name: "clerk_auth"
+        versions: ["0.0.15-beta"]
+      - dependency-name: "intl"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "flutter_secure_storage"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "permission_handler"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "pub"
+    directory: "/libs/brand_flutter"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:20"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(brand_flutter/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "intl"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  - package-ecosystem: "pub"
+    directory: "/libs/maps"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:40"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(maps/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pub"
+    directory: "/apps/mobile/tools/velovate_lints"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(lints/deps)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "gradle"
+    directory: "/apps/mobile/android"
+    rebase-strategy: "disabled"  # see npm block comment — queue churn
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:20"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(mobile/android/deps)"
+    groups:
+      gradle-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      gradle-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "docker"
+    rebase-strategy: "disabled"  # see npm block comment — queue churn
+    directories:
+      - "/apps/api/Velovate.Api"
+      - "/apps/api/Velovate.Jobs"
+      - "/apps/api/Velovate.Workers"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:40"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(api/docker)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    rebase-strategy: "disabled"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "10:00"
+      timezone: "America/Denver"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "dx"]
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      all-updates:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
