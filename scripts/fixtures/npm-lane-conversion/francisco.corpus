@@ -1,0 +1,37 @@
+# fixture-source-repo: Sassy-Dog/francisco
+# fixture-source-ref: 31b47d62fbbb0a536496b7e6ff034026f8431766 (the parent of francisco#182, the hand fix)
+# fixture-scope: every tracked path an ecosystem probe can match, plus .github/workflows. A TAB-separated body follows a path only where its CONTENT decides the result: a package.json's `workspaces` key, and the one line of a Dependabot workflow that marks its ownership or its ecosystem gate (verbatim from upstream).
+# fixture-regen: gh api "repos/Sassy-Dog/francisco/git/trees/31b47d62fbbb0a536496b7e6ff034026f8431766?recursive=1" --jq '.tree[]|select(.type=="blob")|.path', filtered to manifests, lockfiles and .github/workflows
+# ---8<--- one tracked path per line below; optional TAB-separated content
+.github/workflows/ci.yml
+.github/workflows/dependabot-auto-merge.yml
+.github/workflows/deps-cadence-impl.yml
+.github/workflows/deps-cadence.yml
+Cargo.toml
+Francisco.sln
+apps/cli/Cargo.toml
+apps/desktop-linux/Cargo.toml
+apps/desktop-windows/desktop-windows.csproj
+apps/mobile-android/app/build.gradle.kts
+apps/mobile-android/build.gradle.kts
+apps/mobile-android/settings.gradle.kts
+apps/server/Cargo.toml
+apps/server/Dockerfile
+apps/web-e2e/bun.lock
+apps/web-e2e/package.json
+apps/web/Dockerfile
+apps/web/bun.lock
+apps/web/package.json
+archived/apps/cli-ts/package-lock.json
+archived/apps/cli-ts/package.json
+archived/apps/cli-ts/yarn.lock
+archived/libs/engine-ts/package.json
+libs/engine/Cargo.toml
+libs/platform/Cargo.toml
+libs/shared-types/package.json
+libs/shared-ui/package.json
+libs/shared-utils/package.json
+libs/shared/assets-rust/Cargo.toml
+libs/shared/assets-rust/package.json
+libs/shared/assets-ts/package.json
+package.json

@@ -1,0 +1,77 @@
+# fixture-source-repo: Sassy-Dog/qr-ninja
+# fixture-source-path: .github/dependabot.yml @ e74eb040f3c3dcc89a6446586970d38fd9ae12eb (the parent of qr-ninja#919)
+# fixture-shape: HAND-WRITTEN (no generated-by marker). Every key and value is verbatim; full-line comments are
+#   stripped (the repo is internal and only the lanes matter here): grep -vE '^[[:space:]]*#' | cat -s
+# ---8<--- the committed file below this line
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "supply-chain"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "npm"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      npm-minor-patch:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+      - dependency-name: "expo"
+      - dependency-name: "expo-*"
+      - dependency-name: "jest-expo"
+      - dependency-name: "react-native"
+      - dependency-name: "react-native-*"
+      - dependency-name: "@react-native/*"
+      - dependency-name: "@react-native-async-storage/async-storage"
+
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-test-renderer"
+
+      - dependency-name: "@neondatabase/serverless"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "drizzle-orm"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "drizzle-kit"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+
+      - dependency-name: "@clerk/react"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+

@@ -1,0 +1,12 @@
+# fixture-expectation-for: Sassy-Dog/francisco
+# fixture-expectation-source: the lanes of .github/dependabot.yml @ 28e42bd30a67a8e8a3924873142e49c129df3b2d, the merge commit of francisco#182 (the hand fix)
+#   that the converter must reproduce from francisco.committed.yml.
+# ---8<--- ecosystem<TAB>directory, one lane per line
+bun	/apps/web
+bun	/apps/web-e2e
+cargo	/
+docker	/apps/server
+docker	/apps/web
+github-actions	/
+gradle	/apps/mobile-android
+nuget	/

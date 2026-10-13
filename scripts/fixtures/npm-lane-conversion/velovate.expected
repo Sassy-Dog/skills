@@ -1,0 +1,26 @@
+# fixture-expectation-for: Sassy-Dog/velovate
+# fixture-expectation-source: the lanes of .github/dependabot.yml @ c3ff5146b4bf392e2de36c511211cb2e66e55af6, the merge commit of velovate#2400 (the hand fix)
+#   that the converter must reproduce from velovate.committed.yml.
+# ---8<--- ecosystem<TAB>directory, one lane per line
+bun	/
+docker	/apps/api/Velovate.Api
+docker	/apps/api/Velovate.Jobs
+docker	/apps/api/Velovate.Workers
+github-actions	/
+gradle	/apps/mobile/android
+nuget	/apps/api/Velovate.Api
+nuget	/apps/api/Velovate.Api.IntegrationTests
+nuget	/apps/api/Velovate.Api.Tests
+nuget	/apps/api/Velovate.Application
+nuget	/apps/api/Velovate.Contracts
+nuget	/apps/api/Velovate.Domain
+nuget	/apps/api/Velovate.Integrations
+nuget	/apps/api/Velovate.Jobs
+nuget	/apps/api/Velovate.Sync
+nuget	/apps/api/Velovate.Workers
+nuget	/apps/cli/Velovate.Cli
+nuget	/apps/cli/Velovate.Cli.Tests
+pub	/apps/mobile
+pub	/apps/mobile/tools/velovate_lints
+pub	/libs/brand_flutter
+pub	/libs/maps

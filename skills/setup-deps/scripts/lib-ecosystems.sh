@@ -279,12 +279,13 @@ cadence_toolchain() {
 #     --frozen-lockfile` and can never merge (what2wear: seven per-member PRs
 #     red, while the root entry's grouped PR rewrote every member manifest plus
 #     bun.lock and passed). A member with its OWN lockfile keeps its own entry.
-#     The cited precedent for per-member entries does not apply: velovate has
-#     the same single-root-lockfile shape, and its per-member lanes are `npm`,
-#     which does not regenerate bun.lock either (qr-ninja#326: Dependabot does not regenerate bun.lock, so the frozen install aborts).
+#     velovate's per-member lanes were never a precedent: same
+#     single-root-lockfile shape, but `npm`, which does not regenerate bun.lock
+#     either (qr-ninja#326), and velovate#2400 folded them into one bun lane.
+#     convert-npm-lanes.sh folds such lanes by this same rule (bun_cover_root).
 # npm, pub, nuget and docker deliberately do NOT collapse: velovate's committed
-# config lists each npm workspace member, each pubspec (including one nested
-# under another), each .csproj folder and each Dockerfile folder.
+# config lists each pubspec (including one nested under another), each .csproj
+# folder and each Dockerfile folder.
 # ---------------------------------------------------------------------------
 
 # _display_dir <path> — the `directory:` value for the directory holding <path>.
@@ -452,24 +453,28 @@ _glob_to_ere() {
     printf '^%s%s$' "$frag" "$tail"
 }
 
-# bun_dirs — package.json directories minus the workspace MEMBERS a root bun.lock
-# covers. A root is a directory holding the TEXT bun.lock (a bun.lockb-only repo
-# is classified npm by detect-ecosystems.sh and never collapses; a bun.lockb
-# still counts as a member's OWN lockfile) whose package.json
-# declares a TOP-LEVEL `workspaces` (array form or {"packages": [...]}), read
-# with jq; a member is a directory whose path under that root matches one of
-# those globs (every `!glob` excludes, wherever it sits in the list, and a `!`
-# glob's trailing `/**` also matches zero segments) and that holds no bun lockfile of its own.
-# Membership, not ancestry: a package.json under the root that the globs do not
-# name is not covered by the root install, so it keeps the lane it always had.
-# An unparsable manifest, or a root with any glob _glob_to_ere cannot translate,
-# degrades to "not a workspace root" and is noted: nothing under it collapses.
-bun_dirs() {
-    local all locks texts d p c r rel keep g neg hit excl globs i bad ere
-    all="$(dirs_of '^package\.json$')"
-    locks="$(dirs_of '^bun\.lockb?$')"
-    texts="$(dirs_of '^bun\.lock$')"
-    local -a root_dirs=() root_globs=()
+# _bun_load_roots — fills BUN_ROOT_DIRS / BUN_ROOT_GLOBS (the workspace roots),
+# BUN_TEXT_DIRS (every directory holding a text bun.lock) and BUN_LOCK_DIRS
+# (every directory holding a bun.lock or bun.lockb). A root is a directory
+# holding the TEXT bun.lock (a bun.lockb-only repo is classified npm by
+# detect-ecosystems.sh and never collapses) whose package.json declares a
+# TOP-LEVEL `workspaces` (array form or {"packages": [...]}), read with jq. An
+# unparsable manifest, or a root with any glob _glob_to_ere cannot translate,
+# degrades to "not a workspace root" and is noted in CORPUS_NOTES. Call it at
+# the top level, never inside $(...) or a pipeline: a subshell would drop both
+# the arrays and the notes.
+BUN_ROOTS_LOADED=0
+BUN_TEXT_DIRS=""
+BUN_LOCK_DIRS=""
+BUN_ROOT_DIRS=()
+BUN_ROOT_GLOBS=()
+_bun_load_roots() {
+    local d p g neg globs bad ere
+    [ "$BUN_ROOTS_LOADED" -eq 1 ] && return 0
+    BUN_ROOTS_LOADED=1
+    BUN_LOCK_DIRS="$(dirs_of '^bun\.lockb?$')"
+    BUN_TEXT_DIRS="$(dirs_of '^bun\.lock$')"
+    BUN_ROOT_DIRS=(); BUN_ROOT_GLOBS=()
     while IFS= read -r d; do
         [ -n "$d" ] || continue
         if [ "$d" = "/" ]; then p="package.json"; else p="${d#/}/package.json"; fi
@@ -492,7 +497,7 @@ bun_dirs() {
                     if [ -n "$bad" ]; then
                         CORPUS_NOTES+="bun: $p workspaces glob '$bad' is not translatable — no member under $d collapses"$'\n'
                     else
-                        root_dirs+=("$d"); root_globs+=("$globs")
+                        BUN_ROOT_DIRS+=("$d"); BUN_ROOT_GLOBS+=("$globs")
                     fi
                 fi
             else
@@ -501,30 +506,58 @@ bun_dirs() {
         else
             CORPUS_NOTES+="bun: $p not readable — treated as a non-workspace root"$'\n'
         fi
-    done <<<"$texts"
+    done <<<"$BUN_TEXT_DIRS"
+}
+
+# bun_cover_root <display-dir> — the bun install root whose TEXT bun.lock covers
+# <display-dir>, on stdout, or nothing. The directory itself when it holds a text
+# bun.lock; nothing when it holds only a bun.lockb (its own lockfile, which no
+# Dependabot ecosystem writes); otherwise the deepest workspace root whose globs
+# name it as a member. A member is a directory whose path under the root matches
+# one of the root's globs (every `!glob` excludes, wherever it sits in the list,
+# and a `!` glob's trailing `/**` also matches zero segments). Membership, not
+# ancestry: a package.json under the root that the globs do not name is not
+# covered by the root install. The ONE membership rule: bun_dirs collapses by it
+# and convert-npm-lanes.sh converts by it, so a lane the renderer would fold is
+# exactly a lane the converter folds. _bun_load_roots must already have run.
+bun_cover_root() {
+    local c="$1" i r rel g neg hit excl ere best=""
+    if grep -qxF -- "$c" <<<"$BUN_TEXT_DIRS"; then echo "$c"; return 0; fi
+    grep -qxF -- "$c" <<<"$BUN_LOCK_DIRS" && return 0
+    for i in "${!BUN_ROOT_DIRS[@]}"; do
+        r="${BUN_ROOT_DIRS[$i]}"
+        is_ancestor "$r" "$c" || continue
+        if [ "$r" = "/" ]; then rel="${c#/}"; else rel="${c#"$r"/}"; fi
+        hit=0; excl=0
+        while IFS= read -r g; do
+            [ -n "$g" ] || continue
+            neg=0
+            case "$g" in '!'*) neg=1; g="${g#!}" ;; esac
+            ere="$(_glob_to_ere "$g" "$neg")"
+            if grep -qE -- "$ere" <<<"$rel"; then
+                if [ "$neg" -eq 1 ]; then excl=1; else hit=1; fi
+            fi
+        done <<<"${BUN_ROOT_GLOBS[$i]}"
+        [ "$excl" -eq 1 ] && hit=0
+        # Deepest root wins: a member of a nested root belongs to that root.
+        if [ "$hit" -eq 1 ] && [ "${#r}" -gt "${#best}" ]; then best="$r"; fi
+    done
+    [ -z "$best" ] || echo "$best"
+    return 0
+}
+
+# bun_dirs — package.json directories minus the workspace MEMBERS a root bun.lock
+# covers: a directory keeps its lane unless bun_cover_root names a root other
+# than itself (a bun.lockb still counts as a member's OWN lockfile, so it keeps
+# its lane).
+bun_dirs() {
+    local all c r
+    all="$(dirs_of '^package\.json$')"
+    _bun_load_roots
     while IFS= read -r c; do
         [ -n "$c" ] || continue
-        keep=1
-        if ! grep -qxF -- "$c" <<<"$locks"; then
-            for i in "${!root_dirs[@]}"; do
-                r="${root_dirs[$i]}"
-                is_ancestor "$r" "$c" || continue
-                if [ "$r" = "/" ]; then rel="${c#/}"; else rel="${c#"$r"/}"; fi
-                hit=0; excl=0
-                while IFS= read -r g; do
-                    [ -n "$g" ] || continue
-                    neg=0
-                    case "$g" in '!'*) neg=1; g="${g#!}" ;; esac
-                    ere="$(_glob_to_ere "$g" "$neg")"
-                    if grep -qE -- "$ere" <<<"$rel"; then
-                        if [ "$neg" -eq 1 ]; then excl=1; else hit=1; fi
-                    fi
-                done <<<"${root_globs[$i]}"
-                [ "$excl" -eq 1 ] && hit=0
-                if [ "$hit" -eq 1 ]; then keep=0; fi
-            done
-        fi
-        if [ "$keep" -eq 1 ]; then echo "$c"; fi
+        r="$(bun_cover_root "$c")"
+        if [ -z "$r" ] || [ "$r" = "$c" ]; then echo "$c"; fi
     done <<<"$all" | sort -u
 }
 

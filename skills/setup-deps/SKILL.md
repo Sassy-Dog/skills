@@ -27,19 +27,24 @@ It renders these files:
 |---|---|
 | `.github/dependabot.yml` | always — grouped, one entry per (ecosystem, **directory**) |
 | `.github/workflows/dependabot-auto-merge.yml` | when the repo has a merge gate **AND is not public** — two preconditions, see §2 |
-| `.github/workflows/dependabot-bun-lockfile.yml` | legacy fallback — only when npm has `lockfile_risk` (binary `bun.lockb`, or a repo deliberately on npm + sync) **AND the repo is not public**; a text `bun.lock` renders the native `bun` ecosystem instead, no sync workflow. One per bun install root, not one per repo |
+| `.github/workflows/dependabot-bun-lockfile.yml` | legacy fallback — only when npm has `lockfile_risk` (a binary `bun.lockb`, which no ecosystem writes) **AND the repo is not public**; a text `bun.lock` renders the native `bun` ecosystem instead, no sync workflow, and an existing sync for a text-`bun.lock` root is reported `OBSOLETE` (§1). One per bun install root, not one per repo |
 | `.github/workflows/dependabot-pod-lockfile.yml` | when cocoapods is detected **and** the app's `ios/Podfile.lock` is tracked (see §3) **AND the repo is not public** |
 | `.github/workflows/deps-cadence.yml` + `deps-cadence-impl.yml` | the monthly lockfile refresh, rendered as a pair by `render-cadence.sh` — when a bun, npm, pub or cargo lane tracks its lockfile, every such lane's toolchain is pinned, the merge gate is a queue, **AND the repo is not public** (see "The monthly lockfile refresh" in §3) |
 
-Bundled scripts (`scripts/`): `detect-ecosystems.sh` (probe), `render-dependabot.sh` (render),
-`validate-dependabot.sh` (post-render assertion + divergence check), `render-cadence.sh` (the
-deps-cadence pair), and `lib-ecosystems.sh` — the one ecosystem table all four read, so the
-validator can never agree with a renderer that is wrong and the cadence's lanes can never disagree
-with Dependabot's about where a project lives.
+Bundled scripts (`scripts/`): `detect-ecosystems.sh` (probe), `convert-npm-lanes.sh` (rewrites
+`npm` lanes on a text `bun.lock` as `bun`, owned file or not, and reports the workflows that leaves
+stale — §1), `render-dependabot.sh` (render), `validate-dependabot.sh` (post-render assertion +
+divergence check), `render-cadence.sh` (the deps-cadence pair), and `lib-ecosystems.sh` — the one
+ecosystem table all five read, so the validator can never agree with a renderer that is wrong, the
+converter folds exactly the lanes a render folds, and the cadence's lanes can never disagree with
+Dependabot's about where a project lives.
 
 Ownership marker: the `generated-by:` comment on the first non-blank line after the YAML document
 start. Re-runs reconcile **only** files carrying that marker — a hand-written `dependabot.yml` is
-reported and left alone, never overwritten.
+reported and left alone, never overwritten. **One narrow exception:** an `npm` lane on a text
+`bun.lock` is a lane Dependabot refuses outright, so `convert-npm-lanes.sh` rewrites those lanes in
+place — and only those — in a hand-written file too, as a plan item the user approves by name (see
+"npm lanes on a text `bun.lock`" in §1).
 
 **Ownership matching is deliberately wide: accept EITHER marker namespace — the current
 `sassy-dog:` prefix and the pre-rename `ai-agent-skills:` prefix (plugin ≤ 2026.8.20) — paired
@@ -103,12 +108,84 @@ and is reported in `detect_failures`. A member-only PR never
 rewrites the root lockfile, so it fails `bun install --frozen-lockfile` and cannot merge (what2wear:
 seven red PRs, while the root entry's grouped PR passed). A repo with only the binary `bun.lockb` is
 not bun at all — it stays npm + lockfile-sync, and its lanes do not collapse. npm, pub, nuget and
-docker do **not** collapse — velovate's hand-written config lists every npm workspace member, every
-pubspec including a nested one, every `.csproj` folder and every Dockerfile folder, and that is the
-coverage it wants (those velovate lanes are `npm`, which does not regenerate `bun.lock` either, so
-they are the committed config's choice and not evidence that per-member bun lanes merge). An ecosystem
+docker do **not** collapse — velovate's hand-written config lists every pubspec including a nested
+one, every `.csproj` folder and every Dockerfile folder, and that is the coverage it wants. It also
+listed every JS workspace member as an `npm` lane on its root text `bun.lock` until velovate#2400
+folded them into one `bun` lane at `/`; those lanes were never evidence that per-member lanes merge
+(see "npm lanes on a text `bun.lock`" below). An ecosystem
 detected with an empty `directories` is reported in `detect_failures` and rendered as nothing;
 never paper over it with `/`.
+
+### npm lanes on a text `bun.lock` — convert before anything else, owned or not
+
+**Dependabot's `npm_and_yarn` updater refuses a directory that has a `bun.lock` and no
+`package-lock.json`, `yarn.lock` or `pnpm-lock.yaml`.** Every run of such a lane fails with
+`misconfigured_tooling` ("Dependabot's `npm_and_yarn` ecosystem cannot update `bun.lock`. Set
+`package-ecosystem: "bun"`…"), opens no PR, and turns nothing red anywhere a person looks. During
+the deps-cadence rollout ([#509](https://github.com/Sassy-Dog/skills/issues/509)) setup-deps ran in
+qr-ninja, francisco and velovate and left exactly those lanes in place for two to four weeks. Two
+things let it: all three `dependabot.yml` files were hand-written, so the report-and-skip contract
+never read a lane; and this skill still called "a repo deliberately kept on grouped npm + sync" a
+valid stance, so qr-ninja's owned `dependabot-bun-lockfile.yml` was re-rendered to keep a dead lane
+company. That stance is gone: a text `bun.lock` is always the native `bun` ecosystem. Run the
+converter on every `dependabot.yml`, owned or hand-written, **before** the divergence check below:
+
+```bash
+bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/convert-npm-lanes.sh \
+  --out /tmp/dependabot.converted.yml
+```
+
+It applies the renderer's own rule (`bun_cover_root` in `lib-ecosystems.sh`, the bun collapse of
+"directories" above), so it folds exactly the lanes a fresh render would fold:
+
+- `CONVERTED npm 'D' -> bun 'D'` — `D` holds a text `bun.lock`. Only the `package-ecosystem:` value
+  changes; groups, `ignore:`, labels, commit-message prefix, schedule, cooldown and comments are the
+  entry's own lines and stay.
+- `COLLAPSED npm 'M' -> bun 'R'` — `M` is a workspace member of the text-`bun.lock` root `R`. The
+  member's `ignore:` rules are carried into `R`'s lane, once; its other keys are dropped and the
+  line says so. With no lane at `R`, the first member lane is retargeted there instead.
+- `OBSOLETE <workflow>` — a `bun.lock` sync workflow whose install root now holds a text
+  `bun.lock`. It has nothing left to sync and still mints the org App token on every Dependabot
+  `package.json` PR. **Owned: delete it in this run** — this generator no longer renders it there.
+  **Hand-written: deleting it is a plan item the user approves by name.**
+- `STALE dependabot-auto-merge.yml` — the gate conditions on `package-ecosystem` and never names an
+  ecosystem `dependabot.yml` has (a hand-written `npm_and_yarn` gate holds every `bun` PR for a
+  human). An owned one is re-rendered on every run anyway; the v4 template conditions on no
+  ecosystem. A hand-written one is replaced by the template render as a plan item approved by name.
+- `REFUSED …` (exit `1`, nothing written) — an `npm` `directories:` list naming a covered directory,
+  an `npm` entry whose list item does not start with `package-ecosystem:`, or a member rule that
+  cannot be appended without mixing indents. Fix the committed file by hand,
+  then re-run.
+
+Carry every finding line into the run report verbatim, whether or not the change is applied —
+"would convert" is as loud as "converted". `NO-OP …` is the one-line clean result, and the output
+file is then byte-identical to the committed one. A binary `bun.lockb`-only directory is not
+covered: it stays npm + sync, and its sync workflow is never `OBSOLETE`.
+
+What the converter produced is applied differently by ownership:
+
+- **Owned file:** use `/tmp/dependabot.converted.yml` wherever this skill says
+  `.github/dependabot.yml` as an *input* — `--keep-ignores-from`, `--compare-to` and the cooldown
+  read below. Forgetting this fails closed: `--compare-to` reports the dead lane as `DIVERGED` and
+  names this script.
+- **Hand-written file:** the converted file **is** the proposed change, and the only edit this skill
+  makes to a hand-written `dependabot.yml`. Show its diff in the plan; write it only on approval.
+
+The converter cannot see a repo's other consumers of the old lane. After converting, check the
+three the hand fixes needed (qr-ninja#919, velovate#2400): a script or gate that finds the
+Dependabot entry or PR by its `npm` ecosystem, and a CI install loosened for `dependabot[bot]` that
+only existed for the npm + sync pairing (`bun install` without `--frozen-lockfile` — make it frozen
+again). Comments that still say `npm` are the third; the first command finds most of them:
+
+```bash
+git grep -nE "package-ecosystem.{0,12}npm" -- ':!.github/dependabot.yml'
+git grep -nE 'bun install *$' -- .github/workflows
+```
+
+Bun security updates are not supported upstream (version updates only), and the npm path no longer
+delivers them on a text-`bun.lock` root either, because the npm updater refuses the directory. A JS
+advisory there surfaces as an alert only: fix it by hand, or let `deps-cadence` pick it up when the
+patched version is in range.
 
 ### The diverged-but-owned case
 
@@ -448,12 +525,13 @@ rejects every PR it opens. One repo in this org merged **0 of 20** npm PRs that 
 the ecosystem to stop the noise. The bun half of that trap is closed by default now: Dependabot's
 native `bun` ecosystem (GA 2025-02) reads and rewrites the text `bun.lock` itself (bun >= 1.1.39),
 so a bun repo renders the `bun` block and no sync workflow. The npm + `lockfile-sync-bun` pairing
-survives only as the legacy fallback — binary `bun.lockb` (which no ecosystem writes), or a repo
-that deliberately stays on grouped npm (qr-ninja#394's workspaces-monorepo stance). One caveat keeps
-that fallback relevant: bun security updates are not yet supported upstream (version updates only),
-and security PRs fire on any vulnerable dependency regardless of the ecosystem list — one arriving
-via the npm path edits the manifest without touching `bun.lock`, and only the sync workflow makes it
-mergeable. CocoaPods is the trap in full force: Dependabot has no cocoapods ecosystem at all, so the
+survives only as the legacy fallback for a binary `bun.lockb`, which no ecosystem writes. It is no
+longer a choice for a text `bun.lock`: the npm updater now refuses that directory outright, so an
+npm lane there opens nothing at all — version or security — and its sync workflow has nothing to
+sync (see "npm lanes on a text `bun.lock`" in §1). An earlier version of this paragraph kept the
+pairing alive for "a repo that deliberately stays on grouped npm" and for security PRs arriving via
+the npm path; both reasons died with that refusal, and keeping them is how three repos' JS lanes
+stayed dead through a setup-deps run. CocoaPods is the trap in full force: Dependabot has no cocoapods ecosystem at all, so the
 pod sync workflow is never optional there — without it the security PRs are dead on arrival and the
 alerts stay open.
 
@@ -693,7 +771,13 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
   credential into `.git/config` for the rest of a job whose workspace holds PR-authored content —
   for no benefit, since only the push needs write and it authenticates from its own step `env:`
   ([#232](https://github.com/Sassy-Dog/skills/issues/232)).
-- Never overwrite a `dependabot.yml` lacking this generator's marker; report it and stop.
+- Never overwrite a `dependabot.yml` lacking this generator's marker; report it and stop. The one
+  exception is `convert-npm-lanes.sh`'s edit of `npm` lanes on a text `bun.lock`, applied only as a
+  plan item the user approves by name.
+- Never leave an `npm` lane on a text `bun.lock`, in an owned file or a hand-written one, without a
+  `CONVERTED` / `COLLAPSED` line in the run report, and never render or keep a `bun.lock` sync
+  workflow for a text-`bun.lock` root. Dependabot refuses that lane, so it is dead and nothing says
+  so.
 - Never write a `dependabot.yml` that `validate-dependabot.sh` rejected, and never default a lane
   to `directory: "/"` because the location is unclear. A lane pointing at a directory with no
   manifest is the one failure here nothing else surfaces: no error, no PRs, no signal.

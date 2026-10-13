@@ -3,15 +3,16 @@
 # `bun` ecosystem (GA 2025-02) reads and rewrites the text bun.lock itself
 # (bun >= 1.1.39): the default render for a bun repo is the bun block in
 # dependabot.yml.template, with NO sync workflow. Render this pairing only when
-# detect-ecosystems.sh reports npm with lockfile_risk — i.e. when the sync
-# pairing is still the correct call:
-#   - binary bun.lockb (pre-text-lockfile) — no Dependabot ecosystem writes
-#     it; migrate with `bun install --save-text-lockfile`, or keep this pairing
-#   - a repo deliberately kept on grouped npm instead of native bun (qr-ninja
-#     #394: workspaces monorepo, grouped weekly npm + monthly cadence refresh)
-#   - Dependabot SECURITY updates: not yet supported by the bun ecosystem
-#     (version updates only), so security PRs arrive via the npm path —
-#     manifest edit, no bun.lock write — and need this workflow to merge
+# detect-ecosystems.sh reports npm with lockfile_risk, which today means ONE
+# case: a binary bun.lockb (pre-text-lockfile) — no Dependabot ecosystem writes
+# it; migrate with `bun install --save-text-lockfile`, or keep this pairing.
+# NEVER for a text bun.lock root: Dependabot's npm_and_yarn updater refuses a
+# directory with a bun.lock and no npm/yarn/pnpm lockfile
+# (`misconfigured_tooling`), so the npm lane this would serve opens nothing —
+# version or security — and the two reasons once given for keeping the pairing
+# there (a repo deliberately on grouped npm, qr-ninja#394; security PRs via the
+# npm path) both died with that refusal. convert-npm-lanes.sh reports a copy of
+# this workflow on a text bun.lock root as OBSOLETE (SKILL.md §1).
 #   {{RUNNER}}   → runs-on value (default: [self-hosted, linux, sassy-dog])
 #   {{PKG_DIR}}  → the BUN INSTALL ROOT relative to the repo root: the directory
 #                  holding the package.json + bun.lock this workflow syncs, no

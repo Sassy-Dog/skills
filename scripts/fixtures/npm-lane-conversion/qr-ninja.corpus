@@ -1,0 +1,38 @@
+# fixture-source-repo: Sassy-Dog/qr-ninja
+# fixture-source-ref: e74eb040f3c3dcc89a6446586970d38fd9ae12eb (the parent of qr-ninja#919, the hand fix)
+# fixture-scope: every tracked path an ecosystem probe can match, plus .github/workflows. A TAB-separated body follows a path only where its CONTENT decides the result: a package.json's `workspaces` key, and the one line of a Dependabot workflow that marks its ownership or its ecosystem gate (verbatim from upstream).
+# fixture-regen: gh api "repos/Sassy-Dog/qr-ninja/git/trees/e74eb040f3c3dcc89a6446586970d38fd9ae12eb?recursive=1" --jq '.tree[]|select(.type=="blob")|.path', filtered to manifests, lockfiles and .github/workflows
+# ---8<--- one tracked path per line below; optional TAB-separated content
+.github/workflows/_ci-jobs.yml
+.github/workflows/_mobile-maestro-e2e.yml
+.github/workflows/_mobile-smoke.yml
+.github/workflows/branch-delete-reaper.yml
+.github/workflows/cf-zone-guard.yml
+.github/workflows/ci-cloud.yml
+.github/workflows/ci.yml
+.github/workflows/claude-review.yml
+.github/workflows/dependabot-auto-merge.yml	(steps.meta.outputs.package-ecosystem == 'github_actions' || steps.meta.outputs.package-ecosystem == 'npm_and_yarn') &&
+.github/workflows/dependabot-bun-lockfile.yml	# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 10
+.github/workflows/deps-cadence-impl.yml
+.github/workflows/deps-cadence.yml
+.github/workflows/mobile-ota-rollback.yml
+.github/workflows/mobile-release.yml
+.github/workflows/mobile.yml
+.github/workflows/play-listing.yml
+.github/workflows/store-release.yml
+apps/cli/package.json
+apps/mobile/package.json
+apps/redirect/package.json
+apps/web/package.json
+bun.lock
+e2e/package.json
+package.json	{"workspaces":["apps/*","packages/*","e2e","scripts"]}
+packages/analytics-ua/package.json
+packages/api/package.json
+packages/auth/package.json
+packages/cache/package.json
+packages/db/package.json
+packages/email/package.json
+packages/env/package.json
+packages/jobs/package.json
+scripts/package.json

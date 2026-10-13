@@ -1,0 +1,64 @@
+# fixture-source-repo: Sassy-Dog/velovate
+# fixture-source-ref: 9a33d9d0834f4065f147bfc16284b3a7a608369a (the parent of velovate#2400, the hand fix)
+# fixture-scope: every tracked path an ecosystem probe can match, plus .github/workflows. A TAB-separated body follows a path only where its CONTENT decides the result: a package.json's `workspaces` key, and the one line of a Dependabot workflow that marks its ownership or its ecosystem gate (verbatim from upstream).
+# fixture-regen: gh api "repos/Sassy-Dog/velovate/git/trees/9a33d9d0834f4065f147bfc16284b3a7a608369a?recursive=1" --jq '.tree[]|select(.type=="blob")|.path', filtered to manifests, lockfiles and .github/workflows
+# ---8<--- one tracked path per line below; optional TAB-separated content
+.github/workflows/_ci-jobs.yml
+.github/workflows/_terraform-apply.yml
+.github/workflows/_terraform-plan.yml
+.github/workflows/appstore-submit.yml
+.github/workflows/build-runner.yml
+.github/workflows/ci.yml
+.github/workflows/cli-release.yml
+.github/workflows/daily-drift-check.yml
+.github/workflows/db-orphan-sweep.yml
+.github/workflows/dependabot-auto-merge.yml
+.github/workflows/dependabot-bun-lockfile.yml
+.github/workflows/dependabot-spm-lockfile.yml
+.github/workflows/dependency-scan.yml
+.github/workflows/deps-cadence-codegen.yml
+.github/workflows/deps-cadence-impl.yml
+.github/workflows/deps-cadence.yml
+.github/workflows/gitleaks.yml
+.github/workflows/mobile-e2e.yml
+.github/workflows/play-listing.yml
+.github/workflows/play-promote.yml
+.github/workflows/release-ghost-guard.yml
+.github/workflows/release-supersede-stale-approvals.yml
+.github/workflows/release.yml
+.github/workflows/rollback.yml
+.github/workflows/schema-breaking-changes.yml
+.github/workflows/screenshots.yml
+.github/workflows/stakeholder-summary-check.yml
+.github/workflows/terraform-apply.yml
+.github/workflows/validate-graphql-schema.yml
+Directory.Packages.props
+apps/api/Velovate.Api.IntegrationTests/Velovate.Api.IntegrationTests.csproj
+apps/api/Velovate.Api.Tests/Velovate.Api.Tests.csproj
+apps/api/Velovate.Api/Dockerfile
+apps/api/Velovate.Api/Velovate.Api.csproj
+apps/api/Velovate.Application/Velovate.Application.csproj
+apps/api/Velovate.Contracts/Velovate.Contracts.csproj
+apps/api/Velovate.Domain/Velovate.Domain.csproj
+apps/api/Velovate.Integrations/Velovate.Integrations.csproj
+apps/api/Velovate.Jobs/Dockerfile
+apps/api/Velovate.Jobs/Velovate.Jobs.csproj
+apps/api/Velovate.Sync/Velovate.Sync.csproj
+apps/api/Velovate.Workers/Dockerfile
+apps/api/Velovate.Workers/Velovate.Workers.csproj
+apps/cli/Velovate.Cli.Tests/Velovate.Cli.Tests.csproj
+apps/cli/Velovate.Cli/Velovate.Cli.csproj
+apps/mobile/android/app/build.gradle.kts
+apps/mobile/android/build.gradle.kts
+apps/mobile/android/settings.gradle.kts
+apps/mobile/pubspec.yaml
+apps/mobile/tools/velovate_lints/pubspec.yaml
+apps/web-e2e/package.json
+apps/web/package.json
+bun.lock
+libs/brand/package.json
+libs/brand_flutter/pubspec.yaml
+libs/maps/pubspec.yaml
+media/hyperframes/velovate-team-promo/package.json
+package.json	{"workspaces":["apps/*","libs/*"]}
+velovate.sln
