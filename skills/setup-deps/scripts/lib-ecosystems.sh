@@ -80,8 +80,14 @@ parse_cooldown_requests() {
 # whole value becomes one rule keyed `!unparsed:<value>`. It still counts as a
 # rule the render must carry (so the validator reports it), and the renderer
 # refuses to carry it rather than guess.
-extract_ignore_rules() {
-    awk '
+# The parser is a variable, not inlined in the function, because two consumers
+# must run the SAME program: the function below (validator, renderer carry) and
+# render-cadence.sh, which injects it into the deps-cadence impl so the monthly
+# report reads the bare `ignore:` holds with it at run time (#524). A single
+# source is the point; a hand copy in the template would drift. It holds no
+# single quote (the awk uses \047), so it can sit in a shell single-quoted
+# string both here and in the rendered workflow.
+IGNORE_RULES_AWK='
     function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
     function ind(s,   m) { match(s, /^ */); return RLENGTH }
     function unq(s) {
@@ -155,7 +161,9 @@ extract_ignore_rules() {
         }
     }
     END { flush_entry() }
-    ' "$1"
+'
+extract_ignore_rules() {
+    awk "$IGNORE_RULES_AWK" "$1"
 }
 
 EXCLUDE_RE='(^|/)(templates?|fixtures?|__fixtures__|testdata|test-?data|examples?|node_modules)(/|$)'

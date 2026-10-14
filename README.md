@@ -89,7 +89,7 @@ repo's ecosystems from tracked files, renders `.github/dependabot.yml` grouped p
 adds the workflows that keep Dependabot's PRs mergeable — auto-merge behind a real required check,
 plus `bun.lock` / `Podfile.lock` sync where Dependabot cannot rewrite the lockfile itself, and a
 monthly `deps-cadence` workflow that refreshes each lockfile within its declared ranges and reports
-stale exact pins (bun, npm, pub and cargo); a repo that commits generated code can opt in to a
+stale exact pins (bun, npm, pub and cargo) and bare `ignore:` holds that have fallen behind latest; a repo that commits generated code can opt in to a
 `deps-cadence-codegen` workflow that regenerates it on that PR and holds a non-trivial change for
 human review (a re-sync that finds that owned workflow unmanaged reports it and writes nothing until you refresh, remove or keep it). Its
 `generated-by:` marker is committed inside every consumer repo's `.github/`, so the same ownership

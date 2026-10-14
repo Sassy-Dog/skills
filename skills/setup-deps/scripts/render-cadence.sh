@@ -715,6 +715,14 @@ render() { # <template> <flags-csv>
             '# {{ENDIF}}') keep=1; continue ;;
         esac
         [ "$keep" = "1" ] || continue
+        # The one multi-line token: the single-source ignore: parser (#524),
+        # written at the placeholder's own indent, a line at a time.
+        if [ "$trimmed" = '{{IGNORE_RULES_AWK}}' ]; then
+            while IFS= read -r aline || [ -n "$aline" ]; do
+                if [ -n "$aline" ]; then printf '%s%s\n' "${line%%[![:space:]]*}" "$aline"; else printf '\n'; fi
+            done <<<"${IGNORE_RULES_AWK#$'\n'}"
+            continue
+        fi
         line="${line//\{\{LANES\}\}/$LANES}"
         line="${line//\{\{NO_REFRESH\}\}/${NO_REFRESH:-none}}"
         line="${line//\{\{NOT_REFRESHED\}\}/${NOT_REFRESHED:-none}}"
