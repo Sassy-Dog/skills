@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 3
+# TEMPLATE: deps-cadence-impl · version 4
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -44,7 +44,7 @@
 #            opens the PR and enqueues it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 3
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 4
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -56,8 +56,8 @@
 # Each lane refreshes WITHIN its declared ranges (bun update, npm update,
 # flutter pub upgrade, cargo update). An exact pin never moves here; the bun and
 # npm lanes REPORT stale exact pins in the PR body and the job summary instead,
-# and still report them in a month where nothing else moved. pub and cargo
-# exact pins are not reported in this version.
+# and still report them in a month where nothing else moved. pub and cargo lanes
+# do the same in a second section of their own (version 4).
 #
 # Rules this workflow keeps, each pinned by a setup-deps gate:
 #   - ONE credential: a GitHub App installation token. No PAT and no
@@ -460,13 +460,161 @@ jobs:
               echo "**Could not evaluate** (not the same as current):"
               printf '%s' "$unevaluated" | sed 's/^/- /'
             fi
-            echo
-            echo "pub and cargo exact pins are not reported in this version."
           } > "$report"
           if [ -n "$unevaluated" ]; then
             echo "::warning::Some manifests could not be checked for stale exact pins; see the job summary."
           fi
           cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+      # The same report for pub and cargo lanes, in its OWN section so the bun
+      # and npm section above stays byte-identical (a consumer reads it by its
+      # literal strings). Same shape, same rule: reported, never bumped, and a
+      # manifest the tools could not evaluate is never read as current.
+      #   pub    an exact pin is a bare version under dependencies: or
+      #          dev_dependencies: in pubspec.yaml ("1.2.3"; pub reads a bare
+      #          version as that version only). The newest version comes from
+      #          `flutter pub outdated --json` (.latest), which resolves against
+      #          pub.dev with no credential, using the Flutter this job already
+      #          installed from the repo's pin.
+      #   cargo  an exact pin is a requirement of the form "=1.2.3" (a bare
+      #          "1.2.3" is a caret range). `cargo metadata --no-deps` reads
+      #          every workspace member's declared requirements offline and
+      #          resolves `workspace = true` inheritance and renames, so no TOML
+      #          is parsed by hand. The newest version comes from `cargo search`
+      #          (the crates.io search API: no credential, and it works on every
+      #          toolchain a repo may pin, which `cargo info` does not). Only
+      #          crates.io dependencies are checked; a path, git or alternative-
+      #          registry dependency has no crates.io latest to compare with.
+      - name: Report exact pins (pub and cargo lanes)
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || { echo "::error::jq is required for the exact-pin report."; exit 1; }
+          work="$RUNNER_TEMP/deps-cadence"
+          mkdir -p "$work"
+          report="$work/pins.md"
+          section="$work/pins-pub-cargo.md"
+
+          wanted=0
+          for lane in $LANES; do
+            case "${lane%%:*}" in pub|cargo) wanted=1 ;; esac
+          done
+          # No such lane: no section, so a bun- or npm-only repo's report is
+          # exactly what it was before this step existed.
+          [ "$wanted" -eq 1 ] || exit 0
+
+          # `flutter pub outdated --json`: {"packages": [{"package": ...,
+          # "latest": {"version": ...}}]}. A package with no latest is omitted.
+          parse_pub_outdated() {
+            jq -r '.packages[] | select(.latest.version != null) | "\(.package)\t\(.latest.version)"'
+          }
+          # Direct dependencies written as a bare whole version, optionally
+          # quoted: "name: 1.2.3". A caret or any other range is not a pin.
+          exact_pub_pins() {
+            awk '
+              /^[^[:space:]#]/ { sect = ($0 ~ /^(dependencies|dev_dependencies):/); next }
+              sect && /^  [A-Za-z_][A-Za-z0-9_]*:[[:space:]]*["\047]?[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.+-]*)?["\047]?[[:space:]]*(#.*)?$/ {
+                name = $0; sub(/^  /, "", name); sub(/:.*$/, "", name)
+                v = $0; sub(/^[^:]*:[[:space:]]*/, "", v); sub(/[[:space:]]+#.*$/, "", v); gsub(/["\047[:space:]]/, "", v)
+                print name "\t" v
+              }' "$1"
+          }
+          # Exact crates.io requirements of every workspace member, as
+          # "manifest<TAB>crate<TAB>=x.y.z".
+          exact_cargo_pins() {
+            jq -r '.packages[] | .manifest_path as $m | .dependencies[]
+                   | select((.source // "") | test("crates\\.io-index"))
+                   | select(.req | test("^=[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"))
+                   | "\($m)\t\(.name)\t\(.req)"'
+          }
+          # `cargo search` prints: name = "1.2.3"    # description
+          # A failed search returns 1 with no output, whatever it printed, and
+          # awk reads to the end of its input (no early exit, so cargo never
+          # sees a closed pipe); the caller treats both as "could not evaluate".
+          cargo_latest() {
+            local res
+            res="$(cargo search "$1" --limit 10 2>/dev/null)" || return 1
+            awk -v n="$1" '$1 == n && $2 == "=" && !found { gsub(/"/, "", $3); print $3; found = 1 }' <<<"$res"
+          }
+
+          behind=""
+          unevaluated=""
+          checked=0
+          seen=$'\n'
+          for lane in $LANES; do
+            eco="${lane%%:*}"
+            dir="${lane#*:}"
+            case "$eco" in pub|cargo) ;; *) continue ;; esac
+            rel="${dir#/}"
+            if [ "$eco" = "pub" ]; then
+              manifest="${rel:+$rel/}pubspec.yaml"
+              pins="$(exact_pub_pins "./$manifest")" || { unevaluated+="$manifest (not readable)"$'\n'; continue; }
+              [ -n "$pins" ] || continue
+              if ! out="$(cd "./$rel" && flutter pub outdated --json 2>/dev/null)" \
+                  || ! latest="$(parse_pub_outdated <<<"$out" 2>/dev/null)"; then
+                unevaluated+="$manifest (flutter pub outdated output not recognised)"$'\n'; continue
+              fi
+              # Counted only once the tool answered, as in the bun and npm report.
+              checked=$((checked + 1))
+              while IFS=$'\t' read -r name pinned; do
+                [ -n "$name" ] || continue
+                newest="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' <<<"$latest")"
+                if [ -n "$newest" ] && [ "$newest" != "$pinned" ]; then
+                  behind+="| \`$manifest\` | \`$name\` | $pinned | $newest |"$'\n'
+                  echo "::warning file=$manifest::Exact pin $name@$pinned is behind $newest; the monthly refresh can never move it."
+                fi
+              done <<<"$pins"
+            else
+              if ! out="$(cd "./$rel" && cargo metadata --no-deps --format-version 1 2>/dev/null)" \
+                  || ! pins="$(exact_cargo_pins <<<"$out" 2>/dev/null)"; then
+                unevaluated+="${rel:+$rel/}Cargo.toml (cargo metadata output not recognised)"$'\n'; continue
+              fi
+              [ -n "$pins" ] || continue
+              # A lane counts as evaluated only if every pin in it was looked up.
+              lane_ok=1
+              while IFS=$'\t' read -r mpath name pinned; do
+                [ -n "$name" ] || continue
+                manifest="${mpath#"$PWD"/}"
+                case "$seen" in *$'\n'"$manifest $name"$'\n'*) continue ;; esac
+                seen+="$manifest $name"$'\n'
+                newest="$(cargo_latest "$name" || true)"
+                if [ -z "$newest" ]; then
+                  unevaluated+="$manifest ($name: no latest version from cargo search)"$'\n'; lane_ok=0; continue
+                fi
+                if [ "$newest" != "${pinned#=}" ]; then
+                  behind+="| \`$manifest\` | \`$name\` | $pinned | $newest |"$'\n'
+                  echo "::warning file=$manifest::Exact pin $name@$pinned is behind $newest; the monthly refresh can never move it."
+                fi
+              done <<<"$pins"
+              if [ "$lane_ok" -eq 1 ]; then checked=$((checked + 1)); fi
+            fi
+          done
+
+          {
+            echo
+            echo "### Exact pins (pub and cargo lanes)"
+            echo
+            echo "A refresh moves nothing outside a declared range, so an exact pin never moves here. Bump a stale one by hand, or loosen it to a range. Check the Security tab first: a stale pin is how advisories accumulate unseen."
+            echo
+            if [ -n "$behind" ]; then
+              echo "| Manifest | Package | Pinned | Latest |"
+              echo "|---|---|---|---|"
+              printf '%s' "$behind"
+            elif [ "$checked" -gt 0 ]; then
+              echo "No exact pin is behind its latest release in the $checked manifest(s) evaluated."
+            elif [ -z "$unevaluated" ]; then
+              echo "No pub or cargo lane declares an exact pin."
+            fi
+            if [ -n "$unevaluated" ]; then
+              echo
+              echo "**Could not evaluate** (not the same as current):"
+              printf '%s' "$unevaluated" | sed 's/^/- /'
+            fi
+          } > "$section"
+          if [ -n "$unevaluated" ]; then
+            echo "::warning::Some pub or cargo manifests could not be checked for stale exact pins; see the job summary."
+          fi
+          cat "$section" >> "$report"
+          cat "$section" >> "$GITHUB_STEP_SUMMARY"
 
       # The ONLY thing that leaves this job: the lane files' diff, staged from
       # the recorded lane paths (the single `git add`), plus the two reports.

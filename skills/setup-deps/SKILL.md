@@ -688,14 +688,21 @@ Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
 `0` with a notice naming its open PR, so a re-dispatch never stacks branches; **any failed refresh
 fails the job**; only the lanes' manifests and lockfiles are staged; the PR body lists each lane's
-delta plus an **exact-pin report** for bun and npm lanes. That report also goes to the job summary
-and is written even in a month where nothing moved, because an exact pin never moves within a range
-and a stale one is a finding, not a clean month. pub and cargo exact pins are not reported in this
-version.
+delta plus an **exact-pin report**: `### Exact pins (bun and npm lanes)`, then, when a pub or cargo
+lane exists, a second section `### Exact pins (pub and cargo lanes)` in the same table format (pub
+from `flutter pub outdated --json`; cargo from `cargo metadata --no-deps` plus `cargo search`, so
+only crates.io dependencies pinned as `=x.y.z` are checked). The two sections are separate steps and
+the first is never reworded, because Sassy-Dog/routines reads it by literal strings. The report also
+goes to the job summary and is written even in a month where nothing moved, because an exact pin
+never moves within a range and a stale one is a finding, not a clean month. A pin the tools could
+not evaluate is listed as such, never as current. Bare `ignore:` holds in `dependabot.yml` are not
+reported against latest.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (both `3`: version 1 ran on the fleet and minted the token first; version 2 ran
-the package managers and the token in one job). The ownership rules in §1 apply to each. Re-render owned files with
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `4`: version 1 ran on the
+fleet and minted the token first; version 2 ran the package managers and the token in one job;
+version 3 split the token from the package managers; version 4 adds the pub and cargo exact-pin
+section). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
