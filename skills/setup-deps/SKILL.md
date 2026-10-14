@@ -557,7 +557,8 @@ the lock is the prerequisite change — the template becomes renderable the mome
 Dependabot proposes version updates; nothing refreshes a lockfile **within** its declared ranges
 unless something runs the package manager. `deps-cadence` does that once a month (09:00 UTC on the
 1st, plus `workflow_dispatch`) and opens one PR, `chore(deps): monthly lockfile refresh YYYY-MM`,
-which it enqueues. It is two files, rendered together and owned together:
+which it enqueues. It is two files, rendered together and owned together (plus an optional third,
+`deps-cadence-codegen.yml`, below):
 
 - `deps-cadence.yml` — **thin trigger only**: the `schedule:`, `workflow_dispatch` and a call to
   `./.github/workflows/deps-cadence-impl.yml`, passing exactly the two App secrets. It carries no
@@ -579,11 +580,12 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-cadence.sh \
   --detect-json /tmp/deps.json --visibility "$VISIBILITY" --merge-gate merge-queue \
   --out-dir /tmp/cadence [--compare-to .github/workflows/deps-cadence-impl.yml] \
   [--codegen-command CMD --codegen-toolchain TOOL --codegen-globs "GLOB GLOB"]   # all three, or none
+  [--keep-codegen]   # only to leave an owned codegen workflow as-is, see "Owned and unmanaged"
 ```
 
 `--merge-gate` is the §2 classification (`merge-queue`, `direct`, `none` or `unavailable`). The
 script prints a JSON summary (lanes, `not_refreshed`, `no_refresh_command`, each toolchain's source
-and version, `refusals`, `codegen`) and writes the files only when every check passes. Put the
+and version, `refusals`, `codegen`, `codegen_unmanaged`) and writes the files only when every check passes. Put the
 summary in the plan; on a refusal it still prints, so the plan can name exactly what the repo is
 missing.
 
@@ -591,8 +593,8 @@ missing.
 | --- | --- | --- |
 | `0` | rendered | copy the files the summary's `files` lists into `.github/workflows/` (the pair, plus the codegen workflow when its inputs were given) |
 | `3` | declined: public repo, merge gate not a queue, or no lane to refresh | report the skip and its reason; nothing to fix here |
-| `4` | refused: a toolchain pin is missing, floating or disagrees, or a codegen input is incomplete or unsafe | report each `REFUSED` line; the repo needs the pin first, or the codegen input corrected |
-| `5` | `--compare-to`: a committed lane is missing from the fresh render | report the `DIVERGED` lanes and stop |
+| `4` | refused: a toolchain pin is missing, floating or disagrees, or a codegen input is incomplete, repeated, whitespace-only or unsafe | report each `REFUSED` line; the repo needs the pin first, or the codegen input corrected |
+| `5` | `--compare-to`: a committed lane is missing from the fresh render; or an owned `deps-cadence-codegen.yml` exists and no codegen flag was given (`OWNED-UNMANAGED`, nothing written) | report the `DIVERGED` lanes and stop; for `OWNED-UNMANAGED` follow "Owned and unmanaged" below |
 | `1` | bad input or a malformed template | fix the input; never hand-render instead |
 
 What it derives, from the repo only:
@@ -780,6 +782,20 @@ it. A substantive PR therefore waits for a person by design.
 **No loop, proven by idempotence.** The App's push re-fires `synchronize` and `regen` then finds
 nothing. If a second regen ever did produce a diff, `push` refuses to stack a codegen commit on a
 head that already is one, so a non-deterministic generator fails loudly instead of looping.
+
+**Owned and unmanaged.** A re-sync without the three codegen flags would leave an owned
+`deps-cadence-codegen.yml` (it carries the `generated-by:` marker from an earlier run) neither
+refreshed nor mentioned, and a stale App-token push workflow is not a state to leave unreported. So
+when that file exists and no flag was given, `render-cadence.sh` exits `5` (`OWNED-UNMANAGED`),
+writes nothing, never deletes or rewrites the file, and prints `codegen_unmanaged` in the summary
+(`file`, `state`, and a `proposal` of the file's own command, toolchain and globs). Surface it in the
+plan as a **keep-or-remove** item, and show the proposal as starting values only: the human
+re-confirms each one, exactly as in "Propose, then confirm" (the renderer reads values back out of
+its own owned file for the proposal and never parses CI YAML). Then one of: **refresh**, passing all
+three confirmed flags; **remove**, the user deleting the file in the same plan; or **keep**, passing
+`--keep-codegen`, which renders the pair, leaves the file untouched and reports
+`codegen: kept (owned, not refreshed)` in the run report. A hand-written file has no marker and is
+not this case (below).
 
 **Ownership.** The file carries the `generated-by:` marker and its own `template-version` (`1`). A
 hand-written `deps-cadence-codegen.yml` (a repo may already carry one) has no marker: report it and

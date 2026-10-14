@@ -287,6 +287,9 @@ jobs:
       # scripts/test-deps-cadence-policy.sh extracts each block between its
       # BEGIN/END markers and runs it, so the test exercises this exact code.
       # render-cadence.sh extracts glob-to-re the same way. Keep the markers.
+      # It also parses the `denied='...'` line below with a sed that is coupled to
+      # its indentation and single quoting: change either only together with
+      # render-cadence.sh (the `cg_denied=` line).
       - name: Validate and apply the codegen patch
         run: |
           # BEGIN validate-codegen-patch
@@ -337,6 +340,7 @@ jobs:
           allowed="${allowed%|}"
           [ -n "$allowed" ] || reject "CODEGEN_GLOBS is empty"
           # Whatever the globs say, never a workflow, a manifest or a lockfile.
+          # (render-cadence.sh sed-parses the denied= line: keep it one single-quoted line.)
           denied='^\.git(hub)?/|(^|/)(package\.json|bun\.lockb?|package-lock\.json|pubspec\.yaml|pubspec\.lock|Cargo\.toml|Cargo\.lock)$'
 
           # git's own reading of the patch: any create, delete, rename, copy
@@ -455,6 +459,24 @@ jobs:
           fi
           exit 0
           # END classify-codegen-diff
+
+      # A secret this repo cannot reach resolves to the EMPTY STRING, never an
+      # error, so the mint below would fail as an opaque auth error. Name the
+      # cause and fail here. There is no fallback credential by design: a push
+      # made without the App token never fires CI on the cadence PR.
+      - name: Require the app credentials
+        env:
+          APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
+        run: |
+          missing=
+          [ -n "$APP_CLIENT_ID" ] || missing="$missing PLATFORM_WRITER_APP_CLIENT_ID"
+          [ -n "$APP_KEY" ]       || missing="$missing PLATFORM_WRITER_APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing Actions secret(s):$missing. Org secrets are private-visibility and do not reach public repositories. This workflow has no fallback credential on purpose: a push without the App token never fires CI."
+            exit 1
+          fi
+          echo "App credentials present."
 
       # Minted only now, after the patch is validated, applied and classified,
       # on a VM that never ran repo or package code. Scoped to this repository:

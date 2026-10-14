@@ -91,7 +91,7 @@ plus `bun.lock` / `Podfile.lock` sync where Dependabot cannot rewrite the lockfi
 monthly `deps-cadence` workflow that refreshes each lockfile within its declared ranges and reports
 stale exact pins (bun, npm, pub and cargo); a repo that commits generated code can opt in to a
 `deps-cadence-codegen` workflow that regenerates it on that PR and holds a non-trivial change for
-human review. Its
+human review (a re-sync that finds that owned workflow unmanaged reports it and writes nothing until you refresh, remove or keep it). Its
 `generated-by:` marker is committed inside every consumer repo's `.github/`, so the same ownership
 rule applies: the matcher accepts every producer name this generator has ever emitted, in either
 marker namespace, normalising to the current form on write, while a file with no marker at all is

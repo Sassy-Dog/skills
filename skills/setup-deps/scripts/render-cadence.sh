@@ -52,18 +52,46 @@
 # lanes a re-render loses is the state that once hid four lanes behind a
 # current-looking dependabot.yml marker (#169).
 #
+# The optional third file, deps-cadence-codegen.yml (#519), is driven by three
+# explicit inputs a human confirmed: --codegen-command, --codegen-toolchain and
+# --codegen-globs. ALL THREE or none: none renders no codegen file, any other
+# count REFUSES (exit 4), as does a whitespace-only value, a flag given twice,
+# an unknown toolchain, a multi-line / single-quoted / {{ }} command, or a glob
+# that is not a plain relative path glob with a literal leading directory and
+# extension, matches no tracked file, or reaches a workflow, manifest or
+# lockfile. The glob reader and the deny list are lifted from the codegen
+# template's own BEGIN/END blocks, so render time and run time cannot differ.
+#
+# OWNED-UNMANAGED (exit 5): with NO codegen flag, an owned (generated-by marker)
+# .github/workflows/deps-cadence-codegen.yml/.yaml already in the target would
+# be left stale and unreported by a routine re-sync. The run writes nothing,
+# names the file on stderr, and prints summary.codegen_unmanaged
+# {file, state: owned-unmanaged, proposal: {command, toolchain, globs}} (the
+# proposal is read back from the owned file, for the human to re-confirm). The
+# file is never deleted or rewritten. Resolve it by supplying the three flags
+# (refresh), deleting the file (remove), or --keep-codegen (keep: renders the
+# pair, exit 0, state "kept"). A hand-written file has no marker and is not
+# this case. --keep-codegen with any --codegen-* flag is bad input (exit 1).
+#
 # Usage:
 #   render-cadence.sh --detect-json FILE --visibility VIS --merge-gate GATE
 #                     --out-dir DIR [--compare-to FILE]
+#                     [--codegen-command CMD --codegen-toolchain TOOL
+#                      --codegen-globs "GLOB GLOB"]   # all three, or none
+#                     [--keep-codegen]
 #   render-cadence.sh ... --files-from LIST --root DIR   (test hook only, as in
 #                     detect-ecosystems.sh; nothing in SKILL.md uses it)
-# Writes DIR/deps-cadence.yml and DIR/deps-cadence-impl.yml only when every
-# check passes, and prints a JSON summary (lanes, toolchain sources, skips) on
-# stdout. Reasons go to stderr.
+# Writes DIR/deps-cadence.yml and DIR/deps-cadence-impl.yml (plus
+# DIR/deps-cadence-codegen.yml when the codegen inputs were given) only when
+# every check passes, and prints a JSON summary (lanes, toolchain sources,
+# skips, refusals, `codegen`, `codegen_unmanaged`, `files`) on stdout. Reasons
+# go to stderr.
 # Exit: 0 rendered · 1 bad input, malformed template or tool failure
 #       · 3 declined (public, no merge queue, nothing to refresh)
-#       · 4 refused (a toolchain pin is missing, floating or disagrees)
-#       · 5 diverged from --compare-to
+#       · 4 refused (a toolchain pin is missing, floating or disagrees, or a
+#         codegen input is incomplete, repeated or unsafe)
+#       · 5 diverged from --compare-to, or an owned codegen workflow this run
+#         was not told how to manage (OWNED-UNMANAGED, above)
 set -uo pipefail
 export LC_ALL=C
 
@@ -89,6 +117,8 @@ CODEGEN_COMMAND=""
 CODEGEN_TOOLCHAIN=""
 CODEGEN_GLOBS_ARG=""
 CODEGEN_SET=0
+CG_N_CMD=0; CG_N_TC=0; CG_N_GL=0
+KEEP_CODEGEN=0
 
 die() { echo "render-cadence: $1" >&2; exit "${2:-1}"; }
 
@@ -104,9 +134,10 @@ while [ "$#" -gt 0 ]; do
         --root)          ROOT_ARG="${2:-}"; shift 2 || exit 1 ;;
         --impl-template) IMPL_TPL="${2:-}"; shift 2 || exit 1 ;;   # test hook (mutations)
         --codegen-template) CODEGEN_TPL="${2:-}"; shift 2 || exit 1 ;;   # test hook (mutations)
-        --codegen-command)   CODEGEN_COMMAND="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); shift 2 || exit 1 ;;
-        --codegen-toolchain) CODEGEN_TOOLCHAIN="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); shift 2 || exit 1 ;;
-        --codegen-globs)     CODEGEN_GLOBS_ARG="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); shift 2 || exit 1 ;;
+        --codegen-command)   CODEGEN_COMMAND="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_CMD=$((CG_N_CMD + 1)); shift 2 || exit 1 ;;
+        --codegen-toolchain) CODEGEN_TOOLCHAIN="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_TC=$((CG_N_TC + 1)); shift 2 || exit 1 ;;
+        --codegen-globs)     CODEGEN_GLOBS_ARG="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_GL=$((CG_N_GL + 1)); shift 2 || exit 1 ;;
+        --keep-codegen)      KEEP_CODEGEN=1; shift ;;
         *) die "unknown argument '$1'" ;;
     esac
 done
@@ -126,6 +157,9 @@ esac
 for t in "$TRIGGER_TPL" "$IMPL_TPL"; do
     [ -r "$t" ] || die "template not readable: $t"
 done
+if [ "$KEEP_CODEGEN" -eq 1 ] && [ "$CODEGEN_SET" -gt 0 ]; then
+    die "--keep-codegen cannot be combined with --codegen-command, --codegen-toolchain or --codegen-globs: they refresh the owned codegen workflow, --keep-codegen leaves it untouched"
+fi
 if [ "$CODEGEN_SET" -gt 0 ]; then
     [ -r "$CODEGEN_TPL" ] || die "template not readable: $CODEGEN_TPL"
 fi
@@ -505,10 +539,17 @@ CODEGEN_GLOBS=""
 codegen_json='null'
 if [ "$CODEGEN_SET" -gt 0 ]; then
     cg_missing=""
-    [ -n "$CODEGEN_COMMAND" ]   || cg_missing+=" --codegen-command"
-    [ -n "$CODEGEN_TOOLCHAIN" ] || cg_missing+=" --codegen-toolchain"
-    [ -n "$CODEGEN_GLOBS_ARG" ] || cg_missing+=" --codegen-globs"
-    if [ -n "$cg_missing" ]; then
+    # Whitespace-only counts as empty: ' ' is not a command, toolchain or glob.
+    [ -n "${CODEGEN_COMMAND//[[:space:]]/}" ]   || cg_missing+=" --codegen-command"
+    [ -n "${CODEGEN_TOOLCHAIN//[[:space:]]/}" ] || cg_missing+=" --codegen-toolchain"
+    [ -n "${CODEGEN_GLOBS_ARG//[[:space:]]/}" ] || cg_missing+=" --codegen-globs"
+    cg_dup=""
+    [ "$CG_N_CMD" -le 1 ] || cg_dup+=" --codegen-command"
+    [ "$CG_N_TC" -le 1 ]  || cg_dup+=" --codegen-toolchain"
+    [ "$CG_N_GL" -le 1 ] || cg_dup+=" --codegen-globs"
+    if [ -n "$cg_dup" ]; then
+        refuse "codegen: given more than once:$cg_dup. Each codegen flag takes exactly one value; a repeat would silently keep the last."
+    elif [ -n "$cg_missing" ]; then
         refuse "codegen: all three of --codegen-command, --codegen-toolchain and --codegen-globs are required (missing or empty:$cg_missing). The codegen workflow commits to a PR branch, so its command, toolchain and generated paths are never guessed. Supply all three, or none."
     else
         cg_ok=1
@@ -579,18 +620,49 @@ if [ "$CODEGEN_SET" -gt 0 ]; then
     fi
 fi
 
+# An OWNED codegen workflow already in the target, with no codegen flag given,
+# would otherwise be neither refreshed nor mentioned: a routine re-sync exits 0
+# and the App-token push workflow goes stale unreported. Detected on disk at
+# ROOT (a marker-bearing file; a hand-written one has no marker and keeps its
+# existing treatment in SKILL.md). Nothing is deleted or rewritten. The
+# proposal values are read back out of OUR OWN owned file and are only a
+# proposal for the human to re-confirm.
+UNMANAGED_FILE=""
+unmanaged_json='null'
+if [ "$CODEGEN_SET" -eq 0 ]; then
+    for ext in yml yaml; do
+        f=".github/workflows/deps-cadence-codegen.$ext"
+        [ -r "$ROOT/$f" ] || continue
+        grep -qE 'generated-by: [^ ]+ \| template: deps-cadence-codegen( |$)' "$ROOT/$f" || continue
+        UNMANAGED_FILE="$f"
+        pr_cmd="$(sed -n "s/^ *CODEGEN_COMMAND: '\(.*\)'\$/\1/p" "$ROOT/$f" | head -1)"
+        pr_globs="$(sed -n "s/^ *CODEGEN_GLOBS: '\(.*\)'\$/\1/p" "$ROOT/$f" | head -1)"
+        pr_tc=""
+        if grep -q 'oven-sh/setup-bun' "$ROOT/$f"; then pr_tc=bun
+        elif grep -q 'actions/setup-node' "$ROOT/$f"; then pr_tc=node
+        elif grep -q 'id: flutter_pin' "$ROOT/$f"; then pr_tc=flutter
+        elif grep -q 'dtolnay/rust-toolchain' "$ROOT/$f"; then pr_tc=rust
+        fi
+        unmanaged_json="$(jq -nc --arg f "$f" --arg k "$KEEP_CODEGEN" --arg c "$pr_cmd" --arg t "$pr_tc" --arg g "$pr_globs" \
+            '{file: $f, state: (if $k == "1" then "kept" else "owned-unmanaged" end),
+              note: "owned by setup-deps, NOT refreshed by this run; keep-or-remove needs a human decision",
+              proposal: {command: $c, toolchain: $t, globs: ($g | split(" ") | map(select(length > 0)))}}')"
+        break
+    done
+fi
+
 # summary <refusals-text> — the JSON report on stdout. A refused render prints
 # it too (with the refusals and no files), so the plan can show what the repo
 # WOULD get and exactly what it is missing.
 summary() {
     jq -n --argjson lanes "$lanes_json" --argjson skipped "$skipped_json" \
         --arg norefresh "$NO_REFRESH" --argjson tc "$toolchains_json" --arg runner "ubuntu-latest" \
-        --arg refusals "$1" --argjson codegen "$codegen_json" \
+        --arg refusals "$1" --argjson codegen "$codegen_json" --argjson unmanaged "$unmanaged_json" \
         '{lanes: $lanes, lanes_line: ($lanes | join(" ")), not_refreshed: $skipped,
           no_refresh_command: ($norefresh | split(", ") | map(select(length > 0))),
           toolchains: $tc, runner: $runner,
           refusals: ($refusals | split("\n") | map(select(length > 0))),
-          codegen: $codegen,
+          codegen: $codegen, codegen_unmanaged: $unmanaged,
           files: (if $refusals == "" then [".github/workflows/deps-cadence.yml", ".github/workflows/deps-cadence-impl.yml"]
                     + (if $codegen != null then [".github/workflows/deps-cadence-codegen.yml"] else [] end) else [] end)}'
 }
@@ -611,6 +683,16 @@ if [ -n "$COMPARE_TO" ]; then
         case " $LANES " in *" $l "*) ;; *) echo "render-cadence: DIVERGED committed lane $l is not in the fresh render" >&2; diverged=1 ;; esac
     done
     [ "$diverged" -eq 0 ] || exit 5
+fi
+
+# --- an owned codegen workflow this run did not manage -----------------------------
+# Same family as DIVERGED: an owned file the re-render would leave stale, so
+# nothing is written (exit 5) until the human either supplies the three codegen
+# flags (refresh), deletes the file (remove) or passes --keep-codegen (keep).
+if [ -n "$UNMANAGED_FILE" ] && [ "$KEEP_CODEGEN" -eq 0 ]; then
+    echo "render-cadence: OWNED-UNMANAGED $UNMANAGED_FILE is owned by setup-deps but no --codegen-* flags were given, so it was NOT refreshed and would go stale. Decide: refresh it (pass all three --codegen-* flags; summary.codegen_unmanaged.proposal has the file's own values to re-confirm), remove it yourself, or keep it as-is (--keep-codegen). Nothing was written." >&2
+    summary ""
+    exit 5
 fi
 
 # --- render ---------------------------------------------------------------------------
@@ -684,5 +766,8 @@ mkdir -p "$OUT_DIR" || die "cannot create --out-dir '$OUT_DIR'"
 for f in "${OUT_FILES[@]}"; do
     cp "$WORK/$f" "$OUT_DIR/" || die "cannot write into '$OUT_DIR'"
 done
+if [ -n "$UNMANAGED_FILE" ]; then
+    echo "render-cadence: NOTE $UNMANAGED_FILE kept as-is (--keep-codegen); it is owned but not refreshed by this run." >&2
+fi
 
 summary ""

@@ -49,7 +49,14 @@
 #      relative path glob with a literal leading directory and a literal
 #      extension that matches a tracked file (any tracked file, including under
 #      directories lane detection ignores) and no workflow, manifest or
-#      lockfile. Seven renderer mutations each flip the case that pins them.
+#      lockfile. Nine renderer mutations each flip the case that pins them.
+#
+#   7a. An OWNED (generated-by marker) deps-cadence-codegen.yml/.yaml already in
+#      the target and NO codegen flag: exit 5 OWNED-UNMANAGED, nothing written,
+#      the file named and a proposal read back from it; the three flags refresh
+#      it, --keep-codegen leaves it as-is (exit 0, state kept), and a
+#      hand-written file without the marker is not this case. Whitespace-only
+#      values and a repeated codegen flag refuse (exit 4), as do partial inputs.
 #
 # Mutation-proof: the arms check must fail on a template with an arm removed,
 # and a template carrying an unknown token must fail the render.
@@ -536,6 +543,78 @@ expect_rc "codegen on a public repo" 3 && ok "a public repo is declined (exit 3)
 run_render cg --merge-gate direct "${cg_args[@]}"
 expect_rc "codegen without a merge queue" 3 && ok "a repo without a merge queue is declined (exit 3) whatever codegen inputs are given"
 
+# Whitespace-only values are empty; a repeated flag is refused, not last-wins.
+cg_refused "a whitespace-only command" "missing or empty: --codegen-command" --codegen-command ' ' --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+cg_refused "a whitespace-only toolchain" "missing or empty: --codegen-toolchain" --codegen-command x --codegen-toolchain ' ' --codegen-globs "$CG_GLOBS"
+cg_refused "whitespace-only globs" "missing or empty: --codegen-globs" --codegen-command x --codegen-toolchain flutter --codegen-globs ' '
+cg_refused "a repeated command" "given more than once: --codegen-command" --codegen-command x --codegen-command y --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+cg_refused "a repeated toolchain" "given more than once: --codegen-toolchain" --codegen-command x --codegen-toolchain flutter --codegen-toolchain bun --codegen-globs "$CG_GLOBS"
+cg_refused "repeated globs" "given more than once: --codegen-globs" --codegen-command x --codegen-toolchain flutter --codegen-globs "$CG_GLOBS" --codegen-globs "$CG_GLOBS"
+# Partial inputs beyond the single-flag cases above.
+cg_refused "toolchain only" "missing or empty: --codegen-command --codegen-globs" --codegen-toolchain flutter
+cg_refused "command and globs, no toolchain" "missing or empty: --codegen-toolchain" --codegen-command x --codegen-globs "$CG_GLOBS"
+
+# --- an OWNED codegen file left unmanaged by a flagless re-sync ---------------------
+# Render it for real, plant that output in the target as the earlier run would
+# have, then re-render WITHOUT the flags. The owned file must not go stale
+# silently: exit 5, nothing written, the file named, the proposal read back
+# from the file itself. A hand-written file (no marker) is a different case and
+# must not trigger it.
+run_render cg "${cg_args[@]}"
+planted="$WORK/cg-owned-codegen.yml"
+cp "$OUTDIR/deps-cadence-codegen.yml" "$planted"
+plant_codegen() { # <tree> <source-file> [ext]
+    mkdir -p "$WORK/$1/.github/workflows"
+    cp "$2" "$WORK/$1/.github/workflows/deps-cadence-codegen.${3:-yml}"
+}
+plant_codegen cg "$planted"
+run_render cg
+if expect_rc "owned codegen, no flags" 5; then
+    if [ "$(jqv .codegen_unmanaged.state)" = "owned-unmanaged" ] \
+        && [ "$(jqv .codegen_unmanaged.file)" = ".github/workflows/deps-cadence-codegen.yml" ] \
+        && grep -qF 'OWNED-UNMANAGED' <<<"$ERR" && [ "$(jqv .codegen)" = "null" ]; then
+        ok "an owned codegen file with no codegen flags exits 5 (OWNED-UNMANAGED), names the file, writes nothing"
+    else
+        bad "owned codegen file not reported as owned-unmanaged: $ERR / $OUT"
+    fi
+    if [ "$(jqv .codegen_unmanaged.proposal.toolchain)" = "flutter" ] \
+        && [ "$(jqv .codegen_unmanaged.proposal.command)" = "$CG_CMD" ] \
+        && [ "$(jqv '.codegen_unmanaged.proposal.globs | join(" ")')" = "$CG_GLOBS" ]; then
+        ok "the proposal carries the owned file's own command, toolchain and globs"
+    else
+        bad "owned-unmanaged proposal does not round-trip the file's values: $(jqv .codegen_unmanaged.proposal)"
+    fi
+fi
+# The .yaml spelling is owned too.
+mv "$WORK/cg/.github/workflows/deps-cadence-codegen.yml" "$WORK/cg/.github/workflows/deps-cadence-codegen.yaml"
+run_render cg
+expect_rc "owned codegen .yaml, no flags" 5 && ok "the .yaml spelling of the owned file is caught too" || true
+mv "$WORK/cg/.github/workflows/deps-cadence-codegen.yaml" "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"
+# Refresh: the three flags manage it, no finding.
+run_render cg "${cg_args[@]}"
+{ expect_rc "owned codegen, refreshed" 0 && [ "$(jqv .codegen_unmanaged.state)" = "null" ]; } \
+    && ok "supplying the three flags refreshes the owned file with no unmanaged finding" || bad "refresh of an owned codegen file reported unmanaged"
+# Keep: acknowledged, the pair renders, the file is reported as kept and untouched.
+before="$(cksum < "$WORK/cg/.github/workflows/deps-cadence-codegen.yml")"
+run_render cg --keep-codegen
+if expect_rc "owned codegen, --keep-codegen" 0 && [ "$(jqv .codegen_unmanaged.state)" = "kept" ] \
+    && [ ! -e "$OUTDIR/deps-cadence-codegen.yml" ] && [ "$(jqv '.files | length')" = "2" ] \
+    && [ "$before" = "$(cksum < "$WORK/cg/.github/workflows/deps-cadence-codegen.yml")" ]; then
+    ok "--keep-codegen renders the pair, reports state kept, and leaves the owned file untouched"
+else
+    bad "--keep-codegen mishandled: $ERR / $OUT"
+fi
+run_render cg --keep-codegen "${cg_args[@]}"
+[ "$RC" -eq 1 ] && ok "--keep-codegen with codegen flags is bad input (exit 1)" || bad "--keep-codegen with codegen flags exited $RC"
+# A hand-written file (no marker) is not the owned case.
+rm -f "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"
+printf 'name: my own codegen\non: pull_request\n' > "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"
+run_render cg
+{ expect_rc "hand-written codegen, no flags" 0 && [ "$(jqv .codegen_unmanaged)" = "null" ]; } \
+    && ok "a hand-written deps-cadence-codegen.yml (no marker) does not trigger OWNED-UNMANAGED" \
+    || bad "a hand-written codegen file was treated as owned: $ERR"
+rm -f "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"
+
 # Mutations of the renderer itself. Each must flip the case that pins it.
 mutate_render() { # <name> <from> <to> <case-fn> <expect-rc-without-the-rule: not this>
     local name="$1" from="$2" to="$3" fn="$4" want_not="$5" real="$RENDER"
@@ -567,6 +646,10 @@ mutate_render "no-match check dropped" 'elif [ "$hits" -eq 0 ]; then' 'elif fals
 mutate_render "single-quote check dropped" 'elif [[ "$CODEGEN_COMMAND" == *"'"'"'"* ]]; then' 'elif false; then' case_quote 4
 mutate_render "literal-directory check dropped" 'if [ "$first" = "$g" ] || [[ "$first" == *[*?]* ]] || [[ "$first" == .git* ]]; then' 'if false; then' case_wild_first 4
 mutate_render "literal-extension check dropped" 'if ! [[ "${g##*/}" =~ \.[A-Za-z0-9]{1,8}$ ]]; then' 'if false; then' case_dir_only 4
+case_hand_written() { printf 'name: mine\n' > "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"; run_render cg; rm -f "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"; }
+case_owned_unmanaged() { plant_codegen cg "$planted"; run_render cg; rm -f "$WORK/cg/.github/workflows/deps-cadence-codegen.yml"; }
+mutate_render "owned-unmanaged exit dropped" 'if [ -n "$UNMANAGED_FILE" ] && [ "$KEEP_CODEGEN" -eq 0 ]; then' 'if false; then' case_owned_unmanaged 5
+mutate_render "owned marker check dropped" "grep -qE 'generated-by: [^ ]+ \\| template: deps-cadence-codegen( |\$)' \"\$ROOT/\$f\" || continue" ':' case_hand_written 0
 mutate_render "codegen toolchain flags leak into the impl" 'render "$IMPL_TPL" "${IMPL_FLAGS#,}"' 'render "$IMPL_TPL" "${IMPL_FLAGS#,}${TF_bun}"' case_bun_codegen 0
 
 exit "$fail"
