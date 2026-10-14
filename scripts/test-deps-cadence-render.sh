@@ -539,6 +539,40 @@ cg_refused "an expression in the command" "'{{' or '}}'" --codegen-command 'echo
 # The globs are the push job's allowlist: nothing broad, nothing that is a
 # workflow, manifest or lockfile, nothing that names no file.
 cg_refused "a glob that is a lockfile" "a workflow, manifest or lockfile" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/mobile/*.lock"
+# #526: names the deny list gained. A Podfile.lock under a glob must be refused at render time.
+tree cgpods <<EOF
+apps/mobile/pubspec.yaml	name: app\\nenvironment:\\n  sdk: ^3.5.0
+apps/mobile/pubspec.lock	lock
+apps/mobile/.fvmrc	{"flutter": "3.44.1"}
+ios/Runner/Generated/a.g.dart	// generated
+ios/Podfile	source
+ios/Podfile.lock	lock
+web/yarn.lock	lock
+web/pnpm-lock.yaml	lock
+web/.npmrc	rc
+.github/workflows/ci.yml	name: ci
+EOF
+# Podfile and Gemfile have no extension, so no render-legal glob reaches them: they have no render case.
+tree cgrb <<EOF
+apps/mobile/pubspec.yaml	name: app\\nenvironment:\\n  sdk: ^3.5.0
+apps/mobile/pubspec.lock	lock
+apps/mobile/.fvmrc	{"flutter": "3.44.1"}
+ios/Runner/Generated/a.g.dart	// generated
+ios/Gemfile.lock	lock
+web/pnpm-workspace.yaml	packages: []
+.github/workflows/ci.yml	name: ci
+EOF
+cg_named() { # glob tree path
+    run_render "$2" --codegen-command x --codegen-toolchain flutter --codegen-globs "$1"
+    expect_rc "codegen: glob $1 reaches $3" 4 || return
+    if grep -qF "matches $3, a workflow, manifest or lockfile" <<<"$ERR"; then ok "codegen refused glob $1 naming $3"; else bad "glob $1 refusal does not name $3: $ERR"; fi
+}
+cg_named "ios/**/*.lock" cgpods ios/Podfile.lock
+cg_named "web/*.lock" cgpods web/yarn.lock
+cg_named "web/*.yaml" cgpods web/pnpm-lock.yaml
+cg_named "web/*.npmrc" cgpods web/.npmrc
+cg_named "web/*.yaml" cgrb web/pnpm-workspace.yaml
+cg_named "ios/*.lock" cgrb ios/Gemfile.lock
 cg_refused "a glob that reaches a manifest" "pubspec.yaml, a workflow" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/**/*.yaml"
 cg_refused "a glob that reaches a workflow" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs ".github/workflows/*.yml"
 cg_refused "a glob that starts with a wildcard" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs "**/*.dart"

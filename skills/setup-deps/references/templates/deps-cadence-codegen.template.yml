@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-codegen · version 1
+# TEMPLATE: deps-cadence-codegen · version 2
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand, and ONLY when the caller supplies all three codegen facts
 # (--codegen-command, --codegen-toolchain, --codegen-globs). It is opt-in:
@@ -21,7 +21,7 @@
 #                         refusals as deps-cadence-impl).
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-codegen | template-version: 1
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-codegen | template-version: 2
 #
 # Regenerate committed codegen on the monthly deps-cadence PR.
 #
@@ -341,7 +341,7 @@ jobs:
           [ -n "$allowed" ] || reject "CODEGEN_GLOBS is empty"
           # Whatever the globs say, never a workflow, a manifest or a lockfile.
           # (render-cadence.sh sed-parses the denied= line: keep it one single-quoted line.)
-          denied='^\.git(hub)?/|(^|/)(package\.json|bun\.lockb?|package-lock\.json|pubspec\.yaml|pubspec\.lock|Cargo\.toml|Cargo\.lock)$'
+          denied='^\.git(hub)?/|(^|/)(package\.json|bun\.lockb?|package-lock\.json|pubspec\.yaml|pubspec\.lock|Cargo\.toml|Cargo\.lock|Podfile|Podfile\.lock|yarn\.lock|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|Gemfile|Gemfile\.lock)$'
 
           # git's own reading of the patch: any create, delete, rename, copy
           # or mode change shows up in --summary.
