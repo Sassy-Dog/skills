@@ -85,7 +85,8 @@ echo "template-actionlint tests (work: $WORK)" >&2
 # variant|template|ON-flags (comma-separated)|TOKEN=VALUE;TOKEN=VALUE
 # One entry per documented render shape. The two lockfile templates each render
 # nested and at the repo root; auto-merge renders one arm per merge strategy;
-# the deps-cadence trigger and impl render as a pair per shape.
+# the deps-cadence trigger and impl render as a pair per shape, and the optional
+# codegen workflow renders beside them (one toolchain per shape).
 VARIANTS=(
     "auto-merge-queue|dependabot-auto-merge.template.yml|MERGE_QUEUE|RUNNER=[self-hosted, linux, sassy-dog]"
     "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|RUNNER=ubuntu-latest"
@@ -100,6 +101,12 @@ VARIANTS=(
     "cadence-files|deps-cadence-impl.template.yml|BUN_PIN_FILE,NODE_PIN_LITERAL,FLUTTER,RUST|LANES=bun:/web npm:/tools pub:/app cargo:/;NO_REFRESH=github-actions, gradle;NOT_REFRESHED=none;BUN_VERSION_FILE=.bun-version;NODE_VERSION=22.11.0;FLUTTER_PIN_FILE=app/.fvmrc;RUST_PIN_FILE=rust-toolchain.toml"
     "cadence-literals|deps-cadence.template.yml||"
     "cadence-literals|deps-cadence-impl.template.yml|BUN_PIN_LITERAL,NODE_PIN_FILE|LANES=bun:/ npm:/;NO_REFRESH=none;NOT_REFRESHED=none;BUN_VERSION=1.3.5;NODE_VERSION_FILE=.nvmrc"
+    # The optional codegen workflow renders beside the pair, one tool per shape
+    # (the renderer sets up exactly the codegen toolchain and nothing else).
+    # No `&` or `;` in a value: bash 5.2 reads `&` as the matched text in a
+    # replacement, and `;` separates the substitutions.
+    "cadence-files|deps-cadence-codegen.template.yml|FLUTTER|CODEGEN_COMMAND=dart run build_runner build;CODEGEN_GLOBS=app/lib/gen/**/*.g.dart app/test/**/*.mocks.dart;FLUTTER_PIN_FILE=app/.fvmrc"
+    "cadence-literals|deps-cadence-codegen.template.yml|BUN_PIN_LITERAL|CODEGEN_COMMAND=bunx graphql-codegen;CODEGEN_GLOBS=src/gen/*.ts;BUN_VERSION=1.3.5"
 )
 
 # The one expected finding: `sassy-dog` is a custom self-hosted label actionlint

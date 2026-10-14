@@ -23,7 +23,7 @@ Everything here is plain Markdown plus Bash. Claude Code consumes it as a plugin
 | `sassy-dog` | `setup-repo` | Orchestrator: owns the broad "set up this repo" intent — runs `setup-config` → `setup-hooks` → `setup-deps` strictly in sequence behind one combined plan gate, and reports what ran, what was skipped, and why |
 | `sassy-dog` | `setup-config` | Generator/refresher: writes and re-syncs a repo's `.claude/sassy-dog/*.md` workflow-skill config plus its `.claude/settings.json` plugin declaration |
 | `sassy-dog` | `setup-hooks` | Generator/refresher: renders a repo's Claude Code hooks (`.claude/hooks/sassydog-*.sh` + `.claude/settings.json` wiring, or `settings.local.json` in a public repo) — a stack-specific format-on-edit/lint dispatcher from detection, plus an always-on stray-artifact guard that keeps throwaway binaries out of the repo root; re-runnable as the stack evolves |
-| `sassy-dog` | `setup-deps` | Generator/refresher: renders a repo's `.github/dependabot.yml` (grouped, per detected ecosystem) plus its dependency automation workflows — auto-merge, `bun.lock` sync, pod lockfile sync, the monthly `deps-cadence` lockfile refresh — from stack detection; re-runnable as the stack evolves |
+| `sassy-dog` | `setup-deps` | Generator/refresher: renders a repo's `.github/dependabot.yml` (grouped, per detected ecosystem) plus its dependency automation workflows — auto-merge, `bun.lock` sync, pod lockfile sync, the monthly `deps-cadence` lockfile refresh, and (opt-in) a codegen workflow that regenerates committed generated code on the refresh PR — from stack detection; re-runnable as the stack evolves |
 | `sassy-dog` | `github-issues` | Issue/board reads, stale-issue detection, idempotent dedupe-then-file issue creation |
 | `sassy-dog` | `sentry-triage` | Gate-and-escalate Sentry triage; qualifying hits escalate via `github-issues` |
 | `sassy-dog` | `pr-shepherd` | PR lifecycle mechanics — check polling, merge queue vs direct merge, coupled-PR serialization, worktree teardown |
@@ -89,7 +89,9 @@ repo's ecosystems from tracked files, renders `.github/dependabot.yml` grouped p
 adds the workflows that keep Dependabot's PRs mergeable — auto-merge behind a real required check,
 plus `bun.lock` / `Podfile.lock` sync where Dependabot cannot rewrite the lockfile itself, and a
 monthly `deps-cadence` workflow that refreshes each lockfile within its declared ranges and reports
-stale exact pins (bun, npm, pub and cargo). Its
+stale exact pins (bun, npm, pub and cargo); a repo that commits generated code can opt in to a
+`deps-cadence-codegen` workflow that regenerates it on that PR and holds a non-trivial change for
+human review (a re-sync that finds that owned workflow unmanaged reports it and writes nothing until you refresh, remove or keep it). Its
 `generated-by:` marker is committed inside every consumer repo's `.github/`, so the same ownership
 rule applies: the matcher accepts every producer name this generator has ever emitted, in either
 marker namespace, normalising to the current form on write, while a file with no marker at all is

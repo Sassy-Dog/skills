@@ -52,18 +52,46 @@
 # lanes a re-render loses is the state that once hid four lanes behind a
 # current-looking dependabot.yml marker (#169).
 #
+# The optional third file, deps-cadence-codegen.yml (#519), is driven by three
+# explicit inputs a human confirmed: --codegen-command, --codegen-toolchain and
+# --codegen-globs. ALL THREE or none: none renders no codegen file, any other
+# count REFUSES (exit 4), as does a whitespace-only value, a flag given twice,
+# an unknown toolchain, a multi-line / single-quoted / {{ }} command, or a glob
+# that is not a plain relative path glob with a literal leading directory and
+# extension, matches no tracked file, or reaches a workflow, manifest or
+# lockfile. The glob reader and the deny list are lifted from the codegen
+# template's own BEGIN/END blocks, so render time and run time cannot differ.
+#
+# OWNED-UNMANAGED (exit 5): with NO codegen flag, an owned (generated-by marker)
+# .github/workflows/deps-cadence-codegen.yml/.yaml already in the target would
+# be left stale and unreported by a routine re-sync. The run writes nothing,
+# names the file on stderr, and prints summary.codegen_unmanaged
+# {file, state: owned-unmanaged, proposal: {command, toolchain, globs}} (the
+# proposal is read back from the owned file, for the human to re-confirm). The
+# file is never deleted or rewritten. Resolve it by supplying the three flags
+# (refresh), deleting the file (remove), or --keep-codegen (keep: renders the
+# pair, exit 0, state "kept"). A hand-written file has no marker and is not
+# this case. --keep-codegen with any --codegen-* flag is bad input (exit 1).
+#
 # Usage:
 #   render-cadence.sh --detect-json FILE --visibility VIS --merge-gate GATE
 #                     --out-dir DIR [--compare-to FILE]
+#                     [--codegen-command CMD --codegen-toolchain TOOL
+#                      --codegen-globs "GLOB GLOB"]   # all three, or none
+#                     [--keep-codegen]
 #   render-cadence.sh ... --files-from LIST --root DIR   (test hook only, as in
 #                     detect-ecosystems.sh; nothing in SKILL.md uses it)
-# Writes DIR/deps-cadence.yml and DIR/deps-cadence-impl.yml only when every
-# check passes, and prints a JSON summary (lanes, toolchain sources, skips) on
-# stdout. Reasons go to stderr.
+# Writes DIR/deps-cadence.yml and DIR/deps-cadence-impl.yml (plus
+# DIR/deps-cadence-codegen.yml when the codegen inputs were given) only when
+# every check passes, and prints a JSON summary (lanes, toolchain sources,
+# skips, refusals, `codegen`, `codegen_unmanaged`, `files`) on stdout. Reasons
+# go to stderr.
 # Exit: 0 rendered · 1 bad input, malformed template or tool failure
 #       · 3 declined (public, no merge queue, nothing to refresh)
-#       · 4 refused (a toolchain pin is missing, floating or disagrees)
-#       · 5 diverged from --compare-to
+#       · 4 refused (a toolchain pin is missing, floating or disagrees, or a
+#         codegen input is incomplete, repeated or unsafe)
+#       · 5 diverged from --compare-to, or an owned codegen workflow this run
+#         was not told how to manage (OWNED-UNMANAGED, above)
 set -uo pipefail
 export LC_ALL=C
 
@@ -76,6 +104,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_DIR="$SCRIPT_DIR/../references/templates"
 TRIGGER_TPL="$TEMPLATE_DIR/deps-cadence.template.yml"
 IMPL_TPL="$TEMPLATE_DIR/deps-cadence-impl.template.yml"
+CODEGEN_TPL="$TEMPLATE_DIR/deps-cadence-codegen.template.yml"
 
 DETECT=""
 VISIBILITY=""
@@ -84,6 +113,12 @@ OUT_DIR=""
 COMPARE_TO=""
 FILES_FROM=""
 ROOT_ARG=""
+CODEGEN_COMMAND=""
+CODEGEN_TOOLCHAIN=""
+CODEGEN_GLOBS_ARG=""
+CODEGEN_SET=0
+CG_N_CMD=0; CG_N_TC=0; CG_N_GL=0
+KEEP_CODEGEN=0
 
 die() { echo "render-cadence: $1" >&2; exit "${2:-1}"; }
 
@@ -98,6 +133,11 @@ while [ "$#" -gt 0 ]; do
         --files-from)    FILES_FROM="${2:-}"; shift 2 || exit 1 ;;
         --root)          ROOT_ARG="${2:-}"; shift 2 || exit 1 ;;
         --impl-template) IMPL_TPL="${2:-}"; shift 2 || exit 1 ;;   # test hook (mutations)
+        --codegen-template) CODEGEN_TPL="${2:-}"; shift 2 || exit 1 ;;   # test hook (mutations)
+        --codegen-command)   CODEGEN_COMMAND="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_CMD=$((CG_N_CMD + 1)); shift 2 || exit 1 ;;
+        --codegen-toolchain) CODEGEN_TOOLCHAIN="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_TC=$((CG_N_TC + 1)); shift 2 || exit 1 ;;
+        --codegen-globs)     CODEGEN_GLOBS_ARG="${2:-}"; CODEGEN_SET=$((CODEGEN_SET + 1)); CG_N_GL=$((CG_N_GL + 1)); shift 2 || exit 1 ;;
+        --keep-codegen)      KEEP_CODEGEN=1; shift ;;
         *) die "unknown argument '$1'" ;;
     esac
 done
@@ -117,6 +157,12 @@ esac
 for t in "$TRIGGER_TPL" "$IMPL_TPL"; do
     [ -r "$t" ] || die "template not readable: $t"
 done
+if [ "$KEEP_CODEGEN" -eq 1 ] && [ "$CODEGEN_SET" -gt 0 ]; then
+    die "--keep-codegen cannot be combined with --codegen-command, --codegen-toolchain or --codegen-globs: they refresh the owned codegen workflow, --keep-codegen leaves it untouched"
+fi
+if [ "$CODEGEN_SET" -gt 0 ]; then
+    [ -r "$CODEGEN_TPL" ] || die "template not readable: $CODEGEN_TPL"
+fi
 
 # --- the two declines come first: nothing below matters for these repos ------
 if [ "$VISIBILITY" = "public" ]; then
@@ -199,7 +245,7 @@ refuse() { REFUSALS+="$1"$'\n'; }
 CI_FILES=""
 while IFS= read -r wf; do
     [ -n "$wf" ] || continue
-    case "${wf##*/}" in deps-cadence.yml|deps-cadence.yaml|deps-cadence-impl.yml|deps-cadence-impl.yaml) continue ;; esac
+    case "${wf##*/}" in deps-cadence.yml|deps-cadence.yaml|deps-cadence-impl.yml|deps-cadence-impl.yaml|deps-cadence-codegen.yml|deps-cadence-codegen.yaml) continue ;; esac
     [ -r "$ROOT/$wf" ] || continue
     if grep -qE 'generated-by: [^ ]+ \| template: ' "$ROOT/$wf"; then
         continue
@@ -410,7 +456,9 @@ BUN_RECURSIVE_MIN="1.4.0"
 # by_depth — sort paths shallowest first, then by name.
 by_depth() { awk -F/ '{print NF "\t" $0}' | sort -t$'\t' -k1,1n -k2 | cut -f2-; }
 
-FLAGS=""
+# Flags are kept per tool: the impl takes the flags of the tools its lanes need,
+# the optional codegen workflow takes the flags of its one tool.
+TF_bun=""; TF_node=""; TF_flutter=""; TF_rust=""
 toolchains_json='{}'
 add_tc_json() { # <tool> <kind> <source> <version> <from>
     toolchains_json="$(jq -c --arg t "$1" --arg k "$2" --arg s "$3" --arg v "$4" --arg f "$5" \
@@ -419,10 +467,15 @@ add_tc_json() { # <tool> <kind> <source> <version> <from>
 BUN_VERSION_FILE=""; BUN_VERSION=""; NODE_VERSION_FILE=""; NODE_VERSION=""
 FLUTTER_PIN_FILE=""; RUST_PIN_FILE=""
 
-if grep -qx bun <<<"$TOOLCHAINS"; then
+# The codegen toolchain needs its pin derived even when no lane uses that tool.
+# An unknown tool is its own refusal (below); it derives nothing here.
+WANT_TC="$TOOLCHAINS"
+case "$CODEGEN_TOOLCHAIN" in bun|node|flutter|rust) WANT_TC+="$CODEGEN_TOOLCHAIN"$'\n' ;; esac
+
+if grep -qx bun <<<"$WANT_TC"; then
     if derive_setup_pin bun bun-version bun-version-file .bun-version .tool-versions package.json; then
-        if [ "$PIN_KIND" = "file" ]; then FLAGS+=",BUN_PIN_FILE"; BUN_VERSION_FILE="$PIN_VALUE"
-        else FLAGS+=",BUN_PIN_LITERAL"; BUN_VERSION="$PIN_VALUE"; fi
+        if [ "$PIN_KIND" = "file" ]; then TF_bun=",BUN_PIN_FILE"; BUN_VERSION_FILE="$PIN_VALUE"
+        else TF_bun=",BUN_PIN_LITERAL"; BUN_VERSION="$PIN_VALUE"; fi
         add_tc_json bun "$PIN_KIND" "$PIN_VALUE" "$PIN_VERSION" "$PIN_FROM"
         # A workspace-root lane runs `bun update --recursive`, which moves the
         # members only from bun 1.4.0: 1.2.20-1.3.14 accept the flag and leave
@@ -439,14 +492,14 @@ if grep -qx bun <<<"$TOOLCHAINS"; then
         done
     fi
 fi
-if grep -qx node <<<"$TOOLCHAINS"; then
+if grep -qx node <<<"$WANT_TC"; then
     if derive_setup_pin node node-version node-version-file .nvmrc .node-version .tool-versions; then
-        if [ "$PIN_KIND" = "file" ]; then FLAGS+=",NODE_PIN_FILE"; NODE_VERSION_FILE="$PIN_VALUE"
-        else FLAGS+=",NODE_PIN_LITERAL"; NODE_VERSION="$PIN_VALUE"; fi
+        if [ "$PIN_KIND" = "file" ]; then TF_node=",NODE_PIN_FILE"; NODE_VERSION_FILE="$PIN_VALUE"
+        else TF_node=",NODE_PIN_LITERAL"; NODE_VERSION="$PIN_VALUE"; fi
         add_tc_json node "$PIN_KIND" "$PIN_VALUE" "$PIN_VERSION" "$PIN_FROM"
     fi
 fi
-if grep -qx flutter <<<"$TOOLCHAINS"; then
+if grep -qx flutter <<<"$WANT_TC"; then
     # Priority: .fvmrc, then .fvm/fvm_config.json, then the pub lanes' own
     # pubspec.yaml (only an exact environment.flutter counts as a pin there).
     pubspecs="$(for l in $LANES; do
@@ -457,22 +510,145 @@ if grep -qx flutter <<<"$TOOLCHAINS"; then
                 by_depth <<<"$pubspecs"; } | grep -v '^$')"
     derive_file_pin flutter "Read the Flutter pin" version '(^|/)pubspec\.yaml$' "$cands"; rc=$?
     if [ "$rc" -eq 0 ]; then
-        FLAGS+=",FLUTTER"; FLUTTER_PIN_FILE="$PIN_VALUE"
+        TF_flutter=",FLUTTER"; FLUTTER_PIN_FILE="$PIN_VALUE"
         add_tc_json flutter file "$PIN_VALUE" "$PIN_VERSION" "$PIN_VALUE"
     elif [ "$rc" -eq 3 ]; then
         refuse "flutter: no pin. Track .fvmrc or .fvm/fvm_config.json with an exact version (or an exact environment.flutter in a pub lane's pubspec.yaml), then re-render."
     fi
 fi
-if grep -qx rust <<<"$TOOLCHAINS"; then
+if grep -qx rust <<<"$WANT_TC"; then
     cands="$( { grep -E '(^|/)rust-toolchain\.toml$' <<<"$FILES" | by_depth
                 grep -E '(^|/)rust-toolchain$' <<<"$FILES" | by_depth; } | grep -v '^$')"
     derive_file_pin rust "Read the Rust toolchain pin" toolchain '' "$cands"; rc=$?
     if [ "$rc" -eq 0 ]; then
-        FLAGS+=",RUST"; RUST_PIN_FILE="$PIN_VALUE"
+        TF_rust=",RUST"; RUST_PIN_FILE="$PIN_VALUE"
         add_tc_json rust file "$PIN_VALUE" "$PIN_VERSION" "$PIN_VALUE"
     elif [ "$rc" -eq 3 ]; then
         refuse "rust: no pin. Track a rust-toolchain.toml whose channel is an exact version (X.Y.Z), then re-render."
     fi
+fi
+
+# --- the optional codegen workflow ------------------------------------------------------
+# deps-cadence-codegen.yml regenerates the repo's COMMITTED generated code on the
+# cadence PR. It is opt-in and its three facts are explicit inputs a human
+# confirmed (SKILL.md may propose them from the repo's CI codegen-freshness job;
+# this script never parses workflow YAML to derive them). Nothing supplied: no
+# codegen file. Anything but all three: REFUSED, never a guess.
+CODEGEN=0
+CODEGEN_GLOBS=""
+codegen_json='null'
+if [ "$CODEGEN_SET" -gt 0 ]; then
+    cg_missing=""
+    # Whitespace-only counts as empty: ' ' is not a command, toolchain or glob.
+    [ -n "${CODEGEN_COMMAND//[[:space:]]/}" ]   || cg_missing+=" --codegen-command"
+    [ -n "${CODEGEN_TOOLCHAIN//[[:space:]]/}" ] || cg_missing+=" --codegen-toolchain"
+    [ -n "${CODEGEN_GLOBS_ARG//[[:space:]]/}" ] || cg_missing+=" --codegen-globs"
+    cg_dup=""
+    [ "$CG_N_CMD" -le 1 ] || cg_dup+=" --codegen-command"
+    [ "$CG_N_TC" -le 1 ]  || cg_dup+=" --codegen-toolchain"
+    [ "$CG_N_GL" -le 1 ] || cg_dup+=" --codegen-globs"
+    if [ -n "$cg_dup" ]; then
+        refuse "codegen: given more than once:$cg_dup. Each codegen flag takes exactly one value; a repeat would silently keep the last."
+    elif [ -n "$cg_missing" ]; then
+        refuse "codegen: all three of --codegen-command, --codegen-toolchain and --codegen-globs are required (missing or empty:$cg_missing). The codegen workflow commits to a PR branch, so its command, toolchain and generated paths are never guessed. Supply all three, or none."
+    else
+        cg_ok=1
+        case "$CODEGEN_TOOLCHAIN" in
+            bun|node|flutter|rust) ;;
+            *) refuse "codegen: --codegen-toolchain '$CODEGEN_TOOLCHAIN' is not one of bun, node, flutter, rust."; cg_ok=0 ;;
+        esac
+        # The command is rendered into a single-quoted YAML scalar and run by
+        # `bash -c`; one line, no quote that would end the scalar, no {{ }}
+        # that GitHub or this renderer would read as an expression or token.
+        if [[ "$CODEGEN_COMMAND" == *$'\n'* ]] || [[ "$CODEGEN_COMMAND" == *$'\r'* ]]; then
+            refuse "codegen: --codegen-command must be one line."; cg_ok=0
+        elif [[ "$CODEGEN_COMMAND" == *"'"* ]]; then
+            refuse "codegen: --codegen-command contains a single quote, which would end the YAML scalar it is rendered into. Use double quotes inside the command."; cg_ok=0
+        elif [[ "$CODEGEN_COMMAND" == *"{{"* ]] || [[ "$CODEGEN_COMMAND" == *"}}"* ]]; then
+            refuse "codegen: --codegen-command contains '{{' or '}}', which a workflow reads as an expression."; cg_ok=0
+        elif [[ "$CODEGEN_COMMAND" =~ [[:cntrl:]] ]]; then
+            refuse "codegen: --codegen-command contains a control character."; cg_ok=0
+        fi
+        # glob_to_re is the SAME function the push job runs, lifted from the
+        # template between its BEGIN/END markers, so render time and run time
+        # cannot read a glob differently.
+        glob_src="$(sed -n '/# BEGIN glob-to-re/,/# END glob-to-re/p' "$CODEGEN_TPL" | sed -e '/# BEGIN glob-to-re/d' -e '/# END glob-to-re/d' -e 's/^[[:space:]]*//')"
+        if [ -z "$glob_src" ] || ! eval "$glob_src" 2>/dev/null || ! declare -F glob_to_re >/dev/null; then
+            die "the codegen template carries no usable glob-to-re block"
+        fi
+        # Commas are accepted as separators; the template stores spaces.
+        cg_globs="$(printf '%s' "$CODEGEN_GLOBS_ARG" | tr ',\t\n' '   ' | tr -s ' ' | sed 's/^ //; s/ $//')"
+        read -r -a cg_glob_list <<<"$cg_globs"   # never an unquoted expansion: that would glob against the tree
+        if [ -z "$cg_globs" ]; then
+            refuse "codegen: --codegen-globs names no glob."; cg_ok=0
+        fi
+        # The deny list is the push job's own, read from the template.
+        cg_denied="$(sed -n "s/^ *denied='\(.*\)'\$/\1/p" "$CODEGEN_TPL" | head -1)"
+        [ -n "$cg_denied" ] || die "the codegen template carries no denied= line"
+        for g in ${cg_glob_list[@]+"${cg_glob_list[@]}"}; do
+            if ! [[ "$g" =~ ^[A-Za-z0-9._/@+*?-]+$ ]] || [[ "$g" == *..* ]] || [[ "$g" == /* ]] || [[ "$g" == ./* ]]; then
+                refuse "codegen: glob '$g' is not a plain relative path glob (letters, digits and . _ / @ + - plus * and ?)."; cg_ok=0; continue
+            fi
+            first="${g%%/*}"
+            if [ "$first" = "$g" ] || [[ "$first" == *[*?]* ]] || [[ "$first" == .git* ]]; then
+                refuse "codegen: glob '$g' must begin with a literal directory (not * or ?, and never .git or .github): a glob confined to a directory is what keeps the push job from committing anywhere else."; cg_ok=0; continue
+            fi
+            if ! [[ "${g##*/}" =~ \.[A-Za-z0-9]{1,8}$ ]]; then
+                refuse "codegen: glob '$g' must end in a literal file extension (for example .dart or .ts), so it names generated files and not a whole directory."; cg_ok=0; continue
+            fi
+            re="$(glob_to_re "$g")"
+            hits=0; bad_hit=""
+            while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                if [[ "$f" =~ $re ]]; then
+                    hits=$((hits + 1))
+                    if [[ "$f" =~ $cg_denied ]]; then bad_hit="$f"; break; fi
+                fi
+            done <<<"$ALL_FILES"
+            if [ -n "$bad_hit" ]; then
+                refuse "codegen: glob '$g' matches $bad_hit, a workflow, manifest or lockfile. The codegen commit may never touch those."; cg_ok=0
+            elif [ "$hits" -eq 0 ]; then
+                refuse "codegen: glob '$g' matches no tracked file. Generated code the freshness gate checks is committed, so a glob matching none is a typo or the wrong repo."; cg_ok=0
+            fi
+        done
+        if [ "$cg_ok" -eq 1 ]; then
+            CODEGEN=1
+            CODEGEN_GLOBS="$cg_globs"
+            codegen_json="$(jq -nc --arg c "$CODEGEN_COMMAND" --arg t "$CODEGEN_TOOLCHAIN" --arg g "$CODEGEN_GLOBS" \
+                '{command: $c, toolchain: $t, globs: ($g | split(" "))}')"
+        fi
+    fi
+fi
+
+# An OWNED codegen workflow already in the target, with no codegen flag given,
+# would otherwise be neither refreshed nor mentioned: a routine re-sync exits 0
+# and the App-token push workflow goes stale unreported. Detected on disk at
+# ROOT (a marker-bearing file; a hand-written one has no marker and keeps its
+# existing treatment in SKILL.md). Nothing is deleted or rewritten. The
+# proposal values are read back out of OUR OWN owned file and are only a
+# proposal for the human to re-confirm.
+UNMANAGED_FILE=""
+unmanaged_json='null'
+if [ "$CODEGEN_SET" -eq 0 ]; then
+    for ext in yml yaml; do
+        f=".github/workflows/deps-cadence-codegen.$ext"
+        [ -r "$ROOT/$f" ] || continue
+        grep -qE 'generated-by: [^ ]+ \| template: deps-cadence-codegen( |$)' "$ROOT/$f" || continue
+        UNMANAGED_FILE="$f"
+        pr_cmd="$(sed -n "s/^ *CODEGEN_COMMAND: '\(.*\)'\$/\1/p" "$ROOT/$f" | head -1)"
+        pr_globs="$(sed -n "s/^ *CODEGEN_GLOBS: '\(.*\)'\$/\1/p" "$ROOT/$f" | head -1)"
+        pr_tc=""
+        if grep -q 'oven-sh/setup-bun' "$ROOT/$f"; then pr_tc=bun
+        elif grep -q 'actions/setup-node' "$ROOT/$f"; then pr_tc=node
+        elif grep -q 'id: flutter_pin' "$ROOT/$f"; then pr_tc=flutter
+        elif grep -q 'dtolnay/rust-toolchain' "$ROOT/$f"; then pr_tc=rust
+        fi
+        unmanaged_json="$(jq -nc --arg f "$f" --arg k "$KEEP_CODEGEN" --arg c "$pr_cmd" --arg t "$pr_tc" --arg g "$pr_globs" \
+            '{file: $f, state: (if $k == "1" then "kept" else "owned-unmanaged" end),
+              note: "owned by setup-deps, NOT refreshed by this run; keep-or-remove needs a human decision",
+              proposal: {command: $c, toolchain: $t, globs: ($g | split(" ") | map(select(length > 0)))}}')"
+        break
+    done
 fi
 
 # summary <refusals-text> — the JSON report on stdout. A refused render prints
@@ -481,12 +657,14 @@ fi
 summary() {
     jq -n --argjson lanes "$lanes_json" --argjson skipped "$skipped_json" \
         --arg norefresh "$NO_REFRESH" --argjson tc "$toolchains_json" --arg runner "ubuntu-latest" \
-        --arg refusals "$1" \
+        --arg refusals "$1" --argjson codegen "$codegen_json" --argjson unmanaged "$unmanaged_json" \
         '{lanes: $lanes, lanes_line: ($lanes | join(" ")), not_refreshed: $skipped,
           no_refresh_command: ($norefresh | split(", ") | map(select(length > 0))),
           toolchains: $tc, runner: $runner,
           refusals: ($refusals | split("\n") | map(select(length > 0))),
-          files: (if $refusals == "" then [".github/workflows/deps-cadence.yml", ".github/workflows/deps-cadence-impl.yml"] else [] end)}'
+          codegen: $codegen, codegen_unmanaged: $unmanaged,
+          files: (if $refusals == "" then [".github/workflows/deps-cadence.yml", ".github/workflows/deps-cadence-impl.yml"]
+                    + (if $codegen != null then [".github/workflows/deps-cadence-codegen.yml"] else [] end) else [] end)}'
 }
 
 if [ -n "$REFUSALS" ]; then
@@ -505,6 +683,16 @@ if [ -n "$COMPARE_TO" ]; then
         case " $LANES " in *" $l "*) ;; *) echo "render-cadence: DIVERGED committed lane $l is not in the fresh render" >&2; diverged=1 ;; esac
     done
     [ "$diverged" -eq 0 ] || exit 5
+fi
+
+# --- an owned codegen workflow this run did not manage -----------------------------
+# Same family as DIVERGED: an owned file the re-render would leave stale, so
+# nothing is written (exit 5) until the human either supplies the three codegen
+# flags (refresh), deletes the file (remove) or passes --keep-codegen (keep).
+if [ -n "$UNMANAGED_FILE" ] && [ "$KEEP_CODEGEN" -eq 0 ]; then
+    echo "render-cadence: OWNED-UNMANAGED $UNMANAGED_FILE is owned by setup-deps but no --codegen-* flags were given, so it was NOT refreshed and would go stale. Decide: refresh it (pass all three --codegen-* flags; summary.codegen_unmanaged.proposal has the file's own values to re-confirm), remove it yourself, or keep it as-is (--keep-codegen). Nothing was written." >&2
+    summary ""
+    exit 5
 fi
 
 # --- render ---------------------------------------------------------------------------
@@ -536,6 +724,8 @@ render() { # <template> <flags-csv>
         line="${line//\{\{NODE_VERSION\}\}/$NODE_VERSION}"
         line="${line//\{\{FLUTTER_PIN_FILE\}\}/$FLUTTER_PIN_FILE}"
         line="${line//\{\{RUST_PIN_FILE\}\}/$RUST_PIN_FILE}"
+        line="${line//\{\{CODEGEN_COMMAND\}\}/$CODEGEN_COMMAND}"
+        line="${line//\{\{CODEGEN_GLOBS\}\}/$CODEGEN_GLOBS}"
         printf '%s\n' "$line"
     done < "$tpl"
 }
@@ -545,8 +735,27 @@ render() { # <template> <flags-csv>
 shopt -u patsub_replacement 2>/dev/null || true
 
 render "$TRIGGER_TPL" "" > "$WORK/deps-cadence.yml"
-render "$IMPL_TPL" "${FLAGS#,}" > "$WORK/deps-cadence-impl.yml"
-for f in deps-cadence.yml deps-cadence-impl.yml; do
+# The impl takes the flags of the tools its lanes need; the codegen workflow the
+# flags of its one tool.
+IMPL_FLAGS=""
+while IFS= read -r tc; do
+    [ -n "$tc" ] || continue
+    case "$tc" in
+        bun) IMPL_FLAGS+="$TF_bun" ;; node) IMPL_FLAGS+="$TF_node" ;;
+        flutter) IMPL_FLAGS+="$TF_flutter" ;; rust) IMPL_FLAGS+="$TF_rust" ;;
+    esac
+done <<<"$TOOLCHAINS"
+render "$IMPL_TPL" "${IMPL_FLAGS#,}" > "$WORK/deps-cadence-impl.yml"
+OUT_FILES=(deps-cadence.yml deps-cadence-impl.yml)
+if [ "$CODEGEN" -eq 1 ]; then
+    case "$CODEGEN_TOOLCHAIN" in
+        bun) CG_FLAGS="$TF_bun" ;; node) CG_FLAGS="$TF_node" ;;
+        flutter) CG_FLAGS="$TF_flutter" ;; rust) CG_FLAGS="$TF_rust" ;;
+    esac
+    render "$CODEGEN_TPL" "${CG_FLAGS#,}" > "$WORK/deps-cadence-codegen.yml"
+    OUT_FILES+=(deps-cadence-codegen.yml)
+fi
+for f in "${OUT_FILES[@]}"; do
     [ -s "$WORK/$f" ] || die "render of $f is empty (no '---' in the template?)"
     if left="$(grep -nE '\{\{[A-Za-z_]+(:[A-Za-z_]+)?\}\}' "$WORK/$f")"; then
         die "render of $f left a token or marker behind: $(tr '\n' ' ' <<<"$left")"
@@ -554,6 +763,11 @@ for f in deps-cadence.yml deps-cadence-impl.yml; do
 done
 
 mkdir -p "$OUT_DIR" || die "cannot create --out-dir '$OUT_DIR'"
-cp "$WORK/deps-cadence.yml" "$WORK/deps-cadence-impl.yml" "$OUT_DIR/" || die "cannot write into '$OUT_DIR'"
+for f in "${OUT_FILES[@]}"; do
+    cp "$WORK/$f" "$OUT_DIR/" || die "cannot write into '$OUT_DIR'"
+done
+if [ -n "$UNMANAGED_FILE" ]; then
+    echo "render-cadence: NOTE $UNMANAGED_FILE kept as-is (--keep-codegen); it is owned but not refreshed by this run." >&2
+fi
 
 summary ""

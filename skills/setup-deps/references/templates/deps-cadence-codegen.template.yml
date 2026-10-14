@@ -1,0 +1,570 @@
+# TEMPLATE: deps-cadence-codegen · version 1
+# Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
+# hand, and ONLY when the caller supplies all three codegen facts
+# (--codegen-command, --codegen-toolchain, --codegen-globs). It is opt-in:
+# a repo with no codegen freshness gate renders nothing.
+# The renderer implements the same three rules as every template here (drop this
+# header, keep or delete each # {{IF:FLAG}} block, substitute each {{TOKEN}}):
+#   {{CODEGEN_COMMAND}}   the repo's regenerate command, mirroring what its CI
+#                         codegen-freshness job runs. One line, no single quote.
+#                         A human confirmed it in the setup-deps plan; it is
+#                         never derived by parsing workflow YAML.
+#   {{CODEGEN_GLOBS}}     space-separated globs of the GENERATED files, the only
+#                         paths the push job will ever commit. `*` and `?` stay
+#                         inside one path segment, `**/` spans directories. Each
+#                         ends in a literal extension, begins in a literal
+#                         directory, matches at least one tracked file, and
+#                         matches no workflow, manifest or lockfile.
+#   BUN_PIN_FILE / BUN_PIN_LITERAL / NODE_PIN_FILE / NODE_PIN_LITERAL / FLUTTER /
+#   RUST                  the toolchain the command needs, from the repo's own
+#                         exact pin (same derivation, same reader steps and same
+#                         refusals as deps-cadence-impl).
+# Delete this header block from the rendered output; keep the generated-by line.
+---
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-codegen | template-version: 1
+#
+# Regenerate committed codegen on the monthly deps-cadence PR.
+#
+# deps-cadence-impl.yml refreshes lockfiles within their declared ranges and
+# stages ONLY lane manifests and lockfiles. When that moves a code generator,
+# generated code the repo commits (and gates for freshness in CI) goes stale and
+# the cadence PR can never land without a human. This workflow closes that gap
+# for the generated files named in CODEGEN_GLOBS and nothing else.
+#
+# Rules this workflow keeps, each pinned by scripts/test-deps-cadence-policy.sh:
+#   - Runs ONLY on the App's own cadence PRs: `pull_request` (never
+#     `pull_request_target`), author sassydog-platform-writer[bot], head branch
+#     chore/deps-*, head repo == this repo. Every job repeats the gate.
+#   - `regen` runs the repo's regenerate command (package code) on an ephemeral
+#     GitHub-hosted VM with contents: read and NO secret, and hands on only a
+#     patch of tracked changes.
+#   - `push` runs on a FRESH VM that runs no repo or package code, and only when
+#     the event's SENDER is the App too (a human push to the branch is never
+#     committed under the App's name). The patch is UNTRUSTED: it is validated
+#     (nothing outside CODEGEN_GLOBS, no create, delete, rename, copy or mode
+#     change, no binary hunk, tracked regular files only, an odd-path check, a
+#     staged-set re-check) and applied with hooks off BEFORE the App token is
+#     minted. The token is scoped to this repo (contents and pull-requests
+#     write), kept out of argv, and the push reads it from the environment
+#     through a one-shot credential helper, with system and global git config
+#     ignored and hooks and fsmonitor off. No PAT and no GITHUB_TOKEN fallback.
+#
+# REVIEW RULE (required, not optional). Generated code is app code, produced by
+# generators the same refresh bumped, and the cadence PR otherwise auto-merges
+# with no human review. Path validation cannot help: the allowed paths ARE app
+# code. So the staged diff is classified, and only a diff whose every changed
+# line is EXACTLY EMPTY (checked on a plain --unified=0 diff, never with `-w` or
+# --ignore-blank-lines, which ignore whitespace inside string literals and would
+# call a changed string value cosmetic) keeps the PR's auto-merge. Anything else
+# is SUBSTANTIVE: auto-merge is disabled and the PR dequeued BEFORE the push,
+# nothing is pushed if the re-read PR state is still armed or queued, and one PR
+# comment lists the changed generated files and the lockfile changes, asking for
+# a human review before anyone re-arms it. Fail closed: a classification error,
+# or any value other than an explicit "false", is substantive.
+#
+# Loop safety: the App's push fires `synchronize`, so this runs again on the
+# regenerated head, and a deterministic generator then finds nothing to change
+# ("already fresh"; `push` is skipped). If a second regen ever DID produce a
+# diff, `push` refuses to stack a codegen commit on a head that already is one,
+# so a non-deterministic generator fails loudly instead of looping.
+#
+# The codegen commit never touches a lockfile (the validator rejects it), so a
+# lockfile-identity guard in the repo is unaffected.
+#
+# Re-render with sassy-dog:setup-deps instead of editing; edits to an owned
+# file are overwritten on the next refresh.
+
+name: Deps cadence codegen
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# The built-in token only reads. The one write (the push) uses the App token
+# minted in `push`, after validation.
+permissions:
+  contents: read
+
+# One run per PR at a time; the App's own push queues behind the run that made
+# it rather than racing it.
+concurrency:
+  group: deps-cadence-codegen-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  regen:
+    name: Regenerate committed codegen
+    if: >-
+      github.event.pull_request.user.login == 'sassydog-platform-writer[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'chore/deps-') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    # Ephemeral and GitHub-hosted, never the self-hosted fleet: the regenerate
+    # command executes the refreshed packages' generator code.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      # Toolchain: always the repo's own pin, so the generator runs under the
+      # same version the repo's freshness gate uses.
+# {{IF:BUN_PIN_FILE}}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: '{{BUN_VERSION_FILE}}'
+
+# {{ENDIF}}
+# {{IF:BUN_PIN_LITERAL}}
+      # CI pins bun as a literal, so this copy of it moves only on a re-render.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '{{BUN_VERSION}}'
+
+# {{ENDIF}}
+# {{IF:NODE_PIN_FILE}}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version-file: '{{NODE_VERSION_FILE}}'
+
+# {{ENDIF}}
+# {{IF:NODE_PIN_LITERAL}}
+      # CI pins node as a literal, so this copy of it moves only on a re-render.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: '{{NODE_VERSION}}'
+
+# {{ENDIF}}
+# {{IF:FLUTTER}}
+      # Read at run time so a pin bump in the repo needs no re-render. An
+      # unreadable or floating value fails here rather than installing a
+      # Flutter the repo did not choose.
+      - name: Read the Flutter pin
+        id: flutter_pin
+        env:
+          PIN_FILE: '{{FLUTTER_PIN_FILE}}'
+        run: |
+          set -euo pipefail
+          case "$PIN_FILE" in
+            *.fvmrc)           v="$(jq -r '.flutter // empty' "$PIN_FILE")" ;;
+            *fvm_config.json)  v="$(jq -r '.flutterSdkVersion // empty' "$PIN_FILE")" ;;
+            *pubspec.yaml)
+              v="$(awk '
+                /^[^[:space:]#]/ { inenv = ($0 ~ /^environment:/); next }
+                inenv && /^[[:space:]]+flutter:/ {
+                  sub(/^[[:space:]]+flutter:[[:space:]]*/, ""); sub(/[[:space:]]+#.*$/, "")
+                  gsub(/["\047[:space:]]/, ""); print; exit
+                }' "$PIN_FILE")" ;;
+            *) echo "::error::Unrecognised Flutter pin file: $PIN_FILE"; exit 1 ;;
+          esac
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$PIN_FILE does not pin an exact Flutter version (read: '${v}'). Pin one, then re-run."
+            exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ steps.flutter_pin.outputs.version }}
+
+# {{ENDIF}}
+# {{IF:RUST}}
+      # Read at run time, like the Flutter pin. rustup would honour the file in
+      # its own directory anyway; installing it explicitly makes the toolchain
+      # present on a runner that has never seen it.
+      - name: Read the Rust toolchain pin
+        id: rust_pin
+        env:
+          PIN_FILE: '{{RUST_PIN_FILE}}'
+        run: |
+          set -euo pipefail
+          # `channel = "…"` in either file form; otherwise the legacy one-line
+          # rust-toolchain file's first non-comment line.
+          v="$(awk '
+            /^[[:space:]]*channel[[:space:]]*=/ {
+              sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/["\047[:space:]]/, "")
+              print; done = 1; exit
+            }
+            first == "" && /[^[:space:]]/ && !/^[[:space:]]*[#\[]/ && !/=/ { first = $0; gsub(/[[:space:]]/, "", first) }
+            END { if (!done && first != "") print first }
+          ' "$PIN_FILE")"
+          if ! [[ "$v" =~ ^([0-9]+\.[0-9]+\.[0-9]+|(nightly|beta)-[0-9]{4}-[0-9]{2}-[0-9]{2})$ ]]; then
+            echo "::error::$PIN_FILE does not pin an exact Rust toolchain (read: '${v}'). Pin one, then re-run."
+            exit 1
+          fi
+          echo "toolchain=$v" >> "$GITHUB_OUTPUT"
+
+      # Pinned to a commit of the action; the toolchain input below, not the
+      # action's ref, decides which Rust is installed.
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: ${{ steps.rust_pin.outputs.toolchain }}
+
+# {{ENDIF}}
+
+      # The repo's regenerate command, mirroring what its freshness gate runs,
+      # so what this commits is exactly what that gate expects.
+      - name: Regenerate
+        env:
+          CODEGEN_COMMAND: '{{CODEGEN_COMMAND}}'
+        run: |
+          set -euo pipefail
+          bash -euo pipefail -c "$CODEGEN_COMMAND"
+
+      # The ONLY thing that leaves this job: the diff of tracked files. `push`
+      # re-checks every line of it.
+      - name: Package the regenerated code as a patch
+        id: patch
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/codegen-out"
+          mkdir -p "$out"
+          untracked="$(git status --porcelain --untracked-files=all | grep '^??' || true)"
+          if [ -n "$untracked" ]; then
+            echo "::warning::Codegen created untracked files, which are never committed here: $(echo "$untracked" | cut -c4- | tr '\n' ' ')"
+          fi
+          git add -u
+          if git diff --cached --quiet; then
+            echo "::notice::Committed codegen is already fresh on this head; nothing to push."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --cached --binary --no-renames --no-ext-diff --no-textconv > "$out/codegen.patch"
+          git diff --cached --stat >> "$GITHUB_STEP_SUMMARY"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ steps.patch.outputs.changed == 'true' }}
+        with:
+          name: deps-cadence-codegen
+          path: ${{ runner.temp }}/codegen-out/
+          retention-days: 1
+          if-no-files-found: error
+
+  # A FRESH VM that runs no repo or package code: checkout, git, gh, awk and
+  # the App-token action only.
+  push:
+    name: Push the regenerated code
+    needs: regen
+    # The PR author AND the event's sender must be the App: a human push to the
+    # cadence branch still gets `regen`'s staleness report, but its output is
+    # never committed under the App's name.
+    if: >-
+      needs.regen.outputs.changed == 'true' &&
+      github.event.pull_request.user.login == 'sassydog-platform-writer[bot]' &&
+      github.event.sender.login == 'sassydog-platform-writer[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'chore/deps-') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      CODEGEN_GLOBS: '{{CODEGEN_GLOBS}}'
+      CODEGEN_SUBJECT: "chore(codegen): regenerate for monthly lockfile refresh"
+    steps:
+      # Full history: the review comment names the lockfile changes since the
+      # merge base. Checkout runs no repo code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: deps-cadence-codegen
+          path: ${{ runner.temp }}/codegen-in
+
+      # scripts/test-deps-cadence-policy.sh extracts each block between its
+      # BEGIN/END markers and runs it, so the test exercises this exact code.
+      # render-cadence.sh extracts glob-to-re the same way. Keep the markers.
+      # It also parses the `denied='...'` line below with a sed that is coupled to
+      # its indentation and single quoting: change either only together with
+      # render-cadence.sh (the `cg_denied=` line).
+      - name: Validate and apply the codegen patch
+        run: |
+          # BEGIN validate-codegen-patch
+          set -euo pipefail
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          patch="$RUNNER_TEMP/codegen-in/codegen.patch"
+          reject() { echo "::error::Rejected the codegen patch: $1"; exit 1; }
+          [ -s "$patch" ] || reject "the artifact holds no patch"
+
+          # Branch: only this month's cadence branch, never anything else.
+          [[ "$HEAD_REF" =~ ^chore/deps-[0-9]{4}-(0[1-9]|1[0-2])$ ]] \
+            || reject "head branch '$HEAD_REF' is not a deps-cadence branch"
+          # Loop breaker: never stack a second codegen commit. A regen that
+          # still differs right after our own push means the generator is not
+          # deterministic; fail loudly instead of pushing forever.
+          if [ "$(git "${nohooks[@]}" log -1 --format=%s)" = "$CODEGEN_SUBJECT" ]; then
+            reject "the head is already this workflow's codegen commit and codegen still differs; refusing to push again (non-deterministic generator?)"
+          fi
+
+          # BEGIN glob-to-re
+          glob_to_re() {
+            local g="$1" re=""
+            while [ -n "$g" ]; do
+              case "$g" in
+                '**/'*) re+='(.*/)?'; g="${g#'**/'}" ;;
+                '**'*)  re+='.*';     g="${g#'**'}" ;;
+                '*'*)   re+='[^/]*';  g="${g#'*'}" ;;
+                '?'*)   re+='[^/]';   g="${g#'?'}" ;;
+                [.+@]*) re+="\\${g:0:1}"; g="${g:1}" ;;
+                *)      re+="${g:0:1}";   g="${g:1}" ;;
+              esac
+            done
+            printf '^%s$' "$re"
+          }
+          # END glob-to-re
+
+          # The generated files and nothing else: the render-time globs.
+          # read -a, never an unquoted expansion: that would glob against the
+          # checkout and replace each pattern with the files that exist today.
+          read -r -a globs <<<"$CODEGEN_GLOBS"
+          [ "${#globs[@]}" -gt 0 ] || reject "CODEGEN_GLOBS is empty"
+          allowed=""
+          for glob in "${globs[@]}"; do
+            [[ "$glob" =~ ^[A-Za-z0-9._/@+*?-]+$ ]] || reject "glob '$glob' is not a plain path glob"
+            allowed+="$(glob_to_re "$glob")|"
+          done
+          allowed="${allowed%|}"
+          [ -n "$allowed" ] || reject "CODEGEN_GLOBS is empty"
+          # Whatever the globs say, never a workflow, a manifest or a lockfile.
+          # (render-cadence.sh sed-parses the denied= line: keep it one single-quoted line.)
+          denied='^\.git(hub)?/|(^|/)(package\.json|bun\.lockb?|package-lock\.json|pubspec\.yaml|pubspec\.lock|Cargo\.toml|Cargo\.lock)$'
+
+          # git's own reading of the patch: any create, delete, rename, copy
+          # or mode change shows up in --summary.
+          summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
+          [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
+          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
+          [ -n "$numstat" ] || reject "it changes nothing"
+          while IFS=$'\t' read -r added _ path; do
+            [ "$added" != "-" ] || reject "$path is a binary change; generated files are text"
+            if ! [[ "$path" =~ ^[A-Za-z0-9._/@+-]+$ ]] || [[ "$path" == *..* ]]; then
+              reject "unusual path '$path'"
+            fi
+            if [[ "$path" =~ $denied ]]; then reject "$path is a workflow, manifest or lockfile"; fi
+            [[ "$path" =~ $allowed ]] || reject "$path is outside the generated-file paths"
+            mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
+            [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
+              || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
+          done <<<"$numstat"
+
+          git "${nohooks[@]}" apply --index -- "$patch"
+          # Belt and braces: what is staged, and only that, is generated files.
+          while IFS= read -r path; do
+            [[ "$path" =~ $allowed ]] || reject "after applying, $path is staged"
+          done < <(git "${nohooks[@]}" diff --cached --name-only)
+          if [ -n "$(git "${nohooks[@]}" status --porcelain --untracked-files=all | grep -v '^M  ' || true)" ]; then
+            reject "after applying, the tree holds changes outside the index"
+          fi
+          echo "Validated and staged $(git "${nohooks[@]}" diff --cached --name-only | wc -l) generated file(s)."
+          # END validate-codegen-patch
+
+      # REVIEW RULE: see the header. Fail closed: any error here, or any output
+      # other than an explicit "false", counts as substantive.
+      - name: Classify the regenerated diff
+        id: classify
+        run: |
+          # BEGIN classify-codegen-diff
+          set -uo pipefail
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          body="$RUNNER_TEMP/codegen-review.md"
+          substantive=true
+          reason="classification failed, so it is treated as substantive"
+          # No `-w` and no parser: `-w` ignores whitespace INSIDE lines,
+          # including inside string literals (GraphQL documents, URLs), so it
+          # would call a changed string value cosmetic. The ONLY auto-mergeable
+          # edit is adding or removing EMPTY lines: in a --unified=0 diff every
+          # hunk line must be exactly "+" or "-", nothing after it (a line of
+          # spaces, a tab or a lone \r is substantive). Diff output is forced
+          # plain whatever config or env says.
+          if raw="$(env -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS LC_ALL=C git "${nohooks[@]}" \
+                -c color.ui=false -c color.diff=false -c diff.noprefix=false -c diff.mnemonicPrefix=false \
+                -c diff.relative=false -c core.quotePath=true \
+                diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --no-renames)"; then
+            # Prints "empty-lines-only" only when the diff has at least one
+            # hunk with at least one changed line, every header line is one of
+            # diff/index/---/+++, and every hunk line is exactly "+" or "-".
+            # Anything else (context lines, "\ No newline", mode or binary
+            # headers, text outside a file, an empty diff) prints nothing.
+            verdict="$(printf '%s\n' "$raw" | LC_ALL=C awk '
+              BEGIN { mode = "none"; bad = 0; hunks = 0; changes = 0 }
+              /^diff --git / { mode = "header"; next }
+              mode == "header" && (/^index [0-9a-f]+\.\.[0-9a-f]+( [0-7]+)?$/ || /^--- / || /^\+\+\+ /) { next }
+              /^@@ -[0-9]+(,[0-9]+)? \+[0-9]+(,[0-9]+)? @@/ && mode != "none" { mode = "hunk"; hunks++; next }
+              mode == "hunk" && ($0 == "+" || $0 == "-") { changes++; next }
+              { bad = 1 }
+              END { if (!bad && hunks > 0 && changes > 0) print "empty-lines-only" }')"
+            if [ "$verdict" = "empty-lines-only" ]; then
+              substantive=false
+              reason="it only adds or removes empty lines"
+            else
+              reason="it changes more than empty lines (or its diff could not be read as empty-line-only)"
+            fi
+          fi
+          echo "substantive=$substantive" >> "$GITHUB_OUTPUT"
+          echo "Codegen diff: $reason (substantive=$substantive)."
+
+          if [ "$substantive" = true ]; then
+            # shellcheck disable=SC2016  # literal markdown backticks
+            files="$(git "${nohooks[@]}" diff --cached --name-only 2>/dev/null | sed 's/^/- `/; s/$/`/' || true)"
+            # Lockfile changes since the merge base: which generators moved is
+            # what a reviewer needs, and the lockfile says. Only the changed
+            # lines (each starts with + or -, so none can end the code fence), capped.
+            lockdiff=""
+            if mb="$(git "${nohooks[@]}" merge-base "$BASE_SHA" HEAD 2>/dev/null)"; then
+              lockfiles=()
+              while IFS= read -r lf; do
+                if [ -n "$lf" ]; then lockfiles+=("$lf"); fi
+              done < <(git "${nohooks[@]}" diff --name-only --no-renames "$mb" HEAD 2>/dev/null \
+                | grep -E '(^|/)(bun\.lock|package-lock\.json|pubspec\.lock|Cargo\.lock)$' || true)
+              if [ "${#lockfiles[@]}" -gt 0 ]; then
+                lockdiff="$(env -u GIT_EXTERNAL_DIFF -u GIT_DIFF_OPTS LC_ALL=C git "${nohooks[@]}" \
+                  diff --unified=0 --no-color --no-ext-diff --no-textconv --no-renames "$mb" HEAD -- "${lockfiles[@]}" 2>/dev/null \
+                  | grep -E '^(\+\+\+ |[-+][^-+])' | head -n 120 || true)"
+              fi
+            fi
+            {
+              echo "**Regenerated code needs a human review before this PR is enqueued.**"
+              echo
+              echo "\`deps-cadence-codegen\` regenerated committed codegen for this refresh, and $reason. Generated code is app code produced by generators this refresh just bumped, so auto-merge has been **disabled**. Review the \`$CODEGEN_SUBJECT\` commit, then re-arm it with \`gh pr merge --auto $PR_NUMBER\`."
+              echo
+              echo "### Changed generated files"
+              echo
+              printf '%s\n' "${files:-_(could not list them)_}" | head -n 300
+              echo
+              echo "### Lockfile changes since the merge base (capped)"
+              echo
+              if [ -n "$lockdiff" ]; then
+                echo '```diff'
+                printf '%s\n' "$lockdiff"
+                echo '```'
+              else
+                echo "_No lockfile change could be listed (or the merge base could not be read)._"
+              fi
+            } > "$body"
+          fi
+          exit 0
+          # END classify-codegen-diff
+
+      # A secret this repo cannot reach resolves to the EMPTY STRING, never an
+      # error, so the mint below would fail as an opaque auth error. Name the
+      # cause and fail here. There is no fallback credential by design: a push
+      # made without the App token never fires CI on the cadence PR.
+      - name: Require the app credentials
+        env:
+          APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
+          APP_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
+        run: |
+          missing=
+          [ -n "$APP_CLIENT_ID" ] || missing="$missing PLATFORM_WRITER_APP_CLIENT_ID"
+          [ -n "$APP_KEY" ]       || missing="$missing PLATFORM_WRITER_APP_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing Actions secret(s):$missing. Org secrets are private-visibility and do not reach public repositories. This workflow has no fallback credential on purpose: a push without the App token never fires CI."
+            exit 1
+          fi
+          echo "App credentials present."
+
+      # Minted only now, after the patch is validated, applied and classified,
+      # on a VM that never ran repo or package code. Scoped to this repository:
+      # contents: write for the push, pull-requests: write to disarm
+      # auto-merge and comment when the change is substantive.
+      - name: Mint GitHub App token
+        id: app_token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Commit and push to the cadence branch
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token }}
+          APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
+          SUBSTANTIVE: ${{ steps.classify.outputs.substantive }}
+        run: |
+          # BEGIN push-codegen
+          set -euo pipefail
+          # No system or global git config (no helper, hooksPath, fsmonitor or
+          # insteadOf left by anything else), and every git call that could run
+          # a hook or fsmonitor passes nohooks: either would inherit GH_TOKEN.
+          export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          # Fail closed: only an explicit "false" keeps auto-merge armed.
+          substantive=true
+          [ "${SUBSTANTIVE:-}" = "false" ] && substantive=false
+
+          bot_id="$(gh api "users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${bot_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          if git "${nohooks[@]}" diff --cached --quiet; then
+            echo "::error::The validated patch left nothing staged."
+            exit 1
+          fi
+          git "${nohooks[@]}" commit -q -m "$CODEGEN_SUBJECT" \
+            -m "Regenerated by the repo's own codegen command, opened by deps-cadence-codegen (sassy-dog:setup-deps) for the monthly deps-cadence PR."
+
+          # Substantive: disarm BEFORE pushing, so the new code is never on an
+          # armed PR, and push nothing if disarming fails.
+          if [ "$substantive" = true ]; then
+            # shellcheck disable=SC2016  # GraphQL variables, not shell
+            q='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){id isInMergeQueue autoMergeRequest{enabledAt}}}}'
+            state() {
+              gh api graphql -f query="$q" -f o="${GITHUB_REPOSITORY%%/*}" -f r="${GITHUB_REPOSITORY#*/}" -F n="$PR_NUMBER" \
+                --jq '.data.repository.pullRequest | "\(.id) \(.isInMergeQueue) \(.autoMergeRequest != null)"'
+            }
+            read -r pr_id queued armed < <(state)
+            if [ "$queued" = true ]; then
+              # shellcheck disable=SC2016  # GraphQL variables, not shell
+              gh api graphql -f query='mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}' -f id="$pr_id" >/dev/null \
+                || echo "::warning::dequeuePullRequest failed; the re-check below decides."
+            fi
+            if [ "$armed" = true ]; then
+              gh pr merge --disable-auto "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+                || echo "::warning::gh pr merge --disable-auto failed; the re-check below decides."
+            fi
+            # The PR's state, re-read, is what decides; not the exit codes.
+            read -r _ queued armed < <(state)
+            if [ "$queued" != false ] || [ "$armed" != false ]; then
+              echo "::error::Could not disarm PR #$PR_NUMBER (queued=$queued, auto-merge=$armed); not pushing substantive generated code to an armed PR."
+              exit 1
+            fi
+            echo "Auto-merge disarmed on #$PR_NUMBER: substantive generated change needs a human review."
+          fi
+
+          # Non-force push of the commit on top of the head that was
+          # regenerated: if the branch moved meanwhile, the push is rejected.
+          # The token is never in argv or a URL: the single-quoted helper is
+          # expanded by the shell git spawns, which reads GH_TOKEN from the
+          # environment. The empty helper first clears any other.
+          # shellcheck disable=SC2016  # deliberately unexpanded: git's shell expands it
+          git "${nohooks[@]}" -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${HEAD_REF}"
+          echo "Pushed regenerated codegen to ${HEAD_REF}."
+
+          if [ "$substantive" = true ]; then
+            body="$RUNNER_TEMP/codegen-review.md"
+            if [ ! -s "$body" ]; then
+              printf '%s\n' "**Regenerated code needs a human review before this PR is enqueued.** Its change could not be classified as empty-lines-only, so auto-merge has been disabled. Review the \`$CODEGEN_SUBJECT\` commit, then re-arm with \`gh pr merge --auto $PR_NUMBER\`." > "$body"
+            fi
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            echo "::warning::Substantive generated change: auto-merge disabled on #$PR_NUMBER pending human review."
+          fi
+          # END push-codegen
