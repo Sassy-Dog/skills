@@ -642,8 +642,19 @@ jobs:
       # version, the lane's lockfile) and, for cargo, `cargo metadata` (the
       # resolved version in Cargo.lock) plus `cargo search`. A hold in any other
       # ecosystem, in a directory no lane covers, or whose lookup failed is
-      # listed as "Could not evaluate", never as current. The tools list only
-      # dependencies that are behind, so a package they omit counts as current.
+      # listed as "Could not evaluate", never as current.
+      # The rule for "current" is positive, not by omission. Those tools list
+      # only dependencies that are behind, and `bun outdated` and `npm outdated`
+      # cover only the package they run in, so a package they omit says nothing
+      # unless the lane is KNOWN to contain it. A hold counts as checked only
+      # when it is a direct dependency (dependencies, devDependencies,
+      # optionalDependencies or peerDependencies) of a manifest under the lane,
+      # and the lookup runs in the directory of each manifest that declares it,
+      # the way the exact-pin report runs per manifest (so a workspace member's
+      # dependency is looked up where it lives). Anything else (a typo, a
+      # removed or transitive-only dependency) is "Could not evaluate (not a
+      # dependency of this lane)". An npm entry with no installed version is
+      # not evaluable either. A cargo hold is checked against Cargo.lock.
       # Appended to the same pins.md (the PR body) and the job summary, whether
       # or not anything moved.
       - name: Report bare ignore holds
@@ -673,7 +684,7 @@ jobs:
           }
           parse_npm_outdated() {
             jq -r 'to_entries[] | (.value | if type == "array" then .[0] else . end) as $v
-                   | select($v.latest != null) | "\(.key)\t\($v.current // "unknown")\t\($v.latest)"'
+                   | select($v.latest != null) | "\(.key)\t\($v.current // "")\t\($v.latest)"'
           }
           parse_pub_outdated() {
             jq -r '.packages[] | select(.latest.version != null and .current.version != null)
@@ -686,18 +697,56 @@ jobs:
             awk -v n="$1" '$1 == n && $2 == "=" && !found { gsub(/"/, "", $3); print $3; found = 1 }' <<<"$res"
           }
 
-          # lane_lookup <lane> — fills "$cache/<key>.tsv" (name, resolved, latest
-          # of each package that is behind), "$cache/<key>.meta" (cargo: every
-          # resolved crate) or "$cache/<key>.err" (why not). Run once per lane;
-          # a lane with no answer is never read as current.
-          lane_lookup() {
-            local lane="$1" eco dir rel key out
+          # decl_scan <lane> — "$cache/<key>.decl": "<manifest dir><TAB><name>"
+          # for every direct dependency of every manifest in the lane (bun and
+          # npm: each tracked package.json, minus any that sits in a DEEPER
+          # lane's directory, as the exact-pin report; pub: the lane's
+          # pubspec.yaml). A hold absent from it is not known to be in the lane.
+          decl_scan() {
+            local lane="$1" eco dir rel key manifest mdir nested other odir
             eco="${lane%%:*}"; dir="${lane#*:}"; rel="${dir#/}"
             key="$(printf '%s' "$lane" | tr -c 'A-Za-z0-9' '_')"
+            [ ! -e "$cache/$key.decl" ] || return 0
+            : > "$cache/$key.decl"
+            case "$eco" in
+              bun|npm)
+                while IFS= read -r manifest; do
+                  mdir="$(dirname "$manifest")"
+                  nested=0
+                  for other in $LANES; do
+                    odir="${other#*:}"
+                    odir="${odir#/}"
+                    if [ -z "$odir" ] || [ "$odir" = "$rel" ]; then continue; fi
+                    case "$odir/" in "${rel:+$rel/}"*) ;; *) continue ;; esac
+                    case "$mdir/" in "$odir"/*) nested=1 ;; esac
+                  done
+                  [ "$nested" -eq 0 ] || continue
+                  jq -r --arg d "$mdir" '([.dependencies, .devDependencies, .optionalDependencies, .peerDependencies]
+                       | map(select(type == "object")) | add // {}) | keys[] | "\($d)\t\(.)"' "$manifest" >> "$cache/$key.decl" 2>/dev/null || true
+                done < <(git ls-files -- "${rel:-.}" | grep -E '(^|/)package\.json$' || true)
+                ;;
+              pub)
+                manifest="${rel:+$rel/}pubspec.yaml"
+                if [ -f "$manifest" ]; then
+                  awk -v d="${rel:-.}" '
+                    /^[^[:space:]#]/ { sect = ($0 ~ /^(dependencies|dev_dependencies):/); next }
+                    sect && /^  [A-Za-z_][A-Za-z0-9_]*:/ { n = $0; sub(/^  /, "", n); sub(/:.*$/, "", n); print d "\t" n }' "$manifest" >> "$cache/$key.decl"
+                fi ;;
+            esac
+          }
+
+          # lookup <ecosystem> <directory> — fills "$cache/<key>.tsv" (name,
+          # resolved, latest of each package that is behind), "$cache/<key>.meta"
+          # (cargo: every resolved crate) or "$cache/<key>.err" (why not). Run
+          # once per directory; a directory with no answer is never read as
+          # current. Tools read /dev/null so they cannot eat the caller's loop.
+          lookup() {
+            local eco="$1" rel="$2" key out
+            key="$(printf '%s' "$eco:$rel" | tr -c 'A-Za-z0-9' '_')"
             if [ -e "$cache/$key.tsv" ] || [ -e "$cache/$key.meta" ] || [ -e "$cache/$key.err" ]; then return 0; fi
             case "$eco" in
               bun)
-                if ! out="$(cd "./$rel" && NO_COLOR=1 bun outdated 2>&1)"; then
+                if ! out="$(cd "./$rel" && NO_COLOR=1 bun outdated 2>&1 </dev/null)"; then
                   echo "bun outdated failed: $(echo "$out" | tail -n1)" > "$cache/$key.err"; return 0
                 fi
                 parse_bun_outdated <<<"$out" > "$cache/$key.tsv"
@@ -707,18 +756,18 @@ jobs:
               npm)
                 # npm outdated exits 1 whenever something IS outdated, so its
                 # status says nothing; unparseable output is the failure.
-                out="$(cd "./$rel" && npm outdated --json 2>/dev/null)" || true
+                out="$(cd "./$rel" && npm outdated --json 2>/dev/null </dev/null)" || true
                 [ -n "$out" ] || out='{}'
                 if ! parse_npm_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
                   echo "npm outdated output not recognised" > "$cache/$key.err"
                 fi ;;
               pub)
-                if ! out="$(cd "./$rel" && flutter pub outdated --json 2>/dev/null)" \
+                if ! out="$(cd "./$rel" && flutter pub outdated --json 2>/dev/null </dev/null)" \
                     || ! parse_pub_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
                   echo "flutter pub outdated output not recognised" > "$cache/$key.err"
                 fi ;;
               cargo)
-                if ! out="$(cd "./$rel" && cargo metadata --format-version 1 2>/dev/null)" \
+                if ! out="$(cd "./$rel" && cargo metadata --format-version 1 2>/dev/null </dev/null)" \
                     || ! jq -r '.packages[] | "\(.name)\t\(.version)"' <<<"$out" > "$cache/$key.meta" 2>/dev/null; then
                   echo "cargo metadata output not recognised" > "$cache/$key.err"
                 fi ;;
@@ -726,13 +775,16 @@ jobs:
           }
 
           # The bare holds: "ecosystem<TAB>directory<TAB>package". One line per
-          # rule; a rule whose key is anything but a lone dependency-name has an
-          # update-types or versions limit, so it is not bare.
+          # (ecosystem, directory, package): an entry with several directories
+          # emits the same rule once per directory under ONE rule id, so
+          # nothing here may dedupe by rule id. A rule whose key is anything but
+          # a lone dependency-name has an update-types or versions limit, so it
+          # is not bare.
           holds=""
           unevaluated=""
           if [ -f .github/dependabot.yml ]; then
             if ! holds="$(awk "$ignore_rules_awk" .github/dependabot.yml \
-                | awk -F'\t' '!seen[$3]++ && $4 ~ /^dependency-name:[^;]+$/ { print $1 "\t" $2 "\t" substr($4, 17) }' \
+                | awk -F'\t' '$4 ~ /^dependency-name:[^;]+$/ { print $1 "\t" $2 "\t" substr($4, 17) }' \
                 | awk '!seen[$0]++')"; then
               holds=""; unevaluated+="- \`.github/dependabot.yml\`: Could not evaluate (its ignore: rules could not be read)"$'\n'
             fi
@@ -756,12 +808,14 @@ jobs:
             case "$name" in
               *[\*\?\[]*) unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (a name pattern, not a package)"$'\n'; continue ;;
             esac
-            lane_lookup "$lane"
-            key="$(printf '%s' "$lane" | tr -c 'A-Za-z0-9' '_')"
-            if [ -e "$cache/$key.err" ]; then
-              unevaluated+="- \`$lane\` \`$name\`: Could not evaluate ($(cat "$cache/$key.err"))"$'\n'; continue
-            fi
+            lrel="${dir#/}"
+            lkey="$(printf '%s' "$lane" | tr -c 'A-Za-z0-9' '_')"
             if [ "$eco" = "cargo" ]; then
+              lookup cargo "${lrel:-.}"
+              key="$(printf '%s' "cargo:${lrel:-.}" | tr -c 'A-Za-z0-9' '_')"
+              if [ -e "$cache/$key.err" ]; then
+                unevaluated+="- \`$lane\` \`$name\`: Could not evaluate ($(cat "$cache/$key.err"))"$'\n'; continue
+              fi
               resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$cache/$key.meta")"
               if [ -z "$resolved" ]; then
                 unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (not in Cargo.lock)"$'\n'; continue
@@ -770,17 +824,44 @@ jobs:
               if [ -z "$newest" ]; then
                 unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (no latest version from cargo search)"$'\n'; continue
               fi
-            else
-              resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$cache/$key.tsv")"
-              newest="$(awk -F'\t' -v n="$name" '$1 == n {print $3; exit}' "$cache/$key.tsv")"
+              checked=$((checked + 1))
+              if [ "$newest" != "$resolved" ]; then
+                behind+="| \`$lane\` | \`$name\` | $resolved | $newest |"$'\n'
+                echo "::warning::Bare ignore: hold on $name ($lane) is at $resolved; latest is $newest. Dependabot will not move it."
+              fi
+              continue
             fi
-            # Counted only once the tool answered for this very package.
+            # bun, npm, pub: the lane must be KNOWN to contain the package.
+            decl_scan "$lane"
+            mdirs="$(awk -F'\t' -v n="$name" '$2 == n {print $1}' "$cache/$lkey.decl" | sort -u)"
+            if [ -z "$mdirs" ]; then
+              unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (not a dependency of this lane)"$'\n'; continue
+            fi
+            why=""
+            rows=""
+            while IFS= read -r mdir; do
+              lookup "$eco" "$mdir"
+              key="$(printf '%s' "$eco:$mdir" | tr -c 'A-Za-z0-9' '_')"
+              if [ -e "$cache/$key.err" ]; then why="$(cat "$cache/$key.err")"; break; fi
+              row="$(awk -F'\t' -v n="$name" '$1 == n {print; exit}' "$cache/$key.tsv")"
+              [ -n "$row" ] || continue
+              resolved="$(cut -f2 <<<"$row")"
+              newest="$(cut -f3 <<<"$row")"
+              if [ -z "$resolved" ]; then why="$eco reports no installed version of $name in $mdir"; break; fi
+              if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
+                rows+="| \`$lane\` | \`$name\` | $resolved | $newest |"$'\n'
+                echo "::warning::Bare ignore: hold on $name ($lane) is at $resolved; latest is $newest. Dependabot will not move it."
+              fi
+            done <<<"$mdirs"
+            if [ -n "$why" ]; then
+              unevaluated+="- \`$lane\` \`$name\`: Could not evaluate ($why)"$'\n'; continue
+            fi
+            # Counted only once the tool answered for every manifest that declares it.
             checked=$((checked + 1))
-            if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
-              behind+="| \`$lane\` | \`$name\` | $resolved | $newest |"$'\n'
-              echo "::warning::Bare ignore: hold on $name ($lane) is at $resolved; latest is $newest. Dependabot will not move it."
-            fi
+            behind+="$rows"
           done <<<"$holds"
+          behind="$(printf '%s' "$behind" | awk '!seen[$0]++')"
+          [ -z "$behind" ] || behind+=$'\n'
 
           {
             echo

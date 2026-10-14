@@ -711,8 +711,10 @@ the optional codegen workflow's separate commit, below); the PR body lists each 
 delta plus an **exact-pin report**: `### Exact pins (bun and npm lanes)`, then, when a pub or cargo
 lane exists, a second section `### Exact pins (pub and cargo lanes)` in the same table format (pub
 from `flutter pub outdated --json`; cargo from `cargo metadata --no-deps` plus `cargo search`, so
-only crates.io dependencies pinned as `=x.y.z` are checked). The two sections are separate steps and
-the first is never reworded, because Sassy-Dog/routines reads it by literal strings. The report also
+only crates.io dependencies pinned as `=x.y.z` are checked). The sections are separate steps. Only
+the bun and npm section is frozen for routines: it is never reworded, because Sassy-Dog/routines
+reads it by literal strings; the pub and cargo section is byte-identical to its first release and
+the holds section below is new in version 6. The report also
 goes to the job summary and is written even in a month where nothing moved, because an exact pin
 never moves within a range and a stale one is a finding, not a clean month. A pin the tools could
 not evaluate is listed as such, never as current. A third section, `### Bare ignore: holds`
@@ -726,7 +728,16 @@ injects at the impl's `{{IGNORE_RULES_AWK}}` placeholder rather than copying). V
 the lookups above (`bun outdated`, `npm outdated --json`, `flutter pub outdated --json`,
 `cargo metadata` plus `cargo search`), so only bun, npm, pub and cargo lanes are evaluated; a hold in
 any other ecosystem, in a directory no refreshed lane covers, or whose lookup failed is listed as
-`Could not evaluate (<reason>)`, never as current.
+`Could not evaluate (<reason>)`, never as current. "Current" is never concluded from a tool's
+silence: those tools list only what is behind, and `bun outdated` and `npm outdated` cover only the
+package they run in, so a bun, npm or pub hold is checked only when the lane positively contains
+the package as a direct dependency of a manifest under it, looked up in the directory of each
+manifest that declares it (a workspace member's dependency is looked up in the member). A typo, a
+removed dependency or a transitive-only one is `Could not evaluate (not a dependency of this lane)`,
+and an npm entry with no installed version is not evaluable either. The table lists only holds that
+are **behind**; current ones collapse into one line (`No bare ignore: hold is behind its latest
+release among the N evaluated.`, or `No bare ignore: hold in .github/dependabot.yml.` when there is
+none), the same way the exact-pin sections do, and the unevaluated ones follow as a list.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
 `template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `6`, and the optional

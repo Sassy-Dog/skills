@@ -1568,6 +1568,14 @@
 #      must run `bun update --recursive`. Since version 4 the pub and cargo
 #      exact-pin report is a second section (executed against fake flutter and
 #      cargo), with the bun and npm section's literals pinned unchanged.
+#      Since version 5 every git call in open-pr passes `nohooks`. Since
+#      version 6 a third section reports bare `ignore:` holds behind latest:
+#      the holds are read at run time through the single-source parser
+#      render-cadence.sh injects, only bun, npm, pub and cargo lanes have a
+#      lookup, a hold counts as checked only when the lane positively contains
+#      the package, and anything else is `Could not evaluate`, never current
+#      (executed for bun, npm, pub and cargo, including a multi-directory
+#      entry and a workspace member's dependency).
 #      Mutation checks are listed at the end of the script. No network.
 #  58. deps-cadence render tests (scripts/test-deps-cadence-render.sh) —
 #      render-cadence.sh against synthetic trees: LANES from the dependabot

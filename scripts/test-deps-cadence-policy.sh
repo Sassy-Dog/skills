@@ -114,10 +114,22 @@
 #      hand copy to drift; test-deps-cadence-render.sh pins the injection). A
 #      real lookup only for bun, npm, pub and cargo; a hold in any other
 #      ecosystem, in a directory no refreshed lane covers, or whose lookup
-#      failed is `Could not evaluate (<reason>)`, never current. Executed with
+#      failed is `Could not evaluate (<reason>)`, never current. "Current" is
+#      positive, never inferred from a tool's silence (the tools list only what
+#      is behind, and bun and npm cover only the package they run in): a hold
+#      counts as checked only when a manifest under the lane declares it, and
+#      the lookup runs in each declaring manifest's directory, so a workspace
+#      member's dependency is evaluated and a typo, a removed or a transitive-
+#      only dependency is `not a dependency of this lane`. An entry with
+#      several `directories:` is one rule id emitted once per directory, so the
+#      holds are never deduplicated by rule id. An npm entry with no current
+#      version is not evaluable. Executed with
 #      fake tools on a scratch repo: stale holds in two ecosystems listed, a
 #      limited hold not, gradle unevaluated, a hand-added hold read, failed
-#      lookups unevaluated, no lane unevaluated, no dependabot.yml. The routines
+#      lookups unevaluated, no lane unevaluated, no dependabot.yml; and for npm
+#      and pub: a multi-directory entry, an absent package, a workspace
+#      member's dependency, npm `current: null`, unparseable output, and npm's
+#      exit 1 with JSON, each with a mutation. The routines
 #      parity file needs the new heading `### Bare ignore: holds`.
 #
 # 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
@@ -228,6 +240,22 @@ esac
 [ "$1" = "update" ] || exit 0
 echo "# bumped" >> Cargo.lock
 [ -f src/main.rs ] && echo '// touched' >> src/main.rs
+exit 0
+SH
+cat > "$BIN/npm" <<'SH'
+#!/usr/bin/env bash
+# FAKE_NPM_DIR: a directory of answers, one file per working directory
+# (apps/web -> apps_web_, the repo root -> root); else FAKE_NPM_OUTDATED, a
+# file. FAKE_NPM_RC is the exit status (npm outdated exits 1 when it lists any).
+if [ "$1" = "outdated" ]; then
+    f="${FAKE_NPM_OUTDATED:-/dev/null}"
+    if [ -n "${FAKE_NPM_DIR:-}" ]; then
+        k="$(git rev-parse --show-prefix | tr / _)"
+        f="$FAKE_NPM_DIR/${k:-root}"
+    fi
+    cat "$f" 2>/dev/null
+    exit "${FAKE_NPM_RC:-0}"
+fi
 exit 0
 SH
 cat > "$BIN/flutter" <<'SH'
@@ -827,6 +855,16 @@ EOF
         grep -qF '`serde`: Could not evaluate (no latest version from cargo search)' "$pins" || { echo "a failing cargo search was not 'Could not evaluate'"; rc=1; }
         ! grep -q 'No bare ignore: hold is behind' "$pins" || { echo "a failed lookup was read as current"; rc=1; }
     fi
+    # A failing cargo metadata is "could not evaluate" too, never current.
+    seed cargofail "$fx/current.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$fx/empty.txt" FAKE_CARGO_METADATA_RC=1 FAKE_CARGO_SEARCH="$fx/search-current.txt" 2>&1)"; then
+        echo "a failing cargo metadata killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`serde`: Could not evaluate (cargo metadata output not recognised)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a failing cargo metadata was not 'Could not evaluate'"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$d.tmp/deps-cadence/pins.md" || { echo "a failed cargo metadata was read as current"; rc=1; }
+    fi
     # A hold where no refreshed lane sits is not looked up as if one did.
     seed nolane "$fx/dependabot.yml"
     if out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
@@ -843,6 +881,146 @@ EOF
         echo "the holds report failed with no dependabot.yml: $(tail -n1 <<<"$out")"; rc=1
     elif ! grep -qxF 'No bare ignore: hold in .github/dependabot.yml.' "$d.tmp/deps-cadence/pins.md"; then
         echo "no dependabot.yml did not read 'No bare ignore: hold in .github/dependabot.yml.'"; rc=1
+    fi
+    # --- npm and pub, executed (the bun and cargo lanes above) -------------------
+    # seed_npm <name> <yml> — apps/web and apps/api each declare react; the
+    # root is a workspace root declaring only typescript.
+    seed_npm() {
+        seed "$1" "$2"
+        mkdir -p "$d/apps/web" "$d/apps/api"
+        echo '{"name":"root","workspaces":["apps/*"],"devDependencies":{"typescript":"^5.0.0"}}' > "$d/package.json"
+        echo '{"name":"web","dependencies":{"react":"^18.0.0"}}' > "$d/apps/web/package.json"
+        echo '{"name":"api","dependencies":{"react":"^18.0.0"}}' > "$d/apps/api/package.json"
+        (cd "$d" && git add -A && git commit -qm npm)
+    }
+    mkdir -p "$fx/npm-behind" "$fx/npm-empty" "$fx/npm-null"
+    echo '{"react":{"current":"18.0.0","wanted":"18.3.1","latest":"19.0.0"}}' > "$fx/npm-behind/apps_web_"
+    echo '{"react":{"current":"18.2.0","wanted":"18.3.1","latest":"19.0.0"}}' > "$fx/npm-behind/apps_api_"
+    echo '{}' > "$fx/npm-behind/root"
+    echo '{}' > "$fx/npm-empty/apps_web_"; echo '{}' > "$fx/npm-empty/apps_api_"; echo '{}' > "$fx/npm-empty/root"
+    echo '{"react":{"wanted":"18.3.1","latest":"19.0.0"}}' > "$fx/npm-null/apps_web_"
+    echo '{"react":{"current":null,"wanted":"18.3.1","latest":"19.0.0"}}' > "$fx/npm-null/apps_api_"
+    echo '{}' > "$fx/npm-null/root"
+    printf 'not json at all\n' > "$fx/npm-garbage.txt"
+    cat > "$fx/multi.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: npm
+    directories: ["/apps/web", "/apps/api"]
+    ignore:
+      - dependency-name: react
+EOF
+    cat > "$fx/npm-one.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /apps/web
+    ignore:
+      - dependency-name: react
+EOF
+    cat > "$fx/npm-ghost.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /apps/web
+    ignore:
+      - dependency-name: reactt
+      - dependency-name: typescript
+EOF
+    cat > "$fx/npm-root.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    ignore:
+      - dependency-name: react
+EOF
+    # One entry with several directories: every directory is evaluated, not
+    # just the first (the parser emits the rule once per directory, one rule id).
+    seed_npm multidir "$fx/multi.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web npm:/apps/api" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-behind" FAKE_NPM_RC=1 2>&1)"; then
+        echo "the holds report failed on a multi-directory npm entry: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '| `npm:/apps/web` | `react` | 18.0.0 | 19.0.0 |' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a bare hold in the first directory of a directories: entry is missing (npm exit 1 with JSON must still be read)"; rc=1; }
+        grep -qF '| `npm:/apps/api` | `react` | 18.2.0 | 19.0.0 |' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a bare hold in the SECOND directory of a directories: entry was dropped"; rc=1; }
+    fi
+    # A package the lane does not contain is never read as current.
+    seed_npm ghost "$fx/npm-ghost.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-empty" 2>&1)"; then
+        echo "the holds report failed on absent packages: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '`reactt`: Could not evaluate (not a dependency of this lane)' "$pins" || { echo "a typo'd hold was not 'Could not evaluate (not a dependency of this lane)'"; rc=1; }
+        grep -qF '`typescript`: Could not evaluate (not a dependency of this lane)' "$pins" \
+            || { echo "a dependency of ANOTHER manifest (the workspace root) was counted for apps/web"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$pins" || { echo "an absent package was read as current"; rc=1; }
+    fi
+    # A workspace member's dependency is looked up in the member, where it lives.
+    seed_npm member "$fx/npm-root.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-behind" FAKE_NPM_RC=1 2>&1)"; then
+        echo "the holds report failed on a workspace member's dependency: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '| `npm:/` | `react` | 18.0.0 | 19.0.0 |' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a hold on a workspace member's dependency was called current because the root run omitted it"; rc=1; }
+    fi
+    # An uninstalled package (no current) has no resolved version to compare.
+    seed_npm null "$fx/npm-one.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-null" FAKE_NPM_RC=1 2>&1)"; then
+        echo "the holds report failed on an uninstalled npm package: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '`react`: Could not evaluate (npm reports no installed version of react in apps/web)' "$pins" \
+            || { echo "an npm entry with no current version was not 'Could not evaluate': $(grep -F react "$pins")"; rc=1; }
+        ! grep -qF 'unknown' "$pins" || { echo "an uninstalled npm package was listed with resolved 'unknown'"; rc=1; }
+    fi
+    # Unparseable npm output is "could not evaluate", never current.
+    seed_npm garbage "$fx/npm-one.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_OUTDATED="$fx/npm-garbage.txt" 2>&1)"; then
+        echo "unparseable npm output killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`react`: Could not evaluate (npm outdated output not recognised)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "unparseable npm output was not 'Could not evaluate'"; rc=1; }
+    fi
+    # pub: a direct dependency behind latest is listed; a package the pubspec lacks, and an unparseable answer, are not current.
+    cat > "$fx/pub.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: pub
+    directory: /app
+    ignore:
+      - dependency-name: http
+      - dependency-name: ghostpkg
+EOF
+    echo '{"packages":[{"package":"http","current":{"version":"1.0.0"},"latest":{"version":"1.2.0"}}]}' > "$fx/pub-behind.json"
+    seed pub "$fx/pub.yml"
+    mkdir -p "$d/app"
+    printf 'name: app\ndependencies:\n  http: ^1.0.0\n' > "$d/app/pubspec.yaml"
+    (cd "$d" && git add -A && git commit -qm pub)
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/pub-behind.json" 2>&1)"; then
+        echo "the holds report failed on a pub lane: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '| `pub:/app` | `http` | 1.0.0 | 1.2.0 |' "$pins" || { echo "a bare pub hold behind latest is not listed"; rc=1; }
+        grep -qF '`ghostpkg`: Could not evaluate (not a dependency of this lane)' "$pins" || { echo "a pub hold absent from the pubspec was not 'Could not evaluate'"; rc=1; }
+    fi
+    seed pubbad "$fx/pub.yml"
+    mkdir -p "$d/app"
+    printf 'name: app\ndependencies:\n  http: ^1.0.0\n' > "$d/app/pubspec.yaml"
+    (cd "$d" && git add -A && git commit -qm pub)
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/npm-garbage.txt" 2>&1)"; then
+        echo "unparseable pub output killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`http`: Could not evaluate (flutter pub outdated output not recognised)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "unparseable pub output was not 'Could not evaluate'"; rc=1; }
     fi
     # Like the other two reports, it never waits on a change.
     out="$(step_block "$impl" "$HOLDS_STEP" | sed -n 's/^        if: //p')"
@@ -1025,10 +1203,25 @@ mutate "holds baked in, not read at run time" impl 'if [ -f .github/dependabot.y
 mutate "parser hand-copied into the step" impl '{{IGNORE_RULES_AWK}}' 'function trim(s) { return s } { next }'
 mutate "unsupported ecosystem read as current" impl $'Could not evaluate (no lookup for $eco)"$\'\\n\'; continue ;;' $'"$\'\\n\'; continue ;;'
 mutate "hold with no refreshed lane read as current" impl $'Could not evaluate (no $eco lane at $dir is refreshed here)"$\'\\n\'; continue ;;' $'x"$\'\\n\'; continue ;;'
-mutate "failed lookup read as current" impl $'unevaluated+="- \\`$lane\\` \\`$name\\`: Could not evaluate ($(cat "$cache/$key.err"))"$\'\\n\'; continue' 'checked=$((checked + 1)); continue'
-mutate "stale hold never listed" impl 'if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
-              behind+="| \`$lane\`' 'if false; then
-              behind+="| \`$lane\`'
+mutate "failed bun/npm/pub lookup read as current" impl 'if [ -e "$cache/$key.err" ]; then why="$(cat "$cache/$key.err")"; break; fi' 'if [ -e "$cache/$key.err" ]; then continue; fi'
+mutate "failed cargo lookup read as current" impl $'unevaluated+="- \\`$lane\\` \\`$name\\`: Could not evaluate ($(cat "$cache/$key.err"))"$\'\\n\'; continue' 'checked=$((checked + 1)); continue'
+mutate "stale cargo hold never listed" impl 'if [ "$newest" != "$resolved" ]; then
+                behind+=' 'if false; then
+                behind+='
+mutate "stale bun/npm/pub hold never listed" impl 'if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
+                rows+=' 'if false; then
+                rows+='
+mutate "holds deduped by rule id, not by directory" impl $'| awk -F\'\\t\' \'$4 ~ /^dependency-name:[^;]+$/ { print' $'| awk -F\'\\t\' \'!seen[$3]++ && $4 ~ /^dependency-name:[^;]+$/ { print'
+mutate "absent package read as current" impl $'not a dependency of this lane)"$\'\\n\'; continue' $'x"$\'\\n\'; checked=$((checked + 1)); continue'
+mutate "workspace member looked up in the lane directory" impl 'while IFS= read -r mdir; do
+              lookup' 'while IFS= read -r mdir; do
+              mdir="${lrel:-.}"
+              lookup'
+mutate "npm entry with no current listed as unknown" impl '($v.current // "")' '($v.current // "unknown")'
+mutate "npm exit status trusted" impl 'npm outdated --json 2>/dev/null </dev/null)" || true' 'npm outdated --json 2>/dev/null </dev/null)"'
+mutate "unparseable npm read as current" impl 'echo "npm outdated output not recognised" > "$cache/$key.err"' 'true'
+mutate "pub hold behind never listed" impl '| select(.latest.version != .current.version)' '| select(false)'
+mutate "unparseable pub read as current" impl 'echo "flutter pub outdated output not recognised" > "$cache/$key.err"' 'true'
 mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
 mutate "holds report skips the summary" impl '          cat "$section" >> "$report"
           cat "$section" >> "$GITHUB_STEP_SUMMARY"
