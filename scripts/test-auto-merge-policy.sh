@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # test-auto-merge-policy.sh — pins the FAIL-CLOSED merge policy of setup-deps'
-# dependabot-auto-merge template (template version 4).
+# dependabot-auto-merge template (template version 4, runner hardened in 5).
+#
+# Version 5 (#527, part of #515) adds a third property that is not a merge
+# condition: the job runs on `ubuntu-latest`, hard-coded. It hands the org-wide
+# App token to the runner's local `gh`, and a persistent shared self-hosted
+# runner can carry a PATH-shadowing `gh` or a modified tool cache from any
+# earlier job, in any repo. Modelled on test-deps-cadence-policy.sh property 9;
+# `{{RUNNER}}` is refused as well as any self-hosted label, because a render
+# fact would let a consumer re-open the hole.
 #
 # Versions 1-3 shipped two fail-open conditions to every consumer, found by a
 # security review on 2026-10-11 while francisco rendered the template:
@@ -65,11 +73,16 @@ step_ifs() {
 
 # check <file> — 0 when the policy holds, 1 (with reasons on stdout) otherwise.
 check() {
-    local f="$1" rc=0 job merges holds line
+    local f="$1" rc=0 job runs merges holds line
 
     job="$(grep -E '^    if:' "$f")"
     if [[ "$job" != *"$AUTHOR"* || "$job" != *"$ACTOR"* || "$job" != *"&&"* ]]; then
         echo "job if: must require author AND actor == dependabot[bot]: ${job:-<none>}"; rc=1
+    fi
+
+    runs="$(grep -E '^    runs-on:' "$f")"
+    if [ "$runs" != "    runs-on: ubuntu-latest" ]; then
+        echo "the job must hard-code runs-on: ubuntu-latest (no render fact, no self-hosted label): ${runs:-<none>}"; rc=1
     fi
 
     merges="$(step_ifs "$f" 'gh pr merge')"
@@ -126,5 +139,7 @@ MAJOR_EQ="steps.meta.outputs.update-type == 'version-update:semver-major'"
 mutate "merge on != semver-major" "$MINOR || $PATCH" "$MAJOR_NE"
 mutate "author-only job gate"     " && $ACTOR"        ""
 mutate "hold only semver-major"   "$NOT_MINOR && $NOT_PATCH" "$MAJOR_EQ"
+mutate "runner as a render fact"  'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
+mutate "self-hosted runs-on"      'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
 
 exit "$fail"
