@@ -72,6 +72,34 @@
 #      is reported, a range is not, a failing `bun outdated` reads "could not
 #      evaluate" (never current), and the report step does not depend on
 #      whether anything moved.
+#  12. THE PUB AND CARGO EXACT-PIN REPORT (version 4, #522) is a SECOND section
+#      with its own step, not an extension of the bun and npm one. A consumer
+#      (Sassy-Dog/routines, parity/setup-deps-template-strings.tsv) matches the
+#      bun and npm section by literal strings, so those five (the heading, the
+#      table header and the three outcome sentences) are pinned HERE to stay
+#      byte-identical; the new section reuses the table header and two of the
+#      sentences and says "No pub or cargo lane declares an exact pin." where
+#      the old one says "bun or npm". Same job, same place in the graph: a
+#      step in the secret-free refresh job after the bun and npm report, so it
+#      is ordered before the mint like every package manager. It appends to
+#      the same pins.md (the PR body) and the job summary, runs whether or not
+#      anything moved, and writes NOTHING when LANES holds no pub or cargo lane,
+#      so a bun- or npm-only repo's report does not change. Newest versions
+#      come from tools that need no credential: `flutter pub outdated --json`
+#      (the Flutter the job installed from the repo's pin) and, for cargo,
+#      `cargo metadata --no-deps` for the declared requirements (offline, and
+#      it resolves workspace inheritance, so no hand-parsed TOML) plus
+#      `cargo search` for the newest release. `cargo search` was chosen over
+#      `cargo info` (cargo 1.82+ only, and a repo may pin an older toolchain)
+#      and over the sparse index (yank and prerelease handling to reimplement).
+#      Its output is `name = "x.y.z"` lines in relevance order, so the
+#      executed check feeds it a PREFIX sibling first (serde_json before
+#      serde): taking the first line instead of the exact name reports the
+#      wrong "latest". An exact pin is "=x.y.z" in cargo (a bare "x.y.z" is a
+#      caret range) and a bare "x.y.z" in pub (a caret is a range). Executed:
+#      stale pins are reported in both ecosystems and ranges are not; a failing
+#      tool or an unparseable answer is "could not evaluate", never current; a
+#      path or git dependency with an exact requirement is not looked up.
 #
 # Vacuous-green guards: each step this gate executes or slices must be found
 # (a renamed step would otherwise check nothing), and every mutation must
@@ -106,6 +134,7 @@ done
 
 REFRESH_STEP="Refresh each lane within its declared ranges"
 REPORT_STEP="Report exact pins (bun and npm lanes)"
+REPORT2_STEP="Report exact pins (pub and cargo lanes)"
 PR_STEP="Open the refresh PR and enqueue it"
 PACKAGE_STEP="Package the refresh as a patch"
 VALIDATE_STEP="Validate and apply the refresh patch"
@@ -164,9 +193,24 @@ exit 0
 SH
 cat > "$BIN/cargo" <<'SH'
 #!/usr/bin/env bash
+# FAKE_CARGO_METADATA / FAKE_CARGO_SEARCH: files to print for `metadata` /
+# `search`; FAKE_CARGO_SEARCH_RC: search's exit status.
+case "$1" in
+    metadata) cat "${FAKE_CARGO_METADATA:-/dev/null}"; exit 0 ;;
+    search)   cat "${FAKE_CARGO_SEARCH:-/dev/null}"; exit "${FAKE_CARGO_SEARCH_RC:-0}" ;;
+esac
 [ "$1" = "update" ] || exit 0
 echo "# bumped" >> Cargo.lock
 [ -f src/main.rs ] && echo '// touched' >> src/main.rs
+exit 0
+SH
+cat > "$BIN/flutter" <<'SH'
+#!/usr/bin/env bash
+# FAKE_FLUTTER_OUTDATED: file to print for `pub outdated --json`.
+if [ "$1 $2" = "pub outdated" ]; then
+    cat "${FAKE_FLUTTER_OUTDATED:-/dev/null}"
+    exit "${FAKE_FLUTTER_RC:-0}"
+fi
 exit 0
 SH
 cat > "$BIN/gh" <<'SH'
@@ -357,17 +401,18 @@ check() {
     if grep -qiE 'self-hosted' <<<"$c"; then
         echo "the impl names a self-hosted runner"; rc=1
     fi
-    local mint_ln refresh_ln report_ln pr_ln first_ref validate_ln
+    local mint_ln refresh_ln report_ln report2_ln pr_ln first_ref validate_ln
     mint_ln="$(grep -nE 'actions/create-github-app-token@' "$impl" | head -1 | cut -d: -f1)"
     refresh_ln="$(grep -nF "      - name: $REFRESH_STEP" "$impl" | cut -d: -f1)"
     report_ln="$(grep -nF "      - name: $REPORT_STEP" "$impl" | cut -d: -f1)"
+    report2_ln="$(grep -nF "      - name: $REPORT2_STEP" "$impl" | cut -d: -f1)"
     pr_ln="$(grep -nF "      - name: $PR_STEP" "$impl" | cut -d: -f1)"
     validate_ln="$(grep -nF "      - name: $VALIDATE_STEP" "$impl" | cut -d: -f1)"
     first_ref="$(grep -nE 'steps\.app_token\.' "$impl" | head -1 | cut -d: -f1)"
-    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$pr_ln" ] || [ -z "$validate_ln" ]; then
+    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$report2_ln" ] || [ -z "$pr_ln" ] || [ -z "$validate_ln" ]; then
         echo "could not locate the mint, refresh, report, validate and PR steps to order them"; rc=1
-    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -lt "$validate_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
-        echo "the App token is minted at line $mint_ln, not after the package managers (refresh $refresh_ln, report $report_ln) and the patch validation ($validate_ln), before the PR step ($pr_ln)"; rc=1
+    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -lt "$report2_ln" ] || [ "$mint_ln" -lt "$validate_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
+        echo "the App token is minted at line $mint_ln, not after the package managers (refresh $refresh_ln, reports $report_ln and $report2_ln) and the patch validation ($validate_ln), before the PR step ($pr_ln)"; rc=1
     elif [ -n "$first_ref" ] && [ "$first_ref" -lt "$mint_ln" ]; then
         echo "a step before the mint reads steps.app_token (line $first_ref)"; rc=1
     fi
@@ -377,13 +422,14 @@ check() {
 
     # --- executed ---------------------------------------------------------------
     refresh="$WORK/refresh.sh"; report="$WORK/report.sh"; prstep="$WORK/pr.sh"
-    local package="$WORK/package.sh" validate="$WORK/validate.sh"
+    local package="$WORK/package.sh" validate="$WORK/validate.sh" report2="$WORK/report2.sh"
+    step_run "$impl" "$REPORT2_STEP" > "$report2"
     step_run "$impl" "$REFRESH_STEP" > "$refresh"
     step_run "$impl" "$REPORT_STEP" > "$report"
     step_run "$impl" "$PR_STEP" > "$prstep"
     step_run "$impl" "$PACKAGE_STEP" > "$package"
     step_run "$impl" "$VALIDATE_STEP" > "$validate"
-    for f in "$refresh" "$report" "$prstep" "$package" "$validate"; do
+    for f in "$refresh" "$report" "$report2" "$prstep" "$package" "$validate"; do
         [ -s "$f" ] || { echo "could not slice $(basename "$f" .sh) step's run block (renamed?)"; return 1; }
     done
 
@@ -502,6 +548,129 @@ check() {
 
     # 8. the exact-pin report.
     report_checks "$impl" "$report" || rc=1
+    report2_checks "$impl" "$report2" || rc=1
+    return "$rc"
+}
+
+# report2_checks <impl> <report2-script> — 12: the pub and cargo section.
+report2_checks() {
+    local impl="$1" step="$2" rc=0 d out cond c pins sum lit
+    # The bun and npm section is read by literal strings in another repo: all
+    # five must survive in that step, and the "not reported" claim must be gone.
+    c="$(step_block "$impl" "$REPORT_STEP")"
+    for lit in 'echo "### Exact pins (bun and npm lanes)"' 'echo "| Manifest | Package | Pinned | Latest |"' \
+        'No exact pin is behind its latest release in the $checked manifest(s) evaluated.' \
+        'No bun or npm lane declares an exact pin.' '**Could not evaluate** (not the same as current):'; do
+        grep -qF -- "$lit" <<<"$c" || { echo "the bun and npm report lost the literal: $lit"; rc=1; }
+    done
+    if grep -qE 'exact pins are not reported' "$impl"; then
+        echo "the impl still says pub and cargo exact pins are not reported"; rc=1
+    fi
+    grep -qF 'echo "### Exact pins (pub and cargo lanes)"' <<<"$(step_block "$impl" "$REPORT2_STEP")" \
+        || { echo "the pub and cargo step does not write its own heading"; rc=1; }
+
+    # fixtures: one pub lane at app/ and a cargo lane at the root.
+    local fx="$WORK/r2"; rm -rf "$fx"; mkdir -p "$fx"
+    cat > "$fx/pubspec.yaml" <<'EOF'
+name: app
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.0.0
+  intl: "0.19.0"   # exact, behind
+  path_dep:
+    path: ../x
+dev_dependencies:
+  lints: 3.0.0
+dependency_overrides:
+  ignored: 1.0.0
+EOF
+    cat > "$fx/pub.json" <<'EOF'
+{"packages":[{"package":"http","latest":{"version":"1.5.0"}},{"package":"intl","latest":{"version":"0.20.2"}},{"package":"lints","latest":{"version":"3.0.0"}}]}
+EOF
+    cat > "$fx/search.txt" <<'EOF'
+serde_json = "1.0.1"    # sibling listed first
+serde = "1.0.228"    # the one asked for
+anyhow = "1.0.0"    # current
+EOF
+    : > "$fx/empty.txt"
+    # seed <dir> — a scratch repo root with the pub lane and cargo metadata.
+    seed() {
+        local dd="$1" here
+        rm -rf "$dd" "$dd.tmp" "$dd.summary"; mkdir -p "$dd/app" "$dd.tmp/deps-cadence"
+        cp "$fx/pubspec.yaml" "$dd/app/pubspec.yaml"
+        here="$(cd "$dd" && pwd)"
+        cat > "$dd.meta" <<EOF
+{"packages":[{"manifest_path":"$here/Cargo.toml","dependencies":[
+ {"name":"serde","req":"=1.0.100","source":"registry+https://github.com/rust-lang/crates.io-index"},
+ {"name":"anyhow","req":"=1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index"},
+ {"name":"tokio","req":"^1.0.0","source":"registry+https://github.com/rust-lang/crates.io-index"},
+ {"name":"local","req":"=0.1.0","source":null},
+ {"name":"gitdep","req":"=0.2.0","source":"git+https://example.com/x"}]}]}
+EOF
+        echo "OLD SECTION" > "$dd.tmp/deps-cadence/pins.md"
+    }
+    d="$WORK/p-stale"; seed "$d"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web pub:/app cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/pub.json" FAKE_CARGO_METADATA="$d.meta" FAKE_CARGO_SEARCH="$fx/search.txt" 2>&1)"; then
+        echo "the pub and cargo report failed: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        sum="$d.summary"
+        grep -qx 'OLD SECTION' "$pins" || { echo "the pub and cargo report did not append: the bun and npm section is gone"; rc=1; }
+        grep -qxF '### Exact pins (pub and cargo lanes)' "$pins" || { echo "no pub and cargo heading in pins.md"; rc=1; }
+        grep -qF '| `app/pubspec.yaml` | `intl` | 0.19.0 | 0.20.2 |' "$pins" || { echo "a stale pub pin (intl 0.19.0 < 0.20.2) is missing"; rc=1; }
+        grep -qF '| `Cargo.toml` | `serde` | =1.0.100 | 1.0.228 |' "$pins" \
+            || { echo "a stale cargo pin is missing or compared with a sibling crate's version: $(grep -F serde "$pins")"; rc=1; }
+        if grep -qE '`(http|lints|anyhow|tokio|local|gitdep|ignored|path_dep)`' "$pins"; then
+            echo "a range, a current pin, a path/git dependency or an override was reported: $(grep -E '`(http|lints|anyhow|tokio|local|gitdep|ignored|path_dep)`' "$pins" | head -1)"; rc=1
+        fi
+        grep -qF 'intl' "$sum" || { echo "the pub and cargo report did not reach the job summary"; rc=1; }
+        ! grep -qx 'OLD SECTION' "$sum" || { echo "the job summary repeated the bun and npm section"; rc=1; }
+    fi
+    # Everything current: the "no pin is behind" sentence, counted.
+    d="$WORK/p-current"; seed "$d"
+    cat > "$fx/pub-current.json" <<'EOF'
+{"packages":[{"package":"intl","latest":{"version":"0.19.0"}},{"package":"lints","latest":{"version":"3.0.0"}}]}
+EOF
+    printf 'serde = "1.0.100"    # x\nanyhow = "1.0.0"    # x\n' > "$fx/search-current.txt"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/pub-current.json" FAKE_CARGO_METADATA="$d.meta" FAKE_CARGO_SEARCH="$fx/search-current.txt" 2>&1)"; then
+        echo "the pub and cargo report failed on a current repo: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qF 'No exact pin is behind its latest release in the 2 manifest(s) evaluated.' "$d.tmp/deps-cadence/pins.md"; then
+        echo "all-current did not read 'No exact pin is behind ... 2 manifest(s)': $(tail -n3 "$d.tmp/deps-cadence/pins.md" | tr '\n' ' ')"; rc=1
+    fi
+    # A failing flutter and an empty cargo search: could not evaluate, never current.
+    d="$WORK/p-fail"; seed "$d"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/empty.txt" FAKE_FLUTTER_RC=1 FAKE_CARGO_METADATA="$d.meta" FAKE_CARGO_SEARCH="$fx/empty.txt" 2>&1)"; then
+        echo "the pub and cargo report failed outright instead of reporting: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        { grep -qF 'Could not evaluate' "$pins" && grep -qF 'app/pubspec.yaml (flutter pub outdated' "$pins" && grep -qF 'serde: no latest version' "$pins"; } \
+            || { echo "a failing flutter / empty cargo search was not reported as 'could not evaluate'"; rc=1; }
+        ! grep -q 'No exact pin is behind' "$pins" || { echo "a manifest the tools could not evaluate was read as current"; rc=1; }
+    fi
+    # No pub or cargo lane: nothing is written at all.
+    d="$WORK/p-none"; seed "$d"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web npm:/" GITHUB_STEP_SUMMARY="$d.summary" 2>&1)"; then
+        echo "the pub and cargo report failed with no such lane: $(tail -n1 <<<"$out")"; rc=1
+    elif [ "$(cat "$d.tmp/deps-cadence/pins.md")" != "OLD SECTION" ] || [ -e "$d.summary" ]; then
+        echo "a bun- and npm-only repo's report changed"; rc=1
+    fi
+    # Lanes but no exact pins.
+    d="$WORK/p-nopin"; seed "$d"
+    printf 'name: app\ndependencies:\n  http: ^1.0.0\n' > "$d/app/pubspec.yaml"
+    echo '{"packages":[]}' > "$d.meta"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$d.meta" 2>&1)"; then
+        echo "the pub and cargo report failed on a repo with no exact pins: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qxF 'No pub or cargo lane declares an exact pin.' "$d.tmp/deps-cadence/pins.md"; then
+        echo "no exact pins did not read 'No pub or cargo lane declares an exact pin.'"; rc=1
+    fi
+    # Like the bun and npm report, it never waits on a change.
+    cond="$(step_block "$impl" "$REPORT2_STEP" | sed -n 's/^        if: //p')"
+    [ -z "$cond" ] || { echo "the pub and cargo report's condition is '$cond'; it must run whether or not anything moved"; rc=1; }
     return "$rc"
 }
 
@@ -654,5 +823,21 @@ mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n\
 mutate "merge method flag"           impl    'gh pr merge --auto "$url"' 'gh pr merge --auto --squash "$url"'
 mutate "parser ignores U+2502"       impl    's/\x1b\[[0-9;]*m//g; s/\xe2\x94\x82/|/g' 's/\x1b\[[0-9;]*m//g'
 mutate "report waits on a change"    impl    $'      - name: Report exact pins (bun and npm lanes)\n' $'      - name: Report exact pins (bun and npm lanes)\n        if: ${{ steps.patch.outputs.changed == \'true\' }}\n'
+mutate "pub/cargo report waits on a change" impl $'      - name: Report exact pins (pub and cargo lanes)\n' $'      - name: Report exact pins (pub and cargo lanes)\n        if: ${{ steps.patch.outputs.changed == \'true\' }}\n'
+mutate "pub/cargo report replaces pins.md" impl 'cat "$section" >> "$report"' 'cat "$section" > "$report"'
+mutate "pub/cargo report skips the summary" impl 'cat "$section" >> "$GITHUB_STEP_SUMMARY"' 'true'
+mutate "cargo takes the first search line" impl '$1 == n && $2 == "="' '$2 == "="'
+mutate "cargo caret range counted as a pin" impl 'test("^=[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"))
+                   | "\($m)' 'test("^[=^]?[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.+-]*)?$"))
+                   | "\($m)'
+mutate "cargo path dependency looked up" impl '| select((.source // "") | test("crates\\.io-index"))' '| select(true)'
+mutate "pub range counted as a pin" impl '*:[[:space:]]*["\047]?[0-9]+' '*:[[:space:]]*[\^"\047]*[0-9]+'
+mutate "failed flutter read as current" impl 'unevaluated+="$manifest (flutter pub outdated output not recognised)"$'"'"'\n'"'"'; continue' 'checked=$((checked + 1)); continue'
+mutate "unsearchable crate read as current" impl 'unevaluated+="$manifest ($name: no latest version from cargo search)"$'"'"'\n'"'"'; lane_ok=0; continue' 'continue'
+mutate "no lane still writes a section" impl '[ "$wanted" -eq 1 ] || exit 0' 'true'
+mutate "bun/npm heading reworded" impl 'echo "### Exact pins (bun and npm lanes)"' 'echo "### Exact pins (bun, npm, pub and cargo lanes)"'
+mutate "bun/npm sentence reworded" impl 'No bun or npm lane declares an exact pin.' 'No bun or npm lane declares an exact pin in this repo.'
+mutate "not-reported claim returns" impl '# do the same in a second section of their own (version 4).' '# exact pins are not reported in this version.'
+mutate "pub/cargo report after the mint" impl $'      - name: Report exact pins (pub and cargo lanes)\n' $'      - name: Mint GitHub App token\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n        with:\n          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n\n      - name: Report exact pins (pub and cargo lanes)\n'
 
 exit "$fail"

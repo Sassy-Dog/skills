@@ -1565,7 +1565,9 @@
 #      Since version 3 the package managers run in a secret-free job and a
 #      separate open-pr job validates the refresh's patch as untrusted (hostile
 #      patches executed) before it mints the token; a workspace-root bun lane
-#      must run `bun update --recursive`.
+#      must run `bun update --recursive`. Since version 4 the pub and cargo
+#      exact-pin report is a second section (executed against fake flutter and
+#      cargo), with the bun and npm section's literals pinned unchanged.
 #      Mutation checks are listed at the end of the script. No network.
 #  58. deps-cadence render tests (scripts/test-deps-cadence-render.sh) —
 #      render-cadence.sh against synthetic trees: LANES from the dependabot

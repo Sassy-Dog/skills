@@ -89,7 +89,7 @@ repo's ecosystems from tracked files, renders `.github/dependabot.yml` grouped p
 adds the workflows that keep Dependabot's PRs mergeable — auto-merge behind a real required check,
 plus `bun.lock` / `Podfile.lock` sync where Dependabot cannot rewrite the lockfile itself, and a
 monthly `deps-cadence` workflow that refreshes each lockfile within its declared ranges and reports
-stale exact pins. Its
+stale exact pins (bun, npm, pub and cargo). Its
 `generated-by:` marker is committed inside every consumer repo's `.github/`, so the same ownership
 rule applies: the matcher accepts every producer name this generator has ever emitted, in either
 marker namespace, normalising to the current form on write, while a file with no marker at all is
