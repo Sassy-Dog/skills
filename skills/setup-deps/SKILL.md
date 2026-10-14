@@ -474,6 +474,15 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/validate-dependabot.sh /tmp
 A run that reports `CHANGED` or `DROPPED` for an ecosystem the user did not ask to touch is the
 forgotten-flag case: re-render with the committed value instead of adding `--change-cooldown`.
 
+**A newly detected lane is a plan item, not drift.** `--compare-to` fails a render that adds an
+(ecosystem, directory) pair the committed file lacks (`DIVERGED: this render adds <eco> '<dir>'`),
+because a repo's deliberate absence of a lane (a root `bun.lock` with no per-workspace bun lanes) is
+otherwise unprotected. Put the lane in the plan the user approves; only after they confirm it, pass
+`--accept-added-lane ECOSYSTEM:DIRECTORY` (repeatable, e.g. `bun:/web`) to the validator. It needs
+`--compare-to`, accepts exactly that one pair, and is refused for a pair the render does not add. The
+`convert-npm-lanes.sh` flow needs no flag: its converted file, passed as `--compare-to`, already
+holds the `bun` lane.
+
 **Never write a render the validator rejected**, and never "fix" a rejection by editing the output:
 a failing lane means the derivation is wrong, so fix `lib-ecosystems.sh` and re-render. The three
 Dependabot workflow templates stay hand-rendered — they carry no per-location repeat. The
@@ -890,6 +899,9 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 - Never drop or change a committed cooldown without the user's approval of that exact change as a
   plan item, and never pass `--change-cooldown` to turn a failing run green: a forgotten
   `--cooldown` is fixed by passing the committed value.
+- Never pass `--accept-added-lane` to turn a failing run green: an added lane is accepted only after
+  the user approved that exact (ecosystem, directory) pair as a plan item. If the lane's absence was
+  deliberate, the detection is wrong; fix it instead.
 - Never overwrite an owned file whose committed lanes or `ignore:` rules a fresh render drops
   (`--compare-to` reports `DIVERGED`). Report it and stop — and do not re-stamp its marker, which
   only makes a diverged file look current.
