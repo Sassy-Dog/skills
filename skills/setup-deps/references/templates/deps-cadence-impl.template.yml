@@ -635,8 +635,8 @@ jobs:
       # bumped. The holds are read at RUN time from the checked-out file, so a
       # hold added by hand is reported without a re-render; the parser is the
       # one extract_ignore_rules runs (lib-ecosystems.sh), injected at render
-      # time and never copied by hand here. Latest versions come from the
-      # lookups the two exact-pin reports already run, and only for the lanes
+      # time and never copied by hand here. Latest versions come from the same
+      # tools the two exact-pin reports use, run again here, and only for the lanes
       # this workflow refreshes: `bun outdated`, `npm outdated --json`,
       # `flutter pub outdated --json` (all three also give the resolved
       # version, the lane's lockfile) and, for cargo, `cargo metadata` (the
@@ -653,8 +653,13 @@ jobs:
       # the way the exact-pin report runs per manifest (so a workspace member's
       # dependency is looked up where it lives). Anything else (a typo, a
       # removed or transitive-only dependency) is "Could not evaluate (not a
-      # dependency of this lane)". An npm entry with no installed version is
-      # not evaluable either. A cargo hold is checked against Cargo.lock.
+      # dependency of this lane)". An npm or pub entry with no installed
+      # version is not evaluable either, and npm's own failure (a JSON
+      # {"error":…} envelope, which parses to no rows) is a failed lookup. bun
+      # suffixes dev, peer and optional rows with "(dev)", "(peer)" or
+      # "(optional)"; this step's parser strips all three (the exact-pin
+      # report's frozen parser strips only "(dev)", the one it reads). A cargo
+      # hold is checked against Cargo.lock.
       # Appended to the same pins.md (the PR body) and the job summary, whether
       # or not anything moved.
       - name: Report bare ignore holds
@@ -678,7 +683,7 @@ jobs:
             LC_ALL=C sed 's/\x1b\[[0-9;]*m//g; s/\xe2\x94\x82/|/g' \
             | awk -F'|' 'NF>=6 {
                 for (i = 2; i <= 5; i++) gsub(/^[ \t]+|[ \t]+$/, "", $i)
-                sub(/ \(dev\)$/, "", $2)
+                sub(/ \((dev|peer|optional)\)$/, "", $2)
                 if ($2 != "Package" && $2 !~ /^-+$/ && $5 != "") print $2"\t"$3"\t"$5
               }'
           }
@@ -687,9 +692,9 @@ jobs:
                    | select($v.latest != null) | "\(.key)\t\($v.current // "")\t\($v.latest)"'
           }
           parse_pub_outdated() {
-            jq -r '.packages[] | select(.latest.version != null and .current.version != null)
-                   | select(.latest.version != .current.version)
-                   | "\(.package)\t\(.current.version)\t\(.latest.version)"'
+            jq -r '.packages[] | select(.latest.version != null)
+                   | select(.current.version == null or .latest.version != .current.version)
+                   | "\(.package)\t\(.current.version // "")\t\(.latest.version)"'
           }
           cargo_latest() {
             local res
@@ -758,7 +763,11 @@ jobs:
                 # status says nothing; unparseable output is the failure.
                 out="$(cd "./$rel" && npm outdated --json 2>/dev/null </dev/null)" || true
                 [ -n "$out" ] || out='{}'
-                if ! parse_npm_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
+                # A registry, auth or install failure is a JSON {"error":{code,summary}}
+                # envelope, which parses to no rows: it is a failed lookup, not "all current".
+                if jq -e 'type == "object" and (.error | type == "object" and (has("code") or has("summary")) and (has("latest") | not))' <<<"$out" >/dev/null 2>&1; then
+                  echo "npm outdated failed: $(jq -r '.error.summary // .error.code' <<<"$out" | head -n1)" > "$cache/$key.err"
+                elif ! parse_npm_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
                   echo "npm outdated output not recognised" > "$cache/$key.err"
                 fi ;;
               pub)

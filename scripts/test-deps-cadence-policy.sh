@@ -122,14 +122,21 @@
 #      member's dependency is evaluated and a typo, a removed or a transitive-
 #      only dependency is `not a dependency of this lane`. An entry with
 #      several `directories:` is one rule id emitted once per directory, so the
-#      holds are never deduplicated by rule id. An npm entry with no current
-#      version is not evaluable. Executed with
+#      holds are never deduplicated by rule id. An npm or pub entry with no
+#      current version is not evaluable, npm's JSON `{"error":…}` envelope (a
+#      registry or auth failure, exit 1, no rows) is a failed lookup, a hold
+#      whose lookup failed in ANY declaring directory is not counted, a
+#      manifest owned by a deeper refreshed lane is not the parent's, and bun's
+#      `(peer)` / `(optional)` row suffixes are stripped like `(dev)`. Executed with
 #      fake tools on a scratch repo: stale holds in two ecosystems listed, a
 #      limited hold not, gradle unevaluated, a hand-added hold read, failed
 #      lookups unevaluated, no lane unevaluated, no dependabot.yml; and for npm
 #      and pub: a multi-directory entry, an absent package, a workspace
-#      member's dependency, npm `current: null`, unparseable output, and npm's
-#      exit 1 with JSON, each with a mutation. The routines
+#      member's dependency, npm `current: null`, unparseable output, npm's
+#      exit 1 with JSON, npm's error envelope, a half-failed multi-directory
+#      lookup, a nested lane's manifest, bun peer and optional rows, and a pub
+#      entry with no current version, each with a mutation (the half-failed
+#      case also kills the existing break-to-continue one). The routines
 #      parity file needs the new heading `### Bare ignore: holds`.
 #
 # 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
@@ -1022,6 +1029,96 @@ EOF
         grep -qF '`http`: Could not evaluate (flutter pub outdated output not recognised)' "$d.tmp/deps-cadence/pins.md" \
             || { echo "unparseable pub output was not 'Could not evaluate'"; rc=1; }
     fi
+    # npm's own failure (registry, auth) is a JSON {"error":…} envelope that parses
+    # to no rows: it is a failed lookup, never "every hold is current".
+    mkdir -p "$fx/npm-err"
+    echo '{"error":{"code":"ECONNREFUSED","summary":"request to https://registry.npmjs.org/react failed"}}' > "$fx/npm-err/apps_web_"
+    seed_npm npmerr "$fx/npm-one.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-err" FAKE_NPM_RC=1 2>&1)"; then
+        echo "an npm error envelope killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '`react`: Could not evaluate (npm outdated failed: request to https://registry.npmjs.org/react failed)' "$pins" \
+            || { echo "an npm error envelope was not 'Could not evaluate (npm outdated failed: …)': $(grep -F react "$pins")"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$pins" || { echo "an npm error envelope was read as every hold current"; rc=1; }
+    fi
+    # One declaring directory answers, the other fails: the hold is not counted.
+    mkdir -p "$fx/npm-half"
+    echo '{}' > "$fx/npm-half/apps_web_"; echo 'not json' > "$fx/npm-half/apps_api_"; echo '{}' > "$fx/npm-half/root"
+    seed_npm half "$fx/npm-root.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-half" 2>&1)"; then
+        echo "a half-failed npm lookup killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '`react`: Could not evaluate (npm outdated output not recognised)' "$pins" \
+            || { echo "a hold whose second declaring directory failed was not 'Could not evaluate'"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$pins" || { echo "a hold with one failed declaring directory was read as current"; rc=1; }
+    fi
+    # A manifest that belongs to a deeper refreshed lane is not the parent lane's.
+    cat > "$fx/npm-nested.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    ignore:
+      - dependency-name: lodash
+EOF
+    seed_npm nested "$fx/npm-nested.yml"
+    echo '{"name":"web","dependencies":{"react":"^18.0.0","lodash":"^4.0.0"}}' > "$d/apps/web/package.json"
+    (cd "$d" && git add -A && git commit -qm nested)
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/ npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_DIR="$fx/npm-empty" 2>&1)"; then
+        echo "the holds report failed on nested lanes: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`lodash`: Could not evaluate (not a dependency of this lane)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a dependency only a deeper lane's manifest declares was evaluated for the parent lane"; rc=1; }
+    fi
+    # bun prints peer and optional dependencies as "name (peer)" / "name (optional)".
+    cat > "$fx/bun-peer.txt" <<'EOF'
+bun outdated v1.4.2 (43848b5a7)
+|------------------------------------------------------|
+| Package              | Current | Update | Latest |
+|----------------------|---------|--------|--------|
+| is-even (peer)       | 0.1.0   | 0.1.0  | 1.0.0  |
+|----------------------|---------|--------|--------|
+| is-odd (optional)    | 2.0.0   | 2.0.0  | 3.0.0  |
+|------------------------------------------------------|
+EOF
+    cat > "$fx/bun-peer.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /web
+    ignore:
+      - dependency-name: is-even
+      - dependency-name: is-odd
+EOF
+    seed bunpeer "$fx/bun-peer.yml"
+    echo '{"name":"web","peerDependencies":{"is-even":"^0.1.0"},"optionalDependencies":{"is-odd":"^2.0.0"}}' > "$d/web/package.json"
+    (cd "$d" && git add -A && git commit -qm peer)
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_BUN_OUTDATED="$fx/bun-peer.txt" 2>&1)"; then
+        echo "the holds report failed on bun peer/optional rows: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '| `bun:/web` | `is-even` | 0.1.0 | 1.0.0 |' "$pins" || { echo "a behind bun peer dependency hold was not listed (the '(peer)' suffix?)"; rc=1; }
+        grep -qF '| `bun:/web` | `is-odd` | 2.0.0 | 3.0.0 |' "$pins" || { echo "a behind bun optional dependency hold was not listed (the '(optional)' suffix?)"; rc=1; }
+    fi
+    # A pub dependency with no resolved version (path, git, sdk, unresolved) is not current.
+    echo '{"packages":[{"package":"http","current":null,"latest":{"version":"1.2.0"}}]}' > "$fx/pub-null.json"
+    seed pubnull "$fx/pub.yml"
+    mkdir -p "$d/app"
+    printf 'name: app\ndependencies:\n  http: ^1.0.0\n' > "$d/app/pubspec.yaml"
+    (cd "$d" && git add -A && git commit -qm pub)
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="pub:/app" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_FLUTTER_OUTDATED="$fx/pub-null.json" 2>&1)"; then
+        echo "the holds report failed on a pub entry with no current version: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`http`: Could not evaluate (pub reports no installed version of http in app)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a pub entry with no current version was not 'Could not evaluate': $(grep -F http "$d.tmp/deps-cadence/pins.md")"; rc=1; }
+    fi
     # Like the other two reports, it never waits on a change.
     out="$(step_block "$impl" "$HOLDS_STEP" | sed -n 's/^        if: //p')"
     [ -z "$out" ] || { echo "the holds report's condition is '$out'; it must run whether or not anything moved"; rc=1; }
@@ -1220,7 +1317,12 @@ mutate "workspace member looked up in the lane directory" impl 'while IFS= read 
 mutate "npm entry with no current listed as unknown" impl '($v.current // "")' '($v.current // "unknown")'
 mutate "npm exit status trusted" impl 'npm outdated --json 2>/dev/null </dev/null)" || true' 'npm outdated --json 2>/dev/null </dev/null)"'
 mutate "unparseable npm read as current" impl 'echo "npm outdated output not recognised" > "$cache/$key.err"' 'true'
-mutate "pub hold behind never listed" impl '| select(.latest.version != .current.version)' '| select(false)'
+mutate "pub hold behind never listed" impl '| select(.current.version == null or .latest.version != .current.version)' '| select(false)'
+mutate "pub entry with no current read as current" impl '| select(.latest.version != null)
+' '| select(.latest.version != null and .current.version != null)
+'
+mutate "npm error envelope read as current" impl 'if jq -e '\''type == "object" and (.error | type == "object" and (has("code") or has("summary")) and (has("latest") | not))'\'' <<<"$out" >/dev/null 2>&1; then' 'if false; then'
+mutate "bun peer/optional suffix kept" impl 'sub(/ \((dev|peer|optional)\)$/, "", $2)' 'sub(/ \(dev\)$/, "", $2)'
 mutate "unparseable pub read as current" impl 'echo "flutter pub outdated output not recognised" > "$cache/$key.err"' 'true'
 mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
 mutate "holds report skips the summary" impl '          cat "$section" >> "$report"

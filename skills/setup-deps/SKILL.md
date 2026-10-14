@@ -725,7 +725,7 @@ dependency and an exact pin is out of the refresh's reach too. The holds are rea
 the checked-out file, so a hand-added hold is reported without a re-render, with the parser
 `extract_ignore_rules` runs (`IGNORE_RULES_AWK` in `lib-ecosystems.sh`, which `render-cadence.sh`
 injects at the impl's `{{IGNORE_RULES_AWK}}` placeholder rather than copying). Versions come from
-the lookups above (`bun outdated`, `npm outdated --json`, `flutter pub outdated --json`,
+the same tools the exact-pin reports use, run again per declaring directory (`bun outdated`, `npm outdated --json`, `flutter pub outdated --json`,
 `cargo metadata` plus `cargo search`), so only bun, npm, pub and cargo lanes are evaluated; a hold in
 any other ecosystem, in a directory no refreshed lane covers, or whose lookup failed is listed as
 `Could not evaluate (<reason>)`, never as current. "Current" is never concluded from a tool's
@@ -734,7 +734,8 @@ package they run in, so a bun, npm or pub hold is checked only when the lane pos
 the package as a direct dependency of a manifest under it, looked up in the directory of each
 manifest that declares it (a workspace member's dependency is looked up in the member). A typo, a
 removed dependency or a transitive-only one is `Could not evaluate (not a dependency of this lane)`,
-and an npm entry with no installed version is not evaluable either. The table lists only holds that
+and an npm or pub entry with no installed version is not evaluable either, nor is a failed
+`npm outdated` that answers with its JSON `{"error":…}` envelope. The table lists only holds that
 are **behind**; current ones collapse into one line (`No bare ignore: hold is behind its latest
 release among the N evaluated.`, or `No bare ignore: hold in .github/dependabot.yml.` when there is
 none), the same way the exact-pin sections do, and the unevaluated ones follow as a list.
