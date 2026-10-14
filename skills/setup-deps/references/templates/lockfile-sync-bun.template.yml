@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-bun · version 10
+# TEMPLATE: lockfile-sync-bun · version 12
 # LEGACY FALLBACK — not the default for bun repos anymore. Dependabot's native
 # `bun` ecosystem (GA 2025-02) reads and rewrites the text bun.lock itself
 # (bun >= 1.1.39): the default render for a bun repo is the bun block in
@@ -13,7 +13,46 @@
 # there (a repo deliberately on grouped npm, qr-ninja#394; security PRs via the
 # npm path) both died with that refusal. convert-npm-lanes.sh reports a copy of
 # this workflow on a text bun.lock root as OBSOLETE (SKILL.md §1).
-#   {{RUNNER}}   → runs-on value (default: [self-hosted, linux, sassy-dog])
+#   runs-on is NOT a fact (version 11): both jobs are hard-coded to
+#   ubuntu-latest, see "Security posture" below. There is no {{RUNNER}} and a
+#   render never writes a self-hosted label.
+#   Version history: 11 moved the job to ubuntu-latest, setup-bun at the repo's
+#   pin, a late mint and a credential-helper push (#528, part of #515). 12
+#   splits that one job in two so bun never shares a VM with the token (the rule
+#   deps-cadence v3 set), and drops the actions/cache step entirely (a save
+#   under pull_request_target lands in the default-branch cache scope, built
+#   from an install of the PR head's lockfile, which is cache poisoning; #515's
+#   "actions/cache keyed on bun.lock" decision is superseded, every run is a
+#   cold install). 11 was never released, but its shape changed after review,
+#   so the stamp moved. 12 was still unreleased when both jobs began checking
+#   out the PR's head SHA rather than its branch name (a branch that moves
+#   between the jobs then makes the push non-fast-forward and fail closed) and a
+#   per-PR concurrency group was added, so those two changes did not move the
+#   stamp again.
+#   # {{IF:BUN_PIN_FILE}} / # {{IF:BUN_PIN_LITERAL}}
+#                → keep exactly ONE of the two setup-bun steps and delete the
+#                  other. The pin is derived exactly as render-cadence.sh's
+#                  derive_setup_pin does, first match wins:
+#                    1. CI's `bun-version-file:` (BUN_PIN_FILE) — the file must
+#                       be tracked and name an exact X.Y.Z;
+#                    2. CI's literal `bun-version:` (BUN_PIN_LITERAL) — must be
+#                       an exact X.Y.Z;
+#                    3. then the first of these that pins bun (BUN_PIN_FILE):
+#                       .bun-version, .tool-versions, package.json (its
+#                       packageManager "bun@X.Y.Z"). A file that does not
+#                       mention bun is skipped; one that pins it inexactly
+#                       stops the render.
+#                  CI setting BOTH a `bun-version-file:` and a literal, two
+#                  different values of one key, a floating pin (latest, 1.3.x)
+#                  or a pin that is not exact: STOP and report, render nothing.
+#                  So does finding NO pin source at all. Never guess a version.
+#                  Every path here is relative to the REPO ROOT, whatever
+#                  {{PKG_DIR}} is: the fallback files are read at the repo
+#                  root, never inside a nested install root, and
+#                  `bun-version-file:` is the path CI wrote (setup-bun resolves
+#                  it from the workspace root).
+#   {{BUN_VERSION_FILE}} / {{BUN_VERSION}}
+#                → the pin file path relative to the repo root, or the literal.
 #   {{PKG_DIR}}  → the BUN INSTALL ROOT relative to the repo root: the directory
 #                  holding the package.json + bun.lock this workflow syncs, no
 #                  leading ./ and no trailing / (tailoredtip: web · qr-ninja: .
@@ -38,7 +77,7 @@
 #                  install root has its own lockfile to rewrite and push.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 10
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 12
 #
 # Refresh bun.lock on Dependabot npm PRs (the LEGACY npm + sync pairing —
 # native `bun` is the default for bun repos; see the render conditions above).
@@ -75,7 +114,39 @@
 #      push authenticates inline from its own env:. Nothing between checkout
 #      and push needs repository write, so the credential is never sitting in
 #      .git/config inside a workspace holding PR-authored content (issue #232).
-
+#   6. Ephemeral GitHub-hosted runners, hard-coded (version 11, #528, part of
+#      #515). The workflow runs bun on PR-authored manifests and the org-wide
+#      platform-writer App token (contents and pull-request write on
+#      every installed repo) pushes the result. A persistent shared self-hosted runner can carry a
+#      PATH-shadowing bun or git, a global gitconfig with core.hooksPath,
+#      core.fsmonitor or a credential helper, or a modified tool cache, left by
+#      any earlier job in any repo; --ignore-scripts blocks lifecycle scripts
+#      but not a poisoned binary. A GitHub-hosted VM starts clean and is
+#      destroyed after the job. bun comes from setup-bun at the repo's own pin,
+#      never from the image.
+#   7. bun and the token never share a VM (version 12; deps-cadence v3 is the
+#      precedent). A process bun starts can outlive its step and read a
+#      later-minted token from /proc/*/environ, $RUNNER_TEMP or step files, so
+#      the work is two jobs, each on its own fresh runner. update-bun-lock runs
+#      bun with no secret at all and uploads one artifact, a patch of the
+#      install root's bun.lock. push-bun-lock runs no package manager: it
+#      checks out, downloads the patch, validates it BEFORE the mint (git's own
+#      --summary and --numstat: no create, delete, rename or mode change, no
+#      binary hunk, one file, and that file is exactly the install root's
+#      bun.lock, a tracked regular file), applies it with hooks off, and only
+#      then runs the presence step, the mint and the push.
+#   8. The push never puts the token in a URL or in argv. It goes through a
+#      one-shot credential helper that reads GH_TOKEN from the environment (the
+#      empty helper first clears any other), with system and global git config
+#      ignored and every git call passing -c core.hooksPath=/dev/null
+#      -c core.fsmonitor=false, since a hook or fsmonitor program would inherit
+#      the push step's environment.
+#   9. No actions/cache. Under pull_request_target a save lands in the
+#      default-branch cache scope, built from an install of the PR head's
+#      lockfile, so a poisoned lock could seed a cache the base branch's own
+#      workflows restore. Every run is a cold install, which is fine for a
+#      workflow that fires only on Dependabot PRs.
+#
 name: Dependabot bun.lock sync
 
 on:
@@ -90,15 +161,205 @@ on:
 permissions:
   contents: read
 
+# One run per PR at a time; a second push to the same Dependabot branch queues
+# behind the run that is pushing the lockfile rather than racing it. Both jobs
+# check out the head SHA the event carried, so a branch that moved is a
+# non-fast-forward push, which fails closed.
+concurrency:
+  group: dependabot-bun-lock-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
+  # JOB 1 — runs bun, holds NO secret. Its only output is a patch of the install
+  # root's bun.lock, uploaded as an artifact. The PR-authored manifests and the
+  # package manager live and die on this VM; the App token never exists here.
   update-bun-lock:
     if: ${{ github.actor == 'dependabot[bot]' }}
-    runs-on: {{RUNNER}}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
     env:
-      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      # Git reads no system or global config in any step: nothing left on the
+      # VM can inject a hook path, fsmonitor program or credential helper.
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
     steps:
+      # No token: and persist-credentials: false. actions/checkout defaults
+      # persist-credentials to true, which writes whatever token it was given
+      # into .git/config for the rest of the job — in a workspace that holds
+      # PR-authored content. Dependabot pushes its head branch to the BASE repo
+      # rather than a fork, so the default read-only GITHUB_TOKEN reads this ref
+      # fine.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          repository: ${{ env.PR_HEAD_REPO }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      # bun from the repo's own pin, never the image's: a different bun can
+      # write a different lockfile from the one CI then validates, and the
+      # image's bun is a binary this job did not choose. Exactly one of the two
+      # arms below renders (see the header).
+      # {{IF:BUN_PIN_FILE}}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version-file: '{{BUN_VERSION_FILE}}'
+      # {{ENDIF}}
+      # {{IF:BUN_PIN_LITERAL}}
+      # CI pins bun as a literal, so this copy of it moves only on a re-render.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: '{{BUN_VERSION}}'
+      # {{ENDIF}}
+
+      # Restore the BASE branch's bun.lock, then loose-install. Discarding the
+      # PR's lockfile edit matters because a loose `bun install` considers
+      # Dependabot's npm-style edit valid and writes nothing — while strict
+      # `--frozen-lockfile` in CI still rejects it. Against the pristine base
+      # lock, the bumped package.json range genuinely no longer resolves, so
+      # Bun re-resolves ONLY that subtree and writes it back strict-valid.
+      #
+      # v1 deleted bun.lock and regenerated from scratch. That floated every
+      # semver range in the workspace: a one-package mobile bump carried a
+      # 2,486-line lock diff (qr-ninja#748 — @base-ui/react 1.2→1.6 among
+      # ~40 unrelated floats), one of which broke web's type check on every
+      # npm PR. Wholesale regeneration also destroys per-package attribution
+      # and smuggles an unreviewed all-deps upgrade into an auto-mergeable
+      # bump PR — minimal churn is a supply-chain property, not cosmetics.
+      #
+      # `fetch-depth: 0` above already fetched the base branch. Reuse that
+      # remote-tracking ref instead of fetching after checkout: with
+      # `persist-credentials: false`, a later network fetch is deliberately
+      # unauthenticated and fails for private/internal repositories.
+      #
+      # Every step below runs IN the install root, and every path it names is
+      # relative to that — which preserves v5's root-path shape while a nested
+      # render touches only its own lockfile.
+      - name: Update bun.lock for the bumped packages only
+        # {{IF:NESTED_PKG}}
+        working-directory: '{{PKG_DIR}}'
+        # {{ENDIF}}
+        run: |
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          git "${nohooks[@]}" checkout "origin/$PR_BASE_REF" -- bun.lock
+          bun install --ignore-scripts
+
+      # Fail-closed assertion (never trust a green that checked nothing): the
+      # rewritten lock must satisfy the same strict install CI runs. If the
+      # minimal update could not produce a frozen-valid lock, fail HERE with
+      # the real error rather than shipping a commit that reddens CI.
+      - name: Assert the lock is frozen-valid
+        # {{IF:NESTED_PKG}}
+        working-directory: '{{PKG_DIR}}'
+        # {{ENDIF}}
+        run: bun install --ignore-scripts --frozen-lockfile
+
+      # The ONLY thing that leaves this job: the install root's bun.lock, as the
+      # difference from the PR head the checkout holds. The pathspec names that
+      # one file; --no-renames, --no-ext-diff and --no-textconv keep the patch a
+      # plain one. The next job re-checks every line of it anyway.
+      - name: Package the lockfile change as a patch
+        id: patch
+        run: |
+          set -euo pipefail
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          out="$RUNNER_TEMP/bun-lock-out"
+          mkdir -p "$out"
+          git "${nohooks[@]}" diff HEAD --binary --no-renames --no-ext-diff --no-textconv -- '{{PKG_DIR}}/bun.lock' > "$out/bun-lock.patch"
+          if [ ! -s "$out/bun-lock.patch" ]; then
+            echo "::notice::bun.lock unchanged after regeneration — nothing to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ steps.patch.outputs.changed == 'true' }}
+        with:
+          name: bun-lock-patch
+          path: ${{ runner.temp }}/bun-lock-out/
+          retention-days: 1
+          if-no-files-found: error
+
+  # JOB 2 — a FRESH VM that runs no package manager. The patch from job 1 is
+  # untrusted: it is checked against the one path this workflow owns and applied
+  # with hooks off BEFORE the App token exists.
+  push-bun-lock:
+    needs: update-bun-lock
+    if: ${{ github.actor == 'dependabot[bot]' && needs.update-bun-lock.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          repository: ${{ env.PR_HEAD_REPO }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bun-lock-patch
+          path: ${{ runner.temp }}/bun-lock-in
+
+      # Every rule here is about the patch, not about who made it. The one path
+      # it may touch is the install root's bun.lock (at the repo root the
+      # '{{PKG_DIR}}/' prefix collapses to plain bun.lock), and git itself
+      # reports what the patch would do.
+      - name: Validate and apply the lockfile patch
+        run: |
+          set -euo pipefail
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          patch="$RUNNER_TEMP/bun-lock-in/bun-lock.patch"
+          allowed='{{PKG_DIR}}/bun.lock'
+          reject() { echo "::error::Rejected the lockfile patch: $1"; exit 1; }
+          [ -s "$patch" ] || reject "the artifact holds no patch"
+
+          # git's own reading of the patch: any create, delete, rename, copy
+          # or mode change shows up in --summary.
+          summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
+          [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
+          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
+          [ "$(printf '%s\n' "$numstat" | wc -l)" -eq 1 ] || reject "it touches more than one file"
+          while IFS=$'\t' read -r added removed path; do
+            [ "$added" != "-" ] || reject "$path is a binary change; bun.lock is text"
+            # git prints "0 0 path" for a patch it parses but that changes no
+            # line (headers only); it never prints an empty numstat for one.
+            [ "$added$removed" != "00" ] || reject "it changes nothing"
+            [ "$path" = "$allowed" ] || reject "$path is not $allowed"
+            mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
+            [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
+              || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
+          done <<<"$numstat"
+
+          git "${nohooks[@]}" apply --index -- "$patch"
+          # Belt and braces: what is staged, and only that, is the lockfile.
+          [ "$(git "${nohooks[@]}" diff --cached --name-only)" = "$allowed" ] || reject "after applying, something other than $allowed is staged"
+          # Captured first so a failing `git status` aborts under set -e; a
+          # `$(git status | grep)` would read the failure as a clean tree.
+          tree="$(git "${nohooks[@]}" status --porcelain --untracked-files=all)"
+          if [ -n "$(grep -v '^M  ' <<<"$tree" || true)" ]; then
+            reject "after applying, the tree holds changes outside the index"
+          fi
+
+      # Minted only now: after the patch is validated and applied, on a VM that
+      # never ran a package manager. The presence step stays immediately before
+      # the mint (it names the cause of an empty secret instead of an opaque
+      # auth error).
       # A secret this repo cannot reach resolves to the EMPTY STRING, never an
       # error, so the mint below fails as an opaque auth error that reads as
       # unrelated to its cause (issue #178). Name the cause here.
@@ -130,101 +391,30 @@ jobs:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
 
-      # No token: here, and persist-credentials: false. actions/checkout
-      # defaults persist-credentials to true, which writes whatever token it
-      # was given into .git/config for the rest of the job — in a workspace
-      # that holds PR-authored content. The App token is needed only by the
-      # push, so it is passed only there (issue #232). Dependabot pushes its
-      # head branch to the BASE repo rather than a fork, so the default
-      # GITHUB_TOKEN reads this ref fine; dropping token: costs nothing.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.PR_HEAD_REF }}
-          repository: ${{ env.PR_HEAD_REPO }}
-          persist-credentials: false
-          fetch-depth: 0
-
-      # Guarded, because this job defaults to the self-hosted fleet, where bun
-      # is already on the image WITH A WARM GLOBAL INSTALL CACHE. Installing bun
-      # here anyway replaces it with a fresh binary whose cache is empty, and
-      # `bun install` falls back from hardlinking to copying every package.
-      # Measured on qr-ninja (3,951 packages, same runner, same commit):
-      #
-      #   image bun, warm cache   →     1,323 ms
-      #   setup-bun, cold cache   → 1,266,440 ms   (~960x)
-      #
-      # Two installs run below, so the job took ~41 min instead of seconds. It
-      # never amortises either: this is `pull_request_target` on a Dependabot
-      # PR, whose restricted token cannot write the Actions cache
-      # ("Cache reservation failed: cache write denied: token has no writable
-      # scopes"), so every run pays full price. A repo's own CI workflow
-      # typically skips setup-bun on self-hosted for exactly this reason.
-      #
-      # `runner.environment` (github-hosted | self-hosted) rather than an
-      # IF-block: rendering only ever DELETES lines, so a block cannot ADD this
-      # guard on a self-hosted render — and a runtime check stays correct when a
-      # repo overrides the runner fact to a GitHub-hosted label, where setup-bun
-      # IS required.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
-        if: ${{ runner.environment != 'self-hosted' }}
-
-      # Restore the BASE branch's bun.lock, then loose-install. Discarding the
-      # PR's lockfile edit matters because a loose `bun install` considers
-      # Dependabot's npm-style edit valid and writes nothing — while strict
-      # `--frozen-lockfile` in CI still rejects it. Against the pristine base
-      # lock, the bumped package.json range genuinely no longer resolves, so
-      # Bun re-resolves ONLY that subtree and writes it back strict-valid.
-      #
-      # v1 deleted bun.lock and regenerated from scratch. That floated every
-      # semver range in the workspace: a one-package mobile bump carried a
-      # 2,486-line lock diff (qr-ninja#748 — @base-ui/react 1.2→1.6 among
-      # ~40 unrelated floats), one of which broke web's type check on every
-      # npm PR. Wholesale regeneration also destroys per-package attribution
-      # and smuggles an unreviewed all-deps upgrade into an auto-mergeable
-      # bump PR — minimal churn is a supply-chain property, not cosmetics.
-      #
-      # `fetch-depth: 0` above already fetched the base branch. Reuse that
-      # remote-tracking ref instead of fetching after checkout: with
-      # `persist-credentials: false`, a later network fetch is deliberately
-      # unauthenticated and fails for private/internal repositories.
-      #
-      # Every step below runs IN the install root, and every path it names is
-      # relative to that — which preserves v5's root-path shape while a nested
-      # render touches only its own lockfile.
-      - name: Update bun.lock for the bumped packages only
-        # {{IF:NESTED_PKG}}
-        working-directory: '{{PKG_DIR}}'
-        # {{ENDIF}}
-        run: |
-          git checkout "origin/$PR_BASE_REF" -- bun.lock
-          bun install --ignore-scripts
-
-      # Fail-closed assertion (never trust a green that checked nothing): the
-      # rewritten lock must satisfy the same strict install CI runs. If the
-      # minimal update could not produce a frozen-valid lock, fail HERE with
-      # the real error rather than shipping a commit that reddens CI.
-      - name: Assert the lock is frozen-valid
-        # {{IF:NESTED_PKG}}
-        working-directory: '{{PKG_DIR}}'
-        # {{ENDIF}}
-        run: bun install --ignore-scripts --frozen-lockfile
-
       # The only step that needs repository write, and the only one holding
-      # the credential. Pushing to an explicit authenticated URL rather than
-      # to `origin` is what lets the checkout above stay credential-free.
-      - name: Commit and push bun.lock if changed
-        # {{IF:NESTED_PKG}}
-        working-directory: '{{PKG_DIR}}'
-        # {{ENDIF}}
+      # the credential. Pushing to an explicit URL rather than to `origin` is
+      # what lets the checkout above stay credential-free. The validated patch
+      # is already in the index; nothing else is.
+      - name: Commit and push bun.lock
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
-          if git diff --quiet bun.lock; then
-            echo "bun.lock unchanged after regeneration — nothing to commit."
-            exit 0
+          set -euo pipefail
+          # Every git call passes nohooks: a hook or fsmonitor program would
+          # inherit GH_TOKEN from this step's environment. System and global
+          # config are already off (job env).
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          if git "${nohooks[@]}" diff --cached --quiet; then
+            echo "::error::The validated patch left nothing staged."
+            exit 1
           fi
           git config user.name "dependabot[bot]"
           git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
-          git add bun.lock
-          git commit -m "chore(deps): regenerate bun.lock for Dependabot npm bump"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${PR_HEAD_REPO}.git" "HEAD:${PR_HEAD_REF}"
+          git "${nohooks[@]}" commit -m "chore(deps): regenerate bun.lock for Dependabot npm bump"
+          # The token is never in argv or a URL: the single-quoted helper is
+          # expanded by the shell git spawns, which reads GH_TOKEN from the
+          # environment at run time. The empty helper first clears any other.
+          # shellcheck disable=SC2016  # deliberately unexpanded: git's shell expands it
+          git "${nohooks[@]}" -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push "https://github.com/${PR_HEAD_REPO}.git" "HEAD:refs/heads/${PR_HEAD_REF}"

@@ -1592,6 +1592,25 @@
 #      OBSOLETE bun.lock sync and STALE ecosystem-gated auto-merge findings,
 #      the bun.lockb-only boundary, refusals, idempotence and the owned-file
 #      render path. Three mutation checks in its header. No network.
+#  60. lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh) — the
+#      lockfile-sync-bun template (issue #528, part of #515; #529 extends it to
+#      pod) runs two jobs on a hard-coded ubuntu-latest (no {{RUNNER}}, no
+#      self-hosted, actor gate on both): a token-free one with contents: read
+#      that takes bun from SHA-pinned setup-bun (no actions/cache anywhere) and
+#      uploads a patch, and a second that runs no package manager, validates the
+#      patch before the mint (presence step immediately before it) and pushes,
+#      to exactly the PR's head repo and branch, through an env-reading
+#      credential helper with the token bound once and never in a URL or argv;
+#      both jobs check out the head SHA under a per-PR concurrency group, and
+#      global and system git config are ignored and hooks and fsmonitor off on
+#      every git call (including inside $(...)). The validator is EXECUTED from
+#      the extracted step in scratch git repos, for a root and a nested install
+#      root, against crafted patch artifacts (binary hunk, rename, mode change,
+#      create, delete, two files, another root's lock, a symlinked lock, a
+#      no-op, garbage, empty, missing, a pre-staged file, a stray untracked
+#      file, a failing git status), each asserted by exit 1 and its own reason,
+#      with a mutant per enforcing construct that neuters it and keeps its
+#      message. No network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2582,6 +2601,15 @@ if bash scripts/test-npm-lane-conversion.sh; then
     pass "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
 else
     failed "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
+fi
+
+# --- 60. lockfile-sync policy tests --------------------------------------------
+# The bun sync template runs on a hosted runner, mints the App token last and
+# pushes through a credential helper. Source-level, no network.
+if bash scripts/test-lockfile-sync-policy.sh; then
+    pass "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
+else
+    failed "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
 fi
 
 # ------------------------------------------------------------------------------
