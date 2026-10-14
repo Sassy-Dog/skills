@@ -90,8 +90,8 @@ echo "template-actionlint tests (work: $WORK)" >&2
 VARIANTS=(
     "auto-merge-queue|dependabot-auto-merge.template.yml|MERGE_QUEUE|"
     "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|"
-    "bun-nested|lockfile-sync-bun.template.yml|NESTED_PKG|RUNNER=[self-hosted, linux, sassy-dog];PKG_DIR=web"
-    "bun-root|lockfile-sync-bun.template.yml||RUNNER=[self-hosted, linux, sassy-dog];PKG_DIR=."
+    "bun-nested|lockfile-sync-bun.template.yml|NESTED_PKG,BUN_PIN_FILE|PKG_DIR=web;BUN_VERSION_FILE=.bun-version"
+    "bun-root|lockfile-sync-bun.template.yml|BUN_PIN_LITERAL|PKG_DIR=.;BUN_VERSION=1.3.5"
     "pod-nested|lockfile-sync-pod.template.yml|NESTED_APP|RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=app;FLUTTER_VERSION=3.35.1"
     "pod-root|lockfile-sync-pod.template.yml||RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=.;FLUTTER_VERSION=3.35.1"
     # The deps-cadence pair renders into ONE variant directory per shape, so
@@ -388,11 +388,12 @@ fi
 # off. A config file declaring the label keeps every other unknown label fatal.
 if [ "$HAVE_AL" -eq 1 ]; then
     mkdir -p "$WORK/mut-label/.github/workflows"
-    # The bun lockfile template, not auto-merge: auto-merge no longer takes a
-    # runner fact (#527), and bun still does until #528.
-    render "$TEMPLATE_DIR/lockfile-sync-bun.template.yml" "" \
-        "RUNNER=[self-hosted, linux, not-a-real-label];PKG_DIR=." > "$WORK/mut-label/.github/workflows/dependabot-auto-merge.yml"
-    if lint "mut-label/.github/workflows/dependabot-auto-merge.yml" >/dev/null 2>&1; then
+    # The pod lockfile template, not bun or auto-merge: those hard-code
+    # ubuntu-latest and take no runner fact (#527, #528); pod still does until
+    # #529, and this mutation moves again if that lands.
+    render "$TEMPLATE_DIR/lockfile-sync-pod.template.yml" "" \
+        "RUNNER=[self-hosted, macOS, not-a-real-label];APP_DIR=.;FLUTTER_VERSION=3.35.1" > "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml"
+    if lint "mut-label/.github/workflows/lockfile-sync-pod.yml" >/dev/null 2>&1; then
         bad "mutation (runner-label) — an unknown label other than sassy-dog PASSED; the tolerance mutes the whole rule"
     else
         ok "mutation (runner-label) — the tolerance is scoped to the sassy-dog label"

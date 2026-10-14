@@ -504,8 +504,9 @@ never a trigger for one. **Nothing compares a consumer's committed version to th
 consumer drift is invisible from here — that is why a template change rolls out as one issue per
 consumer repo rather than by waiting for re-runs.
 
-Facts: `{{RUNNER}}`, `{{APP_DIR}}`, `{{PKG_DIR}}`, `{{FLUTTER_VERSION}}` (keep in lockstep with the
-release workflow). `{{APP_DIR}}` is the Flutter app directory relative to the repo root — `app` for
+Facts: `{{RUNNER}}` (pod only), `{{APP_DIR}}`, `{{PKG_DIR}}`, `{{FLUTTER_VERSION}}` (keep in lockstep with the
+release workflow), and for `lockfile-sync-bun` the bun pin (`{{BUN_VERSION_FILE}}` under `BUN_PIN_FILE`,
+or `{{BUN_VERSION}}` under `BUN_PIN_LITERAL`; keep exactly one arm). `{{APP_DIR}}` is the Flutter app directory relative to the repo root — `app` for
 tailoredtip, `apps/mobile` for velovate, `.` for a root-level app. It replaces the pod template's
 v1 `{{PUBSPEC_PATH}}`/`{{IOS_DIR}}` facts: all three named points on the same directory, and
 overlapping facts that must agree will eventually disagree — every pubspec/Podfile path now
@@ -524,11 +525,19 @@ directory that does not exist and fired the workflow on `scripts/package.json`, 
 cannot handle. **One rendered workflow per install root** — a repo with two independent
 `bun.lock` files needs two, each owning its own lockfile.
 
-`{{RUNNER}}` (the two lockfile-sync templates only; `dependabot-auto-merge` hard-codes
-`runs-on: ubuntu-latest` since template version 5, and `deps-cadence` has no runner fact either, see
-"Credential-bearing workflows that run package-manager code" below) defaults to the Sassy Dog
-self-hosted fleet — `[self-hosted, linux, sassy-dog]` for bun, or
-`[self-hosted, macOS, sassy-dog]` for the pod template, which **must** have macOS to run
+`lockfile-sync-bun` takes no runner fact: since template version 11 (#528) it hard-codes
+`runs-on: ubuntu-latest`, as `dependabot-auto-merge` has since version 5 and `deps-cadence` always
+has, because it runs bun on PR-authored manifests and then holds the App token (see "Credential-bearing
+workflows that run package-manager code" below). Its bun is `oven-sh/setup-bun` at the **repo's own
+pin**, derived the way `deps-cadence` derives it (see "Toolchains" below): a `bun-version-file:` CI
+reads, or the `.bun-version` / `package.json` `packageManager` file, renders as `BUN_PIN_FILE`; a
+literal `bun-version:` renders as `BUN_PIN_LITERAL` (a CI pin bump then needs a re-render); a floating
+or missing pin refuses the render. The image's `bun` is never used. The fleet's warm global install
+cache is gone with the fleet: an `actions/cache` step keyed on the install root's `bun.lock` replaces
+it, and a miss is a cold install (accepted, #515).
+
+`{{RUNNER}}` (the pod template only) defaults to the Sassy Dog self-hosted fleet,
+`[self-hosted, macOS, sassy-dog]`, which **must** have macOS to run
 `pod install`. Both org runner groups are `visibility=all`, so every repo can reach the fleet.
 Prefer those label forms over the legacy product-scoped ones (`velovate`, `qr-ninja`): the runners
 still carry those labels, but scoping by product is a leftover, not a constraint.
@@ -703,9 +712,16 @@ last); see "Optional: regenerate committed codegen" below.
 
 `dependabot-auto-merge` follows the rule since template version 5 (no checkout, no package code,
 but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is hard-coded and
-`render` takes no runner for it. The two lockfile-sync templates (bun and pod) still default to
-the fleet until [#528](https://github.com/Sassy-Dog/skills/issues/528) and
-[#529](https://github.com/Sassy-Dog/skills/issues/529) move them.
+`render` takes no runner for it. `lockfile-sync-bun` follows it since template version 11
+([#528](https://github.com/Sassy-Dog/skills/issues/528)) in a single job rather than the three of
+`deps-cadence`: `ubuntu-latest`, bun from `setup-bun`, the package-manager steps with no token in
+scope and a checkout with `persist-credentials: false`, the App token minted after the last
+`bun install` and immediately after its presence step, and the push through an env-reading
+credential helper (no token in a URL or argv) with system and global git config ignored and hooks
+and fsmonitor off on every git call; `scripts/test-lockfile-sync-policy.sh` pins each. The pod
+lockfile-sync template still defaults to the fleet until
+[#529](https://github.com/Sassy-Dog/skills/issues/529) moves it, and that gate is where its checks
+will join.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits

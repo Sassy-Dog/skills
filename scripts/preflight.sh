@@ -1592,6 +1592,15 @@
 #      OBSOLETE bun.lock sync and STALE ecosystem-gated auto-merge findings,
 #      the bun.lockb-only boundary, refusals, idempotence and the owned-file
 #      render path. Three mutation checks in its header. No network.
+#  60. lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh) — the
+#      lockfile-sync-bun template (issue #528, part of #515; #529 extends it to
+#      pod) runs on a hard-coded ubuntu-latest (no {{RUNNER}}, no self-hosted),
+#      takes bun from SHA-pinned setup-bun with a bun.lock-keyed actions/cache,
+#      mints the App token after checkout and after every bun install (the
+#      presence step immediately before the mint), and pushes through an
+#      env-reading credential helper with no token in a URL or argv, global and
+#      system git config ignored and hooks and fsmonitor off on every git call.
+#      Source-level, one mutation per property. No network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2582,6 +2591,15 @@ if bash scripts/test-npm-lane-conversion.sh; then
     pass "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
 else
     failed "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
+fi
+
+# --- 60. lockfile-sync policy tests --------------------------------------------
+# The bun sync template runs on a hosted runner, mints the App token last and
+# pushes through a credential helper. Source-level, no network.
+if bash scripts/test-lockfile-sync-policy.sh; then
+    pass "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
+else
+    failed "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
 fi
 
 # ------------------------------------------------------------------------------
