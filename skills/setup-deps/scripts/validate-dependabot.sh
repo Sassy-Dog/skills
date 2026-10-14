@@ -62,16 +62,30 @@
 # uses. A flow-form `ignore: [...]` cannot be split, so it is compared as one
 # opaque rule and reported if the render does not reproduce it.
 #
+# ADDED LANES (issue #508). Under --compare-to, a lane the render ADDS (an
+# (ecosystem, directory) pair absent from the existing file) fails the run as
+# DIVERGED, because a repo's deliberate absence of a lane (what2wear has no
+# per-workspace bun lanes, one root bun.lock covers them) is otherwise
+# unprotected: a detection change would write the lane over the owned file with
+# no stop. A deliberate addition is acknowledged per pair with
+# `--accept-added-lane ECOSYSTEM:DIRECTORY` (repeatable, needs --compare-to),
+# which accepts exactly that pair and nothing else. It is refused when it would
+# be a no-op (the render does not add that pair), so a typo cannot silently
+# disarm the guard. The npm-to-bun conversion flow needs no flag: the converted
+# file passed as --compare-to already holds the bun lane.
+#
 # Usage:
 #   validate-dependabot.sh FILE [--root DIR] [--files-from LIST]
 #                               [--compare-to EXISTING]
 #                               [--cooldown ECOSYSTEM=DAYS]...
 #                               [--change-cooldown ECOSYSTEM]...
+#                               [--accept-added-lane ECOSYSTEM:DIRECTORY]...
 #   validate-dependabot.sh FILE --pairs-only     # the extracted lanes, nothing
 #                                                # asserted (needs no repo)
 # Exit: 0 every lane is backed by a manifest (and nothing was dropped)
 #       1 a lane points at nothing, the file is structurally unreadable, or a
-#         comparison found a dropped lane, cooldown or ignore: rule
+#         comparison found a dropped lane, cooldown or ignore: rule, or an
+#         unacknowledged added lane
 #       2 bad usage
 set -uo pipefail
 export LC_ALL=C   # comm needs both sides sorted the same way
@@ -86,6 +100,7 @@ COMPARE_TO=""
 PAIRS_ONLY=0
 COOLDOWNS=""   # newline-separated "ecosystem=days"
 ACKS=""        # newline-separated ecosystems whose cooldown change/removal is deliberate
+LANE_ACKS=""   # newline-separated "ecosystem<TAB>directory" added lanes the human accepted
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -95,19 +110,24 @@ while [ "$#" -gt 0 ]; do
         --pairs-only) PAIRS_ONLY=1; shift ;;
         --cooldown)   COOLDOWNS+="${2:-}"$'\n'; shift 2 || exit 2 ;;
         --change-cooldown) ACKS+="${2:-}"$'\n'; shift 2 || exit 2 ;;
+        --accept-added-lane)
+            v="${2:-}"; shift 2 || exit 2
+            [[ "$v" == [a-z]*:/* ]] || { echo "validate-dependabot: --accept-added-lane '$v' must be ECOSYSTEM:DIRECTORY (directory starts with /)" >&2; exit 2; }
+            LANE_ACKS+="${v%%:*}"$'\t'"${v#*:}"$'\n' ;;
         -*) echo "validate-dependabot: unknown argument '$1'" >&2; exit 2 ;;
         *)  [ -z "$FILE" ] || { echo "validate-dependabot: one file at a time" >&2; exit 2; }
             FILE="$1"; shift ;;
     esac
 done
 
-[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING] [--cooldown ECOSYSTEM=DAYS]... [--change-cooldown ECOSYSTEM]..." >&2; exit 2; }
+[ -n "$FILE" ] || { echo "usage: validate-dependabot.sh FILE [--root DIR] [--files-from LIST] [--compare-to EXISTING] [--cooldown ECOSYSTEM=DAYS]... [--change-cooldown ECOSYSTEM]... [--accept-added-lane ECOSYSTEM:DIRECTORY]..." >&2; exit 2; }
 parse_cooldown_requests "$COOLDOWNS" || { echo "validate-dependabot: $COOLDOWN_ERR" >&2; exit 2; }
 while IFS= read -r ack; do
     [ -n "$ack" ] || continue
     [[ "$ack" =~ ^[a-z][a-z-]*$ ]] || { echo "validate-dependabot: --change-cooldown '$ack' must be an ECOSYSTEM name" >&2; exit 2; }
 done <<<"$ACKS"
 [ -z "$ACKS" ] || [ -n "$COMPARE_TO" ] || { echo "validate-dependabot: --change-cooldown acknowledges a difference from the committed file, so it needs --compare-to" >&2; exit 2; }
+[ -z "$LANE_ACKS" ] || [ -n "$COMPARE_TO" ] || { echo "validate-dependabot: --accept-added-lane acknowledges a difference from the committed file, so it needs --compare-to" >&2; exit 2; }
 [ -r "$FILE" ] || { echo "validate-dependabot: cannot read '$FILE'" >&2; exit 2; }
 
 abspath() { echo "$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"; }
@@ -389,10 +409,20 @@ if [ -n "$COMPARE_ABS" ]; then
     else
         ok "no ignore rule in $COMPARE_TO is dropped by this render ($(grep -c . <<<"$existing_ign") compared)"
     fi
+    lane_acked_used=""
     while IFS=$'\t' read -r eco dir; do
         [ -n "$eco" ] || continue
-        echo "  note  this render adds $eco '$dir' (absent from $COMPARE_TO)" >&2
+        if grep -qxF "$eco"$'\t'"$dir" <<<"$LANE_ACKS"; then
+            lane_acked_used+="$eco"$'\t'"$dir"$'\n'
+            ok "$eco '$dir' deliberately added, acknowledged by --accept-added-lane $eco:$dir"
+        else
+            bad "DIVERGED: this render adds $eco '$dir', absent from $COMPARE_TO — if the lane is deliberate, re-run with --accept-added-lane $eco:$dir; if its absence was deliberate, fix detection instead"
+        fi
     done <<<"$added"
+    while IFS=$'\t' read -r eco dir; do
+        [ -n "$eco" ] || continue
+        grep -qxF "$eco"$'\t'"$dir" <<<"$lane_acked_used" || bad "--accept-added-lane $eco:$dir acknowledges nothing: this render does not add $eco '$dir' relative to $COMPARE_TO"
+    done <<<"$LANE_ACKS"
 fi
 
 if [ "$fail" -eq 0 ]; then

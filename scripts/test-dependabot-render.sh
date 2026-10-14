@@ -90,6 +90,18 @@
 #          "--change-cooldown was accepted with nothing to compare to".
 #        - drop the ^[a-z][a-z-]*$ name check on --change-cooldown -> the
 #          malformed-name cases 'Bun', 'bun=7' and '1bun' (exit 2 expected).
+#      (issue #508) A render that ADDS a lane the committed file lacks fails as
+#      DIVERGED naming the pair and `--accept-added-lane ECOSYSTEM:DIRECTORY`,
+#      which passes exactly that pair, is refused for a pair the render does
+#      not add, and is a usage error without --compare-to.
+#      Mutation proof for the added-lane rule (applied, gate run, restored):
+#        - turn the `bad "DIVERGED: this render adds ..."` back into the old
+#          `echo "  note ..."` -> "added lane — a render that adds bun '/web'
+#          passed --compare-to unacknowledged".
+#        - make the acknowledgement unscoped -> "acknowledging bun:/web alone
+#          waved through other added lanes".
+#        - drop the unused-acknowledgement refusal -> "an acknowledgement for a
+#          pair the render does not add was accepted".
 #
 #   5. Every version-updates group is minor/patch only, github-actions'
 #      `actions` group included (template v5). fetch-metadata reports a grouped
@@ -610,6 +622,42 @@ else
         ok "cooldown change — a forgotten flag on validate is blamed on the flag, not only on a hand-added cooldown"
     else
         bad "cooldown change — the forgotten-flag failure did not name the likely cause"
+    fi
+
+    # --- added lanes (issue #508). A repo's deliberate ABSENCE of a lane is
+    # only protected if a render that adds one fails; the human acknowledges a
+    # deliberate addition per (ecosystem, directory) pair.
+    NOWEB="$WORK/tailoredtip.noweb.yml"
+    sed '81,98d' "$GOLDEN" > "$NOWEB"
+    if cmpd "$GOLDEN" --compare-to "$NOWEB"; then
+        bad "added lane — a render that adds bun '/web' passed --compare-to unacknowledged"
+    elif grep -q "DIVERGED: .*adds bun '/web'" "$WORK/chg.err" && grep -q -- '--accept-added-lane bun:/web' "$WORK/chg.err"; then
+        ok "added lane — an unacknowledged added lane fails as DIVERGED naming the pair and the flag"
+    else
+        bad "added lane — the added lane failed, but not with a DIVERGED line naming the pair and --accept-added-lane"
+    fi
+    if cmpd "$GOLDEN" --accept-added-lane bun:/web --compare-to "$NOWEB"; then
+        ok "added lane — --accept-added-lane bun:/web passes exactly that pair"
+    else
+        bad "added lane — --accept-added-lane bun:/web did not pass the added pair"
+    fi
+    NOTWO="$WORK/tailoredtip.notwo.yml"
+    sed '99,$d;81,98d' "$GOLDEN" > "$NOTWO"
+    if cmpd "$GOLDEN" --accept-added-lane bun:/web --compare-to "$NOTWO"; then
+        bad "added lane — acknowledging bun:/web alone waved through other added lanes"
+    else
+        ok "added lane — an acknowledgement is scoped to its one pair; any other added lane still fails"
+    fi
+    if cmpd "$GOLDEN" --accept-added-lane bun:/nope --compare-to "$NOWEB"; then
+        bad "added lane — an acknowledgement for a pair the render does not add was accepted"
+    else
+        ok "added lane — an acknowledgement for a pair the render does not add is refused"
+    fi
+    bash "$SCRIPTS/validate-dependabot.sh" "$GOLDEN" --accept-added-lane bun:/web --root "$TT_TREE" --files-from "$TT_FILES" >/dev/null 2>&1
+    if [ "$?" = "2" ]; then
+        ok "added lane — --accept-added-lane without --compare-to is a usage error"
+    else
+        bad "added lane — --accept-added-lane was accepted with nothing to compare to"
     fi
 fi
 
