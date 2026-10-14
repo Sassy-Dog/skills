@@ -1791,6 +1791,18 @@ cg_exec() { # <codegen template> — 0 when every executed rule holds
     R="$CGW/v-empty"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
     mkdir -p "$R.rt/codegen-in"; : > "$R.rt/codegen-in/codegen.patch"
     cgv "$R" reject "an empty artifact" "the artifact holds no patch"
+    # Every file-name alternative of the deny list (#526), each asserted by its
+    # rejection reason under a widened glob, so dropping any one alternative
+    # turns its case into an ACCEPT. The `^\.git(hub)?/` alternative is covered
+    # by the workflow edit above (.github/); a tracked path under .git/ cannot
+    # exist, so that half has no patch to build.
+    for name in package.json bun.lock bun.lockb package-lock.json pubspec.yaml pubspec.lock Cargo.toml Cargo.lock \
+        Podfile Podfile.lock yarn.lock pnpm-lock.yaml pnpm-workspace.yaml .npmrc Gemfile Gemfile.lock; do
+        R="$CGW/v-deny"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
+        printf 'a: 1\n' > "$R/apps/mobile/$name"; git -C "$R" add -A; git -C "$R" commit -qm "track $name"
+        echo "b: 2" >> "$R/apps/mobile/$name"; cg_snap "$R"
+        cgv "$R" reject "a denied name: $name" "apps/mobile/$name is a workflow, manifest or lockfile" chore/deps-2026-11 "apps/mobile/*"
+    done
     # The deny list holds when the globs are widened, and the globs themselves are checked.
     R="$CGW/v-widen"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
     echo "  evil: 1.0.0" >> "$R/apps/mobile/pubspec.lock"; echo "dependencies: {evil: any}" >> "$R/apps/mobile/pubspec.yaml"; cg_snap "$R"
@@ -2019,6 +2031,15 @@ cgmutate_impl "the impl's commit loses nohooks" 'git "${nohooks[@]}" commit' 'gi
 cgmutate "branch check removed" exec '[[ "$HEAD_REF" =~ ^chore/deps-[0-9]{4}-(0[1-9]|1[0-2])$ ]] \'$'\n            || reject' 'true \'$'\n            || reject'
 cgmutate "loop breaker never fires" exec '[ "$(git "${nohooks[@]}" log -1 --format=%s)" = "$CODEGEN_SUBJECT" ]' '[ "never" = "$CODEGEN_SUBJECT" ]'
 cgmutate "allowlist check removed" exec '[[ "$path" =~ $allowed ]] || reject "$path is outside the generated-file paths"' 'true'
+# Dropping any single file-name alternative from the regex must fail the executed gate.
+cg_deny_line="$(sed -n "s/^ *denied='\(.*\)'\$/\1/p" "$CODEGEN" | head -1)"
+cg_deny_alts="${cg_deny_line#*(^|/)(}"; cg_deny_alts="${cg_deny_alts%)\$}"
+IFS='|' read -r -a cg_alts <<<"$cg_deny_alts"
+for cg_i in "${!cg_alts[@]}"; do
+    cg_rest=""; for cg_j in "${!cg_alts[@]}"; do [ "$cg_j" = "$cg_i" ] || cg_rest+="${cg_rest:+|}${cg_alts[$cg_j]}"; done
+    cgmutate "deny list loses ${cg_alts[$cg_i]}" exec "(^|/)($cg_deny_alts)\$" "(^|/)($cg_rest)\$"
+done
+[ "${#cg_alts[@]}" -ge 15 ] || bad "the deny list parsed to ${#cg_alts[@]} file-name alternatives, expected at least 15"
 cgmutate "deny list check removed" exec 'if [[ "$path" =~ $denied ]]; then reject "$path is a workflow, manifest or lockfile"; fi' 'true'
 cgmutate "summary (create/delete/rename/mode) check removed" exec '[ -z "$summary" ] || reject' 'true || reject'
 cgmutate "binary check removed" exec '[ "$added" != "-" ] || reject "$path is a binary change; generated files are text"' 'true'

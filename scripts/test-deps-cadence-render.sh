@@ -539,6 +539,24 @@ cg_refused "an expression in the command" "'{{' or '}}'" --codegen-command 'echo
 # The globs are the push job's allowlist: nothing broad, nothing that is a
 # workflow, manifest or lockfile, nothing that names no file.
 cg_refused "a glob that is a lockfile" "a workflow, manifest or lockfile" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/mobile/*.lock"
+# #526: names the deny list gained. A Podfile.lock under a glob must be refused at render time.
+tree cgpods <<EOF
+apps/mobile/pubspec.yaml	name: app\\nenvironment:\\n  sdk: ^3.5.0
+apps/mobile/pubspec.lock	lock
+apps/mobile/.fvmrc	{"flutter": "3.44.1"}
+ios/Runner/Generated/a.g.dart	// generated
+ios/Podfile	source
+ios/Podfile.lock	lock
+web/yarn.lock	lock
+web/pnpm-lock.yaml	lock
+web/.npmrc	rc
+.github/workflows/ci.yml	name: ci
+EOF
+for g in "ios/**/*.lock" "web/*.lock" "web/*.yaml" "web/*.npmrc"; do
+    run_render cgpods --codegen-command x --codegen-toolchain flutter --codegen-globs "$g"
+    expect_rc "codegen: glob $g reaches a newly denied name" 4 || continue
+    if grep -qF "a workflow, manifest or lockfile" <<<"$ERR"; then ok "codegen refused a glob reaching a newly denied name: $g"; else bad "glob $g refusal does not name the deny list: $ERR"; fi
+done
 cg_refused "a glob that reaches a manifest" "pubspec.yaml, a workflow" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/**/*.yaml"
 cg_refused "a glob that reaches a workflow" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs ".github/workflows/*.yml"
 cg_refused "a glob that starts with a wildcard" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs "**/*.dart"

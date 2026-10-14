@@ -788,12 +788,12 @@ report. Never pass a value the user did not confirm.
 | Job | Runs | Holds |
 | --- | --- | --- |
 | `regen` | checks out the PR head, sets up the toolchain from the repo's pin, runs the regenerate command, uploads a patch of the tracked changes or reports "already fresh" | **no secret**; `contents: read`; ephemeral GitHub-hosted |
-| `push` | a fresh VM that runs no repo or package code: validates the untrusted patch (nothing outside the globs, nothing that is a workflow, manifest or lockfile, no create, delete, rename, copy or mode change, no binary hunk, tracked regular files only, an odd-path check, a staged-set re-check), classifies it, then mints the App token (scoped to this repo, `contents` and `pull-requests` write), commits as the App and pushes non-force through the same env-reading credential helper, hooks, fsmonitor and system and global git config off | the App token, minted only after validation and classification |
+| `push` | a fresh VM that runs no repo or package code: validates the untrusted patch (nothing outside the globs, nothing under `.git/` or `.github/` or named in the template's single `denied=` line (the manifests, lockfiles and package-manager config of bun, npm, yarn, pnpm, pub, cargo, CocoaPods and Bundler), no create, delete, rename, copy or mode change, no binary hunk, tracked regular files only, an odd-path check, a staged-set re-check), classifies it, then mints the App token (scoped to this repo, `contents` and `pull-requests` write), commits as the App and pushes non-force through the same env-reading credential helper, hooks, fsmonitor and system and global git config off | the App token, minted only after validation and classification |
 
 It runs on `pull_request` (never `pull_request_target`), only for a PR authored by the
 `sassydog-platform-writer[bot]` App from a `chore/deps-*` branch in this repo, every job repeating
 that gate; `push` also requires the event's **sender** to be the App, so a human push to the branch
-is never committed under the App's name. The commit never touches a lockfile, so a lockfile-identity
+is never committed under the App's name. The commit never touches a lockfile (the `denied=` line in `deps-cadence-codegen.template.yml` is the one list, and `render-cadence.sh` refuses at render time a glob that matches any name on it), so a lockfile-identity
 guard in the repo is unaffected.
 
 **The review rule is required, not a setting.** Generated code is app code from generators the same
