@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 5
+# TEMPLATE: deps-cadence-impl · version 6
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -18,6 +18,9 @@
 #   {{FLUTTER_PIN_FILE}}  .fvmrc, .fvm/fvm_config.json or a pubspec.yaml with
 #                         an exact environment.flutter; read at run time.
 #   {{RUST_PIN_FILE}}     rust-toolchain(.toml); read at run time.
+#   {{IGNORE_RULES_AWK}}  the awk program of extract_ignore_rules (lib-ecosystems.sh),
+#                         written at this token's indent: the single source the
+#                         bare ignore: report parses .github/dependabot.yml with.
 # A lane whose toolchain has no exact pin REFUSES the render: a floating
 # toolchain writes a lockfile CI's toolchain may reject, and that failure would
 # otherwise surface at 09:00 on the 1st instead of at render time.
@@ -42,6 +45,10 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
+# Version 6 adds the "Bare ignore: holds" report (#524): a third section, in its
+# own step after the pub and cargo one, that lists each bare ignore: hold in
+# .github/dependabot.yml (read at run time) whose resolved version is behind
+# latest. The two exact-pin sections above it are unchanged.
 # Version 5 only passes the hook-disabling `nohooks` to open-pr's one remaining
 # bare git call (the `git ls-files -s` in the validator), so every git call in
 # the job is uniform. The rendered file differs by that call and the version.
@@ -49,7 +56,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 5
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 6
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -617,6 +624,186 @@ jobs:
           } > "$section"
           if [ -n "$unevaluated" ]; then
             echo "::warning::Some pub or cargo manifests could not be checked for stale exact pins; see the job summary."
+          fi
+          cat "$section" >> "$report"
+          cat "$section" >> "$GITHUB_STEP_SUMMARY"
+
+      # A BARE `ignore:` hold in .github/dependabot.yml (a dependency-name and
+      # no update-types or versions) stops Dependabot moving that dependency at
+      # all, and an exact pin is out of the refresh's reach too, so nothing else
+      # reports when such a hold falls behind latest (#524). Reported, never
+      # bumped. The holds are read at RUN time from the checked-out file, so a
+      # hold added by hand is reported without a re-render; the parser is the
+      # one extract_ignore_rules runs (lib-ecosystems.sh), injected at render
+      # time and never copied by hand here. Latest versions come from the
+      # lookups the two exact-pin reports already run, and only for the lanes
+      # this workflow refreshes: `bun outdated`, `npm outdated --json`,
+      # `flutter pub outdated --json` (all three also give the resolved
+      # version, the lane's lockfile) and, for cargo, `cargo metadata` (the
+      # resolved version in Cargo.lock) plus `cargo search`. A hold in any other
+      # ecosystem, in a directory no lane covers, or whose lookup failed is
+      # listed as "Could not evaluate", never as current. The tools list only
+      # dependencies that are behind, so a package they omit counts as current.
+      # Appended to the same pins.md (the PR body) and the job summary, whether
+      # or not anything moved.
+      - name: Report bare ignore holds
+        run: |
+          set -euo pipefail
+          command -v jq >/dev/null 2>&1 || { echo "::error::jq is required for the bare ignore: report."; exit 1; }
+          work="$RUNNER_TEMP/deps-cadence"
+          mkdir -p "$work"
+          report="$work/pins.md"
+          section="$work/holds.md"
+          cache="$work/holds-cache"
+          rm -rf "${cache:?}"
+          mkdir -p "$cache"
+          # shellcheck disable=SC2016  # an awk program: deliberately not expanded
+          ignore_rules_awk='
+          {{IGNORE_RULES_AWK}}
+          '
+
+          # name<TAB>resolved<TAB>latest for every dependency the tool says is behind.
+          parse_bun_outdated() {
+            LC_ALL=C sed 's/\x1b\[[0-9;]*m//g; s/\xe2\x94\x82/|/g' \
+            | awk -F'|' 'NF>=6 {
+                for (i = 2; i <= 5; i++) gsub(/^[ \t]+|[ \t]+$/, "", $i)
+                sub(/ \(dev\)$/, "", $2)
+                if ($2 != "Package" && $2 !~ /^-+$/ && $5 != "") print $2"\t"$3"\t"$5
+              }'
+          }
+          parse_npm_outdated() {
+            jq -r 'to_entries[] | (.value | if type == "array" then .[0] else . end) as $v
+                   | select($v.latest != null) | "\(.key)\t\($v.current // "unknown")\t\($v.latest)"'
+          }
+          parse_pub_outdated() {
+            jq -r '.packages[] | select(.latest.version != null and .current.version != null)
+                   | select(.latest.version != .current.version)
+                   | "\(.package)\t\(.current.version)\t\(.latest.version)"'
+          }
+          cargo_latest() {
+            local res
+            res="$(cargo search "$1" --limit 10 2>/dev/null)" || return 1
+            awk -v n="$1" '$1 == n && $2 == "=" && !found { gsub(/"/, "", $3); print $3; found = 1 }' <<<"$res"
+          }
+
+          # lane_lookup <lane> — fills "$cache/<key>.tsv" (name, resolved, latest
+          # of each package that is behind), "$cache/<key>.meta" (cargo: every
+          # resolved crate) or "$cache/<key>.err" (why not). Run once per lane;
+          # a lane with no answer is never read as current.
+          lane_lookup() {
+            local lane="$1" eco dir rel key out
+            eco="${lane%%:*}"; dir="${lane#*:}"; rel="${dir#/}"
+            key="$(printf '%s' "$lane" | tr -c 'A-Za-z0-9' '_')"
+            if [ -e "$cache/$key.tsv" ] || [ -e "$cache/$key.meta" ] || [ -e "$cache/$key.err" ]; then return 0; fi
+            case "$eco" in
+              bun)
+                if ! out="$(cd "./$rel" && NO_COLOR=1 bun outdated 2>&1)"; then
+                  echo "bun outdated failed: $(echo "$out" | tail -n1)" > "$cache/$key.err"; return 0
+                fi
+                parse_bun_outdated <<<"$out" > "$cache/$key.tsv"
+                if [ ! -s "$cache/$key.tsv" ] && grep -qE '(^|[^A-Za-z])Package([^A-Za-z]|$)' <<<"$out"; then
+                  echo "bun outdated table not recognised" > "$cache/$key.err"
+                fi ;;
+              npm)
+                # npm outdated exits 1 whenever something IS outdated, so its
+                # status says nothing; unparseable output is the failure.
+                out="$(cd "./$rel" && npm outdated --json 2>/dev/null)" || true
+                [ -n "$out" ] || out='{}'
+                if ! parse_npm_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
+                  echo "npm outdated output not recognised" > "$cache/$key.err"
+                fi ;;
+              pub)
+                if ! out="$(cd "./$rel" && flutter pub outdated --json 2>/dev/null)" \
+                    || ! parse_pub_outdated <<<"$out" > "$cache/$key.tsv" 2>/dev/null; then
+                  echo "flutter pub outdated output not recognised" > "$cache/$key.err"
+                fi ;;
+              cargo)
+                if ! out="$(cd "./$rel" && cargo metadata --format-version 1 2>/dev/null)" \
+                    || ! jq -r '.packages[] | "\(.name)\t\(.version)"' <<<"$out" > "$cache/$key.meta" 2>/dev/null; then
+                  echo "cargo metadata output not recognised" > "$cache/$key.err"
+                fi ;;
+            esac
+          }
+
+          # The bare holds: "ecosystem<TAB>directory<TAB>package". One line per
+          # rule; a rule whose key is anything but a lone dependency-name has an
+          # update-types or versions limit, so it is not bare.
+          holds=""
+          unevaluated=""
+          if [ -f .github/dependabot.yml ]; then
+            if ! holds="$(awk "$ignore_rules_awk" .github/dependabot.yml \
+                | awk -F'\t' '!seen[$3]++ && $4 ~ /^dependency-name:[^;]+$/ { print $1 "\t" $2 "\t" substr($4, 17) }' \
+                | awk '!seen[$0]++')"; then
+              holds=""; unevaluated+="- \`.github/dependabot.yml\`: Could not evaluate (its ignore: rules could not be read)"$'\n'
+            fi
+          fi
+
+          behind=""
+          checked=0
+          total=0
+          while IFS=$'\t' read -r eco dir name; do
+            [ -n "$name" ] || continue
+            total=$((total + 1))
+            lane="$eco:$dir"
+            case "$eco" in
+              bun|npm|pub|cargo) ;;
+              *) unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (no lookup for $eco)"$'\n'; continue ;;
+            esac
+            case " $LANES " in
+              *" $lane "*) ;;
+              *) unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (no $eco lane at $dir is refreshed here)"$'\n'; continue ;;
+            esac
+            case "$name" in
+              *[\*\?\[]*) unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (a name pattern, not a package)"$'\n'; continue ;;
+            esac
+            lane_lookup "$lane"
+            key="$(printf '%s' "$lane" | tr -c 'A-Za-z0-9' '_')"
+            if [ -e "$cache/$key.err" ]; then
+              unevaluated+="- \`$lane\` \`$name\`: Could not evaluate ($(cat "$cache/$key.err"))"$'\n'; continue
+            fi
+            if [ "$eco" = "cargo" ]; then
+              resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$cache/$key.meta")"
+              if [ -z "$resolved" ]; then
+                unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (not in Cargo.lock)"$'\n'; continue
+              fi
+              newest="$(cargo_latest "$name" || true)"
+              if [ -z "$newest" ]; then
+                unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (no latest version from cargo search)"$'\n'; continue
+              fi
+            else
+              resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$cache/$key.tsv")"
+              newest="$(awk -F'\t' -v n="$name" '$1 == n {print $3; exit}' "$cache/$key.tsv")"
+            fi
+            # Counted only once the tool answered for this very package.
+            checked=$((checked + 1))
+            if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
+              behind+="| \`$lane\` | \`$name\` | $resolved | $newest |"$'\n'
+              echo "::warning::Bare ignore: hold on $name ($lane) is at $resolved; latest is $newest. Dependabot will not move it."
+            fi
+          done <<<"$holds"
+
+          {
+            echo
+            echo "### Bare ignore: holds"
+            echo
+            echo "A bare ignore: rule in .github/dependabot.yml stops Dependabot moving that dependency at all, and the refresh cannot move an exact pin either, so nothing else reports when the hold falls behind. Lift the hold, or bump the dependency by hand. Check the Security tab first: a held dependency is how advisories accumulate unseen."
+            echo
+            if [ -n "$behind" ]; then
+              echo "| Lane | Package | Resolved | Latest |"
+              echo "|---|---|---|---|"
+              printf '%s' "$behind"
+            elif [ "$checked" -gt 0 ]; then
+              echo "No bare ignore: hold is behind its latest release among the $checked evaluated."
+            elif [ "$total" -eq 0 ] && [ -z "$unevaluated" ]; then
+              echo "No bare ignore: hold in .github/dependabot.yml."
+            fi
+            if [ -n "$unevaluated" ]; then
+              echo
+              printf '%s' "$unevaluated"
+            fi
+          } > "$section"
+          if [ -n "$unevaluated" ]; then
+            echo "::warning::Some bare ignore: holds could not be checked against latest; see the job summary."
           fi
           cat "$section" >> "$report"
           cat "$section" >> "$GITHUB_STEP_SUMMARY"

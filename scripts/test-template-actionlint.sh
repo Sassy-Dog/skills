@@ -156,6 +156,26 @@ render() {
         fi
     done <<< "$subs;"
 
+    # The one multi-line token (#524): the impl's ignore: parser, written at the
+    # placeholder's own indent from the SAME variable extract_ignore_rules runs,
+    # exactly as render-cadence.sh does. It cannot ride the `;`-separated subs.
+    if [[ "$out" == *'{{IGNORE_RULES_AWK}}'* ]]; then
+        local prog resolved="" aline
+        prog="$( . "$REPO_ROOT/skills/setup-deps/scripts/lib-ecosystems.sh"; printf '%s' "$IGNORE_RULES_AWK" )"
+        prog="${prog#$'\n'}"
+        while IFS= read -r line; do
+            trimmed="${line#"${line%%[![:space:]]*}"}"
+            if [ "$trimmed" = '{{IGNORE_RULES_AWK}}' ]; then
+                while IFS= read -r aline; do
+                    if [ -n "$aline" ]; then resolved+="${line%%[![:space:]]*}$aline"$'\n'; else resolved+=$'\n'; fi
+                done <<< "$prog"
+            else
+                resolved+="$line"$'\n'
+            fi
+        done <<< "$out"
+        out="$resolved"
+    fi
+
     printf '%s' "$out"
 }
 

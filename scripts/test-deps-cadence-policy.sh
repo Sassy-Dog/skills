@@ -101,6 +101,25 @@
 #      tool or an unparseable answer is "could not evaluate", never current; a
 #      path or git dependency with an exact requirement is not looked up.
 #
+# 14. THE BARE ignore: HOLDS REPORT (version 6, #524) is a THIRD section with its
+#      own step after the pub and cargo one: `### Bare ignore: holds`, the same
+#      `| Lane | Package | Resolved | Latest |` shape, appended to pins.md and
+#      the job summary and run whether or not anything moved. The two exact-pin
+#      sections stay byte-identical (their literals are pinned in 8 and 12). It
+#      lists a hold (a `dependency-name` with no `update-types` or `versions`)
+#      whose resolved version is behind latest; it reads the holds at RUN time
+#      from the checked-out .github/dependabot.yml, with the parser
+#      render-cadence.sh injects at the `{{IGNORE_RULES_AWK}}` placeholder
+#      (the SAME `IGNORE_RULES_AWK` extract_ignore_rules runs, so there is no
+#      hand copy to drift; test-deps-cadence-render.sh pins the injection). A
+#      real lookup only for bun, npm, pub and cargo; a hold in any other
+#      ecosystem, in a directory no refreshed lane covers, or whose lookup
+#      failed is `Could not evaluate (<reason>)`, never current. Executed with
+#      fake tools on a scratch repo: stale holds in two ecosystems listed, a
+#      limited hold not, gradle unevaluated, a hand-added hold read, failed
+#      lookups unevaluated, no lane unevaluated, no dependabot.yml. The routines
+#      parity file needs the new heading `### Bare ignore: holds`.
+#
 # 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
 #      pinned in its own section at the end of this file (cg_static for the
 #      template, cg_exec for the blocks it extracts and runs, with its own
@@ -141,6 +160,7 @@ done
 REFRESH_STEP="Refresh each lane within its declared ranges"
 REPORT_STEP="Report exact pins (bun and npm lanes)"
 REPORT2_STEP="Report exact pins (pub and cargo lanes)"
+HOLDS_STEP="Report bare ignore holds"
 PR_STEP="Open the refresh PR and enqueue it"
 PACKAGE_STEP="Package the refresh as a patch"
 VALIDATE_STEP="Validate and apply the refresh patch"
@@ -407,17 +427,18 @@ check() {
     if grep -qiE 'self-hosted' <<<"$c"; then
         echo "the impl names a self-hosted runner"; rc=1
     fi
-    local mint_ln refresh_ln report_ln report2_ln pr_ln first_ref validate_ln
+    local mint_ln refresh_ln report_ln report2_ln holds_ln pr_ln first_ref validate_ln
     mint_ln="$(grep -nE 'actions/create-github-app-token@' "$impl" | head -1 | cut -d: -f1)"
     refresh_ln="$(grep -nF "      - name: $REFRESH_STEP" "$impl" | cut -d: -f1)"
     report_ln="$(grep -nF "      - name: $REPORT_STEP" "$impl" | cut -d: -f1)"
     report2_ln="$(grep -nF "      - name: $REPORT2_STEP" "$impl" | cut -d: -f1)"
+    holds_ln="$(grep -nF "      - name: $HOLDS_STEP" "$impl" | cut -d: -f1)"
     pr_ln="$(grep -nF "      - name: $PR_STEP" "$impl" | cut -d: -f1)"
     validate_ln="$(grep -nF "      - name: $VALIDATE_STEP" "$impl" | cut -d: -f1)"
     first_ref="$(grep -nE 'steps\.app_token\.' "$impl" | head -1 | cut -d: -f1)"
-    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$report2_ln" ] || [ -z "$pr_ln" ] || [ -z "$validate_ln" ]; then
+    if [ -z "$mint_ln" ] || [ -z "$refresh_ln" ] || [ -z "$report_ln" ] || [ -z "$report2_ln" ] || [ -z "$holds_ln" ] || [ -z "$pr_ln" ] || [ -z "$validate_ln" ]; then
         echo "could not locate the mint, refresh, report, validate and PR steps to order them"; rc=1
-    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -lt "$report2_ln" ] || [ "$mint_ln" -lt "$validate_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
+    elif [ "$mint_ln" -lt "$refresh_ln" ] || [ "$mint_ln" -lt "$report_ln" ] || [ "$mint_ln" -lt "$report2_ln" ] || [ "$mint_ln" -lt "$holds_ln" ] || [ "$mint_ln" -lt "$validate_ln" ] || [ "$mint_ln" -gt "$pr_ln" ]; then
         echo "the App token is minted at line $mint_ln, not after the package managers (refresh $refresh_ln, reports $report_ln and $report2_ln) and the patch validation ($validate_ln), before the PR step ($pr_ln)"; rc=1
     elif [ -n "$first_ref" ] && [ "$first_ref" -lt "$mint_ln" ]; then
         echo "a step before the mint reads steps.app_token (line $first_ref)"; rc=1
@@ -428,14 +449,15 @@ check() {
 
     # --- executed ---------------------------------------------------------------
     refresh="$WORK/refresh.sh"; report="$WORK/report.sh"; prstep="$WORK/pr.sh"
-    local package="$WORK/package.sh" validate="$WORK/validate.sh" report2="$WORK/report2.sh"
+    local package="$WORK/package.sh" validate="$WORK/validate.sh" report2="$WORK/report2.sh" holds="$WORK/holds.sh"
     step_run "$impl" "$REPORT2_STEP" > "$report2"
+    step_run "$impl" "$HOLDS_STEP" > "$holds"
     step_run "$impl" "$REFRESH_STEP" > "$refresh"
     step_run "$impl" "$REPORT_STEP" > "$report"
     step_run "$impl" "$PR_STEP" > "$prstep"
     step_run "$impl" "$PACKAGE_STEP" > "$package"
     step_run "$impl" "$VALIDATE_STEP" > "$validate"
-    for f in "$refresh" "$report" "$report2" "$prstep" "$package" "$validate"; do
+    for f in "$refresh" "$report" "$report2" "$holds" "$prstep" "$package" "$validate"; do
         [ -s "$f" ] || { echo "could not slice $(basename "$f" .sh) step's run block (renamed?)"; return 1; }
     done
 
@@ -555,6 +577,7 @@ check() {
     # 8. the exact-pin report.
     report_checks "$impl" "$report" || rc=1
     report2_checks "$impl" "$report2" || rc=1
+    holds_checks "$impl" "$holds" || rc=1
     return "$rc"
 }
 
@@ -697,6 +720,133 @@ EOF
     # Like the bun and npm report, it never waits on a change.
     cond="$(step_block "$impl" "$REPORT2_STEP" | sed -n 's/^        if: //p')"
     [ -z "$cond" ] || { echo "the pub and cargo report's condition is '$cond'; it must run whether or not anything moved"; rc=1; }
+    return "$rc"
+}
+
+# holds_checks <impl> <holds-script> — 14: the bare ignore: holds section (#524).
+# The step carries a `{{IGNORE_RULES_AWK}}` placeholder that render-cadence.sh
+# fills from lib-ecosystems.sh; this gate fills it the same way (from the same
+# variable), so it executes the parser the validator and the renderer run.
+holds_checks() {
+    local impl="$1" step="$2" rc=0 d out fx="$WORK/h14" awkprog
+    rm -rf "$fx"; mkdir -p "$fx"
+    awkprog="$( . "$ROOT/skills/setup-deps/scripts/lib-ecosystems.sh"; printf '%s' "$IGNORE_RULES_AWK" )"
+    [ -n "$awkprog" ] || { echo "lib-ecosystems.sh defines no IGNORE_RULES_AWK"; return 1; }
+    grep -qxF '{{IGNORE_RULES_AWK}}' "$step" || { echo "the holds step has no {{IGNORE_RULES_AWK}} placeholder line (a hand copy of the parser?)"; return 1; }
+    AWKPROG="$awkprog" perl -pe 'BEGIN { $p = $ENV{AWKPROG}; $p =~ s/\A\n//; } s/\A\{\{IGNORE_RULES_AWK\}\}\n\z/$p/' "$step" > "$fx/step.sh"
+    ! grep -qF '{{IGNORE_RULES_AWK}}' "$fx/step.sh" || { echo "the placeholder was not filled"; return 1; }
+    step="$fx/step.sh"
+
+    cat > "$fx/dependabot.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /web
+    ignore:
+      # held: breaks the build
+      - dependency-name: is-number
+      - dependency-name: kind-of
+        update-types: ["version-update:semver-major"]
+      - dependency-name: left-pad
+        versions: ["2.x"]
+  - package-ecosystem: cargo
+    directory: /
+    ignore:
+      - dependency-name: serde
+  - package-ecosystem: gradle
+    directory: /
+    ignore:
+      - dependency-name: com.example:lib
+EOF
+    echo '{"packages":[{"name":"serde","version":"1.0.100"},{"name":"anyhow","version":"1.0.0"}]}' > "$fx/meta.json"
+    printf 'serde_json = "1.0.1"    # sibling first\nserde = "1.0.228"    # asked for\n' > "$fx/search.txt"
+    printf 'serde = "1.0.100"    # current\n' > "$fx/search-current.txt"
+    : > "$fx/empty.txt"
+    # seed <name> <yml> — a scratch repo with the yml committed at .github/.
+    seed() {
+        d="$WORK/h14-$1"; rm -rf "$d" "$d.tmp" "$d.summary"; new_repo "$d"; mkdir -p "$d.tmp/deps-cadence"
+        echo "OLD SECTION" > "$d.tmp/deps-cadence/pins.md"
+        [ -z "${2:-}" ] || cp "$2" "$d/.github/dependabot.yml"
+    }
+
+    # Behind latest, in two refreshed ecosystems, and one that has no lookup.
+    seed mixed "$fx/dependabot.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_BUN_OUTDATED="$FIX/bun-outdated-workspaces.txt" FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/search.txt" 2>&1)"; then
+        echo "the holds report failed: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qx 'OLD SECTION' "$pins" || { echo "the holds report did not append: earlier sections are gone"; rc=1; }
+        grep -qxF '### Bare ignore: holds' "$pins" || { echo "no '### Bare ignore: holds' heading in pins.md"; rc=1; }
+        grep -qxF '| Lane | Package | Resolved | Latest |' "$pins" || { echo "no holds table header"; rc=1; }
+        grep -qF '| `bun:/web` | `is-number` | 6.0.0 | 7.0.0 |' "$pins" || { echo "a bare bun hold behind latest is not listed"; rc=1; }
+        grep -qF '| `cargo:/` | `serde` | 1.0.100 | 1.0.228 |' "$pins" \
+            || { echo "a bare cargo hold behind latest is missing or compared with a sibling crate: $(grep -F serde "$pins")"; rc=1; }
+        if grep -qE '`(kind-of|left-pad)`' "$pins"; then
+            echo "a hold limited by update-types or versions was listed as bare: $(grep -E 'kind-of|left-pad' "$pins" | head -1)"; rc=1
+        fi
+        grep -qF 'Could not evaluate (no lookup for gradle)' "$pins" || { echo "a gradle hold was not listed as 'Could not evaluate (no lookup for gradle)'"; rc=1; }
+        grep -qF 'is-number' "$d.summary" || { echo "the holds report did not reach the job summary"; rc=1; }
+        ! grep -qx 'OLD SECTION' "$d.summary" || { echo "the job summary repeated an earlier section"; rc=1; }
+    fi
+    # A hold added by hand since the last render is read from the file at run time.
+    seed hand "$fx/dependabot.yml"
+    printf '      - dependency-name: left-pad\n' >> "$d/.github/dependabot.yml"
+    sed -i.bak '/versions: \["2.x"\]/d' "$d/.github/dependabot.yml" && rm -f "$d/.github/dependabot.yml.bak"
+    if out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_BUN_OUTDATED="$FIX/bun-outdated-workspaces.txt" FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/search.txt" 2>&1)"; then
+        grep -qF '`left-pad`' "$d.tmp/deps-cadence/pins.md" || { echo "a hold added by hand was not read from .github/dependabot.yml at run time"; rc=1; }
+    else
+        echo "the holds report failed on a hand-edited file: $(tail -n1 <<<"$out")"; rc=1
+    fi
+    # Everything current: the sentence, counted.
+    cat > "$fx/current.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    ignore:
+      - dependency-name: serde
+EOF
+    seed current "$fx/current.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/search-current.txt" 2>&1)"; then
+        echo "the holds report failed on a current repo: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qF 'No bare ignore: hold is behind its latest release among the 1 evaluated.' "$d.tmp/deps-cadence/pins.md"; then
+        echo "all-current did not read 'No bare ignore: hold is behind ... among the 1 evaluated.'"; rc=1
+    fi
+    # A failed lookup is "could not evaluate", never current.
+    seed fail "$fx/dependabot.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_BUN_OUTDATED="$FIX/bun-outdated-no-lockfile.txt" FAKE_BUN_OUTDATED_RC=1 \
+            FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/empty.txt" FAKE_CARGO_SEARCH_RC=1 2>&1)"; then
+        echo "failing lookups killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        grep -qF '`is-number`: Could not evaluate (bun outdated failed' "$pins" || { echo "a failing bun outdated was not 'Could not evaluate'"; rc=1; }
+        grep -qF '`serde`: Could not evaluate (no latest version from cargo search)' "$pins" || { echo "a failing cargo search was not 'Could not evaluate'"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$pins" || { echo "a failed lookup was read as current"; rc=1; }
+    fi
+    # A hold where no refreshed lane sits is not looked up as if one did.
+    seed nolane "$fx/dependabot.yml"
+    if out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/search.txt" 2>&1)"; then
+        grep -qF '`is-number`: Could not evaluate (no bun lane at /web is refreshed here)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a hold with no refreshed lane was not 'Could not evaluate'"; rc=1; }
+    else
+        echo "the holds report failed with no matching lane: $(tail -n1 <<<"$out")"; rc=1
+    fi
+    # No dependabot.yml, and a file with no bare hold.
+    seed none
+    rm -f "$d/.github/dependabot.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web" GITHUB_STEP_SUMMARY="$d.summary" 2>&1)"; then
+        echo "the holds report failed with no dependabot.yml: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qxF 'No bare ignore: hold in .github/dependabot.yml.' "$d.tmp/deps-cadence/pins.md"; then
+        echo "no dependabot.yml did not read 'No bare ignore: hold in .github/dependabot.yml.'"; rc=1
+    fi
+    # Like the other two reports, it never waits on a change.
+    out="$(step_block "$impl" "$HOLDS_STEP" | sed -n 's/^        if: //p')"
+    [ -z "$out" ] || { echo "the holds report's condition is '$out'; it must run whether or not anything moved"; rc=1; }
     return "$rc"
 }
 
@@ -867,6 +1017,25 @@ mutate "bun/npm heading reworded" impl 'echo "### Exact pins (bun and npm lanes)
 mutate "bun/npm sentence reworded" impl 'No bun or npm lane declares an exact pin.' 'No bun or npm lane declares an exact pin in this repo.'
 mutate "not-reported claim returns" impl '# do the same in a second section of their own (version 4).' '# exact pins are not reported in this version.'
 mutate "pub/cargo report after the mint" impl $'      - name: Report exact pins (pub and cargo lanes)\n' $'      - name: Mint GitHub App token\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n        with:\n          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n\n      - name: Report exact pins (pub and cargo lanes)\n'
+
+mutate "holds report waits on a change" impl $'      - name: Report bare ignore holds\n' $'      - name: Report bare ignore holds\n        if: ${{ steps.patch.outputs.changed == \'true\' }}\n'
+mutate "holds report after the mint" impl $'      - name: Report bare ignore holds\n' $'      - name: Mint GitHub App token\n        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n        with:\n          client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n          private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n\n      - name: Report bare ignore holds\n'
+mutate "a limited hold counted as bare" impl '$4 ~ /^dependency-name:[^;]+$/ { print $1 "\t" $2 "\t" substr($4, 17) }' '$4 ~ /^dependency-name:/ { n = substr($4, 17); sub(/;.*/, "", n); print $1 "\t" $2 "\t" n }'
+mutate "holds baked in, not read at run time" impl 'if [ -f .github/dependabot.yml ]; then' 'if false; then'
+mutate "parser hand-copied into the step" impl '{{IGNORE_RULES_AWK}}' 'function trim(s) { return s } { next }'
+mutate "unsupported ecosystem read as current" impl $'Could not evaluate (no lookup for $eco)"$\'\\n\'; continue ;;' $'"$\'\\n\'; continue ;;'
+mutate "hold with no refreshed lane read as current" impl $'Could not evaluate (no $eco lane at $dir is refreshed here)"$\'\\n\'; continue ;;' $'x"$\'\\n\'; continue ;;'
+mutate "failed lookup read as current" impl $'unevaluated+="- \\`$lane\\` \\`$name\\`: Could not evaluate ($(cat "$cache/$key.err"))"$\'\\n\'; continue' 'checked=$((checked + 1)); continue'
+mutate "stale hold never listed" impl 'if [ -n "$newest" ] && [ "$newest" != "$resolved" ]; then
+              behind+="| \`$lane\`' 'if false; then
+              behind+="| \`$lane\`'
+mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
+mutate "holds report skips the summary" impl '          cat "$section" >> "$report"
+          cat "$section" >> "$GITHUB_STEP_SUMMARY"
+
+      # The ONLY' '          cat "$section" >> "$report"
+
+      # The ONLY'
 
 # ===================================================================================
 # 13. THE CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519)

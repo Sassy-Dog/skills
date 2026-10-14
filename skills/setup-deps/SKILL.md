@@ -657,7 +657,7 @@ outlive its step and read the token from `/proc/*/environ`, `$RUNNER_TEMP` or st
 | Job | Runs | Holds |
 | --- | --- | --- |
 | `plan` | no checkout, no repo code: the credential presence check and the month plan (default branch, this month's branch, its open PR) | the secret values for the presence test only; `contents: read`, `pull-requests: read` |
-| `refresh` | the package managers and the exact-pin report, then uploads one artifact: `git diff --cached --binary` of the recorded lane files, plus `lanes.md` and `pins.md` | **no secret at all**; `contents: read` |
+| `refresh` | the package managers and the exact-pin and bare `ignore:` hold reports, then uploads one artifact: `git diff --cached --binary` of the recorded lane files, plus `lanes.md` and `pins.md` | **no secret at all**; `contents: read` |
 | `open-pr` | no package-manager or repo code: checkout, download the artifact, validate and apply it, then mint the App token, commit, push, open the PR and enqueue it | the App token, minted only after the patch is applied |
 
 **The artifact is untrusted.** `open-pr` re-derives the allowed paths from `LANES` with the same
@@ -715,16 +715,26 @@ only crates.io dependencies pinned as `=x.y.z` are checked). The two sections ar
 the first is never reworded, because Sassy-Dog/routines reads it by literal strings. The report also
 goes to the job summary and is written even in a month where nothing moved, because an exact pin
 never moves within a range and a stale one is a finding, not a clean month. A pin the tools could
-not evaluate is listed as such, never as current. Bare `ignore:` holds in `dependabot.yml` are not
-reported against latest.
+not evaluate is listed as such, never as current. A third section, `### Bare ignore: holds`
+(`| Lane | Package | Resolved | Latest |`, always written, in its own step), lists each **bare**
+`ignore:` rule in `.github/dependabot.yml` (a `dependency-name` with no `update-types` or
+`versions`) whose resolved version is behind latest, since such a hold stops Dependabot moving the
+dependency and an exact pin is out of the refresh's reach too. The holds are read at run time from
+the checked-out file, so a hand-added hold is reported without a re-render, with the parser
+`extract_ignore_rules` runs (`IGNORE_RULES_AWK` in `lib-ecosystems.sh`, which `render-cadence.sh`
+injects at the impl's `{{IGNORE_RULES_AWK}}` placeholder rather than copying). Versions come from
+the lookups above (`bun outdated`, `npm outdated --json`, `flutter pub outdated --json`,
+`cargo metadata` plus `cargo search`), so only bun, npm, pub and cargo lanes are evaluated; a hold in
+any other ecosystem, in a directory no refreshed lane covers, or whose lookup failed is listed as
+`Could not evaluate (<reason>)`, never as current.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `5`, and the optional
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `6`, and the optional
 `deps-cadence-codegen.yml` is `1`: impl version 1 ran on the fleet and minted the token first;
 version 2 ran the package managers and the token in one job; version 3 split the token from the
 package managers; version 4 adds the pub and cargo exact-pin section; version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it). The ownership rules in §1 apply to each. Re-render owned files with
+lacked it; version 6 adds the bare `ignore:` holds section). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several

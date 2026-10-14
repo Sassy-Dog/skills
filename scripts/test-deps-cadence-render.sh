@@ -120,6 +120,18 @@ expect_rc() {
 jqv() { jq -r "$1" <<<"$OUT" 2>/dev/null; }
 impl_has() { grep -qF -- "$1" "$OUTDIR/deps-cadence-impl.yml"; }
 
+# injected_awk_matches — the program between `ignore_rules_awk='` and its closing
+# quote in the rendered impl, dedented by the step's 10 spaces, equals the
+# lib's IGNORE_RULES_AWK (the leading newline of the variable aside).
+injected_awk_matches() {
+    local got want
+    [ -f "$OUTDIR/deps-cadence-impl.yml" ] || return 1
+    got="$(awk '/^          ignore_rules_awk=.$/ {f = 1; next} f && /^          .$/ {exit} f {sub(/^          /, ""); print}' "$OUTDIR/deps-cadence-impl.yml")"
+    want="$( . "$SCRIPTS/lib-ecosystems.sh"; printf '%s' "$IGNORE_RULES_AWK" )"
+    want="${want#$'\n'}"
+    [ -n "$got" ] && [ "$got" = "$want" ]
+}
+
 # arms_of <impl-template> — ecosystems named by the refresh step's case arms.
 arms_of() {
     awk '
@@ -229,6 +241,10 @@ if expect_rc "monorepo render" 0; then
         && ! impl_has "setup-node" && ! impl_has "bun-version: '" \
         && ok "impl renders the derived facts and only the arms they select" \
         || bad "impl render does not carry the derived facts / arms"
+    # The bare ignore: holds report parses dependabot.yml with the program
+    # extract_ignore_rules runs, injected at render time (#524): byte-equal.
+    injected_awk_matches && ok "the impl carries lib-ecosystems.sh's IGNORE_RULES_AWK byte for byte" \
+        || bad "the impl's ignore: parser is not the lib's IGNORE_RULES_AWK (a hand copy, or a re-indent that changed a byte)"
     left="$(grep -nE '\{\{[A-Za-z_]+(:[A-Za-z_]+)?\}\}' "$OUTDIR"/*.yml)"
     [ -z "$left" ] && ok "no leftover token or IF marker in either render" || bad "leftovers: $left"
     for f in deps-cadence.yml deps-cadence-impl.yml; do
@@ -651,5 +667,9 @@ case_owned_unmanaged() { plant_codegen cg "$planted"; run_render cg; rm -f "$WOR
 mutate_render "owned-unmanaged exit dropped" 'if [ -n "$UNMANAGED_FILE" ] && [ "$KEEP_CODEGEN" -eq 0 ]; then' 'if false; then' case_owned_unmanaged 5
 mutate_render "owned marker check dropped" "grep -qE 'generated-by: [^ ]+ \\| template: deps-cadence-codegen( |\$)' \"\$ROOT/\$f\" || continue" ':' case_hand_written 0
 mutate_render "codegen toolchain flags leak into the impl" 'render "$IMPL_TPL" "${IMPL_FLAGS#,}"' 'render "$IMPL_TPL" "${IMPL_FLAGS#,}${TF_bun}"' case_bun_codegen 0
+
+case_awk_injection() { run_render mono; injected_awk_matches || RC=99; }
+mutate_render "ignore: parser injected unindented" 'printf '"'"'%s%s\n'"'"' "${line%%[![:space:]]*}" "$aline"' 'printf '"'"'%s\n'"'"' "$aline"' case_awk_injection 0
+mutate_render "ignore: parser not injected" "if [ \"\$trimmed\" = '{{IGNORE_RULES_AWK}}' ]; then" "if false; then" case_awk_injection 0
 
 exit "$fail"
