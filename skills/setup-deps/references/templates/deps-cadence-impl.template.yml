@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 4
+# TEMPLATE: deps-cadence-impl · version 5
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -42,9 +42,14 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
+# Version 5 only passes the hook-disabling `nohooks` to open-pr's one remaining
+# bare git call (the `git ls-files -s` in the validator), so every git call in
+# the job is uniform. The rendered file differs by that call and the version.
+# An optional sibling, deps-cadence-codegen.yml (its own template), regenerates
+# committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 4
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 5
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -716,7 +721,7 @@ jobs:
               reject "unusual path '$path'"
             fi
             [[ "$path" =~ $allowed ]] || reject "$path is outside the lanes' manifests and lockfiles"
-            mode="$(git ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
+            mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
             [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
               || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
           done <<<"$numstat"

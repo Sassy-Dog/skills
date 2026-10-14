@@ -9,8 +9,9 @@ description: >
   "standardize dependency updates across our repos", "set up the monthly dependency cadence", or
   "add the monthly lockfile refresh". Generates and re-syncs a repo's `.github/dependabot.yml`
   plus its dependency automation workflows (auto-merge, bun.lock sync, pod lockfile sync, the
-  monthly deps-cadence lockfile refresh) from detected ecosystems. Run from inside the target
-  repository; re-runnable as the stack evolves.
+  monthly deps-cadence lockfile refresh, and, opt-in, the codegen regenerate workflow that keeps
+  committed generated code fresh on the refresh PR) from detected ecosystems. Run from inside the
+  target repository; re-runnable as the stack evolves.
 ---
 
 <!-- generated-by-companion: templates in references/templates/ -->
@@ -30,11 +31,12 @@ It renders these files:
 | `.github/workflows/dependabot-bun-lockfile.yml` | legacy fallback — only when npm has `lockfile_risk` (a binary `bun.lockb`, which no ecosystem writes) **AND the repo is not public**; a text `bun.lock` renders the native `bun` ecosystem instead, no sync workflow, and an existing sync for a text-`bun.lock` root is reported `OBSOLETE` (§1). One per bun install root, not one per repo |
 | `.github/workflows/dependabot-pod-lockfile.yml` | when cocoapods is detected **and** the app's `ios/Podfile.lock` is tracked (see §3) **AND the repo is not public** |
 | `.github/workflows/deps-cadence.yml` + `deps-cadence-impl.yml` | the monthly lockfile refresh, rendered as a pair by `render-cadence.sh` — when a bun, npm, pub or cargo lane tracks its lockfile, every such lane's toolchain is pinned, the merge gate is a queue, **AND the repo is not public** (see "The monthly lockfile refresh" in §3) |
+| `.github/workflows/deps-cadence-codegen.yml` | **opt-in, a third file beside the pair**: regenerates a repo's committed generated code on the cadence PR. Rendered only when the pair is AND the user confirmed all three codegen inputs (command, toolchain, generated-path globs) in the plan; a repo with no codegen freshness gate renders nothing. Same preconditions as the pair, **AND the repo is not public** (see "Optional: regenerate committed codegen" in §3) |
 
 Bundled scripts (`scripts/`): `detect-ecosystems.sh` (probe), `convert-npm-lanes.sh` (rewrites
 `npm` lanes on a text `bun.lock` as `bun`, owned file or not, and reports the workflows that leaves
 stale — §1), `render-dependabot.sh` (render), `validate-dependabot.sh` (post-render assertion +
-divergence check), `render-cadence.sh` (the deps-cadence pair), and `lib-ecosystems.sh` — the one
+divergence check), `render-cadence.sh` (the deps-cadence pair, plus the optional codegen workflow), and `lib-ecosystems.sh` — the one
 ecosystem table all five read, so the validator can never agree with a renderer that is wrong, the
 converter folds exactly the lanes a render folds, and the cadence's lanes can never disagree with
 Dependabot's about where a project lives.
@@ -575,19 +577,21 @@ which it enqueues. It is two files, rendered together and owned together:
 gh repo view --json visibility --jq .visibility          # → --visibility
 bash ${CLAUDE_PLUGIN_ROOT}/skills/setup-deps/scripts/render-cadence.sh \
   --detect-json /tmp/deps.json --visibility "$VISIBILITY" --merge-gate merge-queue \
-  --out-dir /tmp/cadence [--compare-to .github/workflows/deps-cadence-impl.yml]
+  --out-dir /tmp/cadence [--compare-to .github/workflows/deps-cadence-impl.yml] \
+  [--codegen-command CMD --codegen-toolchain TOOL --codegen-globs "GLOB GLOB"]   # all three, or none
 ```
 
 `--merge-gate` is the §2 classification (`merge-queue`, `direct`, `none` or `unavailable`). The
 script prints a JSON summary (lanes, `not_refreshed`, `no_refresh_command`, each toolchain's source
-and version, `refusals`) and writes both files only when every check passes. Put the summary in the
-plan; on a refusal it still prints, so the plan can name exactly what the repo is missing.
+and version, `refusals`, `codegen`) and writes the files only when every check passes. Put the
+summary in the plan; on a refusal it still prints, so the plan can name exactly what the repo is
+missing.
 
 | Exit | Means | What to do |
 | --- | --- | --- |
-| `0` | rendered | copy both files into `.github/workflows/` |
+| `0` | rendered | copy the files the summary's `files` lists into `.github/workflows/` (the pair, plus the codegen workflow when its inputs were given) |
 | `3` | declined: public repo, merge gate not a queue, or no lane to refresh | report the skip and its reason; nothing to fix here |
-| `4` | refused: a toolchain pin is missing, floating or disagrees | report each `REFUSED` line; the repo needs the pin first |
+| `4` | refused: a toolchain pin is missing, floating or disagrees, or a codegen input is incomplete or unsafe | report each `REFUSED` line; the repo needs the pin first, or the codegen input corrected |
 | `5` | `--compare-to`: a committed lane is missing from the fresh render | report the `DIVERGED` lanes and stop |
 | `1` | bad input or a malformed template | fix the input; never hand-render instead |
 
@@ -681,13 +685,18 @@ the validate and PR steps run in a fresh clone (as `open-pr` does), and hostile 
 outside every lane) must each be rejected with the tree untouched. A logging `git` wrapper and a
 poisoned global gitconfig prove the token reaches no argv and no hook.
 
+The optional `deps-cadence-codegen.yml` follows the same rule and the same split (a `regen` job
+that runs the repo's generator with no secret, a `push` job that runs none and mints the token
+last); see "Optional: regenerate committed codegen" below.
+
 The three Dependabot workflow templates still default to the fleet. Whether this rule should
 reach them is a separate decision that this section does not make.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
 `0` with a notice naming its open PR, so a re-dispatch never stacks branches; **any failed refresh
-fails the job**; only the lanes' manifests and lockfiles are staged; the PR body lists each lane's
+fails the job**; only the lanes' manifests and lockfiles are staged (by the impl; generated code is
+the optional codegen workflow's separate commit, below); the PR body lists each lane's
 delta plus an **exact-pin report**: `### Exact pins (bun and npm lanes)`, then, when a pub or cargo
 lane exists, a second section `### Exact pins (pub and cargo lanes)` in the same table format (pub
 from `flutter pub outdated --json`; cargo from `cargo metadata --no-deps` plus `cargo search`, so
@@ -699,16 +708,83 @@ not evaluate is listed as such, never as current. Bare `ignore:` holds in `depen
 reported against latest.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `4`: version 1 ran on the
-fleet and minted the token first; version 2 ran the package managers and the token in one job;
-version 3 split the token from the package managers; version 4 adds the pub and cargo exact-pin
-section). The ownership rules in §1 apply to each. Re-render owned files with
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `5`, and the optional
+`deps-cadence-codegen.yml` is `1`: impl version 1 ran on the fleet and minted the token first;
+version 2 ran the package managers and the token in one job; version 3 split the token from the
+package managers; version 4 adds the pub and cargo exact-pin section; version 5 passes the
+hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
+lacked it). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
 predate this template and carry a PAT or `GITHUB_TOKEN` fallback) is a plan item the user approves
 by name, never an automatic overwrite. Never edit a rendered file; change the template and
 re-render.
+
+#### Optional: regenerate committed codegen (`deps-cadence-codegen`)
+
+The refresh stages only lane manifests and lockfiles, by design. When it moves a **code generator**
+in a repo that commits generated code and gates its freshness in CI, the cadence PR can never land
+unaided: the generated files go stale and the freshness gate fails (the first velovate run,
+code_builder 4.11.1 to 4.12.0, added a blank line to 130 Ferry files). `deps-cadence-codegen.yml`
+closes that gap. It is **opt-in** and a **third file** beside the pair; a repo with no codegen
+freshness gate renders nothing, and the pair is unchanged either way.
+
+**The three facts are explicit inputs, confirmed by a human. The renderer parses no workflow YAML
+to derive them and refuses unless all three are supplied** (exit `4`, nothing written; none supplied
+means no codegen file):
+
+| Flag | Is | Refused when |
+| --- | --- | --- |
+| `--codegen-command` | the repo's regenerate command, mirroring what its CI freshness job runs | empty, multi-line, holds a single quote (it lands in a single-quoted YAML scalar), or holds `{{` or `}}` |
+| `--codegen-toolchain` | one of `bun`, `node`, `flutter`, `rust`: the toolchain the command needs, set up from the repo's own exact pin by the same derivation and reader steps as a lane's | not one of those, or its pin is missing, floating or disagrees (exit `4` like a lane) |
+| `--codegen-globs` | space- or comma-separated globs of the **generated** files, the only paths the workflow will ever commit | any glob is not a plain relative path glob, does not begin with a literal directory, does not end in a literal extension, matches no tracked file, or matches a workflow, manifest or lockfile |
+
+**Propose, then confirm.** Only when a tracked CI workflow has a job that regenerates code and then
+checks the tree is clean (a step running a generator followed by `git diff --exit-code`, or a job
+named like `codegen-freshness`) may the plan *propose* values, read from that job: the generator
+steps become the command, the toolchain it sets up becomes `--codegen-toolchain`, and the paths its
+diff check covers become the globs. Show all three in the plan as proposals and wait: the user
+confirms or edits each one, because a wrong glob widens what a bot may commit to a PR branch. If a
+value cannot be read from the job, ask for it; if the user does not confirm all three, or the repo
+has no such job, pass none of the flags and record `codegen: not rendered (<reason>)` in the run
+report. Never pass a value the user did not confirm.
+
+**Same split as the pair**, one more step apart (`scripts/test-deps-cadence-policy.sh` pins it):
+
+| Job | Runs | Holds |
+| --- | --- | --- |
+| `regen` | checks out the PR head, sets up the toolchain from the repo's pin, runs the regenerate command, uploads a patch of the tracked changes or reports "already fresh" | **no secret**; `contents: read`; ephemeral GitHub-hosted |
+| `push` | a fresh VM that runs no repo or package code: validates the untrusted patch (nothing outside the globs, nothing that is a workflow, manifest or lockfile, no create, delete, rename, copy or mode change, no binary hunk, tracked regular files only, an odd-path check, a staged-set re-check), classifies it, then mints the App token (scoped to this repo, `contents` and `pull-requests` write), commits as the App and pushes non-force through the same env-reading credential helper, hooks, fsmonitor and system and global git config off | the App token, minted only after validation and classification |
+
+It runs on `pull_request` (never `pull_request_target`), only for a PR authored by the
+`sassydog-platform-writer[bot]` App from a `chore/deps-*` branch in this repo, every job repeating
+that gate; `push` also requires the event's **sender** to be the App, so a human push to the branch
+is never committed under the App's name. The commit never touches a lockfile, so a lockfile-identity
+guard in the repo is unaffected.
+
+**The review rule is required, not a setting.** Generated code is app code from generators the same
+refresh bumped, and the cadence PR otherwise auto-merges with zero human review; path validation
+cannot help because the allowed paths *are* app code. So `push` classifies the staged diff on a
+plain `--unified=0` diff: it keeps the PR's auto-merge **only if every changed line is exactly
+empty** (at least one hunk, every hunk line exactly `+` or `-`). It never uses `-w` or
+`--ignore-blank-lines`: `-w` ignores whitespace inside a line, including inside string literals
+(GraphQL documents, URLs), and would pass a changed string as cosmetic. Anything else is
+**substantive** (spaces- or tab-only lines, CR or CRLF, reorders, mode changes, `\ No newline`,
+binary headers, an empty or malformed diff, a classification error, any value other than an
+explicit `false`): auto-merge is disabled and the PR dequeued **before** the push, nothing is
+pushed unless the re-read PR state shows it neither armed nor queued, and one PR comment lists the
+changed generated files and the lockfile changes, asking for a human review before anyone re-arms
+it. A substantive PR therefore waits for a person by design.
+
+**No loop, proven by idempotence.** The App's push re-fires `synchronize` and `regen` then finds
+nothing. If a second regen ever did produce a diff, `push` refuses to stack a codegen commit on a
+head that already is one, so a non-deterministic generator fails loudly instead of looping.
+
+**Ownership.** The file carries the `generated-by:` marker and its own `template-version` (`1`). A
+hand-written `deps-cadence-codegen.yml` (a repo may already carry one) has no marker: report it and
+skip it, and replace it only as a plan item the user approves by name. Its CI codegen job and its
+generated paths stay the repo's; the renderer never reads a hand-written copy as a source of facts.
 
 ## 4. Prerequisites the render assumes
 
@@ -735,7 +811,10 @@ re-render.
   scheduled run, not a Dependabot-triggered one, so it reads the Actions store; both names exist
   there at org level with `private` visibility. A missing one fails the run at its first step, by
   design: there is no fallback credential. The App also needs `contents` and `pull-requests` write
-  on the repo to push the branch, open the PR and enqueue it.
+  on the repo to push the branch, open the PR and enqueue it. The optional codegen workflow reads
+  the same two secrets (from the Actions store, on a `pull_request` run by the App, so they
+  resolve) and uses the same write permissions to push the regenerated commit and, for a
+  substantive change, to disable auto-merge, dequeue the PR and comment.
 - **`allow_auto_merge`** on the repo, for the direct-merge arm.
 - A **CI workflow** whose check is actually required. If `detect_failures` reports no conventional
   CI workflow, that repo needs one before auto-merge means anything.
@@ -757,7 +836,7 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
 
 - Never render the auto-merge workflow into a repo with no required check.
 - Never render **any App-token workflow** — auto-merge, bun lockfile-sync, pod lockfile-sync, or
-  the `deps-cadence` pair — into a **public** repo. Their org secrets are `private`-visibility and cannot resolve there, so
+  the `deps-cadence` pair and its optional codegen workflow — into a **public** repo. Their org secrets are `private`-visibility and cannot resolve there, so
   the render produces a workflow that fails late and looks unrelated. The precondition belongs to
   the credential, not to one workflow: scoping it to auto-merge left the two templates that check
   out PR head ungated (#186). For the lockfile ones, report the consequence and the manual
@@ -809,6 +888,16 @@ silently leaving security PRs ungrouped, and the mistake is invisible until the 
   without re-deriving its allowed paths from `LANES`, or let the token reach argv, a URL, a git
   config file or a git hook. It runs repo and dependency tooling, then holds a write token for every
   installed repo.
+- Never render `deps-cadence-codegen.yml` from a guess. Its command, toolchain and generated-path
+  globs are inputs the user confirmed in the plan, all three or none; a repo with no codegen
+  freshness gate gets no codegen workflow, and the renderer never parses workflow YAML to derive
+  the facts.
+- Never let `deps-cadence-codegen` push generated code that is not provably empty-lines-only
+  without first disabling the PR's auto-merge and dequeueing it, never classify with `-w` or
+  `--ignore-blank-lines`, and never push when the re-read PR state still shows it armed or queued.
+  Never give its `regen` job a secret, run repo or package code in its `push` job, mint the token
+  before the patch is validated and classified, or widen its globs to a workflow, manifest or
+  lockfile.
 - Never put a third-party `uses:` in `deps-cadence.yml`. It carries the `schedule:`; everything
   else lives in the impl.
 - Never render `deps-cadence` from a floating or guessed toolchain pin. A refusal (exit `4`) is

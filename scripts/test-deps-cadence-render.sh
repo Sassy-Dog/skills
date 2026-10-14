@@ -40,6 +40,17 @@
 #      render is linted too (test-template-actionlint.sh lints the templates
 #      in CI either way).
 #
+#   7. The opt-in codegen workflow (#519): --codegen-command, --codegen-toolchain
+#      and --codegen-globs are explicit inputs a human confirmed. All three
+#      render deps-cadence-codegen.yml beside the pair; none renders nothing;
+#      any other count REFUSES (exit 4). The command must be one line with no
+#      single quote or {{ }}; the toolchain one of bun/node/flutter/rust with
+#      the repo's own exact pin (and kept out of the impl); each glob a plain
+#      relative path glob with a literal leading directory and a literal
+#      extension that matches a tracked file (any tracked file, including under
+#      directories lane detection ignores) and no workflow, manifest or
+#      lockfile. Seven renderer mutations each flip the case that pins them.
+#
 # Mutation-proof: the arms check must fail on a template with an arm removed,
 # and a template carrying an unknown token must fail the render.
 #
@@ -407,5 +418,155 @@ else
         bad "mutation (unknown token) was not refused: exit $RC"
     fi
 fi
+
+# --- 7. the optional codegen workflow (#519) ----------------------------------------
+# deps-cadence-codegen.yml is opt-in. Its command, toolchain and generated-path
+# globs are EXPLICIT inputs a human confirmed; the renderer refuses unless all
+# three are supplied and renders nothing when none are. It never parses workflow
+# YAML to derive them.
+GEN="apps/mobile/lib/graphql/__generated__"
+tree cg <<EOF
+apps/mobile/pubspec.yaml	name: app\nenvironment:\n  sdk: ^3.5.0
+apps/mobile/pubspec.lock	lock
+apps/mobile/.fvmrc	{"flutter": "3.44.1"}
+$GEN/weather.req.gql.dart	// generated
+$GEN/weather.req.gql.g.dart	// generated
+apps/mobile/test/providers/chat_test.mocks.dart	// mocks
+apps/mobile/test/fixtures/odd_test.mocks.dart	// a mock under a directory the lane detection ignores
+.bun-version	1.4.0
+.github/workflows/ci.yml	name: ci
+EOF
+CG_CMD='(cd apps/mobile && flutter pub get && dart run build_runner build --delete-conflicting-outputs)'
+CG_GLOBS="$GEN/*.gql.dart $GEN/*.gql.g.dart apps/mobile/test/**/*_test.mocks.dart"
+cg_args=(--codegen-command "$CG_CMD" --codegen-toolchain flutter --codegen-globs "$CG_GLOBS")
+cg_has() { grep -qF -- "$1" "$OUTDIR/deps-cadence-codegen.yml"; }
+
+# cg_refused <label> <fragment> <args…> — exit 4, the reason named, no file.
+cg_refused() {
+    local label="$1" frag="$2"; shift 2
+    run_render cg "$@"
+    expect_rc "codegen: $label" 4 || return
+    if grep -qF -- "$frag" <<<"$ERR" && [ "$(jqv '.refusals | length')" -gt 0 ] && [ "$(jqv '.codegen')" = "null" ]; then
+        ok "codegen refused (exit 4): $label"
+    else
+        bad "codegen: $label — refusal does not say '$frag': $ERR"
+    fi
+}
+
+run_render cg
+if expect_rc "codegen absent" 0; then
+    { [ ! -e "$OUTDIR/deps-cadence-codegen.yml" ] && [ "$(jqv .codegen)" = "null" ] && [ "$(jqv '.files | length')" = "2" ]; } \
+        && ok "no codegen input: no codegen workflow, and the summary lists the pair only" \
+        || bad "no codegen input still produced a codegen file or summary entry"
+fi
+
+run_render cg "${cg_args[@]}"
+if expect_rc "codegen render" 0; then
+    [ -s "$OUTDIR/deps-cadence-codegen.yml" ] && [ "$(jqv '.files | length')" = "3" ] \
+        && ok "all three inputs render deps-cadence-codegen.yml beside the pair" \
+        || bad "codegen file missing or not in the summary"
+    grep -qE '^# generated-by: sassy-dog:setup-deps \| template: deps-cadence-codegen \| template-version: [0-9]+$' "$OUTDIR/deps-cadence-codegen.yml" \
+        && ok "the codegen render carries its generated-by marker" || bad "codegen render has no generated-by marker"
+    cg_has "CODEGEN_COMMAND: '$CG_CMD'" && cg_has "CODEGEN_GLOBS: '$CG_GLOBS'" \
+        && ok "the confirmed command and globs are rendered verbatim" || bad "command or globs not rendered verbatim"
+    cg_has "PIN_FILE: 'apps/mobile/.fvmrc'" && ! cg_has "setup-bun" && ! cg_has "setup-node" \
+        && ok "only the named toolchain is set up, from the repo's own pin" || bad "codegen toolchain steps wrong"
+    left="$(grep -nE '\{\{[A-Za-z_]+(:[A-Za-z_]+)?\}\}' "$OUTDIR/deps-cadence-codegen.yml")"
+    [ -z "$left" ] && ok "no leftover token or IF marker in the codegen render" || bad "codegen leftovers: $left"
+    # The impl is the same file it was without codegen: the codegen toolchain
+    # does not leak into it.
+    run_render cg; plain_impl="$(cat "$OUTDIR/deps-cadence-impl.yml")"
+    run_render cg "${cg_args[@]}"
+    [ "$(cat "$OUTDIR/deps-cadence-impl.yml")" = "$plain_impl" ] \
+        && ok "supplying codegen leaves deps-cadence-impl.yml byte-identical" || bad "codegen inputs changed the impl render"
+    if command -v actionlint >/dev/null 2>&1; then
+        rm -rf "$WORK/lint2"; mkdir -p "$WORK/lint2/.github/workflows"
+        cp "$OUTDIR"/*.yml "$WORK/lint2/.github/workflows/"
+        printf 'self-hosted-runner:\n  labels:\n    - sassy-dog\n' > "$WORK/lint2/al.yaml"
+        if lout="$(cd "$WORK/lint2" && actionlint -config-file al.yaml -no-color .github/workflows/*.yml 2>&1)"; then
+            ok "actionlint clean on the rendered trio"
+        else
+            bad "actionlint on the rendered trio: $(head -5 <<<"$lout" | tr '\n' ' ')"
+        fi
+    fi
+fi
+
+# A toolchain no lane uses is still pinned from the repo, and stays out of the impl.
+run_render cg --codegen-command 'bunx graphql-codegen' --codegen-toolchain bun --codegen-globs "$GEN/*.gql.dart"
+if expect_rc "codegen bun" 0; then
+    cg_has "bun-version-file: '.bun-version'" && ! impl_has "setup-bun" \
+        && ok "a codegen-only toolchain is set up in the codegen workflow and never in the impl" \
+        || bad "codegen-only bun leaked into the impl or is missing from the codegen workflow"
+fi
+run_render cg --codegen-command 'node gen.js' --codegen-toolchain node --codegen-globs "$GEN/*.gql.dart"
+expect_rc "codegen node, no pin" 4 && grep -qF 'node: no pin' <<<"$ERR" \
+    && ok "an unpinned codegen toolchain refuses like a lane's would (node: no pin)" || bad "unpinned codegen toolchain not refused: $ERR"
+
+# Explicit means all three, or none.
+cg_refused "command only" "--codegen-toolchain --codegen-globs" --codegen-command "$CG_CMD"
+cg_refused "globs only" "--codegen-command --codegen-toolchain" --codegen-globs "$CG_GLOBS"
+cg_refused "toolchain and globs, no command" "missing or empty: --codegen-command" --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+cg_refused "an empty command" "missing or empty: --codegen-command" --codegen-command '' --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+cg_refused "an unknown toolchain" "is not one of bun, node, flutter, rust" --codegen-command x --codegen-toolchain python --codegen-globs "$CG_GLOBS"
+# The command lands in a single-quoted YAML scalar run by bash -c.
+cg_refused "a single quote in the command" "single quote" --codegen-command "echo 'hi'" --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+cg_refused "a newline in the command" "one line" --codegen-command $'make gen\nrm -rf x' --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+# shellcheck disable=SC2016  # a literal GitHub expression, not shell
+cg_refused "an expression in the command" "'{{' or '}}'" --codegen-command 'echo ${{ secrets.X }}' --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"
+# The globs are the push job's allowlist: nothing broad, nothing that is a
+# workflow, manifest or lockfile, nothing that names no file.
+cg_refused "a glob that is a lockfile" "a workflow, manifest or lockfile" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/mobile/*.lock"
+cg_refused "a glob that reaches a manifest" "pubspec.yaml, a workflow" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/**/*.yaml"
+cg_refused "a glob that reaches a workflow" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs ".github/workflows/*.yml"
+cg_refused "a glob that starts with a wildcard" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs "**/*.dart"
+cg_refused "a glob with no directory" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs "weather.gql.dart"
+cg_refused "a glob that names a directory, not files" "must end in a literal file extension" --codegen-command x --codegen-toolchain flutter --codegen-globs "$GEN/*"
+cg_refused "a glob that ends in a wildcard extension" "must end in a literal file extension" --codegen-command x --codegen-toolchain flutter --codegen-globs "$GEN/weather.*"
+cg_refused "a glob that matches no tracked file" "matches no tracked file" --codegen-command x --codegen-toolchain flutter --codegen-globs "$GEN/*.nothing.dart"
+cg_refused "a glob that walks out of the repo" "not a plain relative path glob" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/../etc/*.dart"
+cg_refused "a glob with shell metacharacters" "not a plain relative path glob" --codegen-command x --codegen-toolchain flutter --codegen-globs 'apps/$(id)/*.dart'
+# The globs are matched against EVERY tracked file, not only the ones the lane
+# detection reads: a mock under test/fixtures/ is generated code too.
+run_render cg --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/mobile/test/fixtures/*_test.mocks.dart"
+expect_rc "codegen glob into an excluded directory" 0 && ok "a glob matches tracked files under directories the lane detection ignores (fixtures/)" \
+    || bad "a glob into test/fixtures was refused"
+# Declines still come first.
+run_render cg --visibility public "${cg_args[@]}"
+expect_rc "codegen on a public repo" 3 && ok "a public repo is declined (exit 3) whatever codegen inputs are given"
+run_render cg --merge-gate direct "${cg_args[@]}"
+expect_rc "codegen without a merge queue" 3 && ok "a repo without a merge queue is declined (exit 3) whatever codegen inputs are given"
+
+# Mutations of the renderer itself. Each must flip the case that pins it.
+mutate_render() { # <name> <from> <to> <case-fn> <expect-rc-without-the-rule: not this>
+    local name="$1" from="$2" to="$3" fn="$4" want_not="$5" real="$RENDER"
+    local mp="$WORK/mutcg-$RANDOM/skills/setup-deps"
+    mkdir -p "$mp"; cp -R "$ROOT/skills/setup-deps/scripts" "$ROOT/skills/setup-deps/references" "$mp/"
+    FROM="$from" TO="$to" perl -0pi -e 's/\Q$ENV{FROM}\E/$ENV{TO}/' "$mp/scripts/render-cadence.sh"
+    if cmp -s "$mp/scripts/render-cadence.sh" "$real"; then
+        bad "mutation ($name) changed nothing, so it proves nothing"; return
+    fi
+    RENDER="$mp/scripts/render-cadence.sh"
+    "$fn"
+    RENDER="$real"
+    if [ "$RC" -eq "$want_not" ]; then
+        bad "mutation ($name) still behaves as before (exit $RC); no case pins that rule"
+    else
+        ok "mutation ($name) changes the outcome (exit $RC, was $want_not)"
+    fi
+}
+case_command_only() { run_render cg --codegen-command "$CG_CMD"; grep -qF 'all three of --codegen-command' <<<"$ERR" || RC=99; }
+case_lockfile_glob() { run_render cg --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/mobile/*.lock"; }
+case_no_match() { run_render cg --codegen-command x --codegen-toolchain flutter --codegen-globs "$GEN/*.nothing.dart"; }
+case_quote() { run_render cg --codegen-command "echo 'hi'" --codegen-toolchain flutter --codegen-globs "$CG_GLOBS"; }
+case_wild_first() { run_render cg --codegen-command x --codegen-toolchain flutter --codegen-globs "**/*.dart"; }
+case_dir_only() { run_render cg --codegen-command x --codegen-toolchain flutter --codegen-globs "$GEN/*"; }
+case_bun_codegen() { run_render cg --codegen-command 'bunx graphql-codegen' --codegen-toolchain bun --codegen-globs "$GEN/*.gql.dart"; if grep -qF "setup-bun" "$OUTDIR/deps-cadence-impl.yml"; then RC=99; fi; }
+mutate_render "all-three check dropped" 'if [ -n "$cg_missing" ]; then' 'if false; then' case_command_only 4
+mutate_render "lockfile/manifest check dropped" 'if [[ "$f" =~ $cg_denied ]]; then bad_hit' 'if false; then bad_hit' case_lockfile_glob 4
+mutate_render "no-match check dropped" 'elif [ "$hits" -eq 0 ]; then' 'elif false; then' case_no_match 4
+mutate_render "single-quote check dropped" 'elif [[ "$CODEGEN_COMMAND" == *"'"'"'"* ]]; then' 'elif false; then' case_quote 4
+mutate_render "literal-directory check dropped" 'if [ "$first" = "$g" ] || [[ "$first" == *[*?]* ]] || [[ "$first" == .git* ]]; then' 'if false; then' case_wild_first 4
+mutate_render "literal-extension check dropped" 'if ! [[ "${g##*/}" =~ \.[A-Za-z0-9]{1,8}$ ]]; then' 'if false; then' case_dir_only 4
+mutate_render "codegen toolchain flags leak into the impl" 'render "$IMPL_TPL" "${IMPL_FLAGS#,}"' 'render "$IMPL_TPL" "${IMPL_FLAGS#,}${TF_bun}"' case_bun_codegen 0
 
 exit "$fail"
