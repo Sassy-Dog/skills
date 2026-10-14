@@ -742,11 +742,12 @@ none), the same way the exact-pin sections do, and the unevaluated ones follow a
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
 `template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `6`, and the optional
-`deps-cadence-codegen.yml` is `1`: impl version 1 ran on the fleet and minted the token first;
+`deps-cadence-codegen.yml` is `2`: impl version 1 ran on the fleet and minted the token first;
 version 2 ran the package managers and the token in one job; version 3 split the token from the
 package managers; version 4 adds the pub and cargo exact-pin section; version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; version 6 adds the bare `ignore:` holds section). The ownership rules in §1 apply to each. Re-render owned files with
+lacked it; version 6 adds the bare `ignore:` holds section; codegen version 2 widens the push job's
+`denied=` list to CocoaPods, Bundler, yarn, pnpm and `.npmrc`). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several
@@ -788,7 +789,7 @@ report. Never pass a value the user did not confirm.
 | Job | Runs | Holds |
 | --- | --- | --- |
 | `regen` | checks out the PR head, sets up the toolchain from the repo's pin, runs the regenerate command, uploads a patch of the tracked changes or reports "already fresh" | **no secret**; `contents: read`; ephemeral GitHub-hosted |
-| `push` | a fresh VM that runs no repo or package code: validates the untrusted patch (nothing outside the globs, nothing under `.git/` or `.github/` or named in the template's single `denied=` line (the manifests, lockfiles and package-manager config of bun, npm, yarn, pnpm, pub, cargo, CocoaPods and Bundler), no create, delete, rename, copy or mode change, no binary hunk, tracked regular files only, an odd-path check, a staged-set re-check), classifies it, then mints the App token (scoped to this repo, `contents` and `pull-requests` write), commits as the App and pushes non-force through the same env-reading credential helper, hooks, fsmonitor and system and global git config off | the App token, minted only after validation and classification |
+| `push` | a fresh VM that runs no repo or package code: validates the untrusted patch (nothing outside the globs, nothing under `.git/` or `.github/` or named in the template's single `denied=` line (the manifests, lockfiles and package-manager files named on that line), no create, delete, rename, copy or mode change, no binary hunk, tracked regular files only, an odd-path check, a staged-set re-check), classifies it, then mints the App token (scoped to this repo, `contents` and `pull-requests` write), commits as the App and pushes non-force through the same env-reading credential helper, hooks, fsmonitor and system and global git config off | the App token, minted only after validation and classification |
 
 It runs on `pull_request` (never `pull_request_target`), only for a PR authored by the
 `sassydog-platform-writer[bot]` App from a `chore/deps-*` branch in this repo, every job repeating
