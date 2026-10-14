@@ -48,7 +48,9 @@
 #      requires that path to EQUAL `allowed='{{PKG_DIR}}/bun.lock'` (the root
 #      collapse included), requires a tracked regular file (`ls-files -s`, mode
 #      100644 or 100755), applies with `git apply --index` and re-checks the
-#      staged set is only that path. The artifact download is SHA-pinned.
+#      staged set is only that path. The artifact download is SHA-pinned. This
+#      property is STATIC (the command names are in the step, in that order);
+#      property 14 is the one that proves the rejections work.
 #   7. MINT ORDER. In job 2 the App token is minted after checkout, after the
 #      download and after validation, with the `Require the app credentials`
 #      presence step immediately before the mint (test-visibility-preconditions
@@ -69,14 +71,54 @@
 #      `git config` passes `"${nohooks[@]}"` with that array defined, with both
 #      core.hooksPath=/dev/null and core.fsmonitor=false, in the same step.
 #      A hook or fsmonitor program would inherit the push step's environment.
+#      A git call is recognised at line start, after whitespace and after `(`,
+#      `"` or a backtick, so `$(git ...)` is one (a boundary of whitespace alone
+#      missed every `x="$(git ...)"` and let a missing nohooks through).
 #  11. BUN (the bun template only). bun comes from oven-sh/setup-bun, SHA-pinned
 #      with a version comment, in both render arms (BUN_PIN_FILE and
 #      BUN_PIN_LITERAL), never the image's; every `bun install` passes
 #      --ignore-scripts.
+#  12. HEAD SHA AND CONCURRENCY. Both jobs bind PR_HEAD_SHA to
+#      github.event.pull_request.head.sha and check that out, not the branch
+#      name: a branch that moves between the jobs makes the push (still
+#      `HEAD:refs/heads/${PR_HEAD_REF}`) non-fast-forward, which fails closed. A
+#      top-level `concurrency:` group is keyed on the PR number with
+#      cancel-in-progress: false (the deps-cadence-codegen precedent).
+#  13. WIRING AND DESTINATION. Job 2 `needs: update-bun-lock` and its `if:`
+#      requires the `changed == 'true'` output job 1 exports; job 1's upload sets
+#      `if-no-files-found: error`; the push goes to exactly
+#      `https://github.com/${PR_HEAD_REPO}.git` and the refspec
+#      `HEAD:refs/heads/${PR_HEAD_REF}`, each with its own mutant.
+#  14. THE VALIDATOR, EXECUTED. Properties 6 and 7 only see names; `true ||
+#      reject` keeps every name and defeats the rule (a reviewer did exactly that
+#      to the binary-hunk reject and the gate stayed green). So the validate
+#      step's run: body is extracted from the template, {{PKG_DIR}} is
+#      substituted for a root install ('.', the `{{PKG_DIR}}/` collapse) and a
+#      nested one (`web`), and it runs in a scratch git repo (tracked
+#      bun.lock + package.json at the root and in web/) against crafted
+#      artifacts. A clean content change must exit 0 with exactly the allowed
+#      path staged. Each of these must exit 1 AND print its own reason, so a
+#      reject that fires from a different check cannot stand in for the one
+#      under test: a binary hunk, a rename, a mode change, a create, a delete,
+#      two files (bun.lock + package.json), the other install root's bun.lock, a
+#      bun.lock tracked as a symlink (120000), a header-only no-op patch,
+#      garbage, an empty patch, a missing patch, a clean patch with an extra
+#      file already staged, and a clean patch beside a stray untracked file. A
+#      `git` that fails only for `status` must abort the step (the status is
+#      captured into a variable first; piped into grep, a failed status read as
+#      a clean tree). One mutant per enforcing construct neuters it while keeping
+#      its message text. There is deliberately no `[ -n "$numstat" ]` check: git
+#      never prints an empty numstat for a patch it parses (a header-only patch
+#      prints `0 0 path`), so it was unreachable and could not be pinned; the
+#      "it changes nothing" reject on `0 0` is the reachable form. The executed
+#      suite is memoised on the extracted body, so mutants that leave the step
+#      alone do not re-run it.
 #
 # Vacuous-green guards: the template must split into exactly two jobs, and each
 # job's step table must find what it is checked for (job 1: checkout and at least
 # two installs; job 2: checkout, download, validate, presence step, mint, push),
+# the validator's run: body must extract and have no {{…}} left after
+# substitution, and every executed case is asserted by exit status AND reason,
 # or the check fails rather than covering nothing.
 #
 # Mutation-proof (a gate that cannot fail is decorative): one mutation per
@@ -84,7 +126,10 @@
 # WITH the expected reason (a mutation that fails for some other reason proves
 # nothing), a mutation that changes nothing fails the gate (template reworded),
 # and a perl that is missing, exits non-zero or writes an empty mutant fails the
-# gate rather than letting a broken mutation pass vacuously.
+# gate rather than letting a broken mutation pass vacuously. Expected reasons are
+# full message fragments: the step-table-incomplete message names `push`,
+# `checkout` and `contents: read` too, so a bare word would let a mutant that
+# only broke step detection pass for the wrong reason.
 #
 # To extend to the pod template (#529): add `check_pod` (check_common with the
 # pod template's package-manager pattern plus its toolchain check), call it on
@@ -93,7 +138,8 @@
 # template will need that literal passed in.
 #
 # Reads one tracked file. No gh, no network, no actionlint; perl for the
-# mutations. Wired into scripts/preflight.sh; run directly:
+# mutations, git and cp for the executed validator's scratch repos (global and
+# system git config off, as in the job). Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-lockfile-sync-policy.sh
 set -uo pipefail
 export LC_ALL=C
@@ -159,6 +205,9 @@ split_jobs() {
 # check_git_hardened <job label> — property 10 over the loaded STEP_BODY.
 check_git_hardened() {
     local label="$1" rc=0 i body line uses_git
+    # A git call starts at line start, after whitespace, or after ( " or a
+    # backtick: `$(git ...)` and `"$(git ...)"` are calls too.
+    local gitre='(^|[[:space:]("`])git[[:space:]]'
     if [[ "${STEP_BODY[0]}" != *'GIT_CONFIG_NOSYSTEM: "1"'* ]]; then
         echo "$label: GIT_CONFIG_NOSYSTEM=1 is not in the job env"; rc=1
     fi
@@ -169,7 +218,7 @@ check_git_hardened() {
         body="${STEP_BODY[$i]}"
         uses_git=0
         while IFS= read -r line; do
-            [[ "$line" =~ (^|[[:space:]])git[[:space:]] ]] || continue
+            [[ "$line" =~ $gitre ]] || continue
             [[ "$line" =~ git[[:space:]]+config[[:space:]] ]] && continue
             uses_git=1
             if [[ "$line" != *'"${nohooks[@]}"'* ]]; then
@@ -185,12 +234,16 @@ check_git_hardened() {
     return "$rc"
 }
 
-# check_checkout <job label> — property 8 over the loaded STEP_BODY.
+# check_checkout <job label> — properties 8 and 12 over the loaded STEP_BODY.
 check_checkout() {
     local label="$1" rc=0 co body
     co="$(find_step 'actions/checkout@')" || co=""
     [ -n "$co" ] || { echo "$label: no checkout step — the check would cover nothing"; return 1; }
     body="${STEP_BODY[$co]}"
+    [[ "${STEP_BODY[0]}" == *'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}'* ]] \
+        || { echo "$label: PR_HEAD_SHA is not bound to github.event.pull_request.head.sha in the job env"; rc=1; }
+    [[ "$body" == *'ref: ${{ env.PR_HEAD_SHA }}'* ]] \
+        || { echo "$label: checkout does not check out the PR head SHA (a branch name can move between the jobs)"; rc=1; }
     [[ "$body" == *'persist-credentials: false'* ]] || { echo "$label: checkout does not set persist-credentials: false"; rc=1; }
     if grep -Eq '^[[:space:]]+token:' <<<"$body"; then echo "$label: checkout passes a token:"; rc=1; fi
     return "$rc"
@@ -200,7 +253,7 @@ check_checkout() {
 # the policy holds, 1 (reasons on stdout) otherwise.
 check_common() {
     local f="$1" pm="$2" rc=0 d="$WORK/split" i line body nonc runs n
-    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline
+    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up
     # A package manager at command position: line start (after run:), or after
     # && ; | or $( — not a word inside a quoted message.
     local pm2='(^[[:space:]]*(run:[[:space:]]+)?|&&[[:space:]]*|;[[:space:]]*|\|[[:space:]]*|\$\([[:space:]]*)(bun|bunx|npm|npx|yarn|pnpm|pod|bundle)([[:space:]]|$)'
@@ -236,6 +289,23 @@ check_common() {
         fi
     done
 
+    # 12. concurrency: one run per PR (the file's only top-level block).
+    if ! grep -qxF 'concurrency:' <<<"$nonc"; then
+        echo "no workflow-level concurrency block"; rc=1
+    elif ! grep -Eq '^  group: [A-Za-z0-9-]+-\$\{\{ github\.event\.pull_request\.number \}\}$' <<<"$nonc"; then
+        echo "the concurrency group is not keyed on github.event.pull_request.number"; rc=1
+    elif ! grep -qxF '  cancel-in-progress: false' <<<"$nonc"; then
+        echo "the concurrency block does not set cancel-in-progress: false (a cancelled push is a half-pushed one)"; rc=1
+    fi
+
+    # 13 (job wiring). Job 2 waits for job 1 and runs only when job 1 changed the lock.
+    if ! grep -qxF '    needs: update-bun-lock' "$j2"; then
+        echo "job 2 does not declare needs: update-bun-lock"; rc=1
+    fi
+    if ! grep -qF "needs.update-bun-lock.outputs.changed == 'true'" <<<"$(grep -E '^    if:' "$j2")"; then
+        echo "job 2's if: does not require needs.update-bun-lock.outputs.changed == 'true'"; rc=1
+    fi
+
     # 9 (whole file). The token occurs once, as the push step's GH_TOKEN binding.
     n="$(grep -o 'steps\.app_token\.outputs\.token' <<<"$nonc" | wc -l | tr -d ' ')"
     if [ "$n" != "1" ]; then
@@ -255,6 +325,9 @@ check_common() {
     load_steps "$j1"
     check_checkout "job 1" || rc=1
     check_git_hardened "job 1" || rc=1
+    if [[ "${STEP_BODY[0]}" != *'changed: ${{ steps.patch.outputs.changed }}'* ]]; then
+        echo "job 1 does not export changed: \${{ steps.patch.outputs.changed }} for job 2's gate"; rc=1
+    fi
     for ((i = 1; i <= NSTEPS; i++)); do
         grep -Eq "$pm" <<<"${STEP_BODY[$i]}" && installs+=("$i")
     done
@@ -280,6 +353,10 @@ check_common() {
     uploads="$(grep -E 'uses: actions/upload-artifact@' <<<"$body")"
     if [ "$(grep -c . <<<"$uploads")" -ne 1 ] || grep -Evq '@[0-9a-f]{40} # v[0-9]' <<<"$uploads"; then
         echo "job 1 must upload the patch with exactly one SHA-pinned (40-hex plus version comment) actions/upload-artifact"; rc=1
+    fi
+    up="$(find_step 'actions/upload-artifact@')" || up=""
+    if [ -z "$up" ] || [[ "${STEP_BODY[$up]}" != *'if-no-files-found: error'* ]]; then
+        echo "job 1's upload does not set if-no-files-found: error (a missing patch must fail the job, not upload nothing)"; rc=1
     fi
 
     # ---- job 2: the token job ------------------------------------------------
@@ -359,6 +436,200 @@ check_common() {
     if [[ "$body" != *'GH_TOKEN: ${{ steps.app_token.outputs.token }}'* ]]; then
         echo "the push step does not bind GH_TOKEN to the minted token"; rc=1
     fi
+    # 13 (destination). The PR's own head repo and head branch, nothing else.
+    if [[ "$body" != *'push "https://github.com/${PR_HEAD_REPO}.git" '* ]]; then
+        echo "the push URL is not exactly \"https://github.com/\${PR_HEAD_REPO}.git\""; rc=1
+    fi
+    if [[ "$body" != *' "HEAD:refs/heads/${PR_HEAD_REF}"'* ]]; then
+        echo "the push refspec is not exactly \"HEAD:refs/heads/\${PR_HEAD_REF}\""; rc=1
+    fi
+    return "$rc"
+}
+
+# --- the validator, EXECUTED -------------------------------------------------
+# The static rules above only prove the validator's command names are present;
+# `true || reject` in place of a reject keeps every name and defeats the rule.
+# So the "Validate and apply the lockfile patch" run: body is extracted from the
+# template (the way test-deps-cadence-policy.sh extracts its impl steps), its
+# {{PKG_DIR}} substituted for a root install ('.', where '{{PKG_DIR}}/'
+# collapses to nothing) and a nested one ('web'), and run in a scratch git repo
+# against crafted patch artifacts. Each hostile one must exit 1 WITH its own
+# rejection reason, so a rejection that fires from a different check does not
+# pass for the one under test.
+step_run() {
+    awk -v want="      - name: $2" '
+        index($0, want) == 1 { step = 1; next }
+        step && /^        run: \|$/ { body = 1; next }
+        body && /^[[:space:]]*$/ { print ""; next }
+        body && !/^          / { exit }
+        body { sub(/^          /, ""); print }' "$1"
+}
+
+# Scratch repos must not read the user's git config (a managed-identity hook
+# refuses commits whose identity does not come from it), exactly the job env.
+vg() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"; }
+
+VX="$WORK/vx"
+# vx_base <dir> <text|sym> — a committed repo holding a root install and a web/
+# install, each with a tracked package.json and bun.lock (a regular file, or a
+# symlink in the sym variant).
+vx_base() {
+    mkdir -p "$1/web"
+    (
+        cd "$1" || exit 1
+        vg init -q -b main .
+        vg config user.name t; vg config user.email t@example.com
+        printf '{"name":"root"}\n' > package.json
+        printf '{"name":"web"}\n' > web/package.json
+        if [ "$2" = sym ]; then
+            ln -s package.json bun.lock
+            ln -s package.json web/bun.lock
+        else
+            printf 'lockfileVersion 1\ndep a 1.0.0\n' > bun.lock
+            printf 'lockfileVersion 1\ndep b 2.0.0\n' > web/bun.lock
+        fi
+        vg add -A && vg commit -qm base
+    )
+}
+
+# vx_patch <root|web> <case> — writes $VX/patch-<root|web>/<case>.patch.
+vx_patch() {
+    local P="$1" c="$2" A=bun.lock O=web/bun.lock D=. base="$VX/base-text" g="$VX/gen"
+    [ "$P" = web ] && { A=web/bun.lock; O=bun.lock; D=web; }
+    [ "$c" = symlink ] && base="$VX/base-sym"
+    mkdir -p "$VX/patch-$P"
+    rm -rf "$g"; cp -R "$base" "$g"
+    (
+        cd "$g" || exit 1
+        local out="$VX/patch-$P/$c.patch" plain=(diff HEAD --binary --no-renames --no-ext-diff --no-textconv)
+        case "$c" in
+            clean)     echo 'dep a 1.0.1' >> "$A"; vg "${plain[@]}" > "$out" ;;
+            binary)    printf 'bin\0ary\0\1\2' > "$A"; vg "${plain[@]}" > "$out" ;;
+            rename)    vg mv "$A" "$D/bun.lock.moved"; vg diff --cached HEAD -M --binary > "$out" ;;
+            mode)      chmod +x "$A"; vg "${plain[@]}" > "$out" ;;
+            create)    echo x > "$D/extra.lock"; vg add -A; vg diff --cached HEAD --binary > "$out" ;;
+            delete)    vg rm -q "$A"; vg diff --cached HEAD --binary > "$out" ;;
+            two)       echo 'dep a 1.0.1' >> "$A"; echo '{"x":1}' > "$D/package.json"; vg "${plain[@]}" > "$out" ;;
+            wrongpath) echo 'dep z 9.9.9' >> "$O"; vg "${plain[@]}" > "$out" ;;
+            symlink)   ln -sfn nowhere "$A"; vg "${plain[@]}" > "$out" ;;
+            nochange)  printf 'diff --git a/%s b/%s\nindex 1111111..1111111 100644\n--- a/%s\n+++ b/%s\n' "$A" "$A" "$A" "$A" > "$out" ;;
+            garbage)   printf 'this is not a patch\n' > "$out" ;;
+            empty)     : > "$out" ;;
+            *) exit 1 ;;
+        esac
+    ) || { echo "fixture: could not build the $P/$c patch" >&2; return 1; }
+}
+
+VX_CASES="clean binary rename mode create delete two wrongpath symlink nochange garbage empty"
+vx_build() {
+    local P c
+    mkdir -p "$VX"
+    vx_base "$VX/base-text" text
+    vx_base "$VX/base-sym" sym
+    for P in root web; do
+        for c in $VX_CASES; do vx_patch "$P" "$c" || return 1; done
+    done
+    # A `git` that fails only for `status`, to prove a failing status aborts.
+    mkdir -p "$VX/failstatus"
+    printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = status ] && { echo "fatal: simulated status failure" >&2; exit 128; }; done\nexec %s "$@"\n' "$(command -v git)" > "$VX/failstatus/git"
+    chmod +x "$VX/failstatus/git"
+}
+
+# vx_run <body.sh> <root|web> <case> <base> <prep> — runs the body in a fresh
+# copy of <base>; prints its output, returns its status. <case> "missing" runs
+# with no patch file at all.
+vx_run() {
+    local body="$1" P="$2" c="$3" base="$4" prep="${5:-}" run="$VX/run" rt="$VX/rt" path="$PATH"
+    rm -rf "$run" "$rt"; cp -R "$base" "$run"; mkdir -p "$rt/bun-lock-in"
+    # A copied tree has new mtimes, and `git apply --index` refuses a stale index.
+    (cd "$run" && vg update-index -q --refresh)
+    [ "$c" = missing ] || cp "$VX/patch-$P/$c.patch" "$rt/bun-lock-in/bun-lock.patch"
+    case "$prep" in
+        staged)     echo x > "$run/extra.txt"; (cd "$run" && vg add extra.txt) ;;
+        untracked)  echo x > "$run/stray.txt" ;;
+        statusfail) path="$VX/failstatus:$PATH" ;;
+    esac
+    (cd "$run" && env RUNNER_TEMP="$rt" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null PATH="$path" \
+        bash --noprofile --norc -eo pipefail "$body" 2>&1)
+}
+
+# vx_expect <body.sh> <root|web> <label> <case> <base> <prep> <want-rc> <fragment>
+# — one executed case; prints a reason when it does not behave.
+vx_expect() {
+    local body="$1" P="$2" label="$3" c="$4" base="$5" prep="$6" want="$7" frag="$8" out rc A=bun.lock O=web/bun.lock
+    [ "$P" = web ] && { A=web/bun.lock; O=bun.lock; }
+    frag="${frag//@A/$A}"; frag="${frag//@O/$O}"
+    out="$(vx_run "$body" "$P" "$c" "$base" "$prep")"; rc=$?
+    if [ "$want" = ok ]; then
+        if [ "$rc" -ne 0 ]; then
+            echo "validator [$P] $label: a clean lockfile patch was rejected (rc=$rc): $(grep -m1 '::error::' <<<"$out")"; return 1
+        fi
+        if [ "$(cd "$VX/run" && vg diff --cached --name-only)" != "$A" ] || [ "$(cd "$VX/run" && vg status --porcelain)" != "M  $A" ]; then
+            echo "validator [$P] $label: accepted, but the staged set is not exactly $A"; return 1
+        fi
+        return 0
+    fi
+    if [ "$want" = fail ]; then
+        if [ "$rc" -eq 0 ]; then
+            echo "validator [$P] $label: ACCEPTED a hostile patch (expected a rejection containing '$frag')"; return 1
+        fi
+        if ! grep -qF -- "$frag" <<<"$out"; then
+            echo "validator [$P] $label: rejected (rc=$rc), but not for the expected reason '$frag': $(grep -m1 -e '::error::' -e fatal <<<"$out")"; return 1
+        fi
+        return 0
+    fi
+    # rejected exactly through Rejected …, status 1
+    if [ "$rc" -ne 1 ]; then
+        echo "validator [$P] $label: expected exit status 1, got $rc (expected a rejection containing '$frag')"; return 1
+    fi
+    if ! grep -qF -- "Rejected the lockfile patch: " <<<"$out" || ! grep -qF -- "$frag" <<<"$out"; then
+        echo "validator [$P] $label: exit 1, but not rejected for the expected reason '$frag': $(grep -m1 '::error::' <<<"$out")"; return 1
+    fi
+    return 0
+}
+
+# check_validator <file> — extracts, substitutes and runs the validator over
+# every case for both install roots. Memoised on the extracted body, so the
+# mutants that leave this step alone do not re-run it.
+check_validator() {
+    local f="$1" raw key cache P body rc=0 line
+    raw="$(step_run "$f" 'Validate and apply the lockfile patch')"
+    if [ -z "$raw" ]; then
+        echo "validator: could not extract the 'Validate and apply the lockfile patch' run: body — the executed check would cover nothing"
+        return 1
+    fi
+    key="$(printf '%s' "$raw" | cksum | cut -d' ' -f1)"
+    cache="$WORK/vcache.$key"
+    if [ -f "$cache.rc" ]; then cat "$cache"; return "$(cat "$cache.rc")"; fi
+    {
+        for P in root web; do
+            body="$VX/body-$P.sh"
+            if [ "$P" = root ]; then
+                sed 's#{{PKG_DIR}}/##g' <<<"$raw" > "$body"
+            else
+                sed 's#{{PKG_DIR}}#web#g' <<<"$raw" > "$body"
+            fi
+            if grep -qF '{{' "$body"; then echo "validator [$P]: an unsubstituted {{…}} placeholder survives in the run: body"; rc=1; fi
+            vx_expect "$body" "$P" "clean content change"  clean     "$VX/base-text" ""         ok   ""                                                      || rc=1
+            vx_expect "$body" "$P" "binary hunk"           binary    "$VX/base-text" ""         rej  "is a binary change"                                    || rc=1
+            vx_expect "$body" "$P" "rename"                rename    "$VX/base-text" ""         rej  "creates, deletes, renames, copies or re-modes"         || rc=1
+            vx_expect "$body" "$P" "mode change"           mode      "$VX/base-text" ""         rej  "creates, deletes, renames, copies or re-modes"         || rc=1
+            vx_expect "$body" "$P" "create"                create    "$VX/base-text" ""         rej  "creates, deletes, renames, copies or re-modes"         || rc=1
+            vx_expect "$body" "$P" "delete"                delete    "$VX/base-text" ""         rej  "creates, deletes, renames, copies or re-modes"         || rc=1
+            vx_expect "$body" "$P" "two files"             two       "$VX/base-text" ""         rej  "it touches more than one file"                         || rc=1
+            vx_expect "$body" "$P" "wrong path"            wrongpath "$VX/base-text" ""         rej  "@O is not @A"                                          || rc=1
+            vx_expect "$body" "$P" "symlink"               symlink   "$VX/base-sym"  ""         rej  "is not a tracked regular file"                         || rc=1
+            vx_expect "$body" "$P" "no-op patch"           nochange  "$VX/base-text" ""         rej  "it changes nothing"                                    || rc=1
+            vx_expect "$body" "$P" "garbage patch"         garbage   "$VX/base-text" ""         rej  "git cannot parse it"                                   || rc=1
+            vx_expect "$body" "$P" "empty patch"           empty     "$VX/base-text" ""         rej  "the artifact holds no patch"                           || rc=1
+            vx_expect "$body" "$P" "missing patch"         missing   "$VX/base-text" ""         rej  "the artifact holds no patch"                           || rc=1
+            vx_expect "$body" "$P" "pre-staged extra file" clean     "$VX/base-text" staged     rej  "something other than @A is staged"                     || rc=1
+            vx_expect "$body" "$P" "stray untracked file"  clean     "$VX/base-text" untracked  rej  "the tree holds changes outside the index"               || rc=1
+            vx_expect "$body" "$P" "git status failure"    clean     "$VX/base-text" statusfail fail "simulated status failure"                              || rc=1
+        done
+    } > "$cache"
+    printf '%s\n' "$rc" > "$cache.rc"
+    cat "$cache"
     return "$rc"
 }
 
@@ -366,6 +637,7 @@ check_common() {
 check_bun() {
     local f="$1" rc=0 nonc uses n i line
     check_common "$f" 'bun install' || rc=1
+    check_validator "$f" || rc=1
 
     nonc="$(grep -Ev '^[[:space:]]*#' "$f")"
     uses="$(grep -E 'uses: oven-sh/setup-bun@' <<<"$nonc")"
@@ -388,6 +660,8 @@ check_bun() {
     done <<<"$nonc"
     return "$rc"
 }
+
+vx_build || { echo "  FAIL could not build the validator fixtures"; exit 1; }
 
 echo "lockfile-sync policy (bun):"
 
@@ -450,44 +724,44 @@ mutate_perl "actions/cache re-added" "actions/cache" 's/(      \# Restore the BA
 mutate_perl "cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
 
 # 3. actor gate
-mutate "actor gate dropped from job 1" "job 1 has no" "    if: \${{ github.actor == 'dependabot[bot]' }}" '    if: ${{ true }}'
-mutate "actor gate dropped from job 2" "job 2 has no" "github.actor == 'dependabot[bot]' && needs" 'needs'
+mutate "actor gate dropped from job 1" "job 1 has no github.actor" "    if: \${{ github.actor == 'dependabot[bot]' }}" '    if: ${{ true }}'
+mutate "actor gate dropped from job 2" "job 2 has no github.actor" "github.actor == 'dependabot[bot]' && needs" 'needs'
 
 # 4. job 1 is token-free
 mutate_perl "token in an install's env" "token-free" 's/(      - name: Update bun\.lock for the bumped packages only\n)/$1        env:\n          GH_TOKEN: \${{ steps.app_token.outputs.token }}\n/'
 mutate_perl "App secret in job 1's env" "token-free" 's/(    steps:\n)/    env:\n      PLATFORM_WRITER_APP_PRIVATE_KEY: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n$1/'
 mutate_perl "mint action in job 1" "token-free" 's/(      - name: Assert the lock is frozen-valid\n)/      - uses: actions\/create-github-app-token\@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n$1/'
-mutate_perl "job 1 loses contents: read" "contents: read" 's/(    timeout-minutes: 15\n    permissions:\n      contents: )read/$1write/'
-mutate_perl "job 1 patch not limited to bun.lock" "pathspec" "s/ -- '\\{\\{PKG_DIR\\}\\}\\/bun\\.lock' >/ >/"
-mutate "job 1 patch with textconv allowed" "diff HEAD --binary" ' --no-textconv --' ' -- '
-mutate_perl "job 1 upload unpinned" "upload-artifact" 's/upload-artifact\@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/upload-artifact\@v7/'
+mutate_perl "job 1 loses contents: read" "job 1 does not set job-level permissions: contents: read" 's/(    timeout-minutes: 15\n    permissions:\n      contents: )read/$1write/'
+mutate_perl "job 1 patch not limited to bun.lock" "is not limited to the one" "s/ -- '\\{\\{PKG_DIR\\}\\}\\/bun\\.lock' >/ >/"
+mutate "job 1 patch with textconv allowed" "does not package the change with git diff HEAD --binary" ' --no-textconv --' ' -- '
+mutate_perl "job 1 upload unpinned" "job 1 must upload the patch with exactly one SHA-pinned" 's/upload-artifact\@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/upload-artifact\@v7/'
 
 # 5. job 2 runs no package manager
-mutate_perl "bun install in the token job" "package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: bun install --ignore-scripts\n\n$1/'
-mutate_perl "npm in the token job" "package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: cd x \&\& npm ci\n\n$1/'
-mutate_perl "setup-bun in the token job" "package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: oven-sh\\/setup-bun\\\@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n\n\$2/s"
+mutate_perl "bun install in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: bun install --ignore-scripts\n\n$1/'
+mutate_perl "npm in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: cd x \&\& npm ci\n\n$1/'
+mutate_perl "setup-bun in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: oven-sh\\/setup-bun\\\@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n\n\$2/s"
 
 # 6. validate before the mint
 mutate_perl "validate moved after the mint" "is validated (step" "s/$VALIDATE_BLOCK$MINT_BLOCK$PUSH_COMMENT/\$2\$1/s"
-mutate "allowed path widened to the directory" "allowed path" "allowed='{{PKG_DIR}}/bun.lock'" "allowed='{{PKG_DIR}}/'"
-mutate "path match loosened to a glob" "EQUAL" '[ "$path" = "$allowed" ]' '[[ "$path" == *bun.lock ]]'
-mutate "apply --summary dropped" "--summary" 'apply --summary' 'apply --stat'
-mutate "apply --numstat dropped" "--numstat" 'apply --numstat' 'apply --stat'
-mutate "single-file rule dropped" "exactly one patched file" '-eq 1 ]' '-ge 1 ]'
-mutate "regular-file mode check dropped" "regular file" 'ls-files -s' 'ls-files'
-mutate "apply --index dropped" "apply --index" 'apply --index' 'apply --3way'
-mutate "staged re-check dropped" "staged set" 'diff --cached --name-only)" = ' 'diff --cached --quiet)" = '
-mutate "artifact download unpinned" "download-artifact" 'download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' 'download-artifact@v8'
+mutate "allowed path widened to the directory" "the validator's allowed path is not exactly" "allowed='{{PKG_DIR}}/bun.lock'" "allowed='{{PKG_DIR}}/'"
+mutate "path match loosened to a glob" "does not require the patched path to EQUAL" '[ "$path" = "$allowed" ]' '[[ "$path" == *bun.lock ]]'
+mutate "apply --summary dropped" "does not read the patch with git apply --summary" 'apply --summary' 'apply --stat'
+mutate "apply --numstat dropped" "does not read the patch with git apply --numstat" 'apply --numstat' 'apply --stat'
+mutate "single-file rule dropped" "does not require exactly one patched file" '-eq 1 ]' '-ge 1 ]'
+mutate "regular-file mode check dropped" "does not require a tracked regular file" 'ls-files -s' 'ls-files'
+mutate "apply --index dropped" "does not apply the patch with git apply --index" 'apply --index' 'apply --3way'
+mutate "staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only)" = ' 'diff --cached --quiet)" = '
+mutate "artifact download unpinned" "actions/download-artifact is not pinned" 'download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' 'download-artifact@v8'
 
 # 7. mint order
-mutate_perl "mint before checkout" "checkout" "s/(${J2}    steps:\n)(.*?)$MINT_BLOCK$PUSH_COMMENT/\$1\$3\$2/s"
+mutate_perl "mint before checkout" "at or before checkout" "s/(${J2}    steps:\n)(.*?)$MINT_BLOCK$PUSH_COMMENT/\$1\$3\$2/s"
 mutate "interloper after the presence step" "immediately before the mint" '      - name: Mint GitHub App token' $'      - name: Interloper\n        run: echo hi\n\n      - name: Mint GitHub App token'
-mutate_perl "push before the mint" "push" 's/(      - name: Mint GitHub App token\n.*?\n\n)(      \# The only step that needs repository write.*)\z/$2\n$1/s'
+mutate_perl "push before the mint" "is not after the mint" 's/(      - name: Mint GitHub App token\n.*?\n\n)(      \# The only step that needs repository write.*)\z/$2\n$1/s'
 mutate_perl "App secret read before the presence step" "reads the App secrets" 's/(      - name: Validate and apply the lockfile patch\n)/$1        env:\n          LEAK: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n/'
 
 # 8. checkout and token scope
-mutate "checkout persists credentials (both jobs)" "persist-credentials" 'persist-credentials: false' 'persist-credentials: true'
-mutate_perl "token job checkout persists credentials" "job 2: checkout does not set" "s/(${J2}persist-credentials: )false/\$1true/s"
+mutate "checkout persists credentials (both jobs)" "checkout does not set persist-credentials: false" 'persist-credentials: false' 'persist-credentials: true'
+mutate_perl "token job checkout persists credentials" "job 2: checkout does not set persist-credentials: false" "s/(${J2}persist-credentials: )false/\$1true/s"
 mutate "checkout takes the token" "checkout passes a token" 'repository: ${{ env.PR_HEAD_REPO }}' $'repository: ${{ env.PR_HEAD_REPO }}\n          token: ${{ steps.app_token.outputs.token }}'
 
 # 9. URL, argv and the single binding
@@ -496,21 +770,57 @@ mutate "token in an extraheader" "GH_TOKEN reaches" $'-c credential.helper= \\\n
 mutate "token inlined into an extraheader" "exactly once" $'-c credential.helper= \\\n' $'-c credential.helper= -c "http.extraheader=Authorization: bearer ${{ steps.app_token.outputs.token }}" \\\n'
 mutate "token inlined into a url rewrite" "exactly once" $'-c credential.helper= \\\n' $'-c credential.helper= -c "url.https://x:${{ steps.app_token.outputs.token }}@github.com/.insteadOf=https://github.com/" \\\n'
 mutate "second binding of the token" "exactly once" $'          GH_TOKEN: ${{ steps.app_token.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.app_token.outputs.token }}\n          GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}\n'
-mutate "push missing its GH_TOKEN binding" "bind GH_TOKEN" 'GH_TOKEN: ${{ steps.app_token.outputs.token }}' 'GH_TOKEN: nothing'
+mutate "push missing its GH_TOKEN binding" "the push step does not bind GH_TOKEN" 'GH_TOKEN: ${{ steps.app_token.outputs.token }}' 'GH_TOKEN: nothing'
 mutate "env-reading helper form missing" "env-reading credential helper" "'credential.helper=!f()" "'credential.helper=!g()"
-mutate "empty helper dropped" "credential helpers first" '-c credential.helper= ' ''
+mutate "empty helper dropped" "does not clear other credential helpers first" '-c credential.helper= ' ''
 
 # 10. git hardened
-mutate "global git config left on (both jobs)" "GIT_CONFIG_GLOBAL" '      GIT_CONFIG_GLOBAL: /dev/null' ''
-mutate "system git config left on (both jobs)" "GIT_CONFIG_NOSYSTEM" '      GIT_CONFIG_NOSYSTEM: "1"' ''
-mutate "git call without nohooks (job 1)" "without" 'git "${nohooks[@]}" diff HEAD' 'git diff HEAD'
-mutate "git call without nohooks (job 2)" "without" 'git "${nohooks[@]}" commit' 'git commit'
-mutate "fsmonitor left on" "core.fsmonitor" ' -c core.fsmonitor=false)' ')'
-mutate "hooksPath left on" "core.hooksPath" 'nohooks=(-c core.hooksPath=/dev/null' 'nohooks=(-c core.hooksPath=.githooks'
+mutate "global git config left on (both jobs)" "GIT_CONFIG_GLOBAL=/dev/null is not in the job env" '      GIT_CONFIG_GLOBAL: /dev/null' ''
+mutate "system git config left on (both jobs)" "GIT_CONFIG_NOSYSTEM=1 is not in the job env" '      GIT_CONFIG_NOSYSTEM: "1"' ''
+mutate "git call without nohooks (job 1)" "job 1: step" 'git "${nohooks[@]}" diff HEAD' 'git diff HEAD'
+mutate "git call without nohooks (job 2)" "job 2: step" 'git "${nohooks[@]}" commit' 'git commit'
+mutate "fsmonitor left on" "does not define nohooks with core.hooksPath=/dev/null and core.fsmonitor=false" ' -c core.fsmonitor=false)' ')'
+mutate "hooksPath left on" "does not define nohooks with core.hooksPath=/dev/null and core.fsmonitor=false" 'nohooks=(-c core.hooksPath=/dev/null' 'nohooks=(-c core.hooksPath=.githooks'
 
 # 11. bun
-mutate "setup-bun removed" "setup-bun" 'oven-sh/setup-bun@' 'oven-sh/setup-node@'
-mutate "setup-bun unpinned" "setup-bun use is not pinned" 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2' 'oven-sh/setup-bun@v2'
-mutate "install scripts enabled" "without --ignore-scripts" 'bun install --ignore-scripts --frozen-lockfile' 'bun install --frozen-lockfile'
+mutate "setup-bun removed" "expected two setup-bun uses" 'oven-sh/setup-bun@' 'oven-sh/setup-node@'
+mutate "setup-bun unpinned" "a setup-bun use is not pinned to a 40-hex SHA" 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2' 'oven-sh/setup-bun@v2'
+mutate "install scripts enabled" "a bun install runs without --ignore-scripts" 'bun install --ignore-scripts --frozen-lockfile' 'bun install --frozen-lockfile'
+
+# 12. head SHA pin and concurrency
+mutate "checkout by branch name (both jobs)" "checkout does not check out the PR head SHA" 'ref: ${{ env.PR_HEAD_SHA }}' 'ref: ${{ env.PR_HEAD_REF }}'
+mutate_perl "checkout by branch name (job 1 only)" "job 1: checkout does not check out the PR head SHA" 's/(ref: \$\{\{ env\.)PR_HEAD_SHA/${1}PR_HEAD_REF/'
+mutate_perl "checkout by branch name (token job only)" "job 2: checkout does not check out the PR head SHA" "s/(${J2}ref: \\\$\\{\\{ env\\.)PR_HEAD_SHA/\${1}PR_HEAD_REF/s"
+mutate "head SHA bound to the branch name" "PR_HEAD_SHA is not bound to github.event.pull_request.head.sha" 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' 'PR_HEAD_SHA: ${{ github.event.pull_request.head.ref }}'
+mutate_perl "concurrency block removed" "no workflow-level concurrency block" 's/^concurrency:\n  group:[^\n]*\n  cancel-in-progress: false\n\n//m'
+mutate "concurrency group not keyed on the PR" "not keyed on github.event.pull_request.number" 'group: dependabot-bun-lock-sync-${{ github.event.pull_request.number }}' 'group: dependabot-bun-lock-sync'
+mutate "concurrency cancels in progress" "does not set cancel-in-progress: false" '  cancel-in-progress: false' '  cancel-in-progress: true'
+
+# 13. job wiring and the push destination
+mutate "needs dropped from the token job" "job 2 does not declare needs: update-bun-lock" '    needs: update-bun-lock' ''
+mutate "changed gate dropped from the token job" "does not require needs.update-bun-lock.outputs.changed == 'true'" " && needs.update-bun-lock.outputs.changed == 'true'" ''
+mutate "changed output dropped from job 1" "job 1 does not export changed" 'changed: ${{ steps.patch.outputs.changed }}' 'changed: true'
+mutate "upload tolerates a missing patch" "if-no-files-found: error" 'if-no-files-found: error' 'if-no-files-found: ignore'
+mutate "push to a different URL" "the push URL is not exactly" 'push "https://github.com/${PR_HEAD_REPO}.git"' 'push "https://github.com/${GITHUB_REPOSITORY}.git"'
+mutate "push to a different branch" "the push refspec is not exactly" '"HEAD:refs/heads/${PR_HEAD_REF}"' '"HEAD:refs/heads/main"'
+
+# 10 (boundary). A git call inside $( ) is a git call.
+mutate "git call without nohooks inside \$( )" "job 2: step" 'summary="$(git "${nohooks[@]}" apply --summary' 'summary="$(git apply --summary'
+
+# 14. the validator, executed: each enforcing construct neutered while its
+# message text stays. The static names are all still present in every one of
+# these, so only the executed suite can fail them, and it must fail for the case
+# that construct guards.
+mutate "validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
+mutate "validator: parse failures swallowed" "validator [root] garbage patch:" '|| reject "git cannot parse it"' '|| true'
+mutate "validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'
+mutate "validator: one-file reject neutered" "validator [root] two files:" $'[ "$(printf \'%s\\n\' "$numstat" | wc -l)" -eq 1 ] || reject' 'true || reject'
+mutate "validator: binary reject neutered" "validator [root] binary hunk:" '[ "$added" != "-" ] || reject' 'true || reject'
+mutate "validator: changes-nothing reject neutered" "validator [root] no-op patch:" '[ "$added$removed" != "00" ] || reject' 'true || reject'
+mutate "validator: path-equality reject neutered" "validator [root] wrong path:" '[ "$path" = "$allowed" ] || reject' 'true || reject'
+mutate "validator: mode reject neutered" "validator [root] symlink:" '[ "$mode" = "100644" ] || [ "$mode" = "100755" ]' 'true'
+mutate "validator: staged re-check neutered" "validator [root] pre-staged extra file:" '|| reject "after applying, something other' '|| : "after applying, something other'
+mutate "validator: outside-the-index reject neutered" "validator [root] stray untracked file:" 'reject "after applying, the tree holds changes outside the index"' ': "after applying, the tree holds changes outside the index"'
+mutate_perl "validator: git status piped into grep (failure reads as clean)" "validator [root] git status failure:" 's/tree="\$\((git "\$\{nohooks\[\@\]\}" status --porcelain --untracked-files=all)\)"\n          if \[ -n "\$\(grep -v \x27\^M  \x27 <<<"\$tree" \|\| true\)" \]; then/if [ -n "\$($1 | grep -v \x27^M  \x27 || true)" ]; then/'
 
 exit "$fail"

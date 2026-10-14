@@ -24,7 +24,11 @@
 #   from an install of the PR head's lockfile, which is cache poisoning; #515's
 #   "actions/cache keyed on bun.lock" decision is superseded, every run is a
 #   cold install). 11 was never released, but its shape changed after review,
-#   so the stamp moved.
+#   so the stamp moved. 12 was still unreleased when both jobs began checking
+#   out the PR's head SHA rather than its branch name (a branch that moves
+#   between the jobs then makes the push non-fast-forward and fail closed) and a
+#   per-PR concurrency group was added, so those two changes did not move the
+#   stamp again.
 #   # {{IF:BUN_PIN_FILE}} / # {{IF:BUN_PIN_LITERAL}}
 #                → keep exactly ONE of the two setup-bun steps and delete the
 #                  other. The pin is derived exactly as render-cadence.sh's
@@ -157,6 +161,14 @@ on:
 permissions:
   contents: read
 
+# One run per PR at a time; a second push to the same Dependabot branch queues
+# behind the run that is pushing the lockfile rather than racing it. Both jobs
+# check out the head SHA the event carried, so a branch that moved is a
+# non-fast-forward push, which fails closed.
+concurrency:
+  group: dependabot-bun-lock-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
 jobs:
   # JOB 1 — runs bun, holds NO secret. Its only output is a patch of the install
   # root's bun.lock, uploaded as an artifact. The PR-authored manifests and the
@@ -170,7 +182,7 @@ jobs:
     outputs:
       changed: ${{ steps.patch.outputs.changed }}
     env:
-      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
       # Git reads no system or global config in any step: nothing left on the
@@ -186,7 +198,7 @@ jobs:
       # fine.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.PR_HEAD_REF }}
+          ref: ${{ env.PR_HEAD_SHA }}
           repository: ${{ env.PR_HEAD_REPO }}
           persist-credentials: false
           fetch-depth: 0
@@ -287,6 +299,7 @@ jobs:
     permissions:
       contents: read
     env:
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
       GIT_CONFIG_NOSYSTEM: "1"
@@ -294,7 +307,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ env.PR_HEAD_REF }}
+          ref: ${{ env.PR_HEAD_SHA }}
           repository: ${{ env.PR_HEAD_REPO }}
           persist-credentials: false
 
@@ -321,10 +334,12 @@ jobs:
           summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
           [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
           numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
-          [ -n "$numstat" ] || reject "it changes nothing"
           [ "$(printf '%s\n' "$numstat" | wc -l)" -eq 1 ] || reject "it touches more than one file"
-          while IFS=$'\t' read -r added _ path; do
+          while IFS=$'\t' read -r added removed path; do
             [ "$added" != "-" ] || reject "$path is a binary change; bun.lock is text"
+            # git prints "0 0 path" for a patch it parses but that changes no
+            # line (headers only); it never prints an empty numstat for one.
+            [ "$added$removed" != "00" ] || reject "it changes nothing"
             [ "$path" = "$allowed" ] || reject "$path is not $allowed"
             mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
             [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
@@ -334,7 +349,10 @@ jobs:
           git "${nohooks[@]}" apply --index -- "$patch"
           # Belt and braces: what is staged, and only that, is the lockfile.
           [ "$(git "${nohooks[@]}" diff --cached --name-only)" = "$allowed" ] || reject "after applying, something other than $allowed is staged"
-          if [ -n "$(git "${nohooks[@]}" status --porcelain --untracked-files=all | grep -v '^M  ' || true)" ]; then
+          # Captured first so a failing `git status` aborts under set -e; a
+          # `$(git status | grep)` would read the failure as a clean tree.
+          tree="$(git "${nohooks[@]}" status --porcelain --untracked-files=all)"
+          if [ -n "$(grep -v '^M  ' <<<"$tree" || true)" ]; then
             reject "after applying, the tree holds changes outside the index"
           fi
 

@@ -740,10 +740,17 @@ The patch is untrusted. Before the mint, `push-bun-lock` asks git what it would 
 --summary` and `--numstat`) and rejects a create, delete, rename, copy or mode change, a binary
 hunk, more than one file, any path other than exactly the install root's `bun.lock`, and a path that
 is not a tracked regular file; it then applies with `git apply --index` and re-checks that only that
-path is staged. Both jobs keep the `github.actor == 'dependabot[bot]'` gate under `pull_request_target`.
+path is staged and that nothing sits outside the index. Both jobs check out the PR's head SHA rather
+than its branch name (a branch that moved makes the push non-fast-forward, which fails closed), a
+per-PR `concurrency` group serializes runs, and the push goes only to the PR's own head repo and
+branch. Both jobs keep the `github.actor == 'dependabot[bot]'` gate under `pull_request_target`.
 The push goes through an env-reading credential helper (no token in a URL or argv) with system and
 global git config ignored and hooks and fsmonitor off on every git call.
-`scripts/test-lockfile-sync-policy.sh` pins each. The pod
+`scripts/test-lockfile-sync-policy.sh` pins each: statically the job split, the pins, the token's
+single binding and the push destination, and by execution the validator itself, run from the
+extracted step against crafted patch artifacts for a root and a nested install root (each hostile
+patch must exit 1 with its own reason, and each enforcing construct has a mutant that neuters it
+while keeping its message). The pod
 lockfile-sync template still defaults to the fleet until
 [#529](https://github.com/Sassy-Dog/skills/issues/529) moves it, and that gate is where its checks
 will join.
