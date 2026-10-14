@@ -196,7 +196,7 @@ cat > "$BIN/cargo" <<'SH'
 # FAKE_CARGO_METADATA / FAKE_CARGO_SEARCH: files to print for `metadata` /
 # `search`; FAKE_CARGO_SEARCH_RC: search's exit status.
 case "$1" in
-    metadata) cat "${FAKE_CARGO_METADATA:-/dev/null}"; exit 0 ;;
+    metadata) cat "${FAKE_CARGO_METADATA:-/dev/null}"; exit "${FAKE_CARGO_METADATA_RC:-0}" ;;
     search)   cat "${FAKE_CARGO_SEARCH:-/dev/null}"; exit "${FAKE_CARGO_SEARCH_RC:-0}" ;;
 esac
 [ "$1" = "update" ] || exit 0
@@ -651,6 +651,26 @@ EOF
             || { echo "a failing flutter / empty cargo search was not reported as 'could not evaluate'"; rc=1; }
         ! grep -q 'No exact pin is behind' "$pins" || { echo "a manifest the tools could not evaluate was read as current"; rc=1; }
     fi
+    # A cargo search that exits non-zero WITH output, and a failing cargo
+    # metadata: the step still exits 0 and reports "could not evaluate" (an
+    # errexit here would kill the refresh and open no PR that month).
+    d="$WORK/p-searchrc"; seed "$d"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$d.meta" FAKE_CARGO_SEARCH="$fx/search.txt" FAKE_CARGO_SEARCH_RC=1 2>&1)"; then
+        echo "a failing cargo search killed the report step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        pins="$d.tmp/deps-cadence/pins.md"
+        { grep -qF 'Could not evaluate' "$pins" && grep -qF 'serde: no latest version' "$pins"; } \
+            || { echo "a failing cargo search was not reported as 'could not evaluate'"; rc=1; }
+        ! grep -q 'No exact pin is behind' "$pins" || { echo "a failing cargo search was read as current"; rc=1; }
+    fi
+    d="$WORK/p-metarc"; seed "$d"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$d.meta" FAKE_CARGO_METADATA_RC=1 2>&1)"; then
+        echo "a failing cargo metadata killed the report step: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qF 'Cargo.toml (cargo metadata output not recognised)' "$d.tmp/deps-cadence/pins.md"; then
+        echo "a failing cargo metadata was not reported as 'could not evaluate'"; rc=1
+    fi
     # No pub or cargo lane: nothing is written at all.
     d="$WORK/p-none"; seed "$d"
     if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web npm:/" GITHUB_STEP_SUMMARY="$d.summary" 2>&1)"; then
@@ -834,6 +854,8 @@ mutate "cargo path dependency looked up" impl '| select((.source // "") | test("
 mutate "pub range counted as a pin" impl '*:[[:space:]]*["\047]?[0-9]+' '*:[[:space:]]*[\^"\047]*[0-9]+'
 mutate "failed flutter read as current" impl 'unevaluated+="$manifest (flutter pub outdated output not recognised)"$'"'"'\n'"'"'; continue' 'checked=$((checked + 1)); continue'
 mutate "unsearchable crate read as current" impl 'unevaluated+="$manifest ($name: no latest version from cargo search)"$'"'"'\n'"'"'; lane_ok=0; continue' 'continue'
+mutate "cargo search failure kills the step" impl 'newest="$(cargo_latest "$name" || true)"' 'newest="$(cargo_latest "$name")"'
+mutate "cargo search status ignored" impl 'res="$(cargo search "$1" --limit 10 2>/dev/null)" || return 1' 'res="$(cargo search "$1" --limit 10 2>/dev/null || true)"'
 mutate "no lane still writes a section" impl '[ "$wanted" -eq 1 ] || exit 0' 'true'
 mutate "bun/npm heading reworded" impl 'echo "### Exact pins (bun and npm lanes)"' 'echo "### Exact pins (bun, npm, pub and cargo lanes)"'
 mutate "bun/npm sentence reworded" impl 'No bun or npm lane declares an exact pin.' 'No bun or npm lane declares an exact pin in this repo.'

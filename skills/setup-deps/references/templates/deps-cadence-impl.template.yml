@@ -527,9 +527,13 @@ jobs:
                    | "\($m)\t\(.name)\t\(.req)"'
           }
           # `cargo search` prints: name = "1.2.3"    # description
+          # A failed search returns 1 with no output, whatever it printed, and
+          # awk reads to the end of its input (no early exit, so cargo never
+          # sees a closed pipe); the caller treats both as "could not evaluate".
           cargo_latest() {
-            cargo search "$1" --limit 10 2>/dev/null \
-              | awk -v n="$1" '$1 == n && $2 == "=" { gsub(/"/, "", $3); print $3; exit }'
+            local res
+            res="$(cargo search "$1" --limit 10 2>/dev/null)" || return 1
+            awk -v n="$1" '$1 == n && $2 == "=" && !found { gsub(/"/, "", $3); print $3; found = 1 }' <<<"$res"
           }
 
           behind=""
@@ -572,7 +576,7 @@ jobs:
                 manifest="${mpath#"$PWD"/}"
                 case "$seen" in *$'\n'"$manifest $name"$'\n'*) continue ;; esac
                 seen+="$manifest $name"$'\n'
-                newest="$(cargo_latest "$name")"
+                newest="$(cargo_latest "$name" || true)"
                 if [ -z "$newest" ]; then
                   unevaluated+="$manifest ($name: no latest version from cargo search)"$'\n'; lane_ok=0; continue
                 fi
