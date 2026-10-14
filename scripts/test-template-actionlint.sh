@@ -88,8 +88,8 @@ echo "template-actionlint tests (work: $WORK)" >&2
 # the deps-cadence trigger and impl render as a pair per shape, and the optional
 # codegen workflow renders beside them (one toolchain per shape).
 VARIANTS=(
-    "auto-merge-queue|dependabot-auto-merge.template.yml|MERGE_QUEUE|RUNNER=[self-hosted, linux, sassy-dog]"
-    "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|RUNNER=ubuntu-latest"
+    "auto-merge-queue|dependabot-auto-merge.template.yml|MERGE_QUEUE|"
+    "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|"
     "bun-nested|lockfile-sync-bun.template.yml|NESTED_PKG|RUNNER=[self-hosted, linux, sassy-dog];PKG_DIR=web"
     "bun-root|lockfile-sync-bun.template.yml||RUNNER=[self-hosted, linux, sassy-dog];PKG_DIR=."
     "pod-nested|lockfile-sync-pod.template.yml|NESTED_APP|RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=app;FLUTTER_VERSION=3.35.1"
@@ -358,7 +358,7 @@ if cmp -s "$MUT_TPL" "$AUTO_MERGE"; then
     bad "mutation (expression) — the mutation changed nothing, so it proves nothing (template reworded?)"
 elif [ "$HAVE_AL" -eq 1 ]; then
     mkdir -p "$WORK/mut-expr/.github/workflows"
-    render "$MUT_TPL" "MERGE_QUEUE" "RUNNER=[self-hosted, linux, sassy-dog]" \
+    render "$MUT_TPL" "MERGE_QUEUE" "" \
         > "$WORK/mut-expr/.github/workflows/dependabot-auto-merge.yml"
     if lint "mut-expr/.github/workflows/dependabot-auto-merge.yml" >/dev/null 2>&1; then
         bad "mutation (expression) — actionlint PASSED a render with an undefined context variable; the gate cannot fail"
@@ -374,7 +374,7 @@ if cmp -s "$MUT_TPL" "$AUTO_MERGE"; then
     bad "mutation (token) — the mutation changed nothing, so it proves nothing (template reworded?)"
 else
     mkdir -p "$WORK/mut-token/.github/workflows"
-    render "$MUT_TPL" "MERGE_QUEUE" "RUNNER=[self-hosted, linux, sassy-dog]" \
+    render "$MUT_TPL" "MERGE_QUEUE" "" \
         > "$WORK/mut-token/.github/workflows/dependabot-auto-merge.yml"
     if assert_complete "$WORK/mut-token/.github/workflows/dependabot-auto-merge.yml" >/dev/null; then
         bad "mutation (token) — the leftover-token assertion did not see a fact no variant substitutes"
@@ -388,8 +388,10 @@ fi
 # off. A config file declaring the label keeps every other unknown label fatal.
 if [ "$HAVE_AL" -eq 1 ]; then
     mkdir -p "$WORK/mut-label/.github/workflows"
-    render "$TEMPLATE_DIR/dependabot-auto-merge.template.yml" "MERGE_QUEUE" \
-        "RUNNER=[self-hosted, linux, not-a-real-label]" > "$WORK/mut-label/.github/workflows/dependabot-auto-merge.yml"
+    # The bun lockfile template, not auto-merge: auto-merge no longer takes a
+    # runner fact (#527), and bun still does until #528.
+    render "$TEMPLATE_DIR/lockfile-sync-bun.template.yml" "" \
+        "RUNNER=[self-hosted, linux, not-a-real-label];PKG_DIR=." > "$WORK/mut-label/.github/workflows/dependabot-auto-merge.yml"
     if lint "mut-label/.github/workflows/dependabot-auto-merge.yml" >/dev/null 2>&1; then
         bad "mutation (runner-label) — an unknown label other than sassy-dog PASSED; the tolerance mutes the whole rule"
     else

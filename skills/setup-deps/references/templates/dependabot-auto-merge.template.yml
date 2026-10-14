@@ -1,16 +1,13 @@
-# TEMPLATE: dependabot-auto-merge · version 4
+# TEMPLATE: dependabot-auto-merge · version 5
 # Rendered by sassy-dog:setup-deps.
 #   {{FACT}}              → replace with the detected/confirmed value
-#   {{RUNNER}}            → runs-on value. Default [self-hosted, linux, sassy-dog]
-#                           (the org fleet); both runner groups are visibility=all
-#                           so every repo can reach it.
 #   # {{IF:FLAG}} ... # {{ENDIF}}
 #                         → keep the block or delete it entirely; rendering only
 #                           DELETES lines, so the template is valid YAML as-is
 #                           and every render is valid by construction.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 4
+# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 5
 #
 # Auto-merge green Dependabot PRs so security bumps do not rot in the queue.
 #
@@ -39,6 +36,16 @@
 #   store. A Dependabot run cannot see Actions secrets at all; this is the most
 #   common reason a copied version of this workflow silently no-ops.
 #
+# runs-on is NOT a fact (version 5). This job mints the org-wide platform-writer
+# App token and hands it to the runner's local `gh`, so it runs only on an
+# ephemeral GitHub-hosted runner: a persistent shared runner can carry a
+# PATH-shadowing `gh` or a modified tool cache left by any earlier job, from any
+# repo, and that would capture the token. The token is minted as late as
+# possible (after fetch-metadata and the credential check, immediately before
+# the merge steps) and reaches `gh` through step `env:` only. Nothing here runs
+# a bare repository command: there is no checkout, so no git config or hook is
+# read.
+#
 # Security: no checkout. PR code never executes here — fetch-metadata parses the
 # PR server-side. Do not add a checkout step to "make it easier" to read files.
 
@@ -55,7 +62,7 @@ permissions:
 jobs:
   auto-merge:
     if: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' }}
-    runs-on: {{RUNNER}}
+    runs-on: ubuntu-latest
     steps:
       - name: Fetch Dependabot metadata
         id: meta

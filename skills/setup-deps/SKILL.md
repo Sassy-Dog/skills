@@ -524,9 +524,10 @@ directory that does not exist and fired the workflow on `scripts/package.json`, 
 cannot handle. **One rendered workflow per install root** — a repo with two independent
 `bun.lock` files needs two, each owning its own lockfile.
 
-`{{RUNNER}}` (the three Dependabot workflow templates only; `deps-cadence` has no runner fact, see
+`{{RUNNER}}` (the two lockfile-sync templates only; `dependabot-auto-merge` hard-codes
+`runs-on: ubuntu-latest` since template version 5, and `deps-cadence` has no runner fact either, see
 "Credential-bearing workflows that run package-manager code" below) defaults to the Sassy Dog
-self-hosted fleet — `[self-hosted, linux, sassy-dog]`, or
+self-hosted fleet — `[self-hosted, linux, sassy-dog]` for bun, or
 `[self-hosted, macOS, sassy-dog]` for the pod template, which **must** have macOS to run
 `pod install`. Both org runner groups are `visibility=all`, so every repo can reach the fleet.
 Prefer those label forms over the legacy product-scoped ones (`velovate`, `qr-ninja`): the runners
@@ -700,8 +701,11 @@ The optional `deps-cadence-codegen.yml` follows the same rule and the same split
 that runs the repo's generator with no secret, a `push` job that runs none and mints the token
 last); see "Optional: regenerate committed codegen" below.
 
-The three Dependabot workflow templates still default to the fleet. Whether this rule should
-reach them is a separate decision that this section does not make.
+`dependabot-auto-merge` follows the rule since template version 5 (no checkout, no package code,
+but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is hard-coded and
+`render` takes no runner for it. The two lockfile-sync templates (bun and pod) still default to
+the fleet until [#528](https://github.com/Sassy-Dog/skills/issues/528) and
+[#529](https://github.com/Sassy-Dog/skills/issues/529) move them.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
