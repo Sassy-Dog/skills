@@ -1594,11 +1594,13 @@
 #      render path. Three mutation checks in its header. No network.
 #  60. lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh) — the
 #      lockfile-sync-bun template (issue #528, part of #515; #529 extends it to
-#      pod) runs on a hard-coded ubuntu-latest (no {{RUNNER}}, no self-hosted),
-#      takes bun from SHA-pinned setup-bun with a bun.lock-keyed actions/cache,
-#      mints the App token after checkout and after every bun install (the
-#      presence step immediately before the mint), and pushes through an
-#      env-reading credential helper with no token in a URL or argv, global and
+#      pod) runs two jobs on a hard-coded ubuntu-latest (no {{RUNNER}}, no
+#      self-hosted, actor gate on both): a token-free one with contents: read
+#      that takes bun from SHA-pinned setup-bun (no actions/cache anywhere) and
+#      uploads a patch, and a second that runs no package manager, validates the
+#      patch to exactly the install root's bun.lock before the mint (presence
+#      step immediately before it) and pushes through an env-reading credential
+#      helper with the token bound once and never in a URL or argv, global and
 #      system git config ignored and hooks and fsmonitor off on every git call.
 #      Source-level, one mutation per property. No network.
 #

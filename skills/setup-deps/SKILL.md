@@ -525,16 +525,30 @@ directory that does not exist and fired the workflow on `scripts/package.json`, 
 cannot handle. **One rendered workflow per install root** — a repo with two independent
 `bun.lock` files needs two, each owning its own lockfile.
 
-`lockfile-sync-bun` takes no runner fact: since template version 11 (#528) it hard-codes
-`runs-on: ubuntu-latest`, as `dependabot-auto-merge` has since version 5 and `deps-cadence` always
-has, because it runs bun on PR-authored manifests and then holds the App token (see "Credential-bearing
-workflows that run package-manager code" below). Its bun is `oven-sh/setup-bun` at the **repo's own
-pin**, derived the way `deps-cadence` derives it (see "Toolchains" below): a `bun-version-file:` CI
-reads, or the `.bun-version` / `package.json` `packageManager` file, renders as `BUN_PIN_FILE`; a
-literal `bun-version:` renders as `BUN_PIN_LITERAL` (a CI pin bump then needs a re-render); a floating
-or missing pin refuses the render. The image's `bun` is never used. The fleet's warm global install
-cache is gone with the fleet: an `actions/cache` step keyed on the install root's `bun.lock` replaces
-it, and a miss is a cold install (accepted, #515).
+`lockfile-sync-bun` takes no runner fact: since template version 11 (#528) both of its jobs
+hard-code `runs-on: ubuntu-latest`, as `dependabot-auto-merge` has since version 5 and `deps-cadence`
+always has, because it runs bun on PR-authored manifests and the App token pushes the result (see
+"Credential-bearing workflows that run package-manager code" below). Version 12 splits it into two
+jobs so bun never shares a VM with the token, and drops the cache. Its bun is `oven-sh/setup-bun` at
+the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
+follows it exactly, first match wins:
+
+1. CI's `bun-version-file:` renders `BUN_PIN_FILE` (the file must be tracked and name an exact `X.Y.Z`).
+2. Otherwise CI's literal `bun-version:` renders `BUN_PIN_LITERAL` (it must be exact; a CI pin bump
+   then needs a re-render).
+3. Otherwise the first of `.bun-version`, `.tool-versions`, `package.json` (`packageManager`
+   `bun@X.Y.Z`) that pins bun renders `BUN_PIN_FILE`. A file that does not mention bun is skipped; one
+   that pins it inexactly stops the render.
+
+All of these paths are relative to the **repo root**, whatever `{{PKG_DIR}}` is: the fallback files are
+never read inside a nested install root. When CI sets both a file and a literal, names two different
+values, or pins a floating or inexact version (`latest`, `1.3.x`), or when **no pin source exists at
+all**, the agent stops and reports; it never renders a guess. The image's `bun` is never used. There
+is **no `actions/cache`**: the fleet's warm install cache went with the fleet, and a cache step under
+`pull_request_target` would save into the default-branch cache scope from an install of the PR head's
+lockfile (cache poisoning), so every run is a cold install. That departs from #515's "`actions/cache`
+keyed on `bun.lock`" decision on purpose; the workflow fires only on Dependabot PRs, where a cold
+install is acceptable.
 
 `{{RUNNER}}` (the pod template only) defaults to the Sassy Dog self-hosted fleet,
 `[self-hosted, macOS, sassy-dog]`, which **must** have macOS to run
@@ -712,13 +726,24 @@ last); see "Optional: regenerate committed codegen" below.
 
 `dependabot-auto-merge` follows the rule since template version 5 (no checkout, no package code,
 but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is hard-coded and
-`render` takes no runner for it. `lockfile-sync-bun` follows it since template version 11
-([#528](https://github.com/Sassy-Dog/skills/issues/528)) in a single job rather than the three of
-`deps-cadence`: `ubuntu-latest`, bun from `setup-bun`, the package-manager steps with no token in
-scope and a checkout with `persist-credentials: false`, the App token minted after the last
-`bun install` and immediately after its presence step, and the push through an env-reading
-credential helper (no token in a URL or argv) with system and global git config ignored and hooks
-and fsmonitor off on every git call; `scripts/test-lockfile-sync-policy.sh` pins each. The pod
+`render` takes no runner for it. `lockfile-sync-bun` follows it, runner since template version 11
+([#528](https://github.com/Sassy-Dog/skills/issues/528)) and the never-share-a-VM split since version
+12, in two jobs rather than the three of `deps-cadence` (it has no plan step), each on its own fresh
+`ubuntu-latest` VM:
+
+| Job | Runs | Holds |
+| --- | --- | --- |
+| `update-bun-lock` | `setup-bun` at the repo's pin, the two `bun install --ignore-scripts` steps, then uploads one artifact: `git diff HEAD --binary` of the install root's `bun.lock` | **no secret at all**; `contents: read` |
+| `push-bun-lock` | no package manager: checkout (`persist-credentials: false`), download the artifact, validate and apply the patch, the presence step, the mint, then commit and push | the App token, minted only after the patch is applied |
+
+The patch is untrusted. Before the mint, `push-bun-lock` asks git what it would do (`git apply
+--summary` and `--numstat`) and rejects a create, delete, rename, copy or mode change, a binary
+hunk, more than one file, any path other than exactly the install root's `bun.lock`, and a path that
+is not a tracked regular file; it then applies with `git apply --index` and re-checks that only that
+path is staged. Both jobs keep the `github.actor == 'dependabot[bot]'` gate under `pull_request_target`.
+The push goes through an env-reading credential helper (no token in a URL or argv) with system and
+global git config ignored and hooks and fsmonitor off on every git call.
+`scripts/test-lockfile-sync-policy.sh` pins each. The pod
 lockfile-sync template still defaults to the fleet until
 [#529](https://github.com/Sassy-Dog/skills/issues/529) moves it, and that gate is where its checks
 will join.
