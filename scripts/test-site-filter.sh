@@ -14,6 +14,15 @@
 # So the mismatch is stepped around BEFORE the claim, never discovered after an
 # agent has burned an attempt on it.
 #
+# WATCHDOG KILLS THE SUBJECT'S WHOLE PROCESS GROUP (R32, issue #535). A probe
+# that can hang is backgrounded DIRECTLY (not as `( cmd; echo $? >rc ) &`, whose
+# `$!` is the wrapper subshell) under `set -m`, so it leads its own process
+# group, and the kill is `kill -9 -- -PID`, the group. Killing the PID alone is
+# not enough: under M35 the process that actually blocks is the `cat` inside the
+# resolver's `$(cat)` command substitution, a grandchild of the probe, and
+# `kill -9 PID` reaches only the bash and orphans that `cat` to PID 1 forever,
+# one per hanging mutant per preflight run. Take the status from `wait`.
+#
 # THE FIVE DECISIONS PINNED HERE, each of which reads to a later sweep like
 # something to tidy:
 #
@@ -511,22 +520,31 @@ fi
 # be killed. This row is therefore watchdogged: a regression must REDDEN, never
 # wedge the suite, so a child that has not exited within ~5s is killed and
 # scored as the failure it is.
-: >"$WORK/closed.rc"
-( PATH="$BIN:$PATH" bash "$Q" --sites-of <&- >"$WORK/closed.out" 2>/dev/null
-  echo $? >"$WORK/closed.rc" ) &
+# The kill must reach the subject's WHOLE process tree, not just its PID (issue
+# #535). Two earlier shapes leaked: `( cmd; echo $? >rc ) &` made `$!` the
+# wrapper subshell, so the kill orphaned the resolver; and backgrounding the
+# probe directly still left the `cat` of M35's `$(cat)` grandchild blocked on
+# its own pipe. `set -m` makes the background job a process-group leader, and
+# the HUNG path kills the group, grandchildren included. Status comes from
+# `wait`.
+set -m
+PATH="$BIN:$PATH" bash "$Q" --sites-of <&- >"$WORK/closed.out" 2>/dev/null &
 closed_pid=$!
+set +m
 closed_rc="HUNG"
 # Polled FINELY, not in half-seconds: this loop runs in every child, and the
-# mutation matrix multiplies it by every mutant — a 0.5s first sleep cost the
-# suite ~20s of pure waiting. 100 × 0.05s keeps the same ~5s ceiling.
+# mutation matrix multiplies it by every mutant, a 0.5s first sleep cost the
+# suite ~20s of pure waiting. 100 x 0.05s keeps the same ~5s ceiling.
 closed_wait=0
 while [ "$closed_wait" -lt 100 ]; do
-    kill -0 "$closed_pid" 2>/dev/null || { closed_rc="$(cat "$WORK/closed.rc" 2>/dev/null)"; break; }
+    kill -0 "$closed_pid" 2>/dev/null || { wait "$closed_pid" 2>/dev/null; closed_rc=$?; break; }
     sleep 0.05
     closed_wait=$((closed_wait + 1))
 done
-kill -9 "$closed_pid" 2>/dev/null
-wait "$closed_pid" 2>/dev/null
+if [ "$closed_rc" = "HUNG" ]; then
+    kill -9 -- "-$closed_pid" 2>/dev/null
+    wait "$closed_pid" 2>/dev/null
+fi
 if [ "$closed_rc" = "64" ] && [ ! -s "$WORK/closed.out" ]; then
     row R32 0 "--sites-of refuses a CLOSED fd 0 with exit 64 instead of hanging"
 else
