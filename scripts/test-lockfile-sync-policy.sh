@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # test-lockfile-sync-policy.sh — pins the CREDENTIAL POLICY of setup-deps'
-# lockfile-sync templates (issue #528 for bun, part of #515; #529 extends it to
-# the pod template).
+# lockfile-sync templates: bun (issue #528, part of #515) and pod (#529, the same
+# shape; its decision is on #515: GitHub-hosted macOS, the ~10x minute cost
+# accepted).
 #
 # The shape these templates had: a job on the persistent shared self-hosted
 # fleet ({{RUNNER}}) that minted the org-wide platform-writer App token BEFORE
@@ -13,42 +14,54 @@
 # hosted runner with a late mint in ONE job; review rejected that, because a
 # process bun starts can outlive its step and read a later-minted token from
 # /proc/*/environ, $RUNNER_TEMP or step files (the rule deps-cadence v3 set).
-# Version 12 is two jobs, and the gate pins the split. Every defect passes
-# actionlint (the YAML and the shell are valid, just permissive), so this gate
+# Version 12 is two jobs, and the gate pins the split; pod v7 took that shape
+# directly rather than #529's single-job description, since `pod install`
+# evaluates Podfile and podspec Ruby and so must never share a VM with the token.
+# Every defect passes actionlint (the YAML and the shell are valid, just permissive), so this gate
 # asserts the policy on the template source. It is modelled on
 # test-deps-cadence-policy.sh property 9 and test-auto-merge-policy.sh, and
 # reads no render: the properties are identical in every render arm
 # (test-template-actionlint.sh proves the renders lint).
 #
-# The template has exactly two jobs, split by position: JOB 1 (token-free) runs
+# Each template has exactly two jobs, split by position: JOB 1 (token-free) runs
 # the package manager and uploads a patch; JOB 2 (token) runs no package manager,
-# validates the patch, mints and pushes. Properties (`check_common`, then the
-# template's own toolchain check):
+# validates the patch, mints and pushes. Properties (`check_common`, driven by
+# the C_* facts each `check_<template>` sets, then the template's own toolchain
+# check and its executed validator):
 #
-#   1. RUNNER. Both jobs `runs-on: ubuntu-latest`, hard-coded: no `{{RUNNER}}`
+#   1. RUNNER. Each job's `runs-on` is hard-coded and exact: bun, ubuntu-latest
+#      on both; pod, macos-latest on job 1 (the only job that needs macOS) and
+#      ubuntu-latest on job 2, which may name macOS nowhere. No `{{RUNNER}}`
 #      fact, no `self-hosted` anywhere outside a comment. A fact would let a
 #      consumer re-open the hole at render time.
 #   2. NO CACHE. No `actions/cache` anywhere. Under pull_request_target a save
 #      lands in the default-branch cache scope, built from an install of the PR
 #      head's lockfile: cache poisoning. This departs from #515's "actions/cache
-#      keyed on bun.lock" decision on purpose; every run is a cold install.
+#      keyed on bun.lock" decision on purpose; every run is a cold install. For
+#      pod, the Flutter action's own `cache:` input is a cache save too, so any
+#      `*cache*:` input fails.
 #   3. ACTOR GATE. Both jobs' `if:` carry `github.actor == 'dependabot[bot]'`.
 #   4. JOB 1 IS TOKEN-FREE. No `secrets.`, no PLATFORM_WRITER_APP, no
 #      app_token, no mint action, no GH_TOKEN/GITHUB_TOKEN; job-level
 #      `permissions: contents: read`; checkout persist-credentials: false and
 #      no `token:`; the patch is `git diff HEAD --binary --no-renames
-#      --no-ext-diff --no-textconv` of the one `{{PKG_DIR}}/bun.lock` pathspec,
+#      --no-ext-diff --no-textconv` of exactly the template's lockfile
+#      pathspecs (bun: the one `{{PKG_DIR}}/bun.lock`; pod: `{{APP_DIR}}/
+#      pubspec.lock` and `{{APP_DIR}}/ios/Podfile.lock`, never a `*.lock` glob),
 #      uploaded by a SHA-pinned upload-artifact.
-#   5. JOB 2 RUNS NO PACKAGE MANAGER. No setup-bun/setup-node and no bun, npm,
-#      yarn, pnpm, pod or bundle command in a run: body. It is the VM that holds
-#      the token, so nothing a package manager started may share it.
+#   5. JOB 2 RUNS NO PACKAGE MANAGER. No setup-bun/setup-node/flutter-action and
+#      no bun, npm, yarn, pnpm, pod, bundle, gem, flutter or dart command in a
+#      run: body. It is the VM that holds the token, so nothing a package
+#      manager started may share it.
 #   6. VALIDATE BEFORE THE MINT. Job 2 has a `Validate and apply` step before
 #      the mint that reads the patch with `git apply --summary` (no create,
-#      delete, rename or mode change) and `--numstat` (one file, not binary),
-#      requires that path to EQUAL `allowed='{{PKG_DIR}}/bun.lock'` (the root
+#      delete, rename or mode change) and `--numstat` (not binary), requires
+#      every path to be allowed (bun: EQUAL `allowed='{{PKG_DIR}}/bun.lock'`,
+#      exactly one file; pod: a member of `allowed=('{{APP_DIR}}/pubspec.lock'
+#      '{{APP_DIR}}/ios/Podfile.lock')`, a non-empty subset, none twice; the root
 #      collapse included), requires a tracked regular file (`ls-files -s`, mode
 #      100644 or 100755), applies with `git apply --index` and re-checks the
-#      staged set is only that path. The artifact download is SHA-pinned. This
+#      staged set is only what the patch named. The artifact download is SHA-pinned. This
 #      property is STATIC (the command names are in the step, in that order);
 #      property 14 is the one that proves the rejections work.
 #   7. MINT ORDER. In job 2 the App token is minted after checkout, after the
@@ -84,7 +97,8 @@
 #      `HEAD:refs/heads/${PR_HEAD_REF}`) non-fast-forward, which fails closed. A
 #      top-level `concurrency:` group is keyed on the PR number with
 #      cancel-in-progress: false (the deps-cadence-codegen precedent).
-#  13. WIRING AND DESTINATION. Job 2 `needs: update-bun-lock` and its `if:`
+#  13. WIRING AND DESTINATION. Job 2 `needs:` job 1 (`update-bun-lock` /
+#      `update-pod-lock`) and its `if:`
 #      requires the `changed == 'true'` output job 1 exports; job 1's upload sets
 #      `if-no-files-found: error`; the push goes to exactly
 #      `https://github.com/${PR_HEAD_REPO}.git` and the refspec
@@ -114,15 +128,35 @@
 #      suite is memoised on the extracted body, so mutants that leave the step
 #      alone do not re-run it.
 #
+#  15. THE LEASE. The push passes `--force-with-lease="refs/heads/${PR_HEAD_REF}:
+#      ${PR_HEAD_SHA}"`, the head SHA both jobs checked out, so a branch that
+#      moved or was deleted between the jobs fails closed (a plain push would
+#      recreate a deleted branch). A nit on #534, taken in #529 for both
+#      templates (bun 13, pod 7); a dropped lease, one expecting the branch name,
+#      a bare `--force-with-lease` and `--force` each have a mutant.
+#
+# THE POD VALIDATOR (`check_validator_pod`) is the same executed suite over the
+# pod template's allowed set: a root app (`.`) and a nested one (`app`), each
+# with a tracked pubspec.lock and ios/Podfile.lock in a scratch repo. A patch
+# touching one lockfile or both is accepted with exactly those paths staged; and
+# each of these exits 1 with its own reason: binary, rename, mode change,
+# create, delete, a third file, an allowed name in the wrong directory (the other
+# app's Podfile.lock), a symlinked lock, the same path twice, a no-op, garbage,
+# empty, missing, a pre-staged file, a stray untracked file; a failing `git
+# status` aborts the step. Pod has no one-file rule (a subset of two is the
+# point); the duplicate-path rule and the allowed-set membership replace it.
+#
 # Vacuous-green guards: the template must split into exactly two jobs, and each
 # job's step table must find what it is checked for (job 1: checkout and at least
 # two installs; job 2: checkout, download, validate, presence step, mint, push),
+# the pod template must hold exactly one flutter-action use,
 # the validator's run: body must extract and have no {{…}} left after
 # substitution, and every executed case is asserted by exit status AND reason,
 # or the check fails rather than covering nothing.
 #
 # Mutation-proof (a gate that cannot fail is decorative): one mutation per
-# property is applied to a copy of the bun template and each must FAIL the check
+# property is applied to a copy of the template under test (the bun block, then
+# the pod block, each with its own mutants) and each must FAIL the check
 # WITH the expected reason (a mutation that fails for some other reason proves
 # nothing), a mutation that changes nothing fails the gate (template reworded),
 # and a perl that is missing, exits non-zero or writes an empty mutant fails the
@@ -131,13 +165,7 @@
 # `checkout` and `contents: read` too, so a bare word would let a mutant that
 # only broke step detection pass for the wrong reason.
 #
-# To extend to the pod template (#529): add `check_pod` (check_common with the
-# pod template's package-manager pattern plus its toolchain check), call it on
-# the pod template, and give it its own mutants. check_common's job-2 rules name
-# the bun.lock path through a parameter-free `allowed=` literal match, so a pod
-# template will need that literal passed in.
-#
-# Reads one tracked file. No gh, no network, no actionlint; perl for the
+# Reads two tracked files (the bun and pod templates). No gh, no network, no actionlint; perl for the
 # mutations, git and cp for the executed validator's scratch repos (global and
 # system git config off, as in the job). Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-lockfile-sync-policy.sh
@@ -249,14 +277,20 @@ check_checkout() {
     return "$rc"
 }
 
-# check_common <file> <job-1 package-manager regex> — properties 1-10. 0 when
-# the policy holds, 1 (reasons on stdout) otherwise.
+# check_common <file> <job-1 package-manager regex> — properties 1-10, 12, 13
+# and 15. 0 when the policy holds, 1 (reasons on stdout) otherwise. The
+# per-template facts come from the C_* globals each check_<template> sets first:
+#   C_J1            job 1's id (job 2 `needs:` it, and reads its `changed` output)
+#   C_R1 / C_R2     the hard-coded runs-on of job 1 / job 2
+#   C_PATHSPEC      the pathspec literal job 1's patch step must end its diff with
+#   C_PATHSPEC_DESC what that pathspec is, for the message
+#   C_VALIDATE      the function that statically checks job 2's validate step
 check_common() {
     local f="$1" pm="$2" rc=0 d="$WORK/split" i line body nonc runs n
-    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up
+    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up want j2nonc
     # A package manager at command position: line start (after run:), or after
     # && ; | or $( — not a word inside a quoted message.
-    local pm2='(^[[:space:]]*(run:[[:space:]]+)?|&&[[:space:]]*|;[[:space:]]*|\|[[:space:]]*|\$\([[:space:]]*)(bun|bunx|npm|npx|yarn|pnpm|pod|bundle)([[:space:]]|$)'
+    local pm2='(^[[:space:]]*(run:[[:space:]]+)?|&&[[:space:]]*|;[[:space:]]*|\|[[:space:]]*|\$\([[:space:]]*)(bun|bunx|npm|npx|yarn|pnpm|pod|bundle|gem|flutter|dart)([[:space:]]|$)'
 
     mkdir -p "$d"
     n="$(split_jobs "$f" "$d")"
@@ -267,13 +301,21 @@ check_common() {
     j1="$d/job1.yml"; j2="$d/job2.yml"
     nonc="$(grep -Ev '^[[:space:]]*#' "$f")"
 
-    # 1. runner
-    runs="$(grep -E '^    runs-on:' "$f")"
-    if [ "$(grep -c . <<<"$runs")" -ne 2 ] || [ "$(sort -u <<<"$runs")" != "    runs-on: ubuntu-latest" ]; then
-        echo "both jobs must hard-code runs-on: ubuntu-latest (no render fact, no self-hosted label): ${runs//$'\n'/ | }"; rc=1
-    fi
+    # 1. runner. Each job's own label, hard-coded: job 1 may need a platform
+    # (pod: macOS) that job 2, the token VM, never does.
+    for i in 1 2; do
+        want="$C_R1"; [ "$i" = 2 ] && want="$C_R2"
+        runs="$(grep -E '^    runs-on:' "$d/job$i.yml")"
+        if [ "$runs" != "    runs-on: $want" ]; then
+            echo "job $i must hard-code runs-on: $want (no render fact, no self-hosted label): ${runs:-<none>}"; rc=1
+        fi
+    done
     if grep -qF '{{RUNNER}}' <<<"$nonc" || grep -qi 'self-hosted' <<<"$nonc"; then
         echo "a {{RUNNER}} fact or a self-hosted label survives outside a comment"; rc=1
+    fi
+    j2nonc="$(grep -Ev '^[[:space:]]*#' "$j2")"
+    if grep -Eqi 'macos' <<<"$j2nonc"; then
+        echo "job 2 (the token job) names a macOS runner or label: only job 1 may need macOS"; rc=1
     fi
 
     # 2. no cache
@@ -299,11 +341,11 @@ check_common() {
     fi
 
     # 13 (job wiring). Job 2 waits for job 1 and runs only when job 1 changed the lock.
-    if ! grep -qxF '    needs: update-bun-lock' "$j2"; then
-        echo "job 2 does not declare needs: update-bun-lock"; rc=1
+    if ! grep -qxF "    needs: $C_J1" "$j2"; then
+        echo "job 2 does not declare needs: $C_J1"; rc=1
     fi
-    if ! grep -qF "needs.update-bun-lock.outputs.changed == 'true'" <<<"$(grep -E '^    if:' "$j2")"; then
-        echo "job 2's if: does not require needs.update-bun-lock.outputs.changed == 'true'"; rc=1
+    if ! grep -qF "needs.$C_J1.outputs.changed == 'true'" <<<"$(grep -E '^    if:' "$j2")"; then
+        echo "job 2's if: does not require needs.$C_J1.outputs.changed == 'true'"; rc=1
     fi
 
     # 9 (whole file). The token occurs once, as the push step's GH_TOKEN binding.
@@ -347,8 +389,8 @@ check_common() {
     patch="$(find_step 'id: patch')" || patch=""
     if [ -z "$patch" ] || [[ "${STEP_BODY[$patch]}" != *'diff HEAD --binary --no-renames --no-ext-diff --no-textconv'* ]]; then
         echo "job 1 does not package the change with git diff HEAD --binary --no-renames --no-ext-diff --no-textconv"; rc=1
-    elif [[ "${STEP_BODY[$patch]}" != *"-- '{{PKG_DIR}}/bun.lock'"* ]]; then
-        echo "job 1's patch is not limited to the one '{{PKG_DIR}}/bun.lock' pathspec"; rc=1
+    elif [[ "${STEP_BODY[$patch]}" != *"$C_PATHSPEC"* ]]; then
+        echo "job 1's patch is not limited to $C_PATHSPEC_DESC"; rc=1
     fi
     uploads="$(grep -E 'uses: actions/upload-artifact@' <<<"$body")"
     if [ "$(grep -c . <<<"$uploads")" -ne 1 ] || grep -Evq '@[0-9a-f]{40} # v[0-9]' <<<"$uploads"; then
@@ -376,8 +418,9 @@ check_common() {
 
     # 5. no package manager on the token VM
     body="$(grep -Ev '^[[:space:]]*#' "$j2")"
-    if grep -Eq 'uses: (oven-sh|actions)/setup-' <<<"$body" || grep -Eq "$pm2" <<<"$body" || grep -Eq "$pm" <<<"$body"; then
-        echo "job 2 (the token job) runs a package manager or a setup-* toolchain action: $(grep -E "uses: (oven-sh|actions)/setup-|$pm2" <<<"$body" | head -1 | sed 's/^ *//')"; rc=1
+    local setupre='uses: (oven-sh/setup-|actions/setup-|subosito/flutter-action|ruby/setup-ruby)'
+    if grep -Eq "$setupre" <<<"$body" || grep -Eq "$pm2" <<<"$body" || grep -Eq "$pm" <<<"$body"; then
+        echo "job 2 (the token job) runs a package manager or a setup-* toolchain action: $(grep -E "$setupre|$pm2" <<<"$body" | head -1 | sed 's/^ *//')"; rc=1
     fi
 
     # 6. validate before the mint
@@ -392,15 +435,9 @@ check_common() {
         echo "actions/download-artifact is not pinned to a 40-hex SHA with a version comment"; rc=1
     fi
     body="${STEP_BODY[$validate]}"
-    if [[ "$body" != *"allowed='{{PKG_DIR}}/bun.lock'"* ]]; then
-        echo "the validator's allowed path is not exactly '{{PKG_DIR}}/bun.lock'"; rc=1
-    fi
-    if [[ "$body" != *'[ "$path" = "$allowed" ]'* ]]; then
-        echo "the validator does not require the patched path to EQUAL the allowed path"; rc=1
-    fi
+    "$C_VALIDATE" "$body" || rc=1
     [[ "$body" == *'apply --summary'* ]] || { echo "the validator does not read the patch with git apply --summary (create/delete/rename/mode)"; rc=1; }
     [[ "$body" == *'apply --numstat'* ]] || { echo "the validator does not read the patch with git apply --numstat (binary, path)"; rc=1; }
-    [[ "$body" == *'wc -l'* && "$body" == *'-eq 1'* ]] || { echo "the validator does not require exactly one patched file"; rc=1; }
     [[ "$body" == *'ls-files -s'* && "$body" == *100644* ]] || { echo "the validator does not require a tracked regular file (ls-files -s, mode 100644/100755)"; rc=1; }
     [[ "$body" == *'apply --index'* ]] || { echo "the validator does not apply the patch with git apply --index"; rc=1; }
     [[ "$body" == *'diff --cached --name-only'* ]] || { echo "the validator does not re-check the staged set after applying"; rc=1; }
@@ -437,11 +474,47 @@ check_common() {
         echo "the push step does not bind GH_TOKEN to the minted token"; rc=1
     fi
     # 13 (destination). The PR's own head repo and head branch, nothing else.
-    if [[ "$body" != *'push "https://github.com/${PR_HEAD_REPO}.git" '* ]]; then
+    if [[ "$body" != *' "https://github.com/${PR_HEAD_REPO}.git" '* ]]; then
         echo "the push URL is not exactly \"https://github.com/\${PR_HEAD_REPO}.git\""; rc=1
     fi
     if [[ "$body" != *' "HEAD:refs/heads/${PR_HEAD_REF}"'* ]]; then
         echo "the push refspec is not exactly \"HEAD:refs/heads/\${PR_HEAD_REF}\""; rc=1
+    fi
+    # 15. The lease. A plain push to a branch that was deleted since checkout
+    # recreates it, and one to a branch that moved only fails by accident of
+    # fast-forwardness; the lease names the tip both jobs saw.
+    if [[ "$body" != *' push --force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}" '* ]]; then
+        echo "the push is not leased to the head SHA (--force-with-lease=\"refs/heads/\${PR_HEAD_REF}:\${PR_HEAD_SHA}\"): a branch that moved or was deleted would not fail closed"; rc=1
+    fi
+    return "$rc"
+}
+
+# static_validate_bun <validate step body> — the bun template's own static rules
+# on the validator: one allowed path, exactly one patched file.
+static_validate_bun() {
+    local body="$1" rc=0
+    if [[ "$body" != *"allowed='{{PKG_DIR}}/bun.lock'"* ]]; then
+        echo "the validator's allowed path is not exactly '{{PKG_DIR}}/bun.lock'"; rc=1
+    fi
+    if [[ "$body" != *'[ "$path" = "$allowed" ]'* ]]; then
+        echo "the validator does not require the patched path to EQUAL the allowed path"; rc=1
+    fi
+    [[ "$body" == *'wc -l'* && "$body" == *'-eq 1'* ]] || { echo "the validator does not require exactly one patched file"; rc=1; }
+    return "$rc"
+}
+
+# static_validate_pod <validate step body> — the pod template's: the allowed set
+# is EXACTLY the two lockfiles, every patched path must be a member, none twice.
+static_validate_pod() {
+    local body="$1" rc=0
+    if [[ "$body" != *"allowed=('{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock')"* ]]; then
+        echo "the validator's allowed set is not exactly '{{APP_DIR}}/pubspec.lock' and '{{APP_DIR}}/ios/Podfile.lock'"; rc=1
+    fi
+    if [[ "$body" != *'[ "$path" = "$a" ]'* || "$body" != *'[ "$listed" -eq 1 ]'* ]]; then
+        echo "the validator does not require every patched path to EQUAL a member of the allowed set"; rc=1
+    fi
+    if [[ "$body" != *'appears more than once'* ]]; then
+        echo "the validator does not reject a path that appears twice in the patch"; rc=1
     fi
     return "$rc"
 }
@@ -470,6 +543,9 @@ step_run() {
 vg() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"; }
 
 VX="$WORK/vx"
+# The artifact dir, patch file name and patch-fixture prefix vx_run uses; each
+# check_validator* sets them for its template before running a case.
+VX_IN=bun-lock-in; VX_PF=bun-lock.patch; VX_PD=patch-
 # vx_base <dir> <text|sym> — a committed repo holding a root install and a web/
 # install, each with a tracked package.json and bun.lock (a regular file, or a
 # symlink in the sym variant).
@@ -540,10 +616,10 @@ vx_build() {
 # with no patch file at all.
 vx_run() {
     local body="$1" P="$2" c="$3" base="$4" prep="${5:-}" run="$VX/run" rt="$VX/rt" path="$PATH"
-    rm -rf "$run" "$rt"; cp -R "$base" "$run"; mkdir -p "$rt/bun-lock-in"
+    rm -rf "$run" "$rt"; cp -R "$base" "$run"; mkdir -p "$rt/$VX_IN"
     # A copied tree has new mtimes, and `git apply --index` refuses a stale index.
     (cd "$run" && vg update-index -q --refresh)
-    [ "$c" = missing ] || cp "$VX/patch-$P/$c.patch" "$rt/bun-lock-in/bun-lock.patch"
+    [ "$c" = missing ] || cp "$VX/$VX_PD$P/$c.patch" "$rt/$VX_IN/$VX_PF"
     case "$prep" in
         staged)     echo x > "$run/extra.txt"; (cd "$run" && vg add extra.txt) ;;
         untracked)  echo x > "$run/stray.txt" ;;
@@ -593,6 +669,7 @@ vx_expect() {
 # mutants that leave this step alone do not re-run it.
 check_validator() {
     local f="$1" raw key cache P body rc=0 line
+    VX_IN=bun-lock-in; VX_PF=bun-lock.patch; VX_PD=patch-
     raw="$(step_run "$f" 'Validate and apply the lockfile patch')"
     if [ -z "$raw" ]; then
         echo "validator: could not extract the 'Validate and apply the lockfile patch' run: body — the executed check would cover nothing"
@@ -633,9 +710,204 @@ check_validator() {
     return "$rc"
 }
 
+# --- the pod template's validator, EXECUTED ---------------------------------
+# Same idea as above, with the pod template's allowed set: a non-empty subset of
+# {<app>/pubspec.lock, <app>/ios/Podfile.lock}, each path at most once. The app
+# is the repo root ('.', where '{{APP_DIR}}/' collapses to nothing) or `app`.
+PXF="pubspec.yaml"
+# px_base <dir> <text|sym> — a committed repo holding a root app and an app/
+# app, each with a tracked pubspec.yaml, pubspec.lock and ios/Podfile.lock (the
+# two locks regular files, or symlinks in the sym variant).
+px_base() {
+    mkdir -p "$1/ios" "$1/app/ios"
+    (
+        cd "$1" || exit 1
+        vg init -q -b main .
+        vg config user.name t; vg config user.email t@example.com
+        local d
+        for d in . app; do
+            printf 'name: x\n' > "$d/$PXF"
+            if [ "$2" = sym ]; then
+                ln -s "$PXF" "$d/pubspec.lock"
+                ln -s "$PXF" "$d/ios/Podfile.lock"
+            else
+                printf 'packages:\n  a: 1.0.0\n' > "$d/pubspec.lock"
+                printf 'PODS:\n  - a (1.0.0)\n' > "$d/ios/Podfile.lock"
+            fi
+        done
+        vg add -A && vg commit -qm base
+    )
+}
+
+# px_patch <root|app> <case> — writes $VX/ppatch-<root|app>/<case>.patch.
+px_patch() {
+    local P="$1" c="$2" D="" O="app/ios/Podfile.lock" base="$VX/pbase-text" g="$VX/pgen"
+    [ "$P" = app ] && { D="app/"; O="ios/Podfile.lock"; }
+    local A1="${D}pubspec.lock" A2="${D}ios/Podfile.lock"
+    [ "$c" = symlink ] && base="$VX/pbase-sym"
+    mkdir -p "$VX/ppatch-$P"
+    rm -rf "$g"; cp -R "$base" "$g"
+    (
+        cd "$g" || exit 1
+        local out="$VX/ppatch-$P/$c.patch" plain=(diff HEAD --binary --no-renames --no-ext-diff --no-textconv)
+        case "$c" in
+            clean1)    echo '  b: 1.0.1' >> "$A1"; vg "${plain[@]}" > "$out" ;;
+            clean2)    echo '  - b (2.0.0)' >> "$A2"; vg "${plain[@]}" > "$out" ;;
+            clean)     echo '  b: 1.0.1' >> "$A1"; echo '  - b (2.0.0)' >> "$A2"; vg "${plain[@]}" > "$out" ;;
+            binary)    printf 'bin\0ary\0\1\2' > "$A2"; vg "${plain[@]}" > "$out" ;;
+            rename)    vg mv "$A1" "$A1.moved"; vg diff --cached HEAD -M --binary > "$out" ;;
+            mode)      chmod +x "$A1"; vg "${plain[@]}" > "$out" ;;
+            create)    echo x > "${D}extra.lock"; vg add -A; vg diff --cached HEAD --binary > "$out" ;;
+            delete)    vg rm -q "$A2"; vg diff --cached HEAD --binary > "$out" ;;
+            third)     echo '  b: 1.0.1' >> "$A1"; echo '  - b (2.0.0)' >> "$A2"; echo 'name: y' >> "${D}$PXF"; vg "${plain[@]}" > "$out" ;;
+            wrongpath) echo '  - z (9.9.9)' >> "$O"; vg "${plain[@]}" > "$out" ;;
+            symlink)   ln -sfn nowhere "$A2"; vg "${plain[@]}" > "$out" ;;
+            dup)       echo '  b: 1.0.1' >> "$A1"; vg "${plain[@]}" > "$g.p1"
+                       vg add -A; vg commit -qm one
+                       echo '  b: 1.0.2' >> "$A1"; vg "${plain[@]}" > "$g.p2"
+                       cat "$g.p1" "$g.p2" > "$out" ;;
+            nochange)  printf 'diff --git a/%s b/%s\nindex 1111111..1111111 100644\n--- a/%s\n+++ b/%s\n' "$A1" "$A1" "$A1" "$A1" > "$out" ;;
+            garbage)   printf 'this is not a patch\n' > "$out" ;;
+            empty)     : > "$out" ;;
+            *) exit 1 ;;
+        esac
+    ) || { echo "fixture: could not build the $P/$c pod patch" >&2; return 1; }
+}
+
+PX_CASES="clean1 clean2 clean binary rename mode create delete third wrongpath symlink dup nochange garbage empty"
+px_build() {
+    local P c
+    px_base "$VX/pbase-text" text
+    px_base "$VX/pbase-sym" sym
+    for P in root app; do
+        for c in $PX_CASES; do px_patch "$P" "$c" || return 1; done
+    done
+}
+
+# px_expect <body.sh> <root|app> <label> <case> <base> <prep> <ok|rej|fail> <fragment> [staged]
+# — one executed case. @A1 @A2 @O @T in the fragment are the app's pubspec.lock,
+# Podfile.lock, the OTHER app's Podfile.lock and the app's pubspec.yaml; staged
+# (ok only) is the set the clean patch must leave staged: A1, A2 or A1+A2.
+px_expect() {
+    local body="$1" P="$2" label="$3" c="$4" base="$5" prep="$6" want="$7" frag="$8" staged="${9:-}"
+    local out rc D="" O="app/ios/Podfile.lock" t exp got
+    [ "$P" = app ] && { D="app/"; O="ios/Podfile.lock"; }
+    local A1="${D}pubspec.lock" A2="${D}ios/Podfile.lock" T="${D}$PXF"
+    frag="${frag//@A1/$A1}"; frag="${frag//@A2/$A2}"; frag="${frag//@O/$O}"; frag="${frag//@T/$T}"
+    out="$(vx_run "$body" "$P" "$c" "$base" "$prep")"; rc=$?
+    if [ "$want" = ok ]; then
+        if [ "$rc" -ne 0 ]; then
+            echo "validator [$P] $label: a clean lockfile patch was rejected (rc=$rc): $(grep -m1 '::error::' <<<"$out")"; return 1
+        fi
+        exp="$(for t in ${staged//+/ }; do case "$t" in A1) echo "$A1" ;; A2) echo "$A2" ;; esac; done | sort)"
+        got="$(cd "$VX/run" && vg diff --cached --name-only | sort)"
+        if [ -z "$exp" ] || [ "$got" != "$exp" ] || [ -n "$(cd "$VX/run" && vg status --porcelain | grep -v '^M  ' || true)" ]; then
+            echo "validator [$P] $label: accepted, but the staged set is not exactly ${staged//+/ and } (staged: ${got//$'\n'/ })"; return 1
+        fi
+        return 0
+    fi
+    if [ "$want" = fail ]; then
+        if [ "$rc" -eq 0 ]; then
+            echo "validator [$P] $label: ACCEPTED a hostile patch (expected a failure containing '$frag')"; return 1
+        fi
+        if ! grep -qF -- "$frag" <<<"$out"; then
+            echo "validator [$P] $label: failed (rc=$rc), but not for the expected reason '$frag': $(grep -m1 -e '::error::' -e fatal <<<"$out")"; return 1
+        fi
+        return 0
+    fi
+    if [ "$rc" -ne 1 ]; then
+        echo "validator [$P] $label: expected exit status 1, got $rc (expected a rejection containing '$frag')"; return 1
+    fi
+    if ! grep -qF -- "Rejected the lockfile patch: " <<<"$out" || ! grep -qF -- "$frag" <<<"$out"; then
+        echo "validator [$P] $label: exit 1, but not rejected for the expected reason '$frag': $(grep -m1 '::error::' <<<"$out")"; return 1
+    fi
+    return 0
+}
+
+# check_validator_pod <file> — extracts, substitutes and runs the pod validator
+# over every case for both app locations. Memoised on the extracted body.
+check_validator_pod() {
+    local f="$1" raw key cache P body rc=0
+    VX_IN=pod-lock-in; VX_PF=pod-lock.patch; VX_PD=ppatch-
+    raw="$(step_run "$f" 'Validate and apply the lockfile patch')"
+    if [ -z "$raw" ]; then
+        echo "validator: could not extract the 'Validate and apply the lockfile patch' run: body — the executed check would cover nothing"
+        return 1
+    fi
+    key="$(printf '%s' "$raw" | cksum | cut -d' ' -f1)"
+    cache="$WORK/pvcache.$key"
+    if [ -f "$cache.rc" ]; then cat "$cache"; return "$(cat "$cache.rc")"; fi
+    {
+        for P in root app; do
+            body="$VX/pbody-$P.sh"
+            if [ "$P" = root ]; then
+                sed 's#{{APP_DIR}}/##g' <<<"$raw" > "$body"
+            else
+                sed 's#{{APP_DIR}}#app#g' <<<"$raw" > "$body"
+            fi
+            if grep -qF '{{' "$body"; then echo "validator [$P]: an unsubstituted {{…}} placeholder survives in the run: body"; rc=1; fi
+            px_expect "$body" "$P" "pubspec.lock only"      clean1    "$VX/pbase-text" ""         ok   ""                                                  A1    || rc=1
+            px_expect "$body" "$P" "Podfile.lock only"      clean2    "$VX/pbase-text" ""         ok   ""                                                  A2    || rc=1
+            px_expect "$body" "$P" "both lockfiles"         clean     "$VX/pbase-text" ""         ok   ""                                                  A1+A2 || rc=1
+            px_expect "$body" "$P" "binary hunk"            binary    "$VX/pbase-text" ""         rej  "@A2 is a binary change"                                  || rc=1
+            px_expect "$body" "$P" "rename"                 rename    "$VX/pbase-text" ""         rej  "creates, deletes, renames, copies or re-modes"           || rc=1
+            px_expect "$body" "$P" "mode change"            mode      "$VX/pbase-text" ""         rej  "creates, deletes, renames, copies or re-modes"           || rc=1
+            px_expect "$body" "$P" "create"                 create    "$VX/pbase-text" ""         rej  "creates, deletes, renames, copies or re-modes"           || rc=1
+            px_expect "$body" "$P" "delete"                 delete    "$VX/pbase-text" ""         rej  "creates, deletes, renames, copies or re-modes"           || rc=1
+            px_expect "$body" "$P" "a third file"           third     "$VX/pbase-text" ""         rej  "@T is not an allowed lockfile path"                      || rc=1
+            px_expect "$body" "$P" "wrong directory"        wrongpath "$VX/pbase-text" ""         rej  "@O is not an allowed lockfile path"                      || rc=1
+            px_expect "$body" "$P" "symlink"                symlink   "$VX/pbase-sym"  ""         rej  "@A2 is not a tracked regular file"                       || rc=1
+            px_expect "$body" "$P" "duplicate path"         dup       "$VX/pbase-text" ""         rej  "@A1 appears more than once in the patch"                 || rc=1
+            px_expect "$body" "$P" "no-op patch"            nochange  "$VX/pbase-text" ""         rej  "it changes nothing"                                      || rc=1
+            px_expect "$body" "$P" "garbage patch"          garbage   "$VX/pbase-text" ""         rej  "git cannot parse it"                                     || rc=1
+            px_expect "$body" "$P" "empty patch"            empty     "$VX/pbase-text" ""         rej  "the artifact holds no patch"                             || rc=1
+            px_expect "$body" "$P" "missing patch"          missing   "$VX/pbase-text" ""         rej  "the artifact holds no patch"                             || rc=1
+            px_expect "$body" "$P" "pre-staged extra file"  clean     "$VX/pbase-text" staged     rej  "something other than the patched lockfiles is staged"   || rc=1
+            px_expect "$body" "$P" "stray untracked file"   clean     "$VX/pbase-text" untracked  rej  "the tree holds changes outside the index"                || rc=1
+            px_expect "$body" "$P" "git status failure"     clean     "$VX/pbase-text" statusfail fail "simulated status failure"                                || rc=1
+        done
+    } > "$cache"
+    printf '%s\n' "$rc" > "$cache.rc"
+    cat "$cache"
+    return "$rc"
+}
+
+# check_pod <file> — the pod template: check_common plus the Flutter toolchain.
+check_pod() {
+    local f="$1" rc=0 nonc uses n
+    C_J1=update-pod-lock; C_R1=macos-latest; C_R2=ubuntu-latest
+    C_PATHSPEC="-- '{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock' >"
+    C_PATHSPEC_DESC="the two '{{APP_DIR}}/pubspec.lock' and '{{APP_DIR}}/ios/Podfile.lock' pathspecs"
+    C_VALIDATE=static_validate_pod
+    check_common "$f" 'flutter pub get|pod install' || rc=1
+    check_validator_pod "$f" || rc=1
+
+    nonc="$(grep -Ev '^[[:space:]]*#' "$f")"
+    uses="$(grep -E 'uses: subosito/flutter-action@' <<<"$nonc")"
+    n="$(grep -c . <<<"$uses")"
+    if [ "$n" -ne 1 ]; then
+        echo "expected exactly one flutter-action use, found $n"; rc=1
+    elif grep -Evq '@[0-9a-f]{40} # v[0-9]' <<<"$uses"; then
+        echo "the flutter-action use is not pinned to a 40-hex SHA with a version comment"; rc=1
+    fi
+    if [[ "$nonc" != *'flutter-version: ${{ env.FLUTTER_VERSION }}'* ]]; then
+        echo "flutter-action does not take the repo's pin (flutter-version: \${{ env.FLUTTER_VERSION }})"; rc=1
+    fi
+    if [[ "$nonc" != *"FLUTTER_VERSION: '{{FLUTTER_VERSION}}'"* ]]; then
+        echo "FLUTTER_VERSION is not bound to the {{FLUTTER_VERSION}} fact"; rc=1
+    fi
+    if grep -Eq '^[[:space:]]+[a-z-]*cache[a-z-]*:' <<<"$nonc"; then
+        echo "a cache input (cache:, cache-key:, pub-cache-path:) is set: the Flutter action saves through actions/cache"; rc=1
+    fi
+    return "$rc"
+}
+
 # check_bun <file> — the bun template: check_common plus property 11.
 check_bun() {
     local f="$1" rc=0 nonc uses n i line
+    C_J1=update-bun-lock; C_R1=ubuntu-latest; C_R2=ubuntu-latest
+    C_PATHSPEC="-- '{{PKG_DIR}}/bun.lock'"; C_PATHSPEC_DESC="the one '{{PKG_DIR}}/bun.lock' pathspec"
+    C_VALIDATE=static_validate_bun
     check_common "$f" 'bun install' || rc=1
     check_validator "$f" || rc=1
 
@@ -662,6 +934,7 @@ check_bun() {
 }
 
 vx_build || { echo "  FAIL could not build the validator fixtures"; exit 1; }
+px_build || { echo "  FAIL could not build the pod validator fixtures"; exit 1; }
 
 echo "lockfile-sync policy (bun):"
 
@@ -677,9 +950,10 @@ fi
 #
 # mutate <name> <want> <from> <to> — LITERAL replacement (perl \Q…\E): the
 # patterns carry `$`, `{`, `[` and `|`, which sed would read as regex syntax.
+MUT_TPL="$BUN_TEMPLATE"; MUT_CHECK=check_bun
 mutate() {
     local name="$1" want="$2" m="$WORK/mutant.yml"
-    if ! FROM="$3" TO="$4" perl -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$BUN_TEMPLATE" > "$m"; then
+    if ! FROM="$3" TO="$4" perl -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$MUT_TPL" > "$m"; then
         bad "mutation ($name): perl exited non-zero, so the mutant is meaningless"; return
     fi
     verdict "$name" "$want" "$m"
@@ -687,7 +961,7 @@ mutate() {
 # mutate_perl <name> <want> <perl -0777 program> — a structural mutation.
 mutate_perl() {
     local name="$1" want="$2" m="$WORK/mutant.yml"
-    if ! perl -0777 -pe "$3" "$BUN_TEMPLATE" > "$m"; then
+    if ! perl -0777 -pe "$3" "$MUT_TPL" > "$m"; then
         bad "mutation ($name): perl exited non-zero, so the mutant is meaningless"; return
     fi
     verdict "$name" "$want" "$m"
@@ -696,9 +970,9 @@ verdict() {
     local out
     if [ ! -s "$3" ]; then
         bad "mutation ($1) produced an empty mutant, so it proves nothing"
-    elif cmp -s "$3" "$BUN_TEMPLATE"; then
+    elif cmp -s "$3" "$MUT_TPL"; then
         bad "mutation ($1) changed nothing, so it proves nothing (template reworded?)"
-    elif out="$(check_bun "$3")"; then
+    elif out="$("$MUT_CHECK" "$3")"; then
         bad "mutation ($1) PASSED the check — the gate cannot catch it"
     elif ! grep -qF -- "$2" <<<"$out"; then
         bad "mutation ($1) failed, but not for the expected reason ($2): $(head -1 <<<"$out")"
@@ -715,7 +989,7 @@ MINT_BLOCK='(      \# Minted only now:.*?\n\n)'
 PUSH_COMMENT='(?=      \# The only step that needs repository write)'
 
 # 1. runner
-mutate "self-hosted runs-on (both jobs)" "hard-code runs-on" 'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
+mutate "self-hosted runs-on (both jobs)" "must hard-code runs-on" 'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
 mutate_perl "self-hosted runs-on (token job only)" "hard-code runs-on" "s/(${J2}runs-on: )ubuntu-latest/\${1}[self-hosted, linux]/s"
 mutate "runner as a render fact" "{{RUNNER}} fact" 'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 
@@ -765,7 +1039,7 @@ mutate_perl "token job checkout persists credentials" "job 2: checkout does not 
 mutate "checkout takes the token" "checkout passes a token" 'repository: ${{ env.PR_HEAD_REPO }}' $'repository: ${{ env.PR_HEAD_REPO }}\n          token: ${{ steps.app_token.outputs.token }}'
 
 # 9. URL, argv and the single binding
-mutate "token in the push URL" "userinfo" 'push "https://github.com/${PR_HEAD_REPO}.git"' 'push "https://x-access-token:${GH_TOKEN}@github.com/${PR_HEAD_REPO}.git"'
+mutate "token in the push URL" "userinfo" '"https://github.com/${PR_HEAD_REPO}.git" "HEAD' '"https://x-access-token:${GH_TOKEN}@github.com/${PR_HEAD_REPO}.git" "HEAD'
 mutate "token in an extraheader" "GH_TOKEN reaches" $'-c credential.helper= \\\n' $'-c credential.helper= -c "http.extraheader=Authorization: bearer $GH_TOKEN" \\\n'
 mutate "token inlined into an extraheader" "exactly once" $'-c credential.helper= \\\n' $'-c credential.helper= -c "http.extraheader=Authorization: bearer ${{ steps.app_token.outputs.token }}" \\\n'
 mutate "token inlined into a url rewrite" "exactly once" $'-c credential.helper= \\\n' $'-c credential.helper= -c "url.https://x:${{ steps.app_token.outputs.token }}@github.com/.insteadOf=https://github.com/" \\\n'
@@ -801,8 +1075,14 @@ mutate "needs dropped from the token job" "job 2 does not declare needs: update-
 mutate "changed gate dropped from the token job" "does not require needs.update-bun-lock.outputs.changed == 'true'" " && needs.update-bun-lock.outputs.changed == 'true'" ''
 mutate "changed output dropped from job 1" "job 1 does not export changed" 'changed: ${{ steps.patch.outputs.changed }}' 'changed: true'
 mutate "upload tolerates a missing patch" "if-no-files-found: error" 'if-no-files-found: error' 'if-no-files-found: ignore'
-mutate "push to a different URL" "the push URL is not exactly" 'push "https://github.com/${PR_HEAD_REPO}.git"' 'push "https://github.com/${GITHUB_REPOSITORY}.git"'
+mutate "push to a different URL" "the push URL is not exactly" '"https://github.com/${PR_HEAD_REPO}.git" "HEAD' '"https://github.com/${GITHUB_REPOSITORY}.git" "HEAD'
 mutate "push to a different branch" "the push refspec is not exactly" '"HEAD:refs/heads/${PR_HEAD_REF}"' '"HEAD:refs/heads/main"'
+
+# 15. the push lease
+mutate "push lease dropped" "the push is not leased to the head SHA" ' --force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' ''
+mutate "push lease expects the branch name" "the push is not leased to the head SHA" ':${PR_HEAD_SHA}" \' ':${PR_HEAD_REF}" \'
+mutate "push lease without an expected value" "the push is not leased to the head SHA" '--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' '--force-with-lease'
+mutate "push forced outright" "the push is not leased to the head SHA" '--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' '--force'
 
 # 10 (boundary). A git call inside $( ) is a git call.
 mutate "git call without nohooks inside \$( )" "job 2: step" 'summary="$(git "${nohooks[@]}" apply --summary' 'summary="$(git apply --summary'
@@ -822,5 +1102,145 @@ mutate "validator: mode reject neutered" "validator [root] symlink:" '[ "$mode" 
 mutate "validator: staged re-check neutered" "validator [root] pre-staged extra file:" '|| reject "after applying, something other' '|| : "after applying, something other'
 mutate "validator: outside-the-index reject neutered" "validator [root] stray untracked file:" 'reject "after applying, the tree holds changes outside the index"' ': "after applying, the tree holds changes outside the index"'
 mutate_perl "validator: git status piped into grep (failure reads as clean)" "validator [root] git status failure:" 's/tree="\$\((git "\$\{nohooks\[\@\]\}" status --porcelain --untracked-files=all)\)"\n          if \[ -n "\$\(grep -v \x27\^M  \x27 <<<"\$tree" \|\| true\)" \]; then/if [ -n "\$($1 | grep -v \x27^M  \x27 || true)" ]; then/'
+
+
+# ============================================================================
+# The pod template. Same checks (check_common, then its own toolchain check),
+# plus the macOS-on-job-1-only runner rule, the two-file allowed set and the
+# Flutter pin. The mutants below are written out beside the bun ones rather
+# than shared: the step names, the allowed set and the validator's messages
+# differ, and a shared table would have to parameterise every one of them.
+# ============================================================================
+POD_TEMPLATE="$TPL_DIR/lockfile-sync-pod.template.yml"
+MUT_TPL="$POD_TEMPLATE"; MUT_CHECK=check_pod
+
+echo "lockfile-sync policy (pod):"
+
+if out="$(check_pod "$POD_TEMPLATE")"; then
+    ok "pod template: macOS only on the token-free job, ubuntu-latest token job, validate-then-mint push job, single token binding, leased push, no cache, git hardened, Flutter pinned"
+else
+    while IFS= read -r l; do bad "$l"; done <<<"$out"
+fi
+
+J2='push-pod-lock:.*?'
+
+# 1. runner
+mutate "pod: job 1 on a Linux runner" "job 1 must hard-code runs-on: macos-latest" 'runs-on: macos-latest' 'runs-on: ubuntu-latest'
+mutate "pod: self-hosted runs-on (job 1)" "job 1 must hard-code runs-on: macos-latest" 'runs-on: macos-latest' 'runs-on: [self-hosted, macOS, sassy-dog]'
+mutate_perl "pod: token job on macOS" "job 2 must hard-code runs-on: ubuntu-latest" "s/(${J2}runs-on: )ubuntu-latest/\${1}macos-latest/s"
+mutate_perl "pod: self-hosted runs-on (token job only)" "job 2 must hard-code runs-on: ubuntu-latest" "s/(${J2}runs-on: )ubuntu-latest/\${1}[self-hosted, linux]/s"
+mutate "pod: runner as a render fact" "a {{RUNNER}} fact or a self-hosted label" 'runs-on: macos-latest' 'runs-on: {{RUNNER}}'
+mutate_perl "pod: a macOS condition in the token job" "only job 1 may need macOS" "s/(${J2}      - uses: actions\\/checkout[^\\n]*\\n)/\$1        if: \\\${{ runner.os == 'macOS' }}\\n/s"
+
+# 2. no cache
+mutate_perl "pod: actions/cache re-added to job 1" "actions/cache" 's/(      - name: Regenerate pubspec\.lock\n)/      - uses: actions\/cache\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: ~\/.pub-cache\n          key: pub-\${{ runner.os }}\n\n$1/'
+mutate_perl "pod: actions/cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
+mutate "pod: the Flutter action's own cache on" "a cache input" $'          flutter-version: ${{ env.FLUTTER_VERSION }}\n' $'          flutter-version: ${{ env.FLUTTER_VERSION }}\n          cache: true\n'
+
+# 3. actor gate
+mutate "pod: actor gate dropped from job 1" "job 1 has no github.actor" "    if: \${{ github.actor == 'dependabot[bot]' }}" '    if: ${{ true }}'
+mutate "pod: actor gate dropped from job 2" "job 2 has no github.actor" "github.actor == 'dependabot[bot]' && needs" 'needs'
+
+# 4. job 1 is token-free
+mutate_perl "pod: token in an install's env" "token-free" 's/(      - name: Regenerate Podfile\.lock\n)/$1        env:\n          GH_TOKEN: \${{ steps.app_token.outputs.token }}\n/'
+mutate_perl "pod: App secret in job 1's env" "token-free" 's/(    steps:\n)/    env:\n      PLATFORM_WRITER_APP_PRIVATE_KEY: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n$1/'
+mutate_perl "pod: mint action in job 1" "token-free" 's/(      - name: Regenerate Podfile\.lock\n)/      - uses: actions\/create-github-app-token\@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n$1/'
+mutate_perl "pod: job 1 loses contents: read" "job 1 does not set job-level permissions: contents: read" 's/(    timeout-minutes: 30\n    permissions:\n      contents: )read/$1write/'
+mutate "pod: patch not limited to the two lockfiles (one dropped)" "is not limited to the two" " '{{APP_DIR}}/ios/Podfile.lock' >" ' >'
+mutate "pod: patch widened to a glob" "is not limited to the two" "'{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock' >" "'*.lock' >"
+mutate "pod: patch with textconv allowed" "does not package the change with git diff HEAD --binary" ' --no-textconv --' ' -- '
+mutate_perl "pod: upload unpinned" "job 1 must upload the patch with exactly one SHA-pinned" 's/upload-artifact\@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7\.0\.2/upload-artifact\@v7/'
+mutate "pod: upload tolerates a missing patch" "if-no-files-found: error" 'if-no-files-found: error' 'if-no-files-found: ignore'
+
+# 5. job 2 runs no package manager
+mutate_perl "pod: pod install in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: pod install --repo-update\n\n$1/'
+mutate_perl "pod: flutter pub get in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: cd x \&\& flutter pub get\n\n$1/'
+mutate_perl "pod: bundler in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: bundle exec pod install\n\n$1/'
+mutate_perl "pod: the Flutter action in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: subosito\\/flutter-action\\\@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0\n\n\$2/s"
+
+# 6. validate before the mint
+VALIDATE_BLOCK='(      \# Every rule here is about the patch.*?\n\n)'
+MINT_BLOCK='(      \# Minted only now:.*?\n\n)'
+PUSH_COMMENT='(?=      \# The only step that needs repository write)'
+mutate_perl "pod: validate moved after the mint" "is validated (step" "s/$VALIDATE_BLOCK$MINT_BLOCK$PUSH_COMMENT/\$2\$1/s"
+mutate "pod: allowed set widened" "the validator's allowed set is not exactly" "'{{APP_DIR}}/ios/Podfile.lock')" "'{{APP_DIR}}/ios/Podfile.lock' '{{APP_DIR}}/pubspec.yaml')"
+mutate "pod: membership loosened to a glob" "does not require every patched path to EQUAL a member" '[ "$path" = "$a" ]' '[[ "$path" == *"$a" ]]'
+mutate "pod: apply --summary dropped" "does not read the patch with git apply --summary" 'apply --summary' 'apply --stat'
+mutate "pod: apply --numstat dropped" "does not read the patch with git apply --numstat" 'apply --numstat' 'apply --stat'
+mutate "pod: regular-file mode check dropped" "does not require a tracked regular file" 'ls-files -s' 'ls-files'
+mutate "pod: apply --index dropped" "does not apply the patch with git apply --index" 'apply --index' 'apply --3way'
+mutate "pod: staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only | sort)"' 'diff --cached --stat | sort)"'
+mutate "pod: duplicate-path rule dropped" "does not reject a path that appears twice" 'appears more than once' 'appears twice'
+mutate "pod: artifact download unpinned" "actions/download-artifact is not pinned" 'download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' 'download-artifact@v8'
+
+# 7. mint order
+mutate_perl "pod: mint before checkout" "at or before checkout" "s/(${J2}    steps:\n)(.*?)$MINT_BLOCK$PUSH_COMMENT/\$1\$3\$2/s"
+mutate "pod: interloper after the presence step" "immediately before the mint" '      - name: Mint GitHub App token' $'      - name: Interloper\n        run: echo hi\n\n      - name: Mint GitHub App token'
+mutate_perl "pod: push before the mint" "is not after the mint" 's/(      - name: Mint GitHub App token\n.*?\n\n)(      \# The only step that needs repository write.*)\z/$2\n$1/s'
+mutate_perl "pod: App secret read before the presence step" "reads the App secrets" 's/(      - name: Validate and apply the lockfile patch\n)/$1        env:\n          LEAK: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n/'
+
+# 8. checkout and token scope
+mutate "pod: checkout persists credentials (both jobs)" "checkout does not set persist-credentials: false" 'persist-credentials: false' 'persist-credentials: true'
+mutate_perl "pod: token job checkout persists credentials" "job 2: checkout does not set persist-credentials: false" "s/(${J2}persist-credentials: )false/\$1true/s"
+mutate "pod: checkout takes the token" "checkout passes a token" 'repository: ${{ env.PR_HEAD_REPO }}' $'repository: ${{ env.PR_HEAD_REPO }}\n          token: ${{ steps.app_token.outputs.token }}'
+
+# 9. URL, argv and the single binding
+mutate "pod: token in the push URL" "userinfo" '"https://github.com/${PR_HEAD_REPO}.git" "HEAD' '"https://x-access-token:${GH_TOKEN}@github.com/${PR_HEAD_REPO}.git" "HEAD'
+mutate "pod: token in an extraheader" "GH_TOKEN reaches" $'-c credential.helper= \\\n' $'-c credential.helper= -c "http.extraheader=Authorization: bearer $GH_TOKEN" \\\n'
+mutate "pod: token inlined into an extraheader" "exactly once" $'-c credential.helper= \\\n' $'-c credential.helper= -c "http.extraheader=Authorization: bearer ${{ steps.app_token.outputs.token }}" \\\n'
+mutate "pod: second binding of the token" "exactly once" $'          GH_TOKEN: ${{ steps.app_token.outputs.token }}\n' $'          GH_TOKEN: ${{ steps.app_token.outputs.token }}\n          GITHUB_TOKEN: ${{ steps.app_token.outputs.token }}\n'
+mutate "pod: push missing its GH_TOKEN binding" "the push step does not bind GH_TOKEN" 'GH_TOKEN: ${{ steps.app_token.outputs.token }}' 'GH_TOKEN: nothing'
+mutate "pod: env-reading helper form missing" "env-reading credential helper" "'credential.helper=!f()" "'credential.helper=!g()"
+mutate "pod: empty helper dropped" "does not clear other credential helpers first" '-c credential.helper= ' ''
+
+# 10. git hardened
+mutate "pod: global git config left on (both jobs)" "GIT_CONFIG_GLOBAL=/dev/null is not in the job env" '      GIT_CONFIG_GLOBAL: /dev/null' ''
+mutate "pod: system git config left on (both jobs)" "GIT_CONFIG_NOSYSTEM=1 is not in the job env" '      GIT_CONFIG_NOSYSTEM: "1"' ''
+mutate "pod: git call without nohooks (job 1)" "job 1: step" 'git "${nohooks[@]}" diff HEAD' 'git diff HEAD'
+mutate "pod: git call without nohooks (job 2)" "job 2: step" 'git "${nohooks[@]}" commit' 'git commit'
+mutate "pod: git call without nohooks inside \$( )" "job 2: step" 'summary="$(git "${nohooks[@]}" apply --summary' 'summary="$(git apply --summary'
+mutate "pod: fsmonitor left on" "does not define nohooks with core.hooksPath=/dev/null and core.fsmonitor=false" ' -c core.fsmonitor=false)' ')'
+mutate "pod: hooksPath left on" "does not define nohooks with core.hooksPath=/dev/null and core.fsmonitor=false" 'nohooks=(-c core.hooksPath=/dev/null' 'nohooks=(-c core.hooksPath=.githooks'
+
+# 12. head SHA pin and concurrency
+mutate "pod: checkout by branch name (both jobs)" "checkout does not check out the PR head SHA" 'ref: ${{ env.PR_HEAD_SHA }}' 'ref: ${{ env.PR_HEAD_REF }}'
+mutate_perl "pod: checkout by branch name (token job only)" "job 2: checkout does not check out the PR head SHA" "s/(${J2}ref: \\\$\\{\\{ env\\.)PR_HEAD_SHA/\${1}PR_HEAD_REF/s"
+mutate "pod: head SHA bound to the branch name" "PR_HEAD_SHA is not bound to github.event.pull_request.head.sha" 'PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}' 'PR_HEAD_SHA: ${{ github.event.pull_request.head.ref }}'
+mutate_perl "pod: concurrency block removed" "no workflow-level concurrency block" 's/^concurrency:\n  group:[^\n]*\n  cancel-in-progress: false\n\n//m'
+mutate "pod: concurrency group not keyed on the PR" "not keyed on github.event.pull_request.number" 'group: dependabot-pod-lock-sync-${{ github.event.pull_request.number }}' 'group: dependabot-pod-lock-sync'
+mutate "pod: concurrency cancels in progress" "does not set cancel-in-progress: false" '  cancel-in-progress: false' '  cancel-in-progress: true'
+
+# 13. job wiring and the push destination
+mutate "pod: needs dropped from the token job" "job 2 does not declare needs: update-pod-lock" '    needs: update-pod-lock' ''
+mutate "pod: changed gate dropped from the token job" "does not require needs.update-pod-lock.outputs.changed == 'true'" " && needs.update-pod-lock.outputs.changed == 'true'" ''
+mutate "pod: changed output dropped from job 1" "job 1 does not export changed" 'changed: ${{ steps.patch.outputs.changed }}' 'changed: true'
+mutate "pod: push to a different URL" "the push URL is not exactly" '"https://github.com/${PR_HEAD_REPO}.git" "HEAD' '"https://github.com/${GITHUB_REPOSITORY}.git" "HEAD'
+mutate "pod: push to a different branch" "the push refspec is not exactly" '"HEAD:refs/heads/${PR_HEAD_REF}"' '"HEAD:refs/heads/main"'
+
+# 15. the push lease
+mutate "pod: push lease dropped" "the push is not leased to the head SHA" ' --force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' ''
+mutate "pod: push lease expects the branch name" "the push is not leased to the head SHA" ':${PR_HEAD_SHA}" \' ':${PR_HEAD_REF}" \'
+mutate "pod: push lease without an expected value" "the push is not leased to the head SHA" '--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' '--force-with-lease'
+mutate "pod: push forced outright" "the push is not leased to the head SHA" '--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"' '--force'
+
+# Flutter
+mutate "pod: Flutter action removed" "expected exactly one flutter-action use" 'subosito/flutter-action@' 'subosito/setup-flutter@'
+mutate "pod: Flutter action unpinned" "the flutter-action use is not pinned to a 40-hex SHA" 'subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0' 'subosito/flutter-action@v2'
+mutate "pod: Flutter taken from the image" "flutter-action does not take the repo's pin" 'flutter-version: ${{ env.FLUTTER_VERSION }}' 'flutter-version: stable'
+mutate "pod: Flutter pin not a render fact" "FLUTTER_VERSION is not bound to the {{FLUTTER_VERSION}} fact" "FLUTTER_VERSION: '{{FLUTTER_VERSION}}'" "FLUTTER_VERSION: '3.35.1'"
+
+# 14. the validator, executed. Each enforcing construct neutered while its
+# message text stays, so only the executed suite can fail it.
+mutate "pod validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
+mutate "pod validator: parse failures swallowed" "validator [root] garbage patch:" '|| reject "git cannot parse it"' '|| true'
+mutate "pod validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'
+mutate "pod validator: binary reject neutered" "validator [root] binary hunk:" '[ "$added" != "-" ] || reject' 'true || reject'
+mutate "pod validator: changes-nothing reject neutered" "validator [root] no-op patch:" '[ "$added$removed" != "00" ] || reject' 'true || reject'
+mutate "pod validator: allowed-set reject neutered" "validator [root] a third file:" '|| reject "$path is not an allowed lockfile path' '|| : "$path is not an allowed lockfile path'
+mutate "pod validator: duplicate-path reject neutered" "validator [root] duplicate path:" 'reject "$path appears more than once in the patch"' ': "$path appears more than once in the patch"'
+mutate "pod validator: mode reject neutered" "validator [root] symlink:" '[ "$mode" = "100644" ] || [ "$mode" = "100755" ]' 'true'
+mutate "pod validator: staged re-check neutered" "validator [root] pre-staged extra file:" '|| reject "after applying, something other than the patched lockfiles is staged"' '|| : "after applying, something other than the patched lockfiles is staged"'
+mutate "pod validator: outside-the-index reject neutered" "validator [root] stray untracked file:" 'reject "after applying, the tree holds changes outside the index"' ': "after applying, the tree holds changes outside the index"'
+mutate_perl "pod validator: git status piped into grep (failure reads as clean)" "validator [root] git status failure:" 's/tree="\$\((git "\$\{nohooks\[\@\]\}" status --porcelain --untracked-files=all)\)"\n          if \[ -n "\$\(grep -v \x27\^M  \x27 <<<"\$tree" \|\| true\)" \]; then/if [ -n "\$($1 | grep -v \x27^M  \x27 || true)" ]; then/'
 
 exit "$fail"

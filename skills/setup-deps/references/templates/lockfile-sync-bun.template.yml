@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-bun · version 12
+# TEMPLATE: lockfile-sync-bun · version 13
 # LEGACY FALLBACK — not the default for bun repos anymore. Dependabot's native
 # `bun` ecosystem (GA 2025-02) reads and rewrites the text bun.lock itself
 # (bun >= 1.1.39): the default render for a bun repo is the bun block in
@@ -28,7 +28,10 @@
 #   out the PR's head SHA rather than its branch name (a branch that moves
 #   between the jobs then makes the push non-fast-forward and fail closed) and a
 #   per-PR concurrency group was added, so those two changes did not move the
-#   stamp again.
+#   stamp again. 13 leases the push (--force-with-lease on the head ref at the
+#   head SHA both jobs checked out), so a branch that moved or was deleted
+#   between the jobs fails closed rather than being overwritten or recreated
+#   (#529, which gave lockfile-sync-pod the same lease; a nit on #534).
 #   # {{IF:BUN_PIN_FILE}} / # {{IF:BUN_PIN_LITERAL}}
 #                → keep exactly ONE of the two setup-bun steps and delete the
 #                  other. The pin is derived exactly as render-cadence.sh's
@@ -77,7 +80,7 @@
 #                  install root has its own lockfile to rewrite and push.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 12
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 13
 #
 # Refresh bun.lock on Dependabot npm PRs (the LEGACY npm + sync pairing —
 # native `bun` is the default for bun repos; see the render conditions above).
@@ -146,6 +149,9 @@
 #      lockfile, so a poisoned lock could seed a cache the base branch's own
 #      workflows restore. Every run is a cold install, which is fine for a
 #      workflow that fires only on Dependabot PRs.
+#  10. The push is leased (version 13): --force-with-lease on the head ref at the
+#      head SHA both jobs checked out, so a branch that moved or was deleted
+#      between the jobs (a plain push would recreate it) fails closed.
 #
 name: Dependabot bun.lock sync
 
@@ -414,7 +420,11 @@ jobs:
           # The token is never in argv or a URL: the single-quoted helper is
           # expanded by the shell git spawns, which reads GH_TOKEN from the
           # environment at run time. The empty helper first clears any other.
+          # The push is leased to the head SHA both jobs checked out: if the
+          # branch moved or was deleted since, it fails closed instead of
+          # overwriting the new tip or recreating the branch.
           # shellcheck disable=SC2016  # deliberately unexpanded: git's shell expands it
           git "${nohooks[@]}" -c credential.helper= \
             -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
-            push "https://github.com/${PR_HEAD_REPO}.git" "HEAD:refs/heads/${PR_HEAD_REF}"
+            push --force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}" \
+            "https://github.com/${PR_HEAD_REPO}.git" "HEAD:refs/heads/${PR_HEAD_REF}"

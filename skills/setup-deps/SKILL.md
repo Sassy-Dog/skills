@@ -317,12 +317,15 @@ through two other doors ([#186](https://github.com/Sassy-Dog/skills/issues/186))
 
 The two lockfile templates are the **worse** case, and the ordering is worth noticing:
 `dependabot-auto-merge` deliberately never checks out ("no checkout. PR code never executes here"),
-while both lockfile templates `actions/checkout` the **PR head ref** inside a job that mints the
-credential. They are hard-gated to `dependabot[bot]`, bun runs `--ignore-scripts`, and since
-[#232](https://github.com/Sassy-Dog/skills/issues/232) the token is no longer handed to
-`checkout` at all — `persist-credentials: false`, no `token:`, and the push authenticated from its
-own step `env:` — so the posture is sound as it stands, but the two templates carrying more surface
-were the two without the precondition.
+while both lockfile templates `actions/checkout` the **PR head SHA** and run package-manager code on
+it. Since template versions 12 (bun) and 7 (pod) they do that in a job that holds no secret and never
+mints the credential; a second job on a fresh VM runs no package manager, validates the patch the
+first uploaded, and only then mints and pushes (see "Credential-bearing workflows that run
+package-manager code" below). They are hard-gated to `dependabot[bot]`, bun runs `--ignore-scripts`,
+and since [#232](https://github.com/Sassy-Dog/skills/issues/232) the token is never handed to
+`checkout` — `persist-credentials: false`, no `token:`, and the push authenticated from its own
+step `env:`. Before that restructuring the two templates carrying the most surface were the two
+without the precondition.
 
 Report the skip and its reason; per this skill's report-and-skip contract, a skipped file is a
 reported outcome, never a silent omission. **For the two lockfile templates the report must also
@@ -504,8 +507,8 @@ never a trigger for one. **Nothing compares a consumer's committed version to th
 consumer drift is invisible from here — that is why a template change rolls out as one issue per
 consumer repo rather than by waiting for re-runs.
 
-Facts: `{{RUNNER}}` (pod only), `{{APP_DIR}}`, `{{PKG_DIR}}`, `{{FLUTTER_VERSION}}` (keep in lockstep with the
-release workflow), and for `lockfile-sync-bun` the bun pin (`{{BUN_VERSION_FILE}}` under `BUN_PIN_FILE`,
+Facts: `{{APP_DIR}}`, `{{PKG_DIR}}`, `{{FLUTTER_VERSION}}` (keep in lockstep with the
+release workflow; pod only), and for `lockfile-sync-bun` the bun pin (`{{BUN_VERSION_FILE}}` under `BUN_PIN_FILE`,
 or `{{BUN_VERSION}}` under `BUN_PIN_LITERAL`; keep exactly one arm). `{{APP_DIR}}` is the Flutter app directory relative to the repo root — `app` for
 tailoredtip, `apps/mobile` for velovate, `.` for a root-level app. It replaces the pod template's
 v1 `{{PUBSPEC_PATH}}`/`{{IOS_DIR}}` facts: all three named points on the same directory, and
@@ -525,11 +528,12 @@ directory that does not exist and fired the workflow on `scripts/package.json`, 
 cannot handle. **One rendered workflow per install root** — a repo with two independent
 `bun.lock` files needs two, each owning its own lockfile.
 
-`lockfile-sync-bun` takes no runner fact: since template version 11 (#528) both of its jobs
-hard-code `runs-on: ubuntu-latest`, as `dependabot-auto-merge` has since version 5 and `deps-cadence`
-always has, because it runs bun on PR-authored manifests and the App token pushes the result (see
-"Credential-bearing workflows that run package-manager code" below). Version 12 splits it into two
-jobs so bun never shares a VM with the token, and drops the cache. Its bun is `oven-sh/setup-bun` at
+**No template takes a runner fact.** `lockfile-sync-bun` has hard-coded `runs-on: ubuntu-latest` on
+both of its jobs since template version 11 (#528), as `dependabot-auto-merge` has since version 5 and
+`deps-cadence` always has, because it runs bun on PR-authored manifests and the App token pushes the
+result (see "Credential-bearing workflows that run package-manager code" below). Version 12 splits it
+into two jobs so bun never shares a VM with the token, and drops the cache; version 13 leases the
+push to the head SHA. Its bun is `oven-sh/setup-bun` at
 the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
 follows it exactly, first match wins:
 
@@ -550,11 +554,14 @@ lockfile (cache poisoning), so every run is a cold install. That departs from #5
 keyed on `bun.lock`" decision on purpose; the workflow fires only on Dependabot PRs, where a cold
 install is acceptable.
 
-`{{RUNNER}}` (the pod template only) defaults to the Sassy Dog self-hosted fleet,
-`[self-hosted, macOS, sassy-dog]`, which **must** have macOS to run
-`pod install`. Both org runner groups are `visibility=all`, so every repo can reach the fleet.
-Prefer those label forms over the legacy product-scoped ones (`velovate`, `qr-ninja`): the runners
-still carry those labels, but scoping by product is a leftover, not a constraint.
+`lockfile-sync-pod` takes no runner fact either, since template version 7
+([#529](https://github.com/Sassy-Dog/skills/issues/529)): its first job, the only one that needs
+macOS, hard-codes `runs-on: macos-latest` (a GitHub-hosted runner, about ten times the minutes of
+Linux, an accepted cost recorded on [#515](https://github.com/Sassy-Dog/skills/issues/515) because the
+workflow fires only on Dependabot pub PRs), and the job that holds the token runs on
+`ubuntu-latest`. Flutter comes from `subosito/flutter-action` at `{{FLUTTER_VERSION}}`; CocoaPods
+comes from the macOS image and is **unpinned**, so the `pod` that writes `Podfile.lock` moves with
+image updates. No rendered workflow names a self-hosted label, and a render never writes one.
 
 **The lockfile trap — the single most important thing this skill exists for.** Dependabot updates a
 manifest but writes only the lockfile formats it supports; CI running a frozen-lockfile install then
@@ -576,13 +583,13 @@ alerts stay open.
 `lockfile-sync-pod` only when the app's `ios/Podfile.lock` is itself tracked; check with
 `git ls-files -- "<app-dir>/ios/Podfile.lock"` (empty output = gitignored or untracked). A repo
 that gitignores the lock (tailoredtip: release builds regenerate it every run, so it is a build
-artifact there, not a committed version pin) has nothing to sync — and the rendered workflow
-hard-fails rather than no-ops: `flutter pub get` still changes the tracked `pubspec.lock`, so the
-changed-lockfiles guard falls through to `git add` on an explicitly-ignored path, which exits 1
-under `bash -e` — a red job occupying the fleet's single macOS runner on every pub PR (the
-tailoredtip#252 field report). Gitignored `Podfile.lock` → **do not render**; record in the run
-report why the pod workflow was skipped, so the next refresh skips it deliberately instead of
-shipping a red workflow. If the repo later wants a committed pod pin (velovate's posture), tracking
+artifact there, not a committed version pin) has nothing to sync. Before template version 7 the
+rendered workflow hard-failed on it (`git add` of an explicitly-ignored path exits 1 under `bash -e`:
+the tailoredtip#252 field report); the patch is now `git diff HEAD` over the two lockfile paths, which
+never sees an untracked file, so it no longer fails, but it would regenerate a `Podfile.lock` it can
+never push and spend macOS minutes doing it on every pub PR. Gitignored `Podfile.lock` → **do not
+render**; record in the run report why the pod workflow was skipped, so the next refresh skips it
+deliberately instead of shipping a workflow that does nothing. If the repo later wants a committed pod pin (velovate's posture), tracking
 the lock is the prerequisite change — the template becomes renderable the moment it lands.
 
 ### The monthly lockfile refresh (`deps-cadence`)
@@ -729,7 +736,7 @@ but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is 
 `render` takes no runner for it. `lockfile-sync-bun` follows it, runner since template version 11
 ([#528](https://github.com/Sassy-Dog/skills/issues/528)) and the never-share-a-VM split since version
 12, in two jobs rather than the three of `deps-cadence` (it has no plan step), each on its own fresh
-`ubuntu-latest` VM:
+`ubuntu-latest` VM (version 13 adds the push lease below):
 
 | Job | Runs | Holds |
 | --- | --- | --- |
@@ -750,10 +757,28 @@ global git config ignored and hooks and fsmonitor off on every git call.
 single binding and the push destination, and by execution the validator itself, run from the
 extracted step against crafted patch artifacts for a root and a nested install root (each hostile
 patch must exit 1 with its own reason, and each enforcing construct has a mutant that neuters it
-while keeping its message). The pod
-lockfile-sync template still defaults to the fleet until
-[#529](https://github.com/Sassy-Dog/skills/issues/529) moves it, and that gate is where its checks
-will join.
+while keeping its message).
+
+`lockfile-sync-pod` has had the same two-job shape since template version 7
+([#529](https://github.com/Sassy-Dog/skills/issues/529)), not the single late-mint job that issue
+first described: `pod install` evaluates the Podfile and podspec Ruby, which is arbitrary code, so it
+must not share a VM with the token any more than bun does. The one difference is the first job's
+runner, because CocoaPods needs macOS:
+
+| Job | Runs | Holds |
+| --- | --- | --- |
+| `update-pod-lock` on `macos-latest` | `subosito/flutter-action` at `{{FLUTTER_VERSION}}`, `flutter pub get`, the clean `pod install --repo-update`, then uploads one artifact: `git diff HEAD --binary` of exactly `{{APP_DIR}}/pubspec.lock` and `{{APP_DIR}}/ios/Podfile.lock` | **no secret at all**; `contents: read` |
+| `push-pod-lock` on `ubuntu-latest` | no package manager and nothing that needs macOS: checkout, download, validate and apply the patch, the presence step, the mint, then commit and push | the App token, minted only after the patch is applied |
+
+Its validator allows a **non-empty subset** of those two paths (the patch may carry one lockfile or
+both), each at most once; anything else it rejects before the mint, with the same git-reported checks
+as bun's (no create, delete, rename, copy or mode change, no binary hunk, every path a tracked regular
+file). It no longer pushes whatever `git add -- '*.lock'` staged. Both templates push with
+`--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"`, so a branch that moved or was
+deleted between the jobs fails closed instead of being overwritten or recreated. Neither template
+uses `actions/cache` (the Flutter action's `cache:` input saves through it, so pod sets none).
+`scripts/test-lockfile-sync-policy.sh` runs the same property set, mutants and executed validator
+against both, for a root app and a nested one.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
