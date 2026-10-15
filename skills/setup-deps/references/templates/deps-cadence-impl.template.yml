@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 6
+# TEMPLATE: deps-cadence-impl · version 7
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -45,6 +45,12 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
+# Version 7 (impl version, #539) closes three gaps in the holds report: empty
+# `npm outdated --json` output is `Could not evaluate` (npm prints `{}` itself
+# when nothing is outdated, so a `{}` default read a missing npm as current); a
+# crate with several versions in Cargo.lock is compared at the version a
+# workspace member's own dependency edge names (`resolve.nodes[].deps`), and is
+# `Could not evaluate` when that edge does not name exactly one version.
 # Version 6 adds the "Bare ignore: holds" report (#524): a third section, in its
 # own step after the pub and cargo one, that lists each bare ignore: hold in
 # .github/dependabot.yml (read at run time) whose resolved version is behind
@@ -56,7 +62,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 6
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 7
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -762,7 +768,9 @@ jobs:
                 # npm outdated exits 1 whenever something IS outdated, so its
                 # status says nothing; unparseable output is the failure.
                 out="$(cd "./$rel" && npm outdated --json 2>/dev/null </dev/null)" || true
-                [ -n "$out" ] || out='{}'
+                if [ -z "$out" ]; then
+                  echo "npm outdated produced no output" > "$cache/$key.err"; return 0
+                fi
                 # A registry, auth or install failure is a JSON {"error":{code,summary}}
                 # envelope, which parses to no rows: it is a failed lookup, not "all current".
                 if jq -e 'type == "object" and (.error | type == "object" and (has("code") or has("summary")) and (has("latest") | not))' <<<"$out" >/dev/null 2>&1; then
@@ -777,7 +785,11 @@ jobs:
                 fi ;;
               cargo)
                 if ! out="$(cd "./$rel" && cargo metadata --format-version 1 2>/dev/null </dev/null)" \
-                    || ! jq -r '.packages[] | "\(.name)\t\(.version)"' <<<"$out" > "$cache/$key.meta" 2>/dev/null; then
+                    || ! jq -r '.packages[] | "\(.name)\t\(.version)"' <<<"$out" > "$cache/$key.meta" 2>/dev/null \
+                    || ! jq -r '(.workspace_members // []) as $ws
+                        | (.packages | map({key: (.id // ""), value: .}) | from_entries) as $pk
+                        | (.resolve.nodes // [])[] | select(. as $n | any($ws[]; . == $n.id))
+                        | .deps[]? | $pk[.pkg // ""] | select(. != null) | "\(.name)\t\(.version)"' <<<"$out" > "$cache/$key.direct" 2>/dev/null; then
                   echo "cargo metadata output not recognised" > "$cache/$key.err"
                 fi ;;
             esac
@@ -825,9 +837,18 @@ jobs:
               if [ -e "$cache/$key.err" ]; then
                 unevaluated+="- \`$lane\` \`$name\`: Could not evaluate ($(cat "$cache/$key.err"))"$'\n'; continue
               fi
-              resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2; exit}' "$cache/$key.meta")"
-              if [ -z "$resolved" ]; then
+              versions="$(awk -F'\t' -v n="$name" '$1 == n {print $2}' "$cache/$key.meta" | sort -u)"
+              if [ -z "$versions" ]; then
                 unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (not in Cargo.lock)"$'\n'; continue
+              fi
+              if [ "$(grep -c . <<<"$versions")" -eq 1 ]; then
+                resolved="$versions"
+              else
+                # Several versions: only a workspace member's own dependency edge says which is held.
+                resolved="$(awk -F'\t' -v n="$name" '$1 == n {print $2}' "$cache/$key.direct" | sort -u)"
+                if [ "$(grep -c . <<<"$resolved")" -ne 1 ]; then
+                  unevaluated+="- \`$lane\` \`$name\`: Could not evaluate (several versions of $name in Cargo.lock, none or more than one a direct dependency)"$'\n'; continue
+                fi
               fi
               newest="$(cargo_latest "$name" || true)"
               if [ -z "$newest" ]; then
