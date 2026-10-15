@@ -14,11 +14,14 @@
 # So the mismatch is stepped around BEFORE the claim, never discovered after an
 # agent has burned an attempt on it.
 #
-# WATCHDOG TARGETS THE SUBJECT, NOT A WRAPPER (R32, issue #535). A probe that
-# can hang is backgrounded DIRECTLY so `$!` is the hung process and `kill -9`
-# reaches it; wrapping it as `( cmd; echo $? >rc ) &` makes `$!` the subshell,
-# and killing that orphans the real process to PID 1, one per hanging mutant per
-# preflight run. Take the status from `wait`, never from a wrapper's rc file.
+# WATCHDOG KILLS THE SUBJECT'S WHOLE PROCESS GROUP (R32, issue #535). A probe
+# that can hang is backgrounded DIRECTLY (not as `( cmd; echo $? >rc ) &`, whose
+# `$!` is the wrapper subshell) under `set -m`, so it leads its own process
+# group, and the kill is `kill -9 -- -PID`, the group. Killing the PID alone is
+# not enough: under M35 the process that actually blocks is the `cat` inside the
+# resolver's `$(cat)` command substitution, a grandchild of the probe, and
+# `kill -9 PID` reaches only the bash and orphans that `cat` to PID 1 forever,
+# one per hanging mutant per preflight run. Take the status from `wait`.
 #
 # THE FIVE DECISIONS PINNED HERE, each of which reads to a later sweep like
 # something to tidy:
@@ -517,15 +520,17 @@ fi
 # be killed. This row is therefore watchdogged: a regression must REDDEN, never
 # wedge the suite, so a child that has not exited within ~5s is killed and
 # scored as the failure it is.
-# The watchdog's PID MUST be the subject process itself, never a wrapper
-# subshell around it (issue #535). `( cmd; echo $? >rc ) &` makes `$!` the
-# SUBSHELL; `kill -9` on a hang kills only that wrapper and orphans the hung
-# `bash "$Q"` grandchild to PID 1 forever, one leaked resolver per hanging
-# mutant per preflight run, invisible because the row still reddened. So the
-# probe is backgrounded directly and its status comes from `wait`, which makes
-# `$!` the process the kill must reach.
+# The kill must reach the subject's WHOLE process tree, not just its PID (issue
+# #535). Two earlier shapes leaked: `( cmd; echo $? >rc ) &` made `$!` the
+# wrapper subshell, so the kill orphaned the resolver; and backgrounding the
+# probe directly still left the `cat` of M35's `$(cat)` grandchild blocked on
+# its own pipe. `set -m` makes the background job a process-group leader, and
+# the HUNG path kills the group, grandchildren included. Status comes from
+# `wait`.
+set -m
 PATH="$BIN:$PATH" bash "$Q" --sites-of <&- >"$WORK/closed.out" 2>/dev/null &
 closed_pid=$!
+set +m
 closed_rc="HUNG"
 # Polled FINELY, not in half-seconds: this loop runs in every child, and the
 # mutation matrix multiplies it by every mutant, a 0.5s first sleep cost the
@@ -537,7 +542,7 @@ while [ "$closed_wait" -lt 100 ]; do
     closed_wait=$((closed_wait + 1))
 done
 if [ "$closed_rc" = "HUNG" ]; then
-    kill -9 "$closed_pid" 2>/dev/null
+    kill -9 -- "-$closed_pid" 2>/dev/null
     wait "$closed_pid" 2>/dev/null
 fi
 if [ "$closed_rc" = "64" ] && [ ! -s "$WORK/closed.out" ]; then
