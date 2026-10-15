@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-pod · version 6
+# TEMPLATE: lockfile-sync-pod · version 7
 # Rendered by sassy-dog:setup-deps for repos where
 # detect-ecosystems.sh reports cocoapods with lockfile_risk (a tracked Podfile).
 #
@@ -6,15 +6,31 @@
 # itself be TRACKED (`git ls-files` lists it). A tracked Podfile is not enough.
 # In a repo that gitignores the lock (tailoredtip: release builds regenerate it
 # every run, so it is a build artifact there, not a committed version pin)
-# there is nothing to sync, and the rendered workflow hard-fails instead of
-# no-op'ing: `flutter pub get` still changes the tracked pubspec.lock, so the
-# changed-lockfiles guard falls through to `git add` on an explicitly-ignored
-# path — exit 1 under bash -e, a red job holding the fleet's single macOS
-# runner on every pub PR (tailoredtip#252). Gitignored Podfile.lock → do NOT
+# there is nothing to sync: the patch below is `git diff HEAD`, which never
+# sees an untracked file, so the workflow would regenerate a Podfile.lock it
+# can never push and spend about ten times Linux's minutes doing it on every
+# pub PR (the pre-version-7 shape hard-failed instead, on `git add` of an
+# explicitly-ignored path: tailoredtip#252). Gitignored Podfile.lock → do NOT
 # render; record why the pod workflow was skipped.
 #
-#   {{RUNNER}}           → runs-on; MUST be macOS (pod install). Default:
-#                          [self-hosted, macOS, sassy-dog]
+#   runs-on is NOT a fact (version 7): job 1 is hard-coded to macos-latest (the
+#   only job that needs macOS) and job 2 to ubuntu-latest, see "Security
+#   posture" below. There is no {{RUNNER}} and a render never writes a
+#   self-hosted label. CocoaPods itself comes from the macOS image and is
+#   UNPINNED: the image's version moves with image updates, and the repo's own
+#   Podfile.lock does not pin the tool that writes it. Flutter, by contrast, is
+#   installed from the repo's pin ({{FLUTTER_VERSION}}).
+#   Version history: 7 moved the work to GitHub-hosted runners (#529, part of
+#   #515; the decision, recorded on #515 on 2026-10-14, accepts about ten times
+#   the Linux minutes because the workflow runs only on Dependabot pub PRs).
+#   It is two jobs, not the single late-mint job #529 first described, so that
+#   `flutter pub get` and `pod install` (which evaluates the Podfile and
+#   podspec Ruby, arbitrary code) never share a VM with the token: the rule
+#   lockfile-sync-bun v12 and deps-cadence v3 set. The package-manager job
+#   uploads a patch of exactly two files; a second job on ubuntu-latest
+#   validates it and only then mints and pushes, with the push leased to the
+#   head SHA the event carried. It also stops pushing `git add -- '*.lock'`,
+#   which staged any lockfile the pub step happened to rewrite.
 #   {{APP_DIR}}          → Flutter app directory relative to the repo root, no
 #                          leading ./ and no trailing / (tailoredtip: app ·
 #                          velovate: apps/mobile · root-level app: .).
@@ -30,7 +46,7 @@
 #   {{FLUTTER_VERSION}}  → keep in lockstep with the release workflow
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 6
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 7
 #
 # Refresh pubspec.lock + Podfile.lock on Dependabot pub PRs — the macOS twin of
 # dependabot-bun-lockfile.yml.
@@ -41,21 +57,55 @@
 # only by regenerating the lockfiles out of band, which is what this does.
 #
 # Same posture as the bun twin, for the same reasons:
-#   - pull_request_target for write context; job HARD-GATED to dependabot[bot],
-#     so contributor PR code never reaches a write-capable context.
+#   - pull_request_target for write context; both jobs HARD-GATED to
+#     dependabot[bot], so contributor PR code never reaches a write-capable
+#     context.
 #   - Push with a minted App token, not GITHUB_TOKEN: the push must re-trigger
 #     CI and must not trip the bot-actor approval gate.
 #   - Clean regeneration rather than chasing per-pod constraint prompts.
 #   - PR head ref/repo via env:, never inlined into a run: shell.
-#   - The App token never reaches .git/config: checkout sets
-#     persist-credentials: false and passes no token: at all, and only the push
-#     step carries the credential, inline from its own env: (issue #232).
 #
-# Security note: `pod install` evaluates podspec Ruby from the resolved pod set.
-# These are the same podspecs the release iOS build already executes on this
-# runner for any merged bump, so the dependabot[bot] gate keeps the risk delta
-# at zero — but do NOT widen the actor gate.
-
+# Security posture — do not weaken any of these:
+#   1. Ephemeral GitHub-hosted runners, hard-coded (version 7, #529, part of
+#      #515). The workflow runs Flutter and `pod install` on PR-authored
+#      manifests, and the org-wide platform-writer App token (contents and
+#      pull-request write on every installed repo) pushes the result. A
+#      persistent shared self-hosted runner can carry a PATH-shadowing git or
+#      pod, a global gitconfig with core.hooksPath, core.fsmonitor or a
+#      credential helper, or a modified tool cache, left by any earlier job in
+#      any repo. A GitHub-hosted VM starts clean and is destroyed after the job.
+#      macOS is needed for exactly one job (CocoaPods); the job that holds the
+#      token runs on ubuntu-latest.
+#   2. The package managers and the token never share a VM. `pod install`
+#      evaluates the Podfile and podspec Ruby, and `flutter pub get` runs
+#      package hooks; a process either starts can outlive its step and read a
+#      later-minted token from /proc/*/environ, $RUNNER_TEMP or step files. So
+#      update-pod-lock runs both with no secret at all and uploads one
+#      artifact, a patch of exactly two files. push-pod-lock runs no package
+#      manager: it checks out, downloads the patch, validates it BEFORE the
+#      mint (git's own --summary and --numstat: no create, delete, rename or
+#      mode change, no binary hunk, every path one of the two lockfiles and
+#      none twice, each a tracked regular file), applies it with hooks off, and
+#      only then runs the presence step, the mint and the push.
+#   3. The App token's lifetime on disk is bounded to the push step: checkout
+#      sets persist-credentials: false and passes no token: at all, and the
+#      push authenticates inline from its own env: (issue #232).
+#   4. The push never puts the token in a URL or in argv. It goes through a
+#      one-shot credential helper that reads GH_TOKEN from the environment (the
+#      empty helper first clears any other), with system and global git config
+#      ignored and every git call passing -c core.hooksPath=/dev/null
+#      -c core.fsmonitor=false, since a hook or fsmonitor program would inherit
+#      the push step's environment.
+#   5. Both jobs check out the PR's head SHA, and the push is leased to it
+#      (--force-with-lease on the head ref at that SHA): a branch that moved
+#      between the jobs, or was deleted (a plain push would recreate it), fails
+#      closed instead of being overwritten or resurrected.
+#   6. No actions/cache, and no `cache:` on the Flutter action (it saves through
+#      actions/cache). Under pull_request_target a save lands in the default-
+#      branch cache scope, built from an install of the PR head's manifests, so
+#      a poisoned one could seed a cache the base branch's own workflows
+#      restore. Every run is a cold install.
+#
 name: Dependabot pod lockfile sync
 
 on:
@@ -64,19 +114,182 @@ on:
       - '{{APP_DIR}}/pubspec.yaml'
 
 permissions:
-  contents: write
+  contents: read
 
-env:
-  FLUTTER_VERSION: '{{FLUTTER_VERSION}}'
+# One run per PR at a time; a second push to the same Dependabot branch queues
+# behind the run that is pushing the lockfiles rather than racing it. Both jobs
+# check out the head SHA the event carried, and the push is leased to it.
+concurrency:
+  group: dependabot-pod-lock-sync-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 jobs:
+  # JOB 1 — runs Flutter and CocoaPods, holds NO secret. Its only output is a
+  # patch of the two lockfiles, uploaded as an artifact. The PR-authored
+  # manifests, the Podfile and the package managers live and die on this VM;
+  # the App token never exists here. The only job that needs macOS.
   update-pod-lock:
     if: ${{ github.actor == 'dependabot[bot]' }}
-    runs-on: {{RUNNER}}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.patch.outputs.changed }}
     env:
+      FLUTTER_VERSION: '{{FLUTTER_VERSION}}'
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      # Git reads no system or global config in any step: nothing left on the
+      # VM can inject a hook path, fsmonitor program or credential helper.
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
+    steps:
+      # No token: and persist-credentials: false. actions/checkout defaults
+      # persist-credentials to true, which writes whatever token it was given
+      # into .git/config for the rest of the job — in a workspace that holds
+      # PR-authored content, and one where `pod install` evaluates podspec Ruby.
+      # Dependabot pushes its head branch to the BASE repo rather than a fork,
+      # so the default read-only GITHUB_TOKEN reads this ref fine.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          repository: ${{ env.PR_HEAD_REPO }}
+          persist-credentials: false
+
+      # Flutter from the repo's own pin, never the image's. No `cache:` input:
+      # the action saves through actions/cache (see the posture above).
+      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      # Regenerate pubspec.lock first: `pod install` resolves against the
+      # Flutter plugin set, so a stale pubspec.lock yields a stale Podfile.lock.
+      - name: Regenerate pubspec.lock
+        # {{IF:NESTED_APP}}
+        working-directory: '{{APP_DIR}}'
+        # {{ENDIF}}
+        run: flutter pub get
+
+      # Full clean regeneration. A partial `pod update <name>` chases per-pod
+      # constraint prompts and can leave the lock internally inconsistent.
+      - name: Regenerate Podfile.lock
+        working-directory: '{{APP_DIR}}/ios'
+        run: |
+          rm -f Podfile.lock
+          pod install --repo-update
+
+      # The ONLY thing that leaves this job: the two lockfiles, as the
+      # difference from the PR head the checkout holds. The pathspecs name those
+      # two files; --no-renames, --no-ext-diff and --no-textconv keep the patch
+      # a plain one. The next job re-checks every line of it anyway.
+      - name: Package the lockfile changes as a patch
+        id: patch
+        run: |
+          set -euo pipefail
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          out="$RUNNER_TEMP/pod-lock-out"
+          mkdir -p "$out"
+          git "${nohooks[@]}" diff HEAD --binary --no-renames --no-ext-diff --no-textconv -- '{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock' > "$out/pod-lock.patch"
+          if [ ! -s "$out/pod-lock.patch" ]; then
+            echo "::notice::pubspec.lock and Podfile.lock unchanged after regeneration — nothing to commit."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ steps.patch.outputs.changed == 'true' }}
+        with:
+          name: pod-lock-patch
+          path: ${{ runner.temp }}/pod-lock-out/
+          retention-days: 1
+          if-no-files-found: error
+
+  # JOB 2 — a FRESH ubuntu VM that runs no package manager. The patch from job 1
+  # is untrusted: it is checked against the two paths this workflow owns and
+  # applied with hooks off BEFORE the App token exists.
+  push-pod-lock:
+    needs: update-pod-lock
+    if: ${{ github.actor == 'dependabot[bot]' && needs.update-pod-lock.outputs.changed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      GIT_CONFIG_NOSYSTEM: "1"
+      GIT_CONFIG_GLOBAL: /dev/null
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          repository: ${{ env.PR_HEAD_REPO }}
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: pod-lock-patch
+          path: ${{ runner.temp }}/pod-lock-in
+
+      # Every rule here is about the patch, not about who made it. It may touch
+      # a non-empty subset of exactly two paths, each at most once: the app's
+      # pubspec.lock and its ios/Podfile.lock (at the repo root the
+      # '{{APP_DIR}}/' prefix collapses to plain pubspec.lock and
+      # ios/Podfile.lock). Git itself reports what the patch would do.
+      - name: Validate and apply the lockfile patch
+        run: |
+          set -euo pipefail
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          patch="$RUNNER_TEMP/pod-lock-in/pod-lock.patch"
+          allowed=('{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock')
+          reject() { echo "::error::Rejected the lockfile patch: $1"; exit 1; }
+          [ -s "$patch" ] || reject "the artifact holds no patch"
+
+          # git's own reading of the patch: any create, delete, rename, copy
+          # or mode change shows up in --summary.
+          summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
+          [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
+          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
+          seen=$'\n'
+          while IFS=$'\t' read -r added removed path; do
+            [ "$added" != "-" ] || reject "$path is a binary change; the lockfiles are text"
+            # git prints "0 0 path" for a patch it parses but that changes no
+            # line (headers only); it never prints an empty numstat for one.
+            [ "$added$removed" != "00" ] || reject "it changes nothing"
+            listed=0
+            for a in "${allowed[@]}"; do
+              if [ "$path" = "$a" ]; then listed=1; fi
+            done
+            [ "$listed" -eq 1 ] || reject "$path is not an allowed lockfile path (${allowed[*]})"
+            case "$seen" in
+              *$'\n'"$path"$'\n'*) reject "$path appears more than once in the patch" ;;
+            esac
+            seen+="$path"$'\n'
+            mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
+            [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
+              || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
+          done <<<"$numstat"
+
+          git "${nohooks[@]}" apply --index -- "$patch"
+          # Belt and braces: what is staged, and only that, is the set of paths
+          # the validated patch named.
+          staged="$(git "${nohooks[@]}" diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' "$numstat" | cut -f3 | sort)"
+          [ "$staged" = "$expected" ] || reject "after applying, something other than the patched lockfiles is staged"
+          # Captured first so a failing `git status` aborts under set -e; a
+          # `$(git status | grep)` would read the failure as a clean tree.
+          tree="$(git "${nohooks[@]}" status --porcelain --untracked-files=all)"
+          if [ -n "$(grep -v '^M  ' <<<"$tree" || true)" ]; then
+            reject "after applying, the tree holds changes outside the index"
+          fi
+
+      # Minted only now: after the patch is validated and applied, on a VM that
+      # never ran a package manager. The presence step stays immediately before
+      # the mint (it names the cause of an empty secret instead of an opaque
+      # auth error).
       # A secret this repo cannot reach resolves to the EMPTY STRING, never an
       # error, so the mint below fails as an opaque auth error that reads as
       # unrelated to its cause (issue #178). Name the cause here.
@@ -108,54 +321,34 @@ jobs:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
 
-      # No token: here, and persist-credentials: false. actions/checkout
-      # defaults persist-credentials to true, which writes whatever token it
-      # was given into .git/config for the rest of the job — in a workspace
-      # that holds PR-authored content, and one where `pod install` then
-      # evaluates podspec Ruby. The App token is needed only by the push, so it
-      # is passed only there (issue #232). Dependabot pushes its head branch to
-      # the BASE repo rather than a fork, so the default GITHUB_TOKEN reads
-      # this ref fine; dropping token: costs nothing.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ env.PR_HEAD_REF }}
-          repository: ${{ env.PR_HEAD_REPO }}
-          persist-credentials: false
-          fetch-depth: 0
-
-      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-
-      # Regenerate pubspec.lock first: `pod install` resolves against the
-      # Flutter plugin set, so a stale pubspec.lock yields a stale Podfile.lock.
-      - name: Regenerate pubspec.lock
-        # {{IF:NESTED_APP}}
-        working-directory: '{{APP_DIR}}'
-        # {{ENDIF}}
-        run: flutter pub get
-
-      # Full clean regeneration. A partial `pod update <name>` chases per-pod
-      # constraint prompts and can leave the lock internally inconsistent.
-      - name: Regenerate Podfile.lock
-        working-directory: '{{APP_DIR}}/ios'
-        run: |
-          rm -f Podfile.lock
-          pod install --repo-update
-
       # The only step that needs repository write, and the only one holding
-      # the credential. Pushing to an explicit authenticated URL rather than
-      # to `origin` is what lets the checkout above stay credential-free.
-      - name: Commit and push lockfiles if changed
+      # the credential. Pushing to an explicit URL rather than to `origin` is
+      # what lets the checkout above stay credential-free. The validated patch
+      # is already in the index; nothing else is.
+      - name: Commit and push the lockfiles
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
         run: |
-          if git diff --quiet -- '*.lock' 'Podfile.lock' '{{APP_DIR}}/ios/Podfile.lock'; then
-            echo "lockfiles unchanged after regeneration — nothing to commit."
-            exit 0
+          set -euo pipefail
+          # Every git call passes nohooks: a hook or fsmonitor program would
+          # inherit GH_TOKEN from this step's environment. System and global
+          # config are already off (job env).
+          nohooks=(-c core.hooksPath=/dev/null -c core.fsmonitor=false)
+          if git "${nohooks[@]}" diff --cached --quiet; then
+            echo "::error::The validated patch left nothing staged."
+            exit 1
           fi
           git config user.name "dependabot[bot]"
           git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
-          git add -- '*.lock' '{{APP_DIR}}/ios/Podfile.lock'
-          git commit -m "chore(deps): regenerate pubspec.lock + Podfile.lock for Dependabot pub bump"
-          git push "https://x-access-token:${GH_TOKEN}@github.com/${PR_HEAD_REPO}.git" "HEAD:${PR_HEAD_REF}"
+          git "${nohooks[@]}" commit -m "chore(deps): regenerate pubspec.lock + Podfile.lock for Dependabot pub bump"
+          # The token is never in argv or a URL: the single-quoted helper is
+          # expanded by the shell git spawns, which reads GH_TOKEN from the
+          # environment at run time. The empty helper first clears any other.
+          # The push is leased to the head SHA both jobs checked out: if the
+          # branch moved or was deleted since, it fails closed instead of
+          # overwriting the new tip or recreating the branch.
+          # shellcheck disable=SC2016  # deliberately unexpanded: git's shell expands it
+          git "${nohooks[@]}" -c credential.helper= \
+            -c 'credential.helper=!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push --force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}" \
+            "https://github.com/${PR_HEAD_REPO}.git" "HEAD:refs/heads/${PR_HEAD_REF}"

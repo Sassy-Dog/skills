@@ -92,8 +92,8 @@ VARIANTS=(
     "auto-merge-direct|dependabot-auto-merge.template.yml|DIRECT_MERGE|"
     "bun-nested|lockfile-sync-bun.template.yml|NESTED_PKG,BUN_PIN_FILE|PKG_DIR=web;BUN_VERSION_FILE=.bun-version"
     "bun-root|lockfile-sync-bun.template.yml|BUN_PIN_LITERAL|PKG_DIR=.;BUN_VERSION=1.3.5"
-    "pod-nested|lockfile-sync-pod.template.yml|NESTED_APP|RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=app;FLUTTER_VERSION=3.35.1"
-    "pod-root|lockfile-sync-pod.template.yml||RUNNER=[self-hosted, macOS, sassy-dog];APP_DIR=.;FLUTTER_VERSION=3.35.1"
+    "pod-nested|lockfile-sync-pod.template.yml|NESTED_APP|APP_DIR=app;FLUTTER_VERSION=3.35.1"
+    "pod-root|lockfile-sync-pod.template.yml||APP_DIR=.;FLUTTER_VERSION=3.35.1"
     # The deps-cadence pair renders into ONE variant directory per shape, so
     # actionlint resolves the trigger's local `uses: ./…impl.yml` against the
     # impl it is rendered beside. Two shapes put every toolchain arm ON once.
@@ -388,15 +388,30 @@ fi
 # off. A config file declaring the label keeps every other unknown label fatal.
 if [ "$HAVE_AL" -eq 1 ]; then
     mkdir -p "$WORK/mut-label/.github/workflows"
-    # The pod lockfile template, not bun or auto-merge: those hard-code
-    # ubuntu-latest and take no runner fact (#527, #528); pod still does until
-    # #529, and this mutation moves again if that lands.
+    # No template takes a runner fact any more (auto-merge #527, bun #528, pod
+    # #529: every runs-on is hard-coded), so this tests .github/actionlint.yaml's
+    # tolerance, not a template: render the pod template, then INJECT a
+    # runs-on carrying an unknown label beside the declared one's custom shape.
     render "$TEMPLATE_DIR/lockfile-sync-pod.template.yml" "" \
-        "RUNNER=[self-hosted, macOS, not-a-real-label];APP_DIR=.;FLUTTER_VERSION=3.35.1" > "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml"
-    if lint "mut-label/.github/workflows/lockfile-sync-pod.yml" >/dev/null 2>&1; then
+        "APP_DIR=.;FLUTTER_VERSION=3.35.1" > "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml"
+    sed -i.bak 's/^    runs-on: macos-latest$/    runs-on: [self-hosted, macOS, not-a-real-label]/' "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml"
+    rm -f "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml.bak"
+    if ! grep -qF 'runs-on: [self-hosted, macOS, not-a-real-label]' "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml"; then
+        bad "mutation (runner-label) — the injected runs-on is not in the render, so the mutation proves nothing (template reworded?)"
+    elif label_out="$(lint "mut-label/.github/workflows/lockfile-sync-pod.yml")"; then
         bad "mutation (runner-label) — an unknown label other than sassy-dog PASSED; the tolerance mutes the whole rule"
+    elif ! grep -qF 'not-a-real-label' <<<"$label_out"; then
+        bad "mutation (runner-label) — it failed, but not on the unknown label: $(head -1 <<<"$label_out")"
     else
-        ok "mutation (runner-label) — the tolerance is scoped to the sassy-dog label"
+        # The control: the same injection with the DECLARED label must lint
+        # clean, or the failure above could be any runs-on shape at all.
+        sed 's/not-a-real-label/sassy-dog/' "$WORK/mut-label/.github/workflows/lockfile-sync-pod.yml" \
+            > "$WORK/mut-label/.github/workflows/lockfile-sync-pod-control.yml"
+        if lint "mut-label/.github/workflows/lockfile-sync-pod-control.yml" >/dev/null 2>&1; then
+            ok "mutation (runner-label) — the tolerance is scoped to the sassy-dog label"
+        else
+            bad "mutation (runner-label) — the declared sassy-dog label no longer lints clean in the same injection, so the unknown-label failure proves nothing"
+        fi
     fi
 fi
 

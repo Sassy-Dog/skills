@@ -1593,24 +1593,28 @@
 #      the bun.lockb-only boundary, refusals, idempotence and the owned-file
 #      render path. Three mutation checks in its header. No network.
 #  60. lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh) — the
-#      lockfile-sync-bun template (issue #528, part of #515; #529 extends it to
-#      pod) runs two jobs on a hard-coded ubuntu-latest (no {{RUNNER}}, no
-#      self-hosted, actor gate on both): a token-free one with contents: read
-#      that takes bun from SHA-pinned setup-bun (no actions/cache anywhere) and
-#      uploads a patch, and a second that runs no package manager, validates the
-#      patch before the mint (presence step immediately before it) and pushes,
-#      to exactly the PR's head repo and branch, through an env-reading
-#      credential helper with the token bound once and never in a URL or argv;
-#      both jobs check out the head SHA under a per-PR concurrency group, and
-#      global and system git config are ignored and hooks and fsmonitor off on
-#      every git call (including inside $(...)). The validator is EXECUTED from
-#      the extracted step in scratch git repos, for a root and a nested install
-#      root, against crafted patch artifacts (binary hunk, rename, mode change,
-#      create, delete, two files, another root's lock, a symlinked lock, a
-#      no-op, garbage, empty, missing, a pre-staged file, a stray untracked
-#      file, a failing git status), each asserted by exit 1 and its own reason,
-#      with a mutant per enforcing construct that neuters it and keeps its
-#      message. No network.
+#      lockfile-sync-bun (issue #528, part of #515) and lockfile-sync-pod (#529)
+#      templates each run two jobs on hard-coded runners (no {{RUNNER}}, no
+#      self-hosted, actor gate on both): ubuntu-latest for both of bun's, and
+#      for pod macos-latest on the token-free job only. The token-free one has
+#      contents: read, runs the package managers (bun from SHA-pinned setup-bun;
+#      flutter pub get and pod install, Flutter from SHA-pinned flutter-action;
+#      no actions/cache anywhere) and uploads a patch, and a second on
+#      ubuntu-latest runs no package manager, validates the patch before the mint
+#      (presence step immediately before it) and pushes, to exactly the PR's head
+#      repo and branch with the push leased to the head SHA, through an
+#      env-reading credential helper with the token bound once and never in a URL
+#      or argv; both jobs check out the head SHA under a per-PR concurrency
+#      group, and global and system git config are ignored and hooks and
+#      fsmonitor off on every git call (including inside $(...)). The validator
+#      is EXECUTED from the extracted step in scratch git repos, for a root and a
+#      nested install root or app, against crafted patch artifacts (binary hunk,
+#      rename, mode change, create, delete, two or three files, another root's
+#      lock, a symlinked lock, a no-op, garbage, empty, missing, a pre-staged
+#      file, a stray untracked file, a failing git status; pod also a clean one-
+#      or two-lockfile patch and a repeated path), each asserted by exit 1 and
+#      its own reason, with a mutant per enforcing construct that neuters it and
+#      keeps its message. No network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
