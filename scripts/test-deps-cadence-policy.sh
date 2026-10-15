@@ -136,7 +136,16 @@
 #      exit 1 with JSON, npm's error envelope, a half-failed multi-directory
 #      lookup, a nested lane's manifest, bun peer and optional rows, and a pub
 #      entry with no current version, each with a mutation (the half-failed
-#      case also kills the existing break-to-continue one). The routines
+#      case also kills the existing break-to-continue one). Version 7 (#539)
+#      adds the gaps the first review found: empty npm output is `Could not
+#      evaluate (npm outdated produced no output)` (npm prints `{}` itself when
+#      nothing is outdated, so a `{}` default read a missing npm as current), a
+#      crate with several versions in Cargo.lock is compared at the version a
+#      workspace member's own dependency edge names (`resolve.nodes[].deps`) and
+#      is `Could not evaluate` when that is not exactly one version, and the
+#      three branches that had no fixture (a name pattern, a crate not in
+#      Cargo.lock, an unreadable `ignore:` file, skipped as root) each have a
+#      fixture and a mutant. The routines
 #      parity file needs the new heading `### Bare ignore: holds`.
 #
 # 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
@@ -1119,6 +1128,99 @@ EOF
         grep -qF '`http`: Could not evaluate (pub reports no installed version of http in app)' "$d.tmp/deps-cadence/pins.md" \
             || { echo "a pub entry with no current version was not 'Could not evaluate': $(grep -F http "$d.tmp/deps-cadence/pins.md")"; rc=1; }
     fi
+    # Empty npm output is not "nothing outdated": npm prints {} itself for that.
+    seed_npm npmnone "$fx/npm-one.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="npm:/apps/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_OUTDATED="$fx/empty.txt" 2>&1)"; then
+        echo "empty npm output killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`react`: Could not evaluate (npm outdated produced no output)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "empty npm output was not 'Could not evaluate (npm outdated produced no output)': $(grep -F react "$d.tmp/deps-cadence/pins.md")"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$d.tmp/deps-cadence/pins.md" || { echo "empty npm output was read as current"; rc=1; }
+    fi
+    # A name pattern is not a package: no lookup, "Could not evaluate".
+    cat > "$fx/pattern.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: bun
+    directory: /web
+    ignore:
+      - dependency-name: "@types/*"
+EOF
+    seed pattern "$fx/pattern.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web" GITHUB_STEP_SUMMARY="$d.summary" 2>&1)"; then
+        echo "a name-pattern hold killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`@types/*`: Could not evaluate (a name pattern, not a package)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a name-pattern hold was not 'Could not evaluate (a name pattern, not a package)': $(tail -n3 "$d.tmp/deps-cadence/pins.md")"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$d.tmp/deps-cadence/pins.md" || { echo "a name-pattern hold was read as current"; rc=1; }
+    fi
+    # A crate Cargo.lock does not hold is not current.
+    cat > "$fx/ghost-crate.yml" <<'EOF'
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    ignore:
+      - dependency-name: ghostcrate
+EOF
+    seed ghostcrate "$fx/ghost-crate.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$fx/meta.json" FAKE_CARGO_SEARCH="$fx/search.txt" 2>&1)"; then
+        echo "a crate missing from Cargo.lock killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qF '`ghostcrate`: Could not evaluate (not in Cargo.lock)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "a crate missing from Cargo.lock was not 'Could not evaluate (not in Cargo.lock)'"; rc=1; }
+        ! grep -q 'No bare ignore: hold is behind' "$d.tmp/deps-cadence/pins.md" || { echo "a crate missing from Cargo.lock was read as current"; rc=1; }
+    fi
+    # Two versions of one crate: the held DIRECT dependency decides; an ambiguous name is not compared.
+    cat > "$fx/dup-meta.json" <<'EOF'
+{"packages":[
+  {"id":"app 0.1.0","name":"app","version":"0.1.0"},
+  {"id":"serde 1.0.100","name":"serde","version":"1.0.100"},
+  {"id":"serde 0.9.0","name":"serde","version":"0.9.0"},
+  {"id":"dep 1.0.0","name":"dep","version":"1.0.0"}],
+ "workspace_members":["app 0.1.0"],
+ "resolve":{"nodes":[
+  {"id":"app 0.1.0","deps":[{"name":"serde","pkg":"serde 1.0.100"},{"name":"dep","pkg":"dep 1.0.0"}]},
+  {"id":"dep 1.0.0","deps":[{"name":"serde","pkg":"serde 0.9.0"}]},
+  {"id":"serde 1.0.100","deps":[]},{"id":"serde 0.9.0","deps":[]}]}}
+EOF
+    # The transitive copy is listed FIRST, so a first-match lookup compares the wrong one.
+    jq '.packages |= (map(select(.name=="serde")) | sort_by(.version)) + map(select(.name!="serde"))' "$fx/dup-meta.json" > "$fx/dup-meta-rev.json"
+    jq '.resolve.nodes[0].deps += [{"name":"serde","pkg":"serde 0.9.0"}]' "$fx/dup-meta-rev.json" > "$fx/dup-meta-ambiguous.json"
+    jq '.resolve.nodes[0].deps |= map(select(.name != "serde"))' "$fx/dup-meta-rev.json" > "$fx/dup-meta-transitive.json"
+    seed dupcrate "$fx/current.yml"
+    if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_CARGO_METADATA="$fx/dup-meta-rev.json" FAKE_CARGO_SEARCH="$fx/search-current.txt" 2>&1)"; then
+        echo "a duplicate crate killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+    elif ! grep -qF 'No bare ignore: hold is behind its latest release among the 1 evaluated.' "$d.tmp/deps-cadence/pins.md"; then
+        echo "a duplicate crate was compared with the wrong copy, not the workspace member's 1.0.100: $(tail -n3 "$d.tmp/deps-cadence/pins.md")"; rc=1
+    fi
+    for v in ambiguous transitive; do
+        seed "dup$v" "$fx/current.yml"
+        if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="cargo:/" GITHUB_STEP_SUMMARY="$d.summary" \
+                FAKE_CARGO_METADATA="$fx/dup-meta-$v.json" FAKE_CARGO_SEARCH="$fx/search-current.txt" 2>&1)"; then
+            echo "an ambiguous duplicate crate ($v) killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+        else
+            grep -qF '`serde`: Could not evaluate (several versions of serde in Cargo.lock' "$d.tmp/deps-cadence/pins.md" \
+                || { echo "an ambiguous duplicate crate ($v) was not 'Could not evaluate (several versions ...)'"; rc=1; }
+            ! grep -q 'No bare ignore: hold is behind' "$d.tmp/deps-cadence/pins.md" || { echo "an ambiguous duplicate crate ($v) was read as current"; rc=1; }
+        fi
+    done
+    # An ignore: file that cannot be read is "Could not evaluate" (root reads anything, so skip there).
+    if [ "$(id -u)" -ne 0 ]; then
+        seed unreadable "$fx/dependabot.yml"
+        chmod 000 "$d/.github/dependabot.yml"
+        if ! out="$(cd "$d" && gh_shell "$step" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" GITHUB_STEP_SUMMARY="$d.summary" 2>&1)"; then
+            echo "an unreadable dependabot.yml killed the holds step: $(tail -n1 <<<"$out")"; rc=1
+        else
+            grep -qF '`.github/dependabot.yml`: Could not evaluate (its ignore: rules could not be read)' "$d.tmp/deps-cadence/pins.md" \
+                || { echo "an unreadable dependabot.yml was not 'Could not evaluate (its ignore: rules could not be read)'"; rc=1; }
+            ! grep -q 'No bare ignore: hold' "$d.tmp/deps-cadence/pins.md" || { echo "an unreadable dependabot.yml was read as no holds: $(tail -n3 "$d.tmp/deps-cadence/pins.md")"; rc=1; }
+        fi
+        chmod 644 "$d/.github/dependabot.yml"
+    fi
     # Like the other two reports, it never waits on a change.
     out="$(step_block "$impl" "$HOLDS_STEP" | sed -n 's/^        if: //p')"
     [ -z "$out" ] || { echo "the holds report's condition is '$out'; it must run whether or not anything moved"; rc=1; }
@@ -1324,6 +1426,12 @@ mutate "pub entry with no current read as current" impl '| select(.latest.versio
 mutate "npm error envelope read as current" impl 'if jq -e '\''type == "object" and (.error | type == "object" and (has("code") or has("summary")) and (has("latest") | not))'\'' <<<"$out" >/dev/null 2>&1; then' 'if false; then'
 mutate "bun peer/optional suffix kept" impl 'sub(/ \((dev|peer|optional)\)$/, "", $2)' 'sub(/ \(dev\)$/, "", $2)'
 mutate "unparseable pub read as current" impl 'echo "flutter pub outdated output not recognised" > "$cache/$key.err"' 'true'
+mutate "empty npm output read as current" impl $'echo "npm outdated produced no output" > "$cache/$key.err"; return 0' $'out=\'{}\''
+mutate "name pattern looked up as a package" impl $'Could not evaluate (a name pattern, not a package)"$\'\\n\'; continue' $'x"$\'\\n\'; continue'
+mutate "crate missing from Cargo.lock read as current" impl $'Could not evaluate (not in Cargo.lock)"$\'\\n\'; continue' $'x"$\'\\n\'; checked=$((checked + 1)); continue'
+mutate "duplicate crate compared with its first copy" impl '"$cache/$key.direct" | sort -u)"' '"$cache/$key.meta" | sort -u | head -n1)"'
+mutate "ambiguous duplicate crate compared anyway" impl '-ne 1 ]; then' '-lt 0 ]; then'
+mutate "unreadable ignore: file read as no holds" impl $'holds=""; unevaluated+="- \\`.github/dependabot.yml\\`: Could not evaluate (its ignore: rules could not be read)"$\'\\n\'' 'holds=""'
 mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
 mutate "holds report skips the summary" impl '          cat "$section" >> "$report"
           cat "$section" >> "$GITHUB_STEP_SUMMARY"
