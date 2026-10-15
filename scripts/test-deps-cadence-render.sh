@@ -573,6 +573,26 @@ cg_named "web/*.yaml" cgpods web/pnpm-lock.yaml
 cg_named "web/*.npmrc" cgpods web/.npmrc
 cg_named "web/*.yaml" cgrb web/pnpm-workspace.yaml
 cg_named "ios/*.lock" cgrb ios/Gemfile.lock
+# #538: package-manager config and lockfile names added after #526.
+tree cgmisc <<EOF
+apps/mobile/pubspec.yaml	name: app\\nenvironment:\\n  sdk: ^3.5.0
+apps/mobile/pubspec.lock	lock
+apps/mobile/.fvmrc	{"flutter": "3.44.1"}
+ios/Runner/Generated/a.g.dart	// generated
+web/.yarnrc.yml	rc
+web/bunfig.toml	rc
+web/.pnpmfile.cjs	hook
+web/npm-shrinkwrap.json	lock
+ios/Package.resolved	lock
+svc/go.sum	lock
+.github/workflows/ci.yml	name: ci
+EOF
+cg_named "web/*.yml" cgmisc web/.yarnrc.yml
+cg_named "web/*.toml" cgmisc web/bunfig.toml
+cg_named "web/*.cjs" cgmisc web/.pnpmfile.cjs
+cg_named "web/*.json" cgmisc web/npm-shrinkwrap.json
+cg_named "ios/*.resolved" cgmisc ios/Package.resolved
+cg_named "svc/*.sum" cgmisc svc/go.sum
 cg_refused "a glob that reaches a manifest" "pubspec.yaml, a workflow" --codegen-command x --codegen-toolchain flutter --codegen-globs "apps/**/*.yaml"
 cg_refused "a glob that reaches a workflow" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs ".github/workflows/*.yml"
 cg_refused "a glob that starts with a wildcard" "must begin with a literal directory" --codegen-command x --codegen-toolchain flutter --codegen-globs "**/*.dart"

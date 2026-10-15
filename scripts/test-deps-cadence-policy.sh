@@ -1791,13 +1791,14 @@ cg_exec() { # <codegen template> — 0 when every executed rule holds
     R="$CGW/v-empty"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
     mkdir -p "$R.rt/codegen-in"; : > "$R.rt/codegen-in/codegen.patch"
     cgv "$R" reject "an empty artifact" "the artifact holds no patch"
-    # Every file-name alternative of the deny list (#526), each asserted by its
+    # Every file-name alternative of the deny list (#526, #538), each asserted by its
     # rejection reason under a widened glob, so dropping any one alternative
     # turns its case into an ACCEPT. The `^\.git(hub)?/` alternative is covered
     # by the workflow edit above (.github/); a tracked path under .git/ cannot
     # exist, so that half has no patch to build.
     for name in package.json bun.lock bun.lockb package-lock.json pubspec.yaml pubspec.lock Cargo.toml Cargo.lock \
-        Podfile Podfile.lock yarn.lock pnpm-lock.yaml pnpm-workspace.yaml .npmrc Gemfile Gemfile.lock; do
+        Podfile Podfile.lock yarn.lock pnpm-lock.yaml pnpm-workspace.yaml .npmrc Gemfile Gemfile.lock \
+        .yarnrc.yml bunfig.toml .pnpmfile.cjs npm-shrinkwrap.json Package.resolved go.sum; do
         R="$CGW/v-deny"; rm -rf "$R" "$R.rt"; cg_make_repo "$R"
         printf 'a: 1\n' > "$R/apps/mobile/$name"; git -C "$R" add -A; git -C "$R" commit -qm "track $name"
         echo "b: 2" >> "$R/apps/mobile/$name"; cg_snap "$R"
@@ -2039,7 +2040,7 @@ for cg_i in "${!cg_alts[@]}"; do
     cg_rest=""; for cg_j in "${!cg_alts[@]}"; do [ "$cg_j" = "$cg_i" ] || cg_rest+="${cg_rest:+|}${cg_alts[$cg_j]}"; done
     cgmutate "deny list loses ${cg_alts[$cg_i]}" exec "(^|/)($cg_deny_alts)\$" "(^|/)($cg_rest)\$"
 done
-[ "${#cg_alts[@]}" -ge 15 ] || bad "the deny list parsed to ${#cg_alts[@]} file-name alternatives, expected at least 15"
+[ "${#cg_alts[@]}" -ge 21 ] || bad "the deny list parsed to ${#cg_alts[@]} file-name alternatives, expected at least 21"
 cgmutate "deny list check removed" exec 'if [[ "$path" =~ $denied ]]; then reject "$path is a workflow, manifest or lockfile"; fi' 'true'
 cgmutate "summary (create/delete/rename/mode) check removed" exec '[ -z "$summary" ] || reject' 'true || reject'
 cgmutate "binary check removed" exec '[ "$added" != "-" ] || reject "$path is a binary change; generated files are text"' 'true'
