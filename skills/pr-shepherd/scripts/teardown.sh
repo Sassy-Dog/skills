@@ -10,8 +10,8 @@
 #                                                        #   whose upstream is [gone], or that is detached
 #                                                        #   with its HEAD on another ref (either way
 #                                                        #   clean, idle, unlocked), PLUS
-#                                                        #   orphan isolation branches whose
-#                                                        #   worktree is already gone, PLUS
+#                                                        #   isolation branches no present
+#                                                        #   worktree has checked out, PLUS
 #                                                        #   ordinary [gone] local branches
 #                                                        #   (upstream deleted — guarded, below)
 #   teardown.sh <worktree_path> ... --sweep              # BOTH, one call: the named paths are torn
@@ -45,8 +45,9 @@
 # on a worktree-agent-<id> branch. The PR merges from the agent's FEATURE branch,
 # so the isolation branch never gets an upstream — never [gone], and once the
 # worktree directory is torn down there is no path to sweep either; one orphan
-# accumulates per merge. So: removing a worktree here ALSO deletes its isolation
-# branch (prevention), and --sweep classifies leftover orphans (worktree gone) by
+# accumulates per merge. So: explicit-path removal ALSO deletes its isolation
+# branch (prevention; --sweep removals do not, #557), and --sweep classifies every
+# isolation branch no present worktree has checked out by
 # default-branch ancestry OR a PR containing the tip that MERGED INTO THE DEFAULT BRANCH (squash-merge
 # false-negative safe); genuinely unmerged ones are surfaced, never auto-deleted.
 # Isolation branches whose worktree is still present are not swept by inference
@@ -85,7 +86,8 @@
 # is detached). Fail-closed KEEPs (unknown is not verified): an unreadable HEAD,
 # status, git dir or worktree list, and a reachability query that returns nothing.
 # A detached worktree is also swept only if its HEAD is reachable from a branch, tag
-# or remote ref other than an isolation branch (removal deletes that one): commits
+# or remote ref other than an isolation branch (explicit removal deletes that one;
+# the sweep leaves it to the orphan phase, which may delete it once merged): commits
 # made on a detached HEAD lose their only anchor (and the per-worktree reflog)
 # when the worktree goes. Accepted, predating #546: a clean, unlocked [gone]
 # branch worktree holding local commits made after the merge is still swept (-D).
@@ -210,7 +212,8 @@ remove_worktree() {  # $1 = worktree path  $2 = "sweep" when the removal is swee
   # Sweep-driven removals NEVER delete the isolation branch (#557): the sweep's
   # evidence vets the worktree's HEAD, not that branch's own tip, which may hold
   # the only copy of unmerged commits. The orphan phase, right after the worktree
-  # loop in the same call, judges it by ancestry or a MERGED PR. Explicit-path
+  # loop in the same call, judges it by ancestry or a PR merged into the default
+  # branch. Explicit-path
   # teardown (no $2) keeps deleting it: the caller named the path as debris.
   local path="$1" br iso from_sweep=0
   [ "${2:-}" = "sweep" ] && from_sweep=1
