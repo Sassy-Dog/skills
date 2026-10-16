@@ -47,7 +47,7 @@
 # worktree directory is torn down there is no path to sweep either; one orphan
 # accumulates per merge. So: removing a worktree here ALSO deletes its isolation
 # branch (prevention), and --sweep classifies leftover orphans (worktree gone) by
-# default-branch ancestry OR a MERGED PR containing the tip (squash-merge
+# default-branch ancestry OR a PR containing the tip that MERGED INTO THE DEFAULT BRANCH (squash-merge
 # false-negative safe); genuinely unmerged ones are surfaced, never auto-deleted.
 # Isolation branches whose worktree is still present are not swept by inference
 # ("no upstream" is their normal state, not a merged signal), but a branch is
@@ -150,9 +150,9 @@ worktree_op_in_progress() {  # $1 = worktree path — true if a rebase/merge/che
 }
 
 detached_head_reachable() {  # $1 = worktree path — true if a branch, tag or remote ref OTHER than an isolation branch contains its HEAD
-  # Isolation branches (refs/heads/$ISO_PREFIX*) never count: removing the worktree
-  # deletes its own isolation branch (remove_worktree -> delete_isolation_branch),
-  # so that ref cannot vouch for commits it is about to lose. Their lifecycle
+  # Isolation branches (refs/heads/$ISO_PREFIX*) never count: explicit removal
+  # deletes the worktree's own isolation branch and the sweep leaves it to the
+  # orphan phase, so either way that ref must not vouch for HEAD. Their lifecycle
   # belongs to the orphan phase. A failed query prints nothing, and empty output
   # is "not reachable" below: that is the only fail-closed signal here.
   local refs r
@@ -374,7 +374,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
     fi
     merged_pr=""
     [ -n "$REPO_SLUG" ] && merged_pr="$(gh api "repos/$REPO_SLUG/commits/$tip/pulls" \
-      --jq '[.[] | select(.merged_at != null)][0].number // empty' 2>/dev/null || true)"
+      --jq "[.[] | select(.merged_at != null and .base.ref == \"$BRANCH\")][0].number // empty" 2>/dev/null || true)"
     if [ -n "$merged_pr" ]; then
       git branch -D "$br" >/dev/null 2>&1 && echo "  deleted $br (shipped via merged PR #$merged_pr)"
     else
