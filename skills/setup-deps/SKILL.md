@@ -844,12 +844,12 @@ release among the N evaluated.`, or `No bare ignore: hold in .github/dependabot.
 none), the same way the exact-pin sections do, and the unevaluated ones follow as a list.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `7`, and the optional
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `8`, and the optional
 `deps-cadence-codegen.yml` is `3`). Impl history: impl version 1 ran on the fleet and minted the token first;
 impl version 2 ran the package managers and the token in one job; impl version 3 split the token from the
 package managers; impl version 4 adds the pub and cargo exact-pin section; impl version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
+lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; impl version 8 lists empty `npm outdated --json` output in the bun and npm exact-pin section's existing `Could not evaluate` list instead of reading it as nothing behind. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
 to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`. The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
