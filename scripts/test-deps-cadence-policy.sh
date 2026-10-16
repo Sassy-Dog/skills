@@ -1405,6 +1405,7 @@ else
 fi
 OLDLIB="$WORK/lib-old-rule.sh"
 perl -0pe 's/if \(open && ind\(\$0\) <= dash\) \{ fin\(\); open = 0 \}\n(\s+)if \(\$0 ~ \/\^\[\[:space:\]\]\*- \/ && !open\)/if (kind != "" && ind(\$0) <= dash) fin()\n$1if (\$0 ~ \/^[[:space:]]*- \/ && (!open || ind(\$0) <= dash))/' "$ROOT/scripts/lib-builtin-cache.sh" > "$OLDLIB"
+# shellcheck source=/dev/null
 if cmp -s "$OLDLIB" "$ROOT/scripts/lib-builtin-cache.sh"; then
     bad "mutation (previous boundary rule restored) changed nothing, so it proves nothing"
 elif (. "$OLDLIB"; builtin_cache_violations "$SHALLOW" >/dev/null); then
