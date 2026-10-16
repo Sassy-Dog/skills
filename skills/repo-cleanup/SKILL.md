@@ -280,7 +280,7 @@ a PR, then returns here.
 
 The agent-worktree teardown, squash-merge-aware local-branch deletion, ff-reconcile, and
 origin-identical straggler clearing are exactly what `pr-shepherd`'s bundled `teardown.sh --sweep`
-does (it encodes the same "remote branch gone = merged" rule). Reuse it rather than re-implementing:
+does (it encodes the same "upstream deleted (`[gone]`) = merged" rule). Reuse it rather than re-implementing:
 
 ```bash
 DEFAULT_BRANCH="$DEFAULT_BRANCH" \
@@ -291,7 +291,9 @@ DEFAULT_BRANCH="$DEFAULT_BRANCH" \
 feature branch had an upstream that is now `[gone]` **and** whose tree is clean **and** that is not
 locked (positive evidence of a merge, #546). It KEEPS and reports, never infers: a branch with no
 upstream (never pushed: a live worker's normal state), a worktree with uncommitted or untracked
-files, and a locked worktree; pass such a path to `teardown.sh` explicitly to force it. The sweep
+files (even where `status.showUntrackedFiles=no`), one mid rebase, merge, cherry-pick or bisect,
+a locked worktree (a lock is held only while its agent is alive), and one whose HEAD cannot be
+read; a detached worktree gets the same guards; pass such a path to `teardown.sh` explicitly to force it. The sweep
 deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
 isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
 genuinely unmerged ones are surfaced, never auto-deleted — and live ones, worktree still present,
@@ -414,5 +416,5 @@ got missed — re-run from step 2.
 - **Issue state alone is not the "work shipped" signal — `closedByPullRequestsReferences` is.** CLOSED + merged PR → shipped (auto-drop). CLOSED + empty PR refs → hand-closed as abandoned (ask if non-trivial).
 - **Dep/version/migration-file stashes only need confirmation when the issue was hand-closed** (no merged closer PR). A merged successor PR means the work shipped — auto-drop is correct.
 - **Never delete the default branch (local or remote).**
-- **Don't disable `delete_branch_on_merge`.** If lingering merged-PR branches appear on the remote, the setting may have been toggled off — re-enable it; the "remote branch gone = merged" logic depends on it.
+- **Don't disable `delete_branch_on_merge`.** If lingering merged-PR branches appear on the remote, the setting may have been toggled off — re-enable it; the "upstream deleted (`[gone]`) = merged" logic depends on it.
 - **Don't run inside a worktree you're about to remove** — `cd` to the repo root first.

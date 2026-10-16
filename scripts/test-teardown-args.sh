@@ -51,12 +51,20 @@
 #      change; untracked file; locked) while a clean, unlocked one whose branch
 #      was pushed and then deleted on the remote IS still swept, and an explicit
 #      path still removes the locked and the dirty one (the override is for
-#      explicit paths only). One mutant per guard (evidence, clean tree,
-#      unlocked) removes the live worktree and so reddens the survival
-#      assertion. "No upstream" and "upstream not [gone]" are one evidence
-#      guard here: an unpushed branch trips both, so the mutant neuters them
-#      together. Every mkscratch worktree is a SHIPPED one (pushed, then deleted
-#      on origin), because properties 1-2 need the sweep to reclaim it.
+#      explicit paths only). A detached worktree gets the SAME guards: a
+#      mid-rebase one (detached, and live) survives whether it is locked or
+#      clean-and-unlocked, a truly detached clean one is swept, and a git error
+#      reading HEAD is a KEEP rather than "detached". Each guard has its own
+#      mutant that removes a live worktree and so reddens the survival
+#      assertion: evidence (the no-upstream check, which also neuters the track
+#      check since an unpushed branch trips both), track-only (agent-open),
+#      readable status, untracked-files=all (agent-untracked, with
+#      status.showUntrackedFiles=no in the fixture), operation in progress,
+#      locked, readable HEAD, readable worktree list, and the unguarded
+#      detached removal. The three fail-closed branches are exercised with a
+#      PATH-shimmed `git` that fails only that call. Every mkscratch worktree is
+#      a SHIPPED one (pushed, then deleted on origin), because properties 1-2
+#      need the sweep to reclaim it.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -201,7 +209,7 @@ snapshot() { # <repo_dir>
 }
 
 H_EXPLICIT='== explicit teardown of'
-H_SWEEP1='== sweep: agent worktrees whose remote branch is gone'
+H_SWEEP1='== sweep: agent worktrees whose upstream was deleted'
 H_SWEEP2='== sweep: orphan worktree-agent-* isolation branches'
 H_SWEEP3='== sweep: ordinary [gone] local branches'
 H_RECONCILE='== reconcile main =='
@@ -501,7 +509,54 @@ mkguards() { # <name> -> repo with one worktree per case; echoes the repo dir
     git -C "$d" worktree add -q -b worktree-agent-open "$wt" main
     git -C "$wt" switch -q -c feat/open
     git -C "$wt" push -q -u origin feat/open
+    # A repo that hides untracked files from `git status` must not hide a
+    # finished worker's never-added files from the sweep.
+    git -C "$d" config status.showUntrackedFiles no
+    # Detached worktrees. rb-clean / rb-locked are PAUSED MID-REBASE (HEAD is
+    # detached, tree clean): a live worker. plain-detached is truly detached,
+    # clean, unlocked, finished: the one detached case that IS swept.
+    for id in rb-clean rb-locked; do
+        wt="$d/.claude/worktrees/agent-$id"
+        git -C "$d" worktree add -q -b "worktree-agent-$id" "$wt" main
+        git -C "$wt" switch -q -c "feat/$id"
+        echo one >"$wt/one.txt"; git -C "$wt" add one.txt; git -C "$wt" commit -qm one
+        echo two >"$wt/two.txt"; git -C "$wt" add two.txt; git -C "$wt" commit -qm two
+        GIT_SEQUENCE_EDITOR="sed -i.bak s/^pick/edit/" git -C "$wt" rebase -q -i main >/dev/null 2>&1
+    done
+    git -C "$d" worktree lock --reason "agent running" "$d/.claude/worktrees/agent-rb-locked"
+    git -C "$d" worktree add -q --detach "$d/.claude/worktrees/agent-plain-detached" main
     echo "$d"
+}
+# A repo with one clean, unlocked, shipped worktree: the only thing a fail-closed
+# branch stands between the sweep and.
+mkshipped() { # <name> -> repo dir
+    local d wt
+    d="$(mkscratch "$1" 0)"
+    wt="$d/.claude/worktrees/agent-s"
+    git -C "$d" worktree add -q -b worktree-agent-s "$wt" main
+    git -C "$wt" switch -q -c feat/s
+    git -C "$wt" push -q -u origin feat/s
+    git -C "$d" push -q origin --delete feat/s
+    echo "$d"
+}
+# A git that fails (exit 128) exactly one kind of call: calls whose argv contains
+# FAIL_PAT, on the FAIL_NTH-th match only (0 = every match). Everything else is
+# the real git.
+SHIM="$WORK/shim"; mkdir -p "$SHIM"
+REAL_GIT="$(command -v git)"
+cat >"$SHIM/git" <<SHIMEOF
+#!/usr/bin/env bash
+case "\$*" in
+    *"\$FAIL_PAT"*)
+        n=\$(( \$(cat "\$COUNT_FILE" 2>/dev/null || echo 0) + 1 )); echo \$n >"\$COUNT_FILE"
+        if [ "\${FAIL_NTH:-0}" = 0 ] || [ "\$n" = "\$FAIL_NTH" ]; then exit 128; fi ;;
+esac
+exec "$REAL_GIT" "\$@"
+SHIMEOF
+chmod +x "$SHIM/git"
+shim_sweep() { # <repo> <teardown.sh> <fail_pat> <nth> — OUT/STATUS as run_teardown
+    rm -f "$WORK/shim.count"
+    OUT="$(cd "$1" && PATH="$SHIM:$BIN:$PATH" FAIL_PAT="$3" FAIL_NTH="$4" COUNT_FILE="$WORK/shim.count" bash "$2" --sweep 2>&1)"; STATUS=$?
 }
 survives() { [ -d "$1/.claude/worktrees/agent-$2" ]; }  # <repo> <id>
 
@@ -514,6 +569,16 @@ expect_re "  untracked-file worktree kept, with the dirty reason" 'KEEP \(uncomm
 expect_re "  locked worktree kept, with the locked reason" 'KEEP \(worktree is locked.*agent-locked \[feat/locked\]'
 expect_re "  open-PR worktree kept (remote branch still exists)" 'KEEP \(remote branch still exists.*agent-open'
 expect_re "  clean, unlocked, [gone] worktree is still swept" 'gone/merged: .*/agent-merged \[feat/merged\]'
+# Detached and mid-rebase worktrees go through the same guards (the Blocking
+# finding on the first revision: the detached branch removed with -f -f before any
+# guard ran). Mid-rebase ones survive, the finished detached one is swept.
+expect_re "  mid-rebase clean unlocked worktree kept (operation in progress)" 'KEEP \(rebase, merge, cherry-pick or bisect in progress.*agent-rb-clean'
+expect_re "  mid-rebase locked worktree kept" 'KEEP \(.*agent-rb-locked'
+expect_re "  finished, clean, unlocked detached worktree is still swept" 'detached → removing: .*agent-plain-detached'
+for w in rb-clean rb-locked; do
+    if survives "$D" "$w"; then ok "  mid-rebase worktree agent-$w survived the sweep"; else bad "  mid-rebase worktree agent-$w was swept"; fi
+done
+if survives "$D" plain-detached; then bad "  the finished detached worktree is still on disk"; else ok "  the finished detached worktree is gone"; fi
 for w in unpushed dirtytracked untracked locked open; do
     if survives "$D" "$w"; then ok "  worktree agent-$w survived the sweep"; else bad "  worktree agent-$w was swept — a live worker lost its tree"; fi
 done
@@ -537,8 +602,36 @@ mutant_bites() { # <label> <sed_expr> <id_that_must_now_be_swept>
     else ok "  mutant '$1' sweeps agent-$3 (the gate bites)"; fi
 }
 mutant_bites evidence 's/^    if \[ -z "\$upstream" \]; then/    upstream=x; track="[gone]"; if [ -z "$upstream" ]; then/' unpushed
-mutant_bites clean-tree 's/^    if \[ -n "\$dirty" \]; then/    if false; then/' dirtytracked
-mutant_bites unlocked 's/^    if worktree_locked "\$path"; then/    if false; then/' locked
+mutant_bites track-only 's/^    if \[ "\$track" != "\[gone\]" \]; then/    if false; then/' open
+mutant_bites clean-tree 's/^  if \[ -n "\$dirty" \]; then/  if false; then/' dirtytracked
+mutant_bites untracked-all 's/--untracked-files=all/--untracked-files=no/' untracked
+mutant_bites in-progress 's/^  if worktree_op_in_progress "\$path"; then/  if false; then/' rb-clean
+mutant_bites unlocked 's/^  if worktree_locked "\$path"; then/  if false; then/' locked
+mutant_bites detached-unguarded 's/^      sweep_live_guard "\$path" "(detached)" || continue/      :/' rb-locked
+
+# Fail-closed branches, each exercised by a git that fails only that call and
+# each with its own mutant: unknown is a KEEP.
+shim_case() { # <label> <fail_pat> <nth> <keep_message> <mutant_sed_expr>
+    local d mut="$WORK/mut-$1"
+    d="$(mkshipped "shim-$1")"
+    shim_sweep "$d" "$TEARDOWN" "$2" "$3"
+    expect "  $1: a failed call is a KEEP, with its reason" "$4"
+    if survives "$d" s; then ok "  $1: the worktree survived"; else bad "  $1: the worktree was swept on an unreadable answer"; fi
+    mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+    sed -i.bak "$5" "$mut/teardown.sh"
+    if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  $1: mutant anchor drifted"; return; fi
+    d="$(mkshipped "shimmut-$1")"
+    shim_sweep "$d" "$mut/teardown.sh" "$2" "$3"
+    if survives "$d" s; then bad "  $1: mutant without the fail-closed branch still kept the worktree"; dump
+    else ok "  $1: mutant without the fail-closed branch sweeps it (the gate bites)"; fi
+}
+# A clean control: with nothing failing the shipped worktree IS swept.
+D="$(mkshipped shim-control)"
+shim_sweep "$D" "$TEARDOWN" "no-such-call" 0
+if survives "$D" s; then bad "  control: the shipped worktree survived with nothing failing"; dump; else ok "  control: the shipped worktree is swept when nothing fails"; fi
+shim_case status "status --porcelain" 0 "could not read the worktree status" 's/if ! dirty=/dirty=""; if false \&\& ! dirty=/'
+shim_case head "symbolic-ref -q HEAD" 0 "could not read the worktree HEAD" 's/^    if \[ "\$ref_rc" -ne 0 \] \&\& \[ "\$ref_rc" -ne 1 \]; then/    if false; then/'
+shim_case worktree-list "worktree list --porcelain" 2 "worktree is locked" 's/wts="\$(git worktree list --porcelain)" || return 0/wts="$(git worktree list --porcelain)"/'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

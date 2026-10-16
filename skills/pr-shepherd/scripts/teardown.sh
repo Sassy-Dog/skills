@@ -64,12 +64,16 @@
 # fails, deletion is SKIPPED rather than run unguarded (same stance as
 # merge-shepherd.sh's inconclusive stack probe: unknown means wait, not act).
 #
-# Worktrees are removed with `-f -f` because the Agent runtime leaves them locked.
-# That override applies to EXPLICIT paths only. --sweep never infers it (#546): a
-# feature-branch worktree is swept only if its upstream existed and is now [gone]
-# AND its tree is clean AND it is not locked; a branch with no upstream (never
-# pushed), a dirty tree or a lock is KEPT and reported, because a live worker that
-# switched branches but has not pushed looks exactly like a merged one otherwise.
+# Worktrees are removed with `-f -f`, which overrides a lock and a dirty tree. The
+# Agent runtime holds a worktree's lock only while the agent is alive, so a lock
+# means a live agent. The override applies to EXPLICIT paths only; --sweep never
+# infers it (#546): a feature-branch worktree is swept only if its upstream existed
+# and is now [gone] AND its tree is clean AND no rebase/merge/cherry-pick/bisect is
+# under way AND it is not locked; a branch with no upstream (never pushed), a dirty
+# tree, an operation in progress or a lock is KEPT and reported, because a live
+# worker that switched branches but has not pushed looks exactly like a merged one
+# otherwise. A detached worktree gets the same live-worker guards (a paused rebase
+# is detached), and a git error reading HEAD is a KEEP, not "detached".
 # Stashes are reported but NEVER auto-dropped (destructive — human's call).
 #
 # Checkout guard (#486): every mode below mutates the local checkout (worktree
@@ -114,6 +118,43 @@ worktree_locked() {  # $1 = worktree path — true if `git worktree list --porce
     /^worktree / { cur = substr($0, 10); next }
     /^locked/    { if (cur == p) found = 1 }
     END          { exit !found }' <<<"$wts"
+}
+
+worktree_op_in_progress() {  # $1 = worktree path — true if a rebase/merge/cherry-pick/revert/bisect is under way
+  # An unreadable git dir answers "in progress": unknown is not verified.
+  local gd
+  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+  [ -n "$gd" ] || return 0
+  local f
+  for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+    [ -e "$gd/$f" ] && return 0
+  done
+  return 1
+}
+
+# The shared "is a live worker in here" guards for --sweep: returns 0 only when
+# the worktree may be swept. Prints the KEEP line and returns 1 otherwise.
+sweep_live_guard() {  # $1 = path  $2 = label for the KEEP line
+  local path="$1" label="$2" dirty
+  # --untracked-files=all / --ignore-submodules=none: a repo's own
+  # status.showUntrackedFiles=no or diff.ignoreSubmodules must not hide work.
+  if ! dirty="$(git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none 2>/dev/null)"; then
+    echo "  KEEP (could not read the worktree status — unknown is not clean; pass its path explicitly if debris): $path $label"
+    return 1
+  fi
+  if [ -n "$dirty" ]; then
+    echo "  KEEP (uncommitted changes or untracked files — pass its path explicitly if debris): $path $label"
+    return 1
+  fi
+  if worktree_op_in_progress "$path"; then
+    echo "  KEEP (rebase, merge, cherry-pick or bisect in progress — a live worker; pass its path explicitly if debris): $path $label"
+    return 1
+  fi
+  if worktree_locked "$path"; then
+    echo "  KEEP (worktree is locked — a live agent holds it; pass its path explicitly if debris): $path $label"
+    return 1
+  fi
+  return 0
 }
 
 # Delete an isolation branch left behind by its worktree. No-op unless the name
@@ -216,12 +257,26 @@ if [ "${#PATHS[@]}" -gt 0 ]; then
 fi
 
 if [ "$SWEEP_MODE" = "1" ]; then
-  echo "== sweep: agent worktrees whose remote branch is gone (squash-merged + deleted) =="
+  echo "== sweep: agent worktrees whose upstream was deleted ([gone]; squash-merged + deleted) =="
   git fetch --prune --quiet origin 2>/dev/null || true
   while IFS= read -r path; do
     [ -z "$path" ] && continue
-    br="$(git -C "$path" branch --show-current 2>/dev/null || true)"
-    if [ -z "$br" ]; then echo "  detached → removing: $path"; remove_worktree "$path"; continue; fi
+    # symbolic-ref tells a real detached HEAD (exit 1) from a git error (anything
+    # else), which `branch --show-current || true` could not: both read as an
+    # empty name. An error is unknown, and unknown is KEPT, never swept (#546).
+    ref="$(git -C "$path" symbolic-ref -q HEAD 2>/dev/null)"; ref_rc=$?
+    if [ "$ref_rc" -ne 0 ] && [ "$ref_rc" -ne 1 ]; then
+      echo "  KEEP (could not read the worktree HEAD — unknown is not detached; pass its path explicitly if debris): $path"
+      continue
+    fi
+    br="${ref#refs/heads/}"
+    if [ -z "$br" ]; then
+      # Detached HEAD: no branch evidence to weigh, so only the live-worker guards
+      # apply (readable+clean tree, no rebase/merge/cherry-pick/bisect, unlocked).
+      # A paused rebase is detached too, and is exactly a live worker.
+      sweep_live_guard "$path" "(detached)" || continue
+      echo "  detached → removing: $path"; remove_worktree "$path"; continue
+    fi
     case "$br" in
       "$ISO_PREFIX"*)
         # Still checked out on its isolation branch: possibly a LIVE agent that has
@@ -246,18 +301,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
       echo "  KEEP (remote branch still exists, PR likely open): $path [$br]"
       continue
     fi
-    if ! dirty="$(git -C "$path" status --porcelain 2>/dev/null)"; then
-      echo "  KEEP (could not read the worktree status — unknown is not clean; pass its path explicitly if debris): $path [$br]"
-      continue
-    fi
-    if [ -n "$dirty" ]; then
-      echo "  KEEP (uncommitted changes or untracked files — pass its path explicitly if debris): $path [$br]"
-      continue
-    fi
-    if worktree_locked "$path"; then
-      echo "  KEEP (worktree is locked — a live agent holds it; pass its path explicitly if debris): $path [$br]"
-      continue
-    fi
+    sweep_live_guard "$path" "[$br]" || continue
     echo "  gone/merged: $path [$br]"; remove_worktree "$path"
   done < <(git worktree list --porcelain | awk '/^worktree /{print $2}' | grep "/.claude/worktrees/" || true)
 
