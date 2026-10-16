@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 8
+# TEMPLATE: deps-cadence-impl · version 9
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -68,7 +68,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 8
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 9
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -224,6 +224,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version-file: '{{BUN_VERSION_FILE}}'
+          no-cache: true
 
 # {{ENDIF}}
 # {{IF:BUN_PIN_LITERAL}}
@@ -231,19 +232,22 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: '{{BUN_VERSION}}'
+          no-cache: true
 
 # {{ENDIF}}
 # {{IF:NODE_PIN_FILE}}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '{{NODE_VERSION_FILE}}'
+          package-manager-cache: false
 
 # {{ENDIF}}
 # {{IF:NODE_PIN_LITERAL}}
       # CI pins node as a literal, so this copy of it moves only on a re-render.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '{{NODE_VERSION}}'
+          package-manager-cache: false
 
 # {{ENDIF}}
 # {{IF:FLUTTER}}

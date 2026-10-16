@@ -565,9 +565,12 @@ All of these paths are relative to the **repo root**, whatever `{{PKG_DIR}}` is:
 never read inside a nested install root. When CI sets both a file and a literal, names two different
 values, or pins a floating or inexact version (`latest`, `1.3.x`), or when **no pin source exists at
 all**, the agent stops and reports; it never renders a guess. The image's `bun` is never used. There
-is **no `actions/cache`**: the fleet's warm install cache went with the fleet, and a cache step under
-`pull_request_target` would save into the default-branch cache scope from an install of the PR head's
-lockfile (cache poisoning), so every run is a cold install. That departs from #515's "`actions/cache`
+is **no cache of any kind** (no `actions/cache`, and every setup action's built-in cache disabled):
+the fleet's warm install cache went with the fleet, and a cache save under
+`pull_request_target` would land in the default-branch cache scope from an install of the PR head's
+lockfile (cache poisoning), so every run is a cold install. `oven-sh/setup-bun` saves its own
+`bun-<hash>` entry after the job unless `no-cache: true` is set, so both of its steps (one per pin arm)
+set it (version 15, [#551](https://github.com/Sassy-Dog/skills/issues/551)). That departs from #515's "`actions/cache`
 keyed on `bun.lock`" decision on purpose; the workflow fires only on Dependabot PRs, where a cold
 install is acceptable.
 
@@ -799,7 +802,8 @@ as bun's (no create, delete, rename, copy or mode change, no binary hunk, every 
 file). It no longer pushes whatever `git add -- '*.lock'` staged. Both templates push with
 `--force-with-lease="refs/heads/${PR_HEAD_REF}:${PR_HEAD_SHA}"`, so a branch that moved or was
 deleted between the jobs fails closed instead of being overwritten or recreated. Neither template
-uses `actions/cache` (the Flutter action's `cache:` input saves through it, so pod sets none).
+caches anything: no `actions/cache`, bun's `setup-bun` steps set `no-cache: true`, and the Flutter action's
+`cache:` input (default false) saves through `actions/cache`, so pod sets none.
 `scripts/test-lockfile-sync-policy.sh` runs the same property set, mutants and executed validator
 against both, for a root, a nested and a non-ASCII, space-containing app.
 
@@ -844,13 +848,13 @@ release among the N evaluated.`, or `No bare ignore: hold in .github/dependabot.
 none), the same way the exact-pin sections do, and the unevaluated ones follow as a list.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `8`, and the optional
-`deps-cadence-codegen.yml` is `3`). Impl history: impl version 1 ran on the fleet and minted the token first;
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `9`, and the optional
+`deps-cadence-codegen.yml` is `4`). Impl history: impl version 1 ran on the fleet and minted the token first;
 impl version 2 ran the package managers and the token in one job; impl version 3 split the token from the
 package managers; impl version 4 adds the pub and cargo exact-pin section; impl version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; impl version 8 lists empty `npm outdated --json` output in the bun and npm exact-pin section's existing `Could not evaluate` list instead of reading it as nothing behind. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
-to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`. The ownership rules in §1 apply to each. Re-render owned files with
+lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; impl version 8 lists empty `npm outdated --json` output in the bun and npm exact-pin section's existing `Could not evaluate` list instead of reading it as nothing behind; impl version 9 disables the built-in cache of every `oven-sh/setup-bun` (`no-cache: true`) and `actions/setup-node` (`package-manager-cache: false`) step, so the refresh job on the default branch saves no cache entry that a self-hosted CI sharing the scope could restore ([#551](https://github.com/Sassy-Dog/skills/issues/551)); `subosito/flutter-action` (`cache:` defaults to false, none set) and `dtolnay/rust-toolchain` (no cache) were checked and need nothing. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
+to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`; codegen version 4 sets the same two cache-off inputs on its setup-bun and setup-node steps ([#551](https://github.com/Sassy-Dog/skills/issues/551)). The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several

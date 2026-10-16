@@ -34,7 +34,10 @@
 #      ubuntu-latest on job 2, which may name macOS nowhere. No `{{RUNNER}}`
 #      fact, no `self-hosted` anywhere outside a comment. A fact would let a
 #      consumer re-open the hole at render time.
-#   2. NO CACHE. No `actions/cache` anywhere. Under pull_request_target a save
+#   2. NO CACHE OF ANY KIND: no `actions/cache`, and every setup action's
+#      built-in cache disabled (#551): `no-cache: true` on every
+#      oven-sh/setup-bun step (it saves a `bun-<hash>` entry otherwise, and the
+#      bun template has two, one per pin arm). Under pull_request_target a save
 #      lands in the default-branch cache scope, built from an install of the PR
 #      head's lockfile: cache poisoning. This departs from #515's "actions/cache
 #      keyed on bun.lock" decision on purpose; every run is a cold install. For
@@ -199,6 +202,8 @@ export LC_ALL=C
 command -v perl >/dev/null 2>&1 || { echo "  FAIL perl is required for the mutations and is not on PATH"; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib-builtin-cache.sh
+. "$ROOT/scripts/lib-builtin-cache.sh"
 TPL_DIR="$ROOT/skills/setup-deps/references/templates"
 BUN_TEMPLATE="$TPL_DIR/lockfile-sync-bun.template.yml"
 WORK="$(mktemp -d)"
@@ -255,6 +260,7 @@ split_jobs() {
 }
 
 # check_git_hardened <job label> — property 10 over the loaded STEP_BODY.
+
 check_git_hardened() {
     local label="$1" rc=0 i body line uses_git
     # A git call starts at line start, after whitespace, or after ( " or a
@@ -311,7 +317,7 @@ check_checkout() {
 #   C_VALIDATE      the function that statically checks job 2's validate step
 check_common() {
     local f="$1" pm="$2" rc=0 d="$WORK/split" i line body nonc runs n
-    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up want j2nonc
+    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up want j2nonc out
     # A package manager at command position: line start (after run:), or after
     # && ; | or $( — not a word inside a quoted message.
     local pm2='(^[[:space:]]*(run:[[:space:]]+)?|&&[[:space:]]*|;[[:space:]]*|\|[[:space:]]*|\$\([[:space:]]*)(bun|bunx|npm|npx|yarn|pnpm|pod|bundle|gem|flutter|dart)([[:space:]]|$)'
@@ -346,6 +352,16 @@ check_common() {
     if grep -Eqi 'actions/cache|restore-keys|\.bun/install/cache' <<<"$nonc"; then
         echo "an actions/cache step (or a cache path) is present: a save under pull_request_target poisons the default-branch cache scope"; rc=1
     fi
+    # ...and no setup action's built-in cache either: setup-bun saves one unless
+    # `no-cache: true` (#551).
+    # C_SETUP_BUN is the exact setup-bun step count (check_bun sets 2); unset
+    # for pod, which has none.
+    out="$(builtin_cache_violations "$f" "${C_SETUP_BUN-}")" || {
+        while IFS= read -r line; do
+            echo "built-in cache not disabled ($line): a save under pull_request_target poisons the default-branch cache scope"
+        done <<<"$out"
+        rc=1
+    }
 
     # 3. actor gate, on both jobs
     for i in 1 2; do
@@ -967,6 +983,7 @@ check_bun() {
     C_J1=update-bun-lock; C_R1=ubuntu-latest; C_R2=ubuntu-latest
     C_PATHSPEC="-- '{{PKG_DIR}}/bun.lock'"; C_PATHSPEC_DESC="the one '{{PKG_DIR}}/bun.lock' pathspec"
     C_VALIDATE=static_validate_bun
+    C_SETUP_BUN=2
     check_common "$f" 'bun install' || rc=1
     check_validator "$f" || rc=1
 
@@ -1053,6 +1070,11 @@ mutate_perl "self-hosted runs-on (token job only)" "hard-code runs-on" "s/(${J2}
 mutate "runner as a render fact" "{{RUNNER}} fact" 'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 
 # 2. no cache
+mutate_perl "setup-bun built-in cache left on (file arm)" "built-in cache not disabled" 's/(bun-version-file: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate_perl "setup-bun built-in cache left on (literal arm)" "built-in cache not disabled" 's/(bun-version: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate "setup-bun renamed (zero steps classified)" "expected 2 setup-bun steps" 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@'
+mutate_perl "setup-bun in the name-first form, cache left on" "built-in cache not disabled" 's/      - uses: (oven-sh\/setup-bun\@[^\n]*\n        with:\n          bun-version-file: [^\n]*\n)          no-cache: true\n/      - name: Set up bun\n        uses: $1/'
+mutate "setup-bun no-cache set false" "built-in cache not disabled" 'no-cache: true' 'no-cache: false'
 mutate_perl "actions/cache re-added" "actions/cache" 's/(      \# Restore the BASE branch.s bun\.lock)/      - uses: actions\/cache\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: ~\/.bun\/install\/cache\n          key: bun-\${{ runner.os }}-\${{ hashFiles(\x27{{PKG_DIR}}\/bun.lock\x27) }}\n\n$1/'
 mutate_perl "cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
 
