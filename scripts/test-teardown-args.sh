@@ -93,7 +93,9 @@
 #      constant program; a mutant that re-interpolates $BRANCH but keeps the
 #      shell comparison survives the branch assertion and is caught by that
 #      argument check alone. The "(already gone)" sweep guard in teardown.sh is
-#      unreachable from --sweep (see the comment there), so it has no fixture.
+#      unreachable for a directory already missing when the sweep reads it (see
+#      the comment there; a concurrent removal can still land there, so the guard
+#      is load-bearing and stays), so it has no fixture.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -143,7 +145,11 @@ case "${1:-}" in
     repo) echo "mock-org/mock-repo" ;;   # repo view --json nameWithOwner
     api)  # commits/<tip>/pulls -> no merged PR, unless MOCK_PULLS names a JSON file of PRs;
           # then the caller's own --jq filter runs over it (so the real filter is tested)
-          [ "${MOCK_GH_FAIL:-}" = "1" ] && exit 1   # gh api exits nonzero (rate limit, auth, network)
+          # Real gh on an HTTP error exits 1 and prints the UNFILTERED error JSON (--jq is not applied to error bodies).
+          if [ "${MOCK_GH_FAIL:-}" = "1" ]; then
+              echo '{"message":"No commit found for SHA: deadbeef","documentation_url":"https://docs.github.com/rest","status":"422"}'
+              exit 1
+          fi
           [ -f "${MOCK_PULLS:-}" ] || exit 0
           expr=""; prev=""
           for a in "$@"; do [ "$prev" = "--jq" ] && expr="$a"; prev="$a"; done
@@ -820,18 +826,22 @@ if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-head1 anchor dri
     sweep_with_pulls "$D" "$WORK/pulls-two.json" "$mut/teardown.sh"
     if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  mutant pr-head1 (first row only) keeps the branch (the gate bites)"
     else bad "  mutant pr-head1 still deleted the branch — the multi-row walk is not pinned"; dump; fi
+    expect_re "  ...via the orphan phase's KEEP line, not a crash" "KEEP worktree-agent-prtip.*no PR merged into main contains it"
+    refute "  ...and never claims a merged PR" "shipped via merged PR"
 fi
 # Degenerate gh answers all fail safe to KEEP.
 D="$(mkorphanpr pr-nullbase)"
 sweep_with_pulls "$D" "$WORK/pulls-nullbase.json" "$TEARDOWN"
 if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  a null base.ref is KEPT"; else bad "  a null base.ref deleted the branch"; dump; fi
+expect_re "  ...with the orphan phase's KEEP line" "KEEP worktree-agent-prtip.*no PR merged into main contains it"
 D="$(mkorphanpr pr-empty)"
 sweep_with_pulls "$D" "$WORK/pulls-empty.json" "$TEARDOWN"
 if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  an empty PR listing is KEPT"; else bad "  an empty PR listing deleted the branch"; dump; fi
+expect_re "  ...with the orphan phase's KEEP line" "KEEP worktree-agent-prtip.*no PR merged into main contains it"
 D="$(mkorphanpr pr-ghfail)"
 OUT="$(cd "$D" && MOCK_GH_FAIL=1 MOCK_PULLS="$WORK/pulls-main.json" PATH="$BIN:$PATH" bash "$TEARDOWN" --sweep 2>&1)"; STATUS=$?
 if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  gh api exiting nonzero is KEPT"; else bad "  gh api failing deleted the branch"; dump; fi
-expect "  ...with the KEEP line" "KEEP worktree-agent-prtip"
+expect_re "  ...with the KEEP line (error JSON on stdout is not a PR row)" "KEEP worktree-agent-prtip.*no PR merged into main contains it"
 
 # A hostile default-branch name must never reach the jq program (gh api --jq has no
 # --arg, and a double quote is a legal refname character): `x"or(true)or"` would
@@ -850,7 +860,7 @@ JQ_CONST='.[] | select(.merged_at != null) | "\(.number)\t\(.base.ref)"'
 hostile_jq_pinned() { # the --jq argument gh received must be the constant on every lookup
     [ -s "$WORK/jq.log" ] && [ "$(sort -u "$WORK/jq.log")" = "$JQ_CONST" ]
 }
-if hostile_jq_pinned; then ok "  ...and the --jq program gh received is the constant"; else bad "  the --jq program varied with the default-branch name: $(cat "$WORK/jq.log")"; fi
+if hostile_jq_pinned; then ok "  ...and the --jq program gh received is the constant"; else bad "  the logged --jq program differs from the constant: $(cat "$WORK/jq.log")"; fi
 mut="$WORK/mut-pr-interp"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
 OLD_JQ='      --jq "[.[] | select(.merged_at != null and .base.ref == \"$BRANCH\")][0].number // empty" 2>/dev/null || true)"'
 OLD_IF='      if [ -n "$pr_num" ]; then merged_pr="$pr_num"; break; fi'
