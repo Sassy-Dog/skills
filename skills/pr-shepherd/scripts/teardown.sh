@@ -49,8 +49,12 @@
 # branch (prevention), and --sweep classifies leftover orphans (worktree gone) by
 # default-branch ancestry OR a MERGED PR containing the tip (squash-merge
 # false-negative safe); genuinely unmerged ones are surfaced, never auto-deleted.
-# Isolation branches whose worktree is still present are LIVE agents — --sweep
-# never touches them ("no upstream" is their normal state, not a merged signal).
+# Isolation branches whose worktree is still present are not swept by inference
+# ("no upstream" is their normal state, not a merged signal), but a branch is
+# still JUDGED once its worktree has switched to a feature branch or detached: the
+# orphan phase tests only branch_in_live_worktree. Judged by ancestry or merged PR;
+# never deleted while unmerged. Sweep-driven worktree removals do not delete the
+# isolation branch themselves (#557) — the orphan phase does, on that evidence.
 #
 # Ordinary [gone] branches (issue #85): a plain feature branch — an ordinary
 # send-it flow — has no agent worktree and no isolation prefix, so neither sweep
@@ -202,8 +206,14 @@ delete_isolation_branch() {  # $1 = candidate branch name (may be empty / non-is
     || echo "    ⚠ could not delete isolation branch $br"
 }
 
-remove_worktree() {  # $1 = worktree path
-  local path="$1" br iso
+remove_worktree() {  # $1 = worktree path  $2 = "sweep" when the removal is sweep-driven
+  # Sweep-driven removals NEVER delete the isolation branch (#557): the sweep's
+  # evidence vets the worktree's HEAD, not that branch's own tip, which may hold
+  # the only copy of unmerged commits. The orphan phase, right after the worktree
+  # loop in the same call, judges it by ancestry or a MERGED PR. Explicit-path
+  # teardown (no $2) keeps deleting it: the caller named the path as debris.
+  local path="$1" br iso from_sweep=0
+  [ "${2:-}" = "sweep" ] && from_sweep=1
   # The isolation branch the runtime created this worktree on (worktree-<dirname>).
   # Derived from the PATH, not the checkout: if the agent switched to a feature
   # branch, `branch --show-current` no longer names it — yet it still exists and
@@ -211,7 +221,7 @@ remove_worktree() {  # $1 = worktree path
   iso="worktree-$(basename "$path")"
   if [ ! -d "$path" ]; then
     echo "  (already gone) $path"
-    delete_isolation_branch "$iso"
+    [ "$from_sweep" = "1" ] || delete_isolation_branch "$iso"
     return
   fi
   br="$(git -C "$path" branch --show-current 2>/dev/null || true)"
@@ -223,7 +233,11 @@ remove_worktree() {  # $1 = worktree path
   if [ -n "$br" ]; then
     git branch -D "$br" >/dev/null 2>&1 && echo "    deleted local branch $br" || true
   fi
-  if [ "$iso" != "$br" ]; then delete_isolation_branch "$iso"; fi
+  if [ "$from_sweep" = "1" ]; then
+    echo "    isolation branch $iso left to the orphan phase (sweep never deletes it unjudged)"
+  elif [ "$iso" != "$br" ]; then
+    delete_isolation_branch "$iso"
+  fi
 }
 
 RECONCILE_ONLY=0
@@ -311,7 +325,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
         echo "  KEEP (detached HEAD is not reachable from any branch, tag or remote ref — removing it would lose its commits; pass its path explicitly if debris): $path (detached)"
         continue
       fi
-      echo "  detached → removing: $path"; remove_worktree "$path"; continue
+      echo "  detached → removing: $path"; remove_worktree "$path" sweep; continue
     fi
     case "$br" in
       "$ISO_PREFIX"*)
@@ -339,7 +353,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
       continue
     fi
     sweep_live_guard "$path" "[$br]" || continue
-    echo "  gone/merged: $path [$br]"; remove_worktree "$path"
+    echo "  gone/merged: $path [$br]"; remove_worktree "$path" sweep
   done < <(git worktree list --porcelain | awk '/^worktree /{print $2}' | grep "/.claude/worktrees/" || true)
 
   echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (worktree gone — never [gone]) =="

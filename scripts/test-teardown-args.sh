@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Eight properties are asserted (7 was added by #486, 8 by #546):
+# Nine properties are asserted (7 was added by #486, 8 by #546, 9 by #557):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -72,6 +72,16 @@
 #      call. Every mkscratch worktree is
 #      a SHIPPED one (pushed, then deleted on origin), because properties 1-2
 #      need the sweep to reclaim it.
+#
+#   9. The sweep never deletes an isolation branch whose tip is unmerged (#557).
+#      The sweep's evidence vets a worktree's HEAD, never that branch's own tip,
+#      so sweep-driven removals leave the isolation branch to the orphan phase
+#      (ancestry or MERGED PR). Two shapes, each with one commit only the
+#      isolation branch holds: a clean detached worktree at main, and a [gone]
+#      feature-branch worktree. Both worktrees are swept, the branch survives and
+#      the orphan phase says KEEP as possibly unmerged; a merged isolation branch
+#      is still deleted, by the orphan phase; an explicit path still deletes it.
+#      A mutant restoring the in-sweep deletion must lose the commit.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -691,6 +701,53 @@ shim_case head "symbolic-ref -q HEAD" 0 "could not read the worktree HEAD" 's/^ 
 shim_case reachability "--contains HEAD" 0 "detached HEAD is not reachable" 's/^  return 1  # no other ref contains HEAD/  return 0  # no other ref contains HEAD/' mkdetached
 shim_case git-dir "rev-parse --absolute-git-dir" 0 "git operation" '/--absolute-git-dir/s/ || return 0//;/^  \[ -n "\$gd" \] || return 0/d'
 shim_case worktree-list "worktree list --porcelain" 2 "worktree is locked" 's/wts="\$(git worktree list --porcelain)" || return 0/wts="$(git worktree list --porcelain)"/'
+
+# --- 9. an unmerged isolation branch survives the sweep (#557) ------------------
+mkunmerged() { # <name> <detached|feature> -> repo whose agent-s worktree is swept, isolation branch one commit ahead
+    local d wt
+    d="$(mkscratch "$1" 0)"
+    wt="$d/.claude/worktrees/agent-s"
+    git -C "$d" worktree add -q -b worktree-agent-s "$wt" main
+    echo only-copy >"$wt/only-copy.txt"
+    git -C "$wt" add only-copy.txt
+    git -C "$wt" commit -qm "unmerged work only the isolation branch holds"
+    if [ "$2" = detached ]; then
+        git -C "$wt" checkout -q --detach main
+    else
+        git -C "$wt" switch -q -c feat/s main
+        git -C "$wt" push -q -u origin feat/s
+        git -C "$d" push -q origin --delete feat/s
+    fi
+    echo "$d"
+}
+for shape in detached feature; do
+    D="$(mkunmerged "unmerged-$shape" "$shape")"
+    TIP="$(git -C "$D" rev-parse worktree-agent-s)"
+    run_teardown "$D" --sweep
+    expect_status "$shape: sweep succeeds" 0
+    if survives "$D" s; then bad "  $shape: the worktree was not swept (fixture not exercising the sweep)"; else ok "  $shape: the worktree is swept"; fi
+    if [ "$(git -C "$D" rev-parse -q --verify refs/heads/worktree-agent-s 2>/dev/null)" = "$TIP" ]; then ok "  $shape: the isolation branch and its commit survived"; else bad "  $shape: the unmerged isolation branch was deleted"; dump; fi
+    expect_re "  $shape: the orphan phase KEPT it as unmerged" 'KEEP worktree-agent-s .*possibly unmerged'
+    refute "  $shape: no in-sweep deletion of it" "deleted isolation branch worktree-agent-s"
+done
+# A merged isolation branch is still reclaimed, by the orphan phase.
+D="$(mkscratch merged-iso 1)"
+run_teardown "$D" --sweep
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-a01; then bad "  merged isolation branch worktree-agent-a01 survived the sweep"; dump; else ok "  merged isolation branch is deleted (orphan phase)"; fi
+expect "  ...and says so from the orphan phase" "deleted worktree-agent-a01 (tip already in origin/main)"
+# Explicit-path teardown keeps deleting it (the caller named the path as debris).
+D="$(mkunmerged unmerged-explicit detached)"
+run_teardown "$D" .claude/worktrees/agent-s
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-s; then bad "  explicit teardown left the isolation branch"; else ok "  explicit teardown still deletes the isolation branch"; fi
+# Mutant: restore the in-sweep deletion; the commit must be lost.
+mut="$WORK/mut-sweep-iso-delete"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+sed -i.bak 's/^  if \[ "\$from_sweep" = "1" \]; then/  if false; then/' "$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant sweep-iso-delete anchor drifted"; else
+    D="$(mkunmerged mutrepo-iso detached)"
+    OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$mut/teardown.sh" --sweep 2>&1)"; STATUS=$?
+    if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-s; then bad "  mutant sweep-iso-delete still kept the branch — the skip is not what protects it"; dump
+    else ok "  mutant sweep-iso-delete loses the unmerged commit (the gate bites)"; fi
+fi
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

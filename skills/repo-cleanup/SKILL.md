@@ -298,10 +298,11 @@ mid any in-progress git operation (rebase, merge, cherry-pick, revert, bisect), 
 a detached HEAD no ref other than an isolation branch contains (its commits would be lost), and
 one whose HEAD, status, git dir or worktree list cannot be read;
 pass such a path to `teardown.sh` explicitly to force it. The sweep
-deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
-isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
-genuinely unmerged ones are surfaced, never auto-deleted — and live ones, worktree still present,
-are never touched), **and deletes ordinary `[gone]` local branches** — regular feature branches
+deletes their local branches but NOT their `worktree-agent-*` isolation branches (a swept worktree's
+HEAD is vetted, not that branch's own tip, which may hold the only copy of unmerged commits — #557),
+and judges every isolation branch in its orphan phase (ancestor-of-default OR merged-PR classification;
+judged by ancestry or merged PR; never deleted while unmerged — genuinely unmerged ones are surfaced,
+and only a branch checked out by a present worktree is skipped), **and deletes ordinary `[gone]` local branches** — regular feature branches
 with no checkout whose upstream was deleted on merge. That last phase used to be a hand-run
 follow-up here, and its grep was a known silent-under-deletion trap (step 1's `: gone]` rendering);
 now the script owns it, with the same guards the prose demands: never the default branch, never a

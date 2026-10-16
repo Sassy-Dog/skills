@@ -15,17 +15,18 @@ The reliable merged signal is **"upstream deleted (`[gone]`)"**: merges delete t
 The Agent runtime checks each agent worktree out on a `worktree-agent-<id>` **isolation branch**. The PR merges from the agent's *feature* branch, so the isolation branch never gets an upstream: after a per-merge teardown removes the worktree directory, the leftover branch is neither a `.claude/worktrees/` path to sweep nor `[gone]` — it just lingers, one per merge (a 35-issue drain left 36 of them). Two rules follow:
 
 - **Prevention** — per-merge teardown (`merge-shepherd.sh`'s teardown step, and `teardown.sh`'s explicit mode) deletes the isolation branch at the same time it removes the worktree. Never the PR's own head branch (`--delete-branch` / the `[gone]` sweep owns that); never a branch another live worktree has checked out.
-- **Sweep** — `teardown.sh --sweep` classifies leftover orphans (isolation-prefix branch, worktree gone): tip is an ancestor of the default branch OR a MERGED PR contains the tip (squash-merge false-negative safe, same gotcha as feature branches) → `-D`; neither → surfaced for a human, never auto-deleted. Isolation branches whose worktree is still present are **live agents** — `--sweep` never touches them, and never removes their worktrees by the "no remote" inference either ("no upstream" is an isolation branch's normal state, not a merged signal).
+- **Sweep** — `teardown.sh --sweep` classifies leftover orphans (isolation-prefix branch, worktree gone): tip is an ancestor of the default branch OR a MERGED PR contains the tip (squash-merge false-negative safe, same gotcha as feature branches) → `-D`; neither → surfaced for a human, never auto-deleted. `--sweep` never removes a worktree by the "no remote" inference ("no upstream" is an isolation branch's normal state, not a merged signal), and its own worktree removals do **not** delete the isolation branch (#557: the evidence vets the worktree's HEAD, not that branch's tip, which may hold the only copy of unmerged commits). That branch is left to this orphan phase in the same call: judged by ancestry or merged PR; never deleted while unmerged. Only a branch a present worktree has checked out is skipped. Explicit-path teardown still deletes it with the worktree.
 
 Prefix override: `ISOLATION_BRANCH_PREFIX` env (default `worktree-agent-`), honored by both scripts.
 
 ## Batch manifest
 
-As each sub-agent returns, record `{issue, pr, worktreePath, worktreeBranch}`. Teardown consumes the `worktreePath`s to clean up *exactly* this batch instead of guessing. Write it somewhere durable (e.g. `.git/<batch-name>.json`) so a crashed coordinator's worktrees stay reclaimable via `--sweep` later.
+As each sub-agent returns, record `{issue, pr, worktreePath, worktreeBranch}`. Teardown consumes the `worktreePath`s to clean up *exactly* this batch instead of guessing. Write it somewhere durable (e.g. `.git/<batch-name>.json`) so a crashed coordinator can re-run `teardown.sh <wt_path...>` with those explicit paths. `--sweep` is not a substitute: it reclaims only worktrees with positive evidence that they are finished, so a crashed batch's worktrees are mostly KEPT by it.
 
 ```bash
 bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" <wt_path_1> <wt_path_2> ...
-# with no manifest (crashed coordinator, older sessions):
+# no manifest (older sessions): housekeeping only, reclaims just worktrees proven finished
+# ([gone] upstream, or detached on a reachable commit; clean, idle, unlocked). Not crash recovery.
 bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" --sweep
 # this batch AND everything else stale, in one call — flags parse anywhere:
 bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" <wt_path_1> <wt_path_2> --sweep
