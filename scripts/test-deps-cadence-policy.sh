@@ -1391,6 +1391,27 @@ mutate "setup-node cache switched on" impl 'package-manager-cache: false' 'packa
 mutate "flutter cache switched on" impl $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n' $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n          cache: true\n' 'step sets a cache input'
 mutate "setup-bun no-cache set false" impl 'no-cache: true' 'no-cache: false' 'setup-bun step without'
 mutate "setup-bun no-cache replaced by a nested list item" impl $'          no-cache: true\n' $'          extra:\n            - x\n' 'setup-bun step without'
+# A list shallower than the steps (an indentless `paths:` list) must not leave
+# the later steps unopened: count-free flutter fixture, then the same fixture
+# against a copy of the lib with the previous boundary rule (must NOT be caught).
+SHALLOW="$WORK/shallow-list.yml"
+printf '%s\n' 'on:' '  pull_request:' '    paths:' "    - 'x'" 'jobs:' '  a:' '    steps:' \
+    '      - uses: oven-sh/setup-bun@abc' '        with:' '          no-cache: true' \
+    '      - uses: subosito/flutter-action@abc' '        with:' '          cache: true' > "$SHALLOW"
+if out="$(builtin_cache_violations "$SHALLOW")" || ! grep -qF 'flutter step sets a cache input' <<<"$out"; then
+    bad "shallow leading list hides a later flutter cache input"
+else
+    ok "shallow leading list does not hide a later step"
+fi
+OLDLIB="$WORK/lib-old-rule.sh"
+perl -0pe 's/if \(open && ind\(\$0\) <= dash\) \{ fin\(\); open = 0 \}\n(\s+)if \(\$0 ~ \/\^\[\[:space:\]\]\*- \/ && !open\)/if (kind != "" && ind(\$0) <= dash) fin()\n$1if (\$0 ~ \/^[[:space:]]*- \/ && (!open || ind(\$0) <= dash))/' "$ROOT/scripts/lib-builtin-cache.sh" > "$OLDLIB"
+if cmp -s "$OLDLIB" "$ROOT/scripts/lib-builtin-cache.sh"; then
+    bad "mutation (previous boundary rule restored) changed nothing, so it proves nothing"
+elif (. "$OLDLIB"; builtin_cache_violations "$SHALLOW" >/dev/null); then
+    ok "mutation (previous boundary rule restored) is killed by the shallow-list fixture"
+else
+    bad "mutation (previous boundary rule restored) PASSED the check — the fixture cannot catch it"
+fi
 mutate "setup-bun renamed (zero steps classified)" impl 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@' 'expected 2 setup-bun steps'
 mutate "setup-node renamed (zero steps classified)" impl 'uses: actions/setup-node@' 'uses: example/setup-node-renamed@' 'expected 2 setup-node steps'
 mutate "setup-bun in the name-first form, cache left on" impl $'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'      - name: Set up bun\n        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'setup-bun step without'
