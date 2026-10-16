@@ -786,12 +786,37 @@ sweep_with_pulls "$D" "$WORK/pulls-main.json" "$TEARDOWN"
 if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  a tip in a PR merged into the default branch survived"; dump; else ok "  a tip in a PR merged into the default branch is deleted"; fi
 expect "  ...as shipped via that merged PR" "shipped via merged PR #8"
 mut="$WORK/mut-pr-base"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
-sed -i.bak 's/ and \.base\.ref == \\"\$BRANCH\\"//' "$mut/teardown.sh"
+sed -i.bak 's/ \&\& \[ "\$pr_base" = "\$BRANCH" \]//' "$mut/teardown.sh"
 if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-base anchor drifted"; else
     D="$(mkorphanpr mutrepo-pr-base)"
     sweep_with_pulls "$D" "$WORK/pulls-stacked.json" "$mut/teardown.sh"
     if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  mutant pr-base still kept the branch — the base check is not what protects it"; dump
     else ok "  mutant pr-base deletes a tip merged only into a stacked base (the gate bites)"; fi
+fi
+
+# A hostile default-branch name must never reach the jq program (gh api --jq has no
+# --arg, and a double quote is a legal refname character): `x"or(true)or"` would
+# make an interpolated base check true for every merged PR. The base is compared
+# in shell as an exact string, so a PR merged into another base is still not enough.
+HOSTILE='x"or(true)or"'
+hostile_sweep() { # <repo> <teardown.sh> — OUT/STATUS, DEFAULT_BRANCH set to the hostile name
+    OUT="$(cd "$1" && DEFAULT_BRANCH="$HOSTILE" MOCK_PULLS="$WORK/pulls-stacked.json" PATH="$BIN:$PATH" bash "$2" --sweep 2>&1)"; STATUS=$?
+}
+D="$(mkorphanpr pr-hostile)"
+hostile_sweep "$D" "$TEARDOWN"
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  hostile default-branch name: a tip merged only into another base is KEPT"; else bad "  a hostile default-branch name made the base check true"; dump; fi
+mut="$WORK/mut-pr-interp"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+OLD_JQ='      --jq "[.[] | select(.merged_at != null and .base.ref == \"$BRANCH\")][0].number // empty" 2>/dev/null || true)"'
+OLD_IF='      if [ -n "$pr_num" ]; then merged_pr="$pr_num"; break; fi'
+OLD_JQ="$OLD_JQ" OLD_IF="$OLD_IF" awk '
+    /--jq .\.\[\] \| select\(\.merged_at != null\)/ { print ENVIRON["OLD_JQ"]; next }
+    /\[ "\$pr_base" = "\$BRANCH" \]/ { print ENVIRON["OLD_IF"]; next }
+    { print }' "$TEARDOWN" >"$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-interp anchor drifted"; else
+    D="$(mkorphanpr mutrepo-pr-interp)"
+    hostile_sweep "$D" "$mut/teardown.sh"
+    if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  mutant pr-interp still kept the branch — the shell comparison is not what protects it"; dump
+    else ok "  mutant pr-interp (interpolated base) deletes under a hostile name (the gate bites)"; fi
 fi
 
 # ------------------------------------------------------------------------------

@@ -52,7 +52,7 @@
 # Isolation branches whose worktree is still present are not swept by inference
 # ("no upstream" is their normal state, not a merged signal), but a branch is
 # still JUDGED once its worktree has switched to a feature branch or detached: the
-# orphan phase tests only branch_in_live_worktree. Judged by ancestry or merged PR;
+# orphan phase tests only branch_in_live_worktree. Judged by ancestry or a PR merged into the default branch;
 # never deleted while unmerged. Sweep-driven worktree removals do not delete the
 # isolation branch themselves (#557) — the orphan phase does, on that evidence.
 #
@@ -356,11 +356,13 @@ if [ "$SWEEP_MODE" = "1" ]; then
     echo "  gone/merged: $path [$br]"; remove_worktree "$path" sweep
   done < <(git worktree list --porcelain | awk '/^worktree /{print $2}' | grep "/.claude/worktrees/" || true)
 
-  echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (worktree gone — never [gone]) =="
+  echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (not checked out: worktree gone or switched away — never [gone]) =="
   # Left behind when a per-merge teardown removed the worktree but not the branch
-  # (pre-#26 flows, crashed runs). Ancestry alone is NOT enough: a squash-merge
-  # leaves the pre-squash tip dangling (same false negative as feature branches),
-  # so a non-ancestor tip is checked against MERGED PRs before deciding.
+  # (pre-#26 flows, crashed runs), or whose worktree is present but on another
+  # branch or detached. Ancestry alone is NOT enough: a squash-merge leaves the
+  # pre-squash tip dangling (same false negative as feature branches), so a
+  # non-ancestor tip is checked against PRs merged INTO $BRANCH (a PR merged into
+  # another base, e.g. a stacked PR, leaves the commits on that branch alone).
   REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
   while read -r br tip; do
     [ -z "$br" ] && continue
@@ -372,13 +374,21 @@ if [ "$SWEEP_MODE" = "1" ]; then
       git branch -D "$br" >/dev/null 2>&1 && echo "  deleted $br (tip already in origin/$BRANCH)"
       continue
     fi
+    # The jq program is a CONSTANT: `gh api --jq` has no --arg, and git accepts a
+    # double quote in a refname, so splicing $BRANCH into it would let a hostile
+    # default-branch name rewrite the filter. The base is compared here instead,
+    # as an exact string, so only a PR merged INTO the default branch counts.
     merged_pr=""
-    [ -n "$REPO_SLUG" ] && merged_pr="$(gh api "repos/$REPO_SLUG/commits/$tip/pulls" \
-      --jq "[.[] | select(.merged_at != null and .base.ref == \"$BRANCH\")][0].number // empty" 2>/dev/null || true)"
+    merged_list=""
+    [ -n "$REPO_SLUG" ] && merged_list="$(gh api "repos/$REPO_SLUG/commits/$tip/pulls" \
+      --jq '.[] | select(.merged_at != null) | "\(.number)\t\(.base.ref)"' 2>/dev/null || true)"
+    while IFS=$'\t' read -r pr_num pr_base; do
+      if [ -n "$pr_num" ] && [ "$pr_base" = "$BRANCH" ]; then merged_pr="$pr_num"; break; fi
+    done <<<"$merged_list"
     if [ -n "$merged_pr" ]; then
       git branch -D "$br" >/dev/null 2>&1 && echo "  deleted $br (shipped via merged PR #$merged_pr)"
     else
-      echo "  ⚠ KEEP $br — tip ${tip:0:7} not in origin/$BRANCH and no merged PR contains it; possibly unmerged work — review by hand"
+      echo "  ⚠ KEEP $br — tip ${tip:0:7} not in origin/$BRANCH and no PR merged into $BRANCH contains it; possibly unmerged work — review by hand"
     fi
   done < <(git for-each-ref --format='%(refname:short) %(objectname)' "refs/heads/${ISO_PREFIX}*" || true)
 

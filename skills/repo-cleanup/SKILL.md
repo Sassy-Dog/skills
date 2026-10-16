@@ -105,7 +105,7 @@ For each non-default branch and each non-root worktree:
 | Signal | Verdict |
 |---|---|
 | Local branch marked `[gone]` | Stale — remote deleted, safe to delete locally |
-| Local `worktree-agent-*` isolation branch whose worktree is gone (no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a MERGED PR contains the tip (`gh api "repos/$REPO/commits/<tip>/pulls"`); neither → STOP and ask (possibly unmerged work) |
+| Local `worktree-agent-*` isolation branch not checked out by any present worktree (worktree gone, switched away or detached; no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree, or the worker moved on. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a PR merged into `$DEFAULT_BRANCH` contains it (`gh api "repos/$REPO/commits/<tip>/pulls"`, keeping entries with `merged_at != null` and `base.ref == $DEFAULT_BRANCH`; a PR merged into another base does not count); neither → STOP and ask (possibly unmerged work) |
 | Local branch tracks a remote that still exists | `gh pr list --repo "$REPO" --state all --search "head:<branch>"` → MERGED / CLOSED-not-merged = stale; OPEN = leave |
 | Worktree SHA where `git merge-base --is-ancestor <sha> origin/$DEFAULT_BRANCH` is true | Stale — work is in the default branch |
 | Worktree SHA NOT in the default branch | Investigate — possibly in-flight; do not remove without confirmation |
@@ -130,8 +130,8 @@ marked `[gone]` (no upstream to lose), and one orphan accumulates per merge (a 3
 36 of them). Enumerate them explicitly — `git for-each-ref --format='%(refname:short)'
 'refs/heads/worktree-agent-*'` — and classify each per the table row above. The ancestry check
 alone is NOT enough: a tip at the pre-squash feature commit, or an orphan salvage commit superseded
-by the PR that actually merged, is shipped yet not an ancestor — confirm via the MERGED-PR lookup
-before `-D`, exactly like the squash-merge gotcha. Never delete one a present worktree has
+by the PR that actually merged, is shipped yet not an ancestor — confirm via the lookup of PRs merged
+into `$DEFAULT_BRANCH` (the row above) before `-D`, exactly like the squash-merge gotcha. Never delete one a present worktree has
 checked out: that is a live agent, and "no upstream" is its normal state, not a merged signal. One
 whose worktree is present but on another branch, or detached, is judged like any orphan.
 
