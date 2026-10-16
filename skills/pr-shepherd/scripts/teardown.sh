@@ -10,8 +10,8 @@
 #                                                        #   whose upstream is [gone], or that is detached
 #                                                        #   with its HEAD on another ref (either way
 #                                                        #   clean, idle, unlocked), PLUS
-#                                                        #   orphan isolation branches whose
-#                                                        #   worktree is already gone, PLUS
+#                                                        #   isolation branches no present
+#                                                        #   worktree has checked out, PLUS
 #                                                        #   ordinary [gone] local branches
 #                                                        #   (upstream deleted — guarded, below)
 #   teardown.sh <worktree_path> ... --sweep              # BOTH, one call: the named paths are torn
@@ -45,12 +45,17 @@
 # on a worktree-agent-<id> branch. The PR merges from the agent's FEATURE branch,
 # so the isolation branch never gets an upstream — never [gone], and once the
 # worktree directory is torn down there is no path to sweep either; one orphan
-# accumulates per merge. So: removing a worktree here ALSO deletes its isolation
-# branch (prevention), and --sweep classifies leftover orphans (worktree gone) by
-# default-branch ancestry OR a MERGED PR containing the tip (squash-merge
+# accumulates per merge. So: explicit-path removal ALSO deletes its isolation
+# branch (prevention; --sweep removals do not, #557), and --sweep classifies every
+# isolation branch no present worktree has checked out by
+# default-branch ancestry OR a PR containing the tip that MERGED INTO THE DEFAULT BRANCH (squash-merge
 # false-negative safe); genuinely unmerged ones are surfaced, never auto-deleted.
-# Isolation branches whose worktree is still present are LIVE agents — --sweep
-# never touches them ("no upstream" is their normal state, not a merged signal).
+# Isolation branches whose worktree is still present are not swept by inference
+# ("no upstream" is their normal state, not a merged signal), but a branch is
+# still JUDGED once its worktree has switched to a feature branch or detached: the
+# orphan phase tests only branch_in_live_worktree. Judged by ancestry or a PR merged into the default branch;
+# never deleted while unmerged. Sweep-driven worktree removals do not delete the
+# isolation branch themselves (#557) — the orphan phase does, on that evidence.
 #
 # Ordinary [gone] branches (issue #85): a plain feature branch — an ordinary
 # send-it flow — has no agent worktree and no isolation prefix, so neither sweep
@@ -81,7 +86,8 @@
 # is detached). Fail-closed KEEPs (unknown is not verified): an unreadable HEAD,
 # status, git dir or worktree list, and a reachability query that returns nothing.
 # A detached worktree is also swept only if its HEAD is reachable from a branch, tag
-# or remote ref other than an isolation branch (removal deletes that one): commits
+# or remote ref other than an isolation branch (explicit removal deletes that one;
+# the sweep leaves it to the orphan phase, which may delete it once merged): commits
 # made on a detached HEAD lose their only anchor (and the per-worktree reflog)
 # when the worktree goes. Accepted, predating #546: a clean, unlocked [gone]
 # branch worktree holding local commits made after the merge is still swept (-D).
@@ -146,9 +152,9 @@ worktree_op_in_progress() {  # $1 = worktree path — true if a rebase/merge/che
 }
 
 detached_head_reachable() {  # $1 = worktree path — true if a branch, tag or remote ref OTHER than an isolation branch contains its HEAD
-  # Isolation branches (refs/heads/$ISO_PREFIX*) never count: removing the worktree
-  # deletes its own isolation branch (remove_worktree -> delete_isolation_branch),
-  # so that ref cannot vouch for commits it is about to lose. Their lifecycle
+  # Isolation branches (refs/heads/$ISO_PREFIX*) never count: explicit removal
+  # deletes the worktree's own isolation branch and the sweep leaves it to the
+  # orphan phase, so either way that ref must not vouch for HEAD. Their lifecycle
   # belongs to the orphan phase. A failed query prints nothing, and empty output
   # is "not reachable" below: that is the only fail-closed signal here.
   local refs r
@@ -202,8 +208,15 @@ delete_isolation_branch() {  # $1 = candidate branch name (may be empty / non-is
     || echo "    ⚠ could not delete isolation branch $br"
 }
 
-remove_worktree() {  # $1 = worktree path
-  local path="$1" br iso
+remove_worktree() {  # $1 = worktree path  $2 = "sweep" when the removal is sweep-driven
+  # Sweep-driven removals NEVER delete the isolation branch (#557): the sweep's
+  # evidence vets the worktree's HEAD, not that branch's own tip, which may hold
+  # the only copy of unmerged commits. The orphan phase, right after the worktree
+  # loop in the same call, judges it by ancestry or a PR merged into the default
+  # branch. Explicit-path
+  # teardown (no $2) keeps deleting it: the caller named the path as debris.
+  local path="$1" br iso from_sweep=0
+  [ "${2:-}" = "sweep" ] && from_sweep=1
   # The isolation branch the runtime created this worktree on (worktree-<dirname>).
   # Derived from the PATH, not the checkout: if the agent switched to a feature
   # branch, `branch --show-current` no longer names it — yet it still exists and
@@ -211,7 +224,7 @@ remove_worktree() {  # $1 = worktree path
   iso="worktree-$(basename "$path")"
   if [ ! -d "$path" ]; then
     echo "  (already gone) $path"
-    delete_isolation_branch "$iso"
+    [ "$from_sweep" = "1" ] || delete_isolation_branch "$iso"
     return
   fi
   br="$(git -C "$path" branch --show-current 2>/dev/null || true)"
@@ -223,7 +236,11 @@ remove_worktree() {  # $1 = worktree path
   if [ -n "$br" ]; then
     git branch -D "$br" >/dev/null 2>&1 && echo "    deleted local branch $br" || true
   fi
-  if [ "$iso" != "$br" ]; then delete_isolation_branch "$iso"; fi
+  if [ "$from_sweep" = "1" ]; then
+    echo "    isolation branch $iso left to the orphan phase (sweep never deletes it unjudged)"
+  elif [ "$iso" != "$br" ]; then
+    delete_isolation_branch "$iso"
+  fi
 }
 
 RECONCILE_ONLY=0
@@ -311,7 +328,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
         echo "  KEEP (detached HEAD is not reachable from any branch, tag or remote ref — removing it would lose its commits; pass its path explicitly if debris): $path (detached)"
         continue
       fi
-      echo "  detached → removing: $path"; remove_worktree "$path"; continue
+      echo "  detached → removing: $path"; remove_worktree "$path" sweep; continue
     fi
     case "$br" in
       "$ISO_PREFIX"*)
@@ -339,14 +356,16 @@ if [ "$SWEEP_MODE" = "1" ]; then
       continue
     fi
     sweep_live_guard "$path" "[$br]" || continue
-    echo "  gone/merged: $path [$br]"; remove_worktree "$path"
+    echo "  gone/merged: $path [$br]"; remove_worktree "$path" sweep
   done < <(git worktree list --porcelain | awk '/^worktree /{print $2}' | grep "/.claude/worktrees/" || true)
 
-  echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (worktree gone — never [gone]) =="
+  echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (not checked out: worktree gone or switched away — never [gone]) =="
   # Left behind when a per-merge teardown removed the worktree but not the branch
-  # (pre-#26 flows, crashed runs). Ancestry alone is NOT enough: a squash-merge
-  # leaves the pre-squash tip dangling (same false negative as feature branches),
-  # so a non-ancestor tip is checked against MERGED PRs before deciding.
+  # (pre-#26 flows, crashed runs), or whose worktree is present but on another
+  # branch or detached. Ancestry alone is NOT enough: a squash-merge leaves the
+  # pre-squash tip dangling (same false negative as feature branches), so a
+  # non-ancestor tip is checked against PRs merged INTO $BRANCH (a PR merged into
+  # another base, e.g. a stacked PR, leaves the commits on that branch alone).
   REPO_SLUG="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
   while read -r br tip; do
     [ -z "$br" ] && continue
@@ -358,13 +377,21 @@ if [ "$SWEEP_MODE" = "1" ]; then
       git branch -D "$br" >/dev/null 2>&1 && echo "  deleted $br (tip already in origin/$BRANCH)"
       continue
     fi
+    # The jq program is a CONSTANT: `gh api --jq` has no --arg, and git accepts a
+    # double quote in a refname, so splicing $BRANCH into it would let a hostile
+    # default-branch name rewrite the filter. The base is compared here instead,
+    # as an exact string, so only a PR merged INTO the default branch counts.
     merged_pr=""
-    [ -n "$REPO_SLUG" ] && merged_pr="$(gh api "repos/$REPO_SLUG/commits/$tip/pulls" \
-      --jq '[.[] | select(.merged_at != null)][0].number // empty' 2>/dev/null || true)"
+    merged_list=""
+    [ -n "$REPO_SLUG" ] && merged_list="$(gh api "repos/$REPO_SLUG/commits/$tip/pulls" \
+      --jq '.[] | select(.merged_at != null) | "\(.number)\t\(.base.ref)"' 2>/dev/null || true)"
+    while IFS=$'\t' read -r pr_num pr_base; do
+      if [ -n "$pr_num" ] && [ "$pr_base" = "$BRANCH" ]; then merged_pr="$pr_num"; break; fi
+    done <<<"$merged_list"
     if [ -n "$merged_pr" ]; then
       git branch -D "$br" >/dev/null 2>&1 && echo "  deleted $br (shipped via merged PR #$merged_pr)"
     else
-      echo "  ⚠ KEEP $br — tip ${tip:0:7} not in origin/$BRANCH and no merged PR contains it; possibly unmerged work — review by hand"
+      echo "  ⚠ KEEP $br — tip ${tip:0:7} not in origin/$BRANCH and no PR merged into $BRANCH contains it; possibly unmerged work — review by hand"
     fi
   done < <(git for-each-ref --format='%(refname:short) %(objectname)' "refs/heads/${ISO_PREFIX}*" || true)
 

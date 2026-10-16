@@ -105,7 +105,7 @@ For each non-default branch and each non-root worktree:
 | Signal | Verdict |
 |---|---|
 | Local branch marked `[gone]` | Stale — remote deleted, safe to delete locally |
-| Local `worktree-agent-*` isolation branch whose worktree is gone (no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a MERGED PR contains the tip (`gh api "repos/$REPO/commits/<tip>/pulls"`); neither → STOP and ask (possibly unmerged work) |
+| Local `worktree-agent-*` isolation branch not checked out by any present worktree (worktree gone, switched away or detached; no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree, or the worker moved on. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a PR merged into `$DEFAULT_BRANCH` contains it (`gh api "repos/$REPO/commits/<tip>/pulls"`, keeping entries with `merged_at != null` and `base.ref == $DEFAULT_BRANCH`; a PR merged into another base does not count); neither → STOP and ask (possibly unmerged work) |
 | Local branch tracks a remote that still exists | `gh pr list --repo "$REPO" --state all --search "head:<branch>"` → MERGED / CLOSED-not-merged = stale; OPEN = leave |
 | Worktree SHA where `git merge-base --is-ancestor <sha> origin/$DEFAULT_BRANCH` is true | Stale — work is in the default branch |
 | Worktree SHA NOT in the default branch | Investigate — possibly in-flight; do not remove without confirmation |
@@ -130,9 +130,10 @@ marked `[gone]` (no upstream to lose), and one orphan accumulates per merge (a 3
 36 of them). Enumerate them explicitly — `git for-each-ref --format='%(refname:short)'
 'refs/heads/worktree-agent-*'` — and classify each per the table row above. The ancestry check
 alone is NOT enough: a tip at the pre-squash feature commit, or an orphan salvage commit superseded
-by the PR that actually merged, is shipped yet not an ancestor — confirm via the MERGED-PR lookup
-before `-D`, exactly like the squash-merge gotcha. Never touch one whose worktree is still present:
-that is a live agent, and "no upstream" is its normal state, not a merged signal.
+by the PR that actually merged, is shipped yet not an ancestor — confirm via the lookup of PRs merged
+into `$DEFAULT_BRANCH` (the row above) before `-D`, exactly like the squash-merge gotcha. Never delete one a present worktree has
+checked out: that is a live agent, and "no upstream" is its normal state, not a merged signal. One
+whose worktree is present but on another branch, or detached, is judged like any orphan.
 
 ## 3. Triage stashes
 
@@ -298,10 +299,10 @@ mid any in-progress git operation (rebase, merge, cherry-pick, revert, bisect), 
 a detached HEAD no ref other than an isolation branch contains (its commits would be lost), and
 one whose HEAD, status, git dir or worktree list cannot be read;
 pass such a path to `teardown.sh` explicitly to force it. The sweep
-deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
-isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
-genuinely unmerged ones are surfaced, never auto-deleted — and live ones, worktree still present,
-are never touched), **and deletes ordinary `[gone]` local branches** — regular feature branches
+deletes their local branches but NOT their `worktree-agent-*` isolation branches (a swept worktree's
+HEAD is vetted, not that branch's own tip, which may hold the only copy of unmerged commits — #557),
+and judges every isolation branch in its orphan phase (ancestor-of-default OR a PR merged into the
+default branch; the unproven are surfaced, never deleted), **and deletes ordinary `[gone]` local branches** — regular feature branches
 with no checkout whose upstream was deleted on merge. That last phase used to be a hand-run
 follow-up here, and its grep was a known silent-under-deletion trap (step 1's `: gone]` rendering);
 now the script owns it, with the same guards the prose demands: never the default branch, never a
@@ -413,7 +414,7 @@ got missed — re-run from step 2.
 
 - **Never delete a branch with an OPEN PR.** Check `gh pr list --repo "$REPO" --state all --search "head:<branch>"` when in doubt.
 - **Never delete a branch that is the BASE of an open PR** — distinct from the rule above, and not covered by it. Deleting a base branch makes GitHub close the PR pointing at it, and a merged branch can still be a live base (a stack mid-landing, or any hand-based PR). Subtract the open-PR `baseRefName` set before deleting, and report what the guard held back.
-- **Never delete a `worktree-agent-*` isolation branch whose worktree is still present** — that's a live agent checkout, not debris. Only isolation branches whose worktree is gone are sweep candidates, and unclassifiable ones (not an ancestor, no merged PR) are surfaced, not deleted.
+- **Never delete a `worktree-agent-*` isolation branch that a present worktree has checked out** — that's a live agent checkout, not debris. One whose worktree is present but on another branch, or detached, is judged by ancestry or merged PR like any orphan, and the unproven (not an ancestor, no PR merged into the default branch) are surfaced, not deleted.
 - **Never `git worktree remove --force` a worktree at a SHA that isn't in the default branch** without confirming — potentially in-flight work.
 - **Never auto-drop a stash referencing an OPEN issue.** Auto-drop is for confidently-shipped or confidently-abandoned work only.
 - **Never auto-discard untracked or gitignored files outside the allowlist, and never anything in the never-discard list.** Neither has git history; asking too often costs a few prompts, auto-discarding wrong is unrecoverable. Enumerate with `git clean -ndx` and remove with specific-path `rm` — never `git clean -fdx -e <pattern>`, whose gitignore-style unanchored patterns match at every depth and silently spare on-list parents.

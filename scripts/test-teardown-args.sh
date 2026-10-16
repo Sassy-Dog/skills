@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Eight properties are asserted (7 was added by #486, 8 by #546):
+# Nine properties are asserted (7 was added by #486, 8 by #546, 9 by #557):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -73,6 +73,19 @@
 #      a SHIPPED one (pushed, then deleted on origin), because properties 1-2
 #      need the sweep to reclaim it.
 #
+#   9. The sweep never deletes an isolation branch whose tip is unmerged (#557).
+#      The sweep's evidence vets a worktree's HEAD, never that branch's own tip,
+#      so sweep-driven removals leave the isolation branch to the orphan phase
+#      (ancestry or MERGED PR). Two shapes, each with one commit only the
+#      isolation branch holds: a clean detached worktree at main, and a [gone]
+#      feature-branch worktree. Both worktrees are swept, the branch survives and
+#      the orphan phase says KEEP as possibly unmerged; a merged isolation branch
+#      is still deleted, by the orphan phase; an explicit path still deletes it.
+#      A mutant restoring the in-sweep deletion must lose the commit.
+#      The merged-PR test is bound to the default branch: a tip in a PR merged
+#      into a non-default (stacked) base is KEPT, one merged into the default
+#      branch is deleted, and a mutant dropping the base check deletes the first.
+#
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
 # that difference is why this surfaced on macOS and not on a Linux runner.
@@ -119,7 +132,12 @@ cat >"$BIN/gh" <<'MOCK'
 #!/usr/bin/env bash
 case "${1:-}" in
     repo) echo "mock-org/mock-repo" ;;   # repo view --json nameWithOwner
-    api)  : ;;                           # commits/<tip>/pulls -> no merged PR
+    api)  # commits/<tip>/pulls -> no merged PR, unless MOCK_PULLS names a JSON file of PRs;
+          # then the caller's own --jq filter runs over it (so the real filter is tested)
+          [ -f "${MOCK_PULLS:-}" ] || exit 0
+          expr=""; prev=""
+          for a in "$@"; do [ "$prev" = "--jq" ] && expr="$a"; prev="$a"; done
+          jq -r "$expr" "$MOCK_PULLS" ;;
     pr)   : ;;                           # pr list --state open -> no open PRs
     *) echo "mock gh: unhandled invocation: $*" >&2; exit 1 ;;
 esac
@@ -691,6 +709,115 @@ shim_case head "symbolic-ref -q HEAD" 0 "could not read the worktree HEAD" 's/^ 
 shim_case reachability "--contains HEAD" 0 "detached HEAD is not reachable" 's/^  return 1  # no other ref contains HEAD/  return 0  # no other ref contains HEAD/' mkdetached
 shim_case git-dir "rev-parse --absolute-git-dir" 0 "git operation" '/--absolute-git-dir/s/ || return 0//;/^  \[ -n "\$gd" \] || return 0/d'
 shim_case worktree-list "worktree list --porcelain" 2 "worktree is locked" 's/wts="\$(git worktree list --porcelain)" || return 0/wts="$(git worktree list --porcelain)"/'
+
+# --- 9. an unmerged isolation branch survives the sweep (#557) ------------------
+mkunmerged() { # <name> <detached|feature> -> repo whose agent-s worktree is swept, isolation branch one commit ahead
+    local d wt
+    d="$(mkscratch "$1" 0)"
+    wt="$d/.claude/worktrees/agent-s"
+    git -C "$d" worktree add -q -b worktree-agent-s "$wt" main
+    echo only-copy >"$wt/only-copy.txt"
+    git -C "$wt" add only-copy.txt
+    git -C "$wt" commit -qm "unmerged work only the isolation branch holds"
+    if [ "$2" = detached ]; then
+        git -C "$wt" checkout -q --detach main
+    else
+        git -C "$wt" switch -q -c feat/s main
+        git -C "$wt" push -q -u origin feat/s
+        git -C "$d" push -q origin --delete feat/s
+    fi
+    echo "$d"
+}
+for shape in detached feature; do
+    D="$(mkunmerged "unmerged-$shape" "$shape")"
+    TIP="$(git -C "$D" rev-parse worktree-agent-s)"
+    run_teardown "$D" --sweep
+    expect_status "$shape: sweep succeeds" 0
+    if survives "$D" s; then bad "  $shape: the worktree was not swept (fixture not exercising the sweep)"; else ok "  $shape: the worktree is swept"; fi
+    if [ "$(git -C "$D" rev-parse -q --verify refs/heads/worktree-agent-s 2>/dev/null)" = "$TIP" ]; then ok "  $shape: the isolation branch and its commit survived"; else bad "  $shape: the unmerged isolation branch was deleted"; dump; fi
+    expect_re "  $shape: the orphan phase KEPT it as unmerged" 'KEEP worktree-agent-s .*possibly unmerged'
+    refute "  $shape: no in-sweep deletion of it" "deleted isolation branch worktree-agent-s"
+done
+# A merged isolation branch is still reclaimed, by the orphan phase.
+D="$(mkscratch merged-iso 1)"
+run_teardown "$D" --sweep
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-a01; then bad "  merged isolation branch worktree-agent-a01 survived the sweep"; dump; else ok "  merged isolation branch is deleted (orphan phase)"; fi
+expect "  ...and says so from the orphan phase" "deleted worktree-agent-a01 (tip already in origin/main)"
+# Explicit-path teardown keeps deleting it (the caller named the path as debris).
+D="$(mkunmerged unmerged-explicit detached)"
+run_teardown "$D" .claude/worktrees/agent-s
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-s; then bad "  explicit teardown left the isolation branch"; else ok "  explicit teardown still deletes the isolation branch"; fi
+# Mutant: restore the in-sweep deletion; the commit must be lost.
+mut="$WORK/mut-sweep-iso-delete"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+sed -i.bak 's/^  if \[ "\$from_sweep" = "1" \]; then/  if false; then/' "$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant sweep-iso-delete anchor drifted"; else
+    D="$(mkunmerged mutrepo-iso detached)"
+    OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$mut/teardown.sh" --sweep 2>&1)"; STATUS=$?
+    if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-s; then bad "  mutant sweep-iso-delete still kept the branch — the skip is not what protects it"; dump
+    else ok "  mutant sweep-iso-delete loses the unmerged commit (the gate bites)"; fi
+fi
+
+# --- 9b. the merged-PR test is bound to the default branch (#557 review) --------
+# An orphan isolation branch whose tip is not in origin/main but is contained in a
+# merged PR: that PR counts only if it merged INTO main. One merged into a stacked
+# base leaves the commits on that other branch alone, so the branch is KEPT.
+mkorphanpr() { # <name> -> repo with an orphan isolation branch one commit ahead of main
+    local d
+    d="$(mkscratch "$1" 0)"
+    git -C "$d" branch -D worktree-agent-orphan >/dev/null
+    git -C "$d" switch -q -c worktree-agent-prtip main
+    echo prwork >"$d/prwork.txt"
+    git -C "$d" add prwork.txt
+    git -C "$d" commit -qm "work shipped through a PR"
+    git -C "$d" switch -q main
+    echo "$d"
+}
+printf '%s\n' '[{"number":7,"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"stack/parent"}}]' >"$WORK/pulls-stacked.json"
+printf '%s\n' '[{"number":8,"merged_at":"2026-01-01T00:00:00Z","base":{"ref":"main"}}]' >"$WORK/pulls-main.json"
+sweep_with_pulls() { # <repo> <pulls.json> <teardown.sh> — OUT/STATUS
+    OUT="$(cd "$1" && MOCK_PULLS="$2" PATH="$BIN:$PATH" bash "$3" --sweep 2>&1)"; STATUS=$?
+}
+D="$(mkorphanpr pr-stacked)"
+sweep_with_pulls "$D" "$WORK/pulls-stacked.json" "$TEARDOWN"
+expect_status "PR merged into a stacked base: sweep succeeds" 0
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  a tip in a PR merged into a non-default base is KEPT"; else bad "  the isolation branch was deleted on a PR merged into a non-default base"; dump; fi
+D="$(mkorphanpr pr-main)"
+sweep_with_pulls "$D" "$WORK/pulls-main.json" "$TEARDOWN"
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  a tip in a PR merged into the default branch survived"; dump; else ok "  a tip in a PR merged into the default branch is deleted"; fi
+expect "  ...as shipped via that merged PR" "shipped via merged PR #8"
+mut="$WORK/mut-pr-base"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+sed -i.bak 's/ \&\& \[ "\$pr_base" = "\$BRANCH" \]//' "$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-base anchor drifted"; else
+    D="$(mkorphanpr mutrepo-pr-base)"
+    sweep_with_pulls "$D" "$WORK/pulls-stacked.json" "$mut/teardown.sh"
+    if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  mutant pr-base still kept the branch — the base check is not what protects it"; dump
+    else ok "  mutant pr-base deletes a tip merged only into a stacked base (the gate bites)"; fi
+fi
+
+# A hostile default-branch name must never reach the jq program (gh api --jq has no
+# --arg, and a double quote is a legal refname character): `x"or(true)or"` would
+# make an interpolated base check true for every merged PR. The base is compared
+# in shell as an exact string, so a PR merged into another base is still not enough.
+HOSTILE='x"or(true)or"'
+hostile_sweep() { # <repo> <teardown.sh> — OUT/STATUS, DEFAULT_BRANCH set to the hostile name
+    OUT="$(cd "$1" && DEFAULT_BRANCH="$HOSTILE" MOCK_PULLS="$WORK/pulls-stacked.json" PATH="$BIN:$PATH" bash "$2" --sweep 2>&1)"; STATUS=$?
+}
+D="$(mkorphanpr pr-hostile)"
+hostile_sweep "$D" "$TEARDOWN"
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then ok "  hostile default-branch name: a tip merged only into another base is KEPT"; else bad "  a hostile default-branch name made the base check true"; dump; fi
+mut="$WORK/mut-pr-interp"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+OLD_JQ='      --jq "[.[] | select(.merged_at != null and .base.ref == \"$BRANCH\")][0].number // empty" 2>/dev/null || true)"'
+OLD_IF='      if [ -n "$pr_num" ]; then merged_pr="$pr_num"; break; fi'
+OLD_JQ="$OLD_JQ" OLD_IF="$OLD_IF" awk '
+    /--jq .\.\[\] \| select\(\.merged_at != null\)/ { print ENVIRON["OLD_JQ"]; next }
+    /\[ "\$pr_base" = "\$BRANCH" \]/ { print ENVIRON["OLD_IF"]; next }
+    { print }' "$TEARDOWN" >"$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-interp anchor drifted"; else
+    D="$(mkorphanpr mutrepo-pr-interp)"
+    hostile_sweep "$D" "$mut/teardown.sh"
+    if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-prtip; then bad "  mutant pr-interp still kept the branch — the shell comparison is not what protects it"; dump
+    else ok "  mutant pr-interp (interpolated base) deletes under a hostile name (the gate bites)"; fi
+fi
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
