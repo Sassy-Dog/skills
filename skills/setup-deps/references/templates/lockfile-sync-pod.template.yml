@@ -258,7 +258,16 @@ jobs:
           numstat="$RUNNER_TEMP/numstat.z"
           git "${nohooks[@]}" apply --numstat -z -- "$patch" > "$numstat" || reject "git cannot parse it"
           seen=$'\n'
-          while IFS=$'\t' read -r -d '' added removed path; do
+          # No IFS trimming: tab is IFS whitespace, so `read added removed path`
+          # would strip a leading or trailing tab from the path and bind a file
+          # named <TAB>bun.lock to bun.lock. Split the record on its first two
+          # tabs by hand and refuse any path holding a tab or newline.
+          while IFS= read -r -d '' rec; do
+            added="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"
+            removed="${rest%%$'\t'*}"; path="${rest#*$'\t'}"
+            case "$path" in
+              ''|*$'\t'*|*$'\n'*) reject "a patched path is empty or holds a tab or newline" ;;
+            esac
             [ "$added" != "-" ] || reject "$path is a binary change; the lockfiles are text"
             # git prints "0 0 path" for a patch it parses but that changes no
             # line (headers only); it never prints an empty numstat for one.

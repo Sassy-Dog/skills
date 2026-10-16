@@ -141,7 +141,14 @@
 #      (NUL-terminated, unquoted) from a FILE (a shell variable drops NULs) and
 #      the staged-set check reads `diff --cached --name-only -z`. Mutants: the
 #      `-z` dropped from numstat, and from the staged-set read (the latter fails
-#      only for the non-ASCII root, which is its point).
+#      only for the non-ASCII root, which is its point). (c) THE READ DOES NOT
+#      TRIM: tab is IFS whitespace, so `IFS=$'\t' read added removed path`
+#      strips a leading or trailing tab from the path and binds a tracked file
+#      named `bun.lock<TAB>` to `bun.lock`; only the post-apply staged-set check
+#      would catch it. The loop splits the record by hand and rejects a path that
+#      is empty or holds a tab or newline; a tracked tab-named lockfile in every
+#      root is a case asserted by THAT reason (not the staged-set one), and a
+#      mutant restoring the trimming read is killed by it.
 #
 #  15. THE LEASE. The push passes `--force-with-lease="refs/heads/${PR_HEAD_REF}:
 #      ${PR_HEAD_SHA}"`, the head SHA both jobs checked out, so a branch that
@@ -586,6 +593,10 @@ vx_base() {
             printf 'lockfileVersion 1\ndep b 2.0.0\n' > web/bun.lock
             printf 'lockfileVersion 1\ndep c 3.0.0\n' > "$VX_UNI/bun.lock"
         fi
+        # A tracked file whose name ENDS in a tab, beside each bun.lock: the
+        # trimming `read` would bind it to bun.lock.
+        local d
+        for d in . web "$VX_UNI"; do printf 'lockfileVersion 1\n' > "$d/bun.lock"$'\t'; done
         vg add -A && vg commit -qm base
     )
 }
@@ -614,6 +625,7 @@ vx_patch() {
             wrongpath) echo 'dep z 9.9.9' >> "$O"; vg "${plain[@]}" > "$out" ;;
             symlink)   ln -sfn nowhere "$A"; vg "${plain[@]}" > "$out" ;;
             nochange)  echo 'dep a 1.0.1' >> "$A"; vg "${plain[@]}" | head -4 | sed '2s/.*/index 1111111..1111111 100644/' > "$out" ;;
+            tabname)   echo 'dep a 1.0.1' >> "$A"$'\t'; vg "${plain[@]}" > "$out" ;;
             garbage)   printf 'this is not a patch\n' > "$out" ;;
             empty)     : > "$out" ;;
             *) exit 1 ;;
@@ -621,7 +633,7 @@ vx_patch() {
     ) || { echo "fixture: could not build the $P/$c patch" >&2; return 1; }
 }
 
-VX_CASES="clean binary rename mode create delete two wrongpath symlink nochange garbage empty"
+VX_CASES="clean binary rename mode create delete two wrongpath symlink nochange tabname garbage empty"
 vx_build() {
     local P c
     mkdir -p "$VX"
@@ -730,6 +742,7 @@ check_validator() {
             vx_expect "$body" "$P" "wrong path"            wrongpath "$VX/base-text" ""         rej  "@O is not @A"                                          || rc=1
             vx_expect "$body" "$P" "symlink"               symlink   "$VX/base-sym"  ""         rej  "is not a tracked regular file"                         || rc=1
             vx_expect "$body" "$P" "no-op patch"           nochange  "$VX/base-text" ""         rej  "it changes nothing"                                    || rc=1
+            vx_expect "$body" "$P" "tab-named lockfile"    tabname   "$VX/base-text" ""         rej  "a patched path is empty or holds a tab or newline"     || rc=1
             vx_expect "$body" "$P" "garbage patch"         garbage   "$VX/base-text" ""         rej  "git cannot parse it"                                   || rc=1
             vx_expect "$body" "$P" "empty patch"           empty     "$VX/base-text" ""         rej  "the artifact holds no patch"                           || rc=1
             vx_expect "$body" "$P" "missing patch"         missing   "$VX/base-text" ""         rej  "the artifact holds no patch"                           || rc=1
@@ -770,6 +783,8 @@ px_base() {
                 printf 'PODS:\n  - a (1.0.0)\n' > "$d/ios/Podfile.lock"
             fi
         done
+        # A tracked file whose name ENDS in a tab, beside each pubspec.lock.
+        for d in . app "$VX_UNI"; do printf 'packages:\n' > "$d/pubspec.lock"$'\t'; done
         vg add -A && vg commit -qm base
     )
 }
@@ -805,6 +820,7 @@ px_patch() {
                        echo '  b: 1.0.2' >> "$A1"; vg "${plain[@]}" > "$g.p2"
                        cat "$g.p1" "$g.p2" > "$out" ;;
             nochange)  echo '  b: 1.0.1' >> "$A1"; vg "${plain[@]}" | head -4 | sed '2s/.*/index 1111111..1111111 100644/' > "$out" ;;
+            tabname)   echo '  b: 1.0.1' >> "$A1"$'\t'; vg "${plain[@]}" > "$out" ;;
             garbage)   printf 'this is not a patch\n' > "$out" ;;
             empty)     : > "$out" ;;
             *) exit 1 ;;
@@ -812,7 +828,7 @@ px_patch() {
     ) || { echo "fixture: could not build the $P/$c pod patch" >&2; return 1; }
 }
 
-PX_CASES="clean1 clean2 clean binary rename mode create delete third wrongpath symlink dup nochange garbage empty"
+PX_CASES="clean1 clean2 clean binary rename mode create delete third wrongpath symlink dup nochange tabname garbage empty"
 px_build() {
     local P c
     px_base "$VX/pbase-text" text
@@ -897,6 +913,7 @@ check_validator_pod() {
             px_expect "$body" "$P" "symlink"                symlink   "$VX/pbase-sym"  ""         rej  "@A2 is not a tracked regular file"                       || rc=1
             px_expect "$body" "$P" "duplicate path"         dup       "$VX/pbase-text" ""         rej  "@A1 appears more than once in the patch"                 || rc=1
             px_expect "$body" "$P" "no-op patch"            nochange  "$VX/pbase-text" ""         rej  "it changes nothing"                                      || rc=1
+            px_expect "$body" "$P" "tab-named lockfile"     tabname   "$VX/pbase-text" ""         rej  "a patched path is empty or holds a tab or newline"      || rc=1
             px_expect "$body" "$P" "garbage patch"          garbage   "$VX/pbase-text" ""         rej  "git cannot parse it"                                     || rc=1
             px_expect "$body" "$P" "empty patch"            empty     "$VX/pbase-text" ""         rej  "the artifact holds no patch"                             || rc=1
             px_expect "$body" "$P" "missing patch"          missing   "$VX/pbase-text" ""         rej  "the artifact holds no patch"                             || rc=1
@@ -1134,6 +1151,7 @@ mutate "git call without nohooks inside \$( )" "job 2: step" 'summary="$(git "${
 mutate "validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
 mutate "validator: --summary parse failure swallowed" "validator [root] summary parse failure:" $'apply --summary -- "$patch")" || reject "git cannot parse it"' $'apply --summary -- "$patch")" || true'
 mutate "validator: --numstat parse failure swallowed" "validator [root] numstat parse failure:" $'> "$numstat" || reject "git cannot parse it"' $'> "$numstat" || true'
+mutate_perl "validator: IFS-trimming read restored (tab-named path binds to the lockfile)" "validator [root] tab-named lockfile:" 's/while IFS= read -r -d \x27\x27 rec; do.*?esac\n/while IFS=\$\x27\\t\x27 read -r -d \x27\x27 added removed path; do\n/s'
 mutate "validator: staged set read C-quoted" "validator [uni] clean content change:" 'diff --cached --name-only -z' 'diff --cached --name-only'
 mutate "validator: numstat read without -z" "validator [root] clean content change:" 'apply --numstat -z --' 'apply --numstat --'
 mutate "validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'
@@ -1277,6 +1295,7 @@ mutate "pod: Flutter pin not a render fact" "FLUTTER_VERSION is not bound to the
 mutate "pod validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
 mutate "pod validator: --summary parse failure swallowed" "validator [root] summary parse failure:" $'apply --summary -- "$patch")" || reject "git cannot parse it"' $'apply --summary -- "$patch")" || true'
 mutate "pod validator: --numstat parse failure swallowed" "validator [root] numstat parse failure:" $'> "$numstat" || reject "git cannot parse it"' $'> "$numstat" || true'
+mutate_perl "pod validator: IFS-trimming read restored (tab-named path binds to the lockfile)" "validator [root] tab-named lockfile:" 's/while IFS= read -r -d \x27\x27 rec; do.*?esac\n/while IFS=\$\x27\\t\x27 read -r -d \x27\x27 added removed path; do\n/s'
 mutate "pod validator: staged set read C-quoted" "validator [uni] pubspec.lock only:" 'diff --cached --name-only -z' 'diff --cached --name-only'
 mutate "pod validator: numstat read without -z" "validator [root] binary hunk:" 'apply --numstat -z --' 'apply --numstat --'
 mutate "pod validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'

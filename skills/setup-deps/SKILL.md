@@ -518,6 +518,14 @@ token and deletes only the `# {{IF:NESTED_APP}}` marker comments; a root-level a
 blocks wholesale and collapses each `{{APP_DIR}}/` prefix to nothing (a `./` prefix would break
 the `on.paths` filter), which keeps root renders byte-identical to v1 output.
 
+**Hand-render precondition for `{{PKG_DIR}}` and `{{APP_DIR}}`: refuse, and report why, a directory
+containing `'` or a glob character (`*`, `?`, `[`).** The validators quote the allowed path in a
+single-quoted shell string (`allowed='…'`), which a `'` breaks, and job 1's `git diff -- '<dir>/…'`
+pathspec is glob-matched (it carries no `:(literal)`), so a glob character would match other files.
+There is no render script to refuse at, so the renderer (you) stops here. Spaces, non-ASCII, `"` and
+`\` are handled by `--numstat -z`. (The job-1 pathspecs were left unchanged: refusal is the single
+strategy, and the template versions stay at 14 and 8, since this lands in the same unreleased PR.)
+
 `{{PKG_DIR}}` is the same shape one template over: the **bun install root** for
 `lockfile-sync-bun` — the directory holding the `package.json` + `bun.lock` that workflow syncs
 (`web` for tailoredtip, `.` for qr-ninja), with the identical nested-vs-root render rule
@@ -533,8 +541,9 @@ both of its jobs since template version 11 (#528), as `dependabot-auto-merge` ha
 `deps-cadence` always has, because it runs bun on PR-authored manifests and the App token pushes the
 result (see "Credential-bearing workflows that run package-manager code" below). Version 12 splits it
 into two jobs so bun never shares a VM with the token, and drops the cache; version 13 leases the
-push to the head SHA; version 14 reads `--numstat -z`, so an install root with non-ASCII or special
-characters validates instead of being rejected. Its bun is `oven-sh/setup-bun` at
+push to the head SHA; version 14 reads `--numstat -z`, so an install root whose path git C-quotes
+(non-ASCII, a space, `"`, `\`) validates instead of being rejected; the record is split by hand rather
+than by `read`'s IFS, which would trim a leading or trailing tab from the path. Its bun is `oven-sh/setup-bun` at
 the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
 follows it exactly, first match wins:
 
@@ -760,11 +769,11 @@ that root was rejected without a reason; the post-apply staged-set check reads `
 for the same reason.
 `scripts/test-lockfile-sync-policy.sh` pins each: statically the job split, the pins, the token's
 single binding and the push destination, and by execution the validator itself, run from the
-extracted step against crafted patch artifacts for a root and a nested install root (each hostile
+extracted step against crafted patch artifacts for a root, a nested and a non-ASCII, space-containing install root (each hostile
 patch must exit 1 with its own reason, and each enforcing construct has a mutant that neuters it
 while keeping its message; the two `git cannot parse it` sites, `--summary` and `--numstat`, each
-have their own mutant, driven by a `git` shim that fails only that subcommand, and a non-ASCII
-install root with a space is a fixture).
+have their own mutant, driven by a `git` that fails only `apply --summary` or only `apply --numstat`, and a tracked
+tab-named lockfile must be rejected by the read loop's own reason).
 
 `lockfile-sync-pod` has had the same two-job shape since template version 7 (version 8 reads `--numstat -z`, as bun's 14 does)
 ([#529](https://github.com/Sassy-Dog/skills/issues/529)), not the single late-mint job that issue
@@ -785,7 +794,7 @@ file). It no longer pushes whatever `git add -- '*.lock'` staged. Both templates
 deleted between the jobs fails closed instead of being overwritten or recreated. Neither template
 uses `actions/cache` (the Flutter action's `cache:` input saves through it, so pod sets none).
 `scripts/test-lockfile-sync-policy.sh` runs the same property set, mutants and executed validator
-against both, for a root app and a nested one.
+against both, for a root, a nested and a non-ASCII, space-containing app.
 
 Behaviour the impl guarantees, each pinned by `scripts/test-deps-cadence-policy.sh`: nothing moved
 exits `0` with a `::notice::`, uploads nothing and skips `open-pr`, so no token is minted; this month's `chore/deps-YYYY-MM` already existing exits
