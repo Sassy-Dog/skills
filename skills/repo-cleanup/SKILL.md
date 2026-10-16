@@ -287,7 +287,11 @@ DEFAULT_BRANCH="$DEFAULT_BRANCH" \
   bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/teardown.sh --sweep
 ```
 
-`--sweep` removes every detached or remote-branch-gone agent worktree under `.claude/worktrees/`,
+`--sweep` removes every detached agent worktree under `.claude/worktrees/`, plus every one whose
+feature branch had an upstream that is now `[gone]` **and** whose tree is clean **and** that is not
+locked (positive evidence of a merge, #546). It KEEPS and reports, never infers: a branch with no
+upstream (never pushed: a live worker's normal state), a worktree with uncommitted or untracked
+files, and a locked worktree; pass such a path to `teardown.sh` explicitly to force it. The sweep
 deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
 isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
 genuinely unmerged ones are surfaced, never auto-deleted — and live ones, worktree still present,

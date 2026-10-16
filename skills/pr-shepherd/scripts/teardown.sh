@@ -7,7 +7,7 @@
 # Usage:
 #   teardown.sh <worktree_path> [<worktree_path> ...]   # explicit, from the batch manifest
 #   teardown.sh --sweep                                  # every .claude/worktrees/agent-*
-#                                                        #   whose remote branch is gone, PLUS
+#                                                        #   whose upstream is [gone] (clean, unlocked), PLUS
 #                                                        #   orphan isolation branches whose
 #                                                        #   worktree is already gone, PLUS
 #                                                        #   ordinary [gone] local branches
@@ -33,7 +33,7 @@
 #   ISOLATION_BRANCH_PREFIX   prefix of the Agent runtime's isolation branches
 #                             (default "worktree-agent-")
 #
-# Why "remote branch gone", not `git branch --merged`:
+# Why "upstream [gone]" (never mere "no remote branch" — see #546 below), not `git branch --merged`:
 #   Squash-merged feature branches' tips are NOT ancestors of the default branch
 #   — `git branch --merged` reports them UNMERGED (false negative). As long as
 #   merges delete the remote branch (delete_branch_on_merge, or the merge queue's
@@ -65,6 +65,11 @@
 # merge-shepherd.sh's inconclusive stack probe: unknown means wait, not act).
 #
 # Worktrees are removed with `-f -f` because the Agent runtime leaves them locked.
+# That override applies to EXPLICIT paths only. --sweep never infers it (#546): a
+# feature-branch worktree is swept only if its upstream existed and is now [gone]
+# AND its tree is clean AND it is not locked; a branch with no upstream (never
+# pushed), a dirty tree or a lock is KEPT and reported, because a live worker that
+# switched branches but has not pushed looks exactly like a merged one otherwise.
 # Stashes are reported but NEVER auto-dropped (destructive — human's call).
 #
 # Checkout guard (#486): every mode below mutates the local checkout (worktree
@@ -98,6 +103,17 @@ branch_in_live_worktree() {  # $1 = branch — true if ANY worktree has it check
   local wts
   wts="$(git worktree list --porcelain)"
   grep -qxF "branch refs/heads/$1" <<<"$wts"
+}
+
+worktree_locked() {  # $1 = worktree path — true if `git worktree list --porcelain` marks it locked
+  # Captured first (never a pipe into grep -q; see branch_in_live_worktree). An
+  # unreadable list answers "locked": unknown is not verified, so the sweep keeps it.
+  local wts
+  wts="$(git worktree list --porcelain)" || return 0
+  awk -v p="$1" '
+    /^worktree / { cur = substr($0, 10); next }
+    /^locked/    { if (cur == p) found = 1 }
+    END          { exit !found }' <<<"$wts"
 }
 
 # Delete an isolation branch left behind by its worktree. No-op unless the name
@@ -152,7 +168,7 @@ usage: teardown.sh [<worktree_path> ...] [--sweep]
        teardown.sh --reconcile-only
 
   <worktree_path> ...  tear these worktrees down explicitly (the batch manifest)
-  --sweep              reclaim every agent worktree whose remote branch is gone,
+  --sweep              reclaim every clean, unlocked agent worktree whose upstream is [gone],
                        orphan isolation branches, and ordinary [gone] branches
   --reconcile-only     ONLY reconcile the default branch — exclusive, never
                        combined with paths or --sweep
@@ -215,11 +231,34 @@ if [ "$SWEEP_MODE" = "1" ]; then
         echo "  KEEP (live isolation worktree — pass its path explicitly if debris): $path [$br]"
         continue ;;
     esac
-    if git ls-remote --exit-code --heads origin "$br" >/dev/null 2>&1; then
-      echo "  KEEP (remote branch still exists, PR likely open): $path [$br]"
-    else
-      echo "  gone/merged: $path [$br]"; remove_worktree "$path"
+    # A feature branch is "merged" only on POSITIVE evidence (#546): it had an
+    # upstream and that upstream is now [gone]. "No remote branch" is also the
+    # state of a live worker that switched to its feature branch and has not
+    # pushed yet, so it proves nothing. Three independent guards, each one
+    # sufficient to KEEP: never pushed, dirty tree, locked worktree.
+    upstream="$(git for-each-ref --format='%(upstream)' "refs/heads/$br" 2>/dev/null || true)"
+    track="$(git for-each-ref --format='%(upstream:track)' "refs/heads/$br" 2>/dev/null || true)"
+    if [ -z "$upstream" ]; then
+      echo "  KEEP (branch has no upstream — never pushed, a live worker's normal state; pass its path explicitly if debris): $path [$br]"
+      continue
     fi
+    if [ "$track" != "[gone]" ]; then
+      echo "  KEEP (remote branch still exists, PR likely open): $path [$br]"
+      continue
+    fi
+    if ! dirty="$(git -C "$path" status --porcelain 2>/dev/null)"; then
+      echo "  KEEP (could not read the worktree status — unknown is not clean; pass its path explicitly if debris): $path [$br]"
+      continue
+    fi
+    if [ -n "$dirty" ]; then
+      echo "  KEEP (uncommitted changes or untracked files — pass its path explicitly if debris): $path [$br]"
+      continue
+    fi
+    if worktree_locked "$path"; then
+      echo "  KEEP (worktree is locked — a live agent holds it; pass its path explicitly if debris): $path [$br]"
+      continue
+    fi
+    echo "  gone/merged: $path [$br]"; remove_worktree "$path"
   done < <(git worktree list --porcelain | awk '/^worktree /{print $2}' | grep "/.claude/worktrees/" || true)
 
   echo "== sweep: orphan ${ISO_PREFIX}* isolation branches (worktree gone — never [gone]) =="

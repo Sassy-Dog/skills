@@ -8,7 +8,7 @@ After a batch of parallel sub-agents merges (or fails), the coordinating session
 
 **`git branch --merged` is useless when the repo squash-merges.** A squash-merged branch's tip is NOT an ancestor of the default branch, so `--merged` reports it UNMERGED — a false negative that makes naive cleanup keep everything forever.
 
-The reliable merged signal is **"remote branch gone"**: merges delete the remote branch (via `--delete-branch`, `delete_branch_on_merge`, or the merge queue's own deletion), so a local worktree branch with no `origin/<branch>` counterpart has been merged (or deliberately closed). `teardown.sh --sweep` keys off exactly this. Corollary: never disable remote-branch deletion on merge — the whole cleanup signal depends on it.
+The reliable merged signal is **"remote branch gone"**: merges delete the remote branch (via `--delete-branch`, `delete_branch_on_merge`, or the merge queue's own deletion), so a local worktree branch whose upstream was deleted (`%(upstream:track)` = `[gone]`) has been merged (or deliberately closed). `teardown.sh --sweep` keys off exactly this, and only this: a branch with no upstream was never pushed (a live worker), so it is KEPT, as is any worktree with uncommitted or untracked files or a lock (#546); an explicit path is the only override. Corollary: never disable remote-branch deletion on merge — the whole cleanup signal depends on it.
 
 ## The isolation-branch leak
 

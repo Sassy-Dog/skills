@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Seven properties are asserted (7 was added by #486):
+# Eight properties are asserted (7 was added by #486, 8 by #546):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -44,6 +44,19 @@
 #      body is pinned at source level: the check precedes the first mutation and
 #      the refusal branch returns. Three mutants (check deleted, check moved
 #      after the remove, `return` dropped) must each fail that pin.
+#
+#   8. The sweep keeps a live worker's worktree (#546): a feature-branch
+#      worktree is swept only on POSITIVE evidence that it shipped. Four
+#      worktrees must SURVIVE --sweep and say why (branch never pushed; tracked
+#      change; untracked file; locked) while a clean, unlocked one whose branch
+#      was pushed and then deleted on the remote IS still swept, and an explicit
+#      path still removes the locked and the dirty one (the override is for
+#      explicit paths only). One mutant per guard (evidence, clean tree,
+#      unlocked) removes the live worktree and so reddens the survival
+#      assertion. "No upstream" and "upstream not [gone]" are one evidence
+#      guard here: an unpushed branch trips both, so the mutant neuters them
+#      together. Every mkscratch worktree is a SHIPPED one (pushed, then deleted
+#      on origin), because properties 1-2 need the sweep to reclaim it.
 #
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
@@ -124,6 +137,10 @@ mkscratch() { # <name> <n_worktrees> -> echoes the repo dir
         wt="$dir/.claude/worktrees/$id"
         git -C "$dir" worktree add -q -b "worktree-$id" "$wt" main
         git -C "$wt" switch -q -c "feat/issue-$i"
+        # Shipped: pushed, then deleted on origin at merge, so the upstream is
+        # [gone] (#546: the sweep reclaims only on that positive evidence).
+        git -C "$wt" push -q -u origin "feat/issue-$i"
+        git -C "$dir" push -q origin --delete "feat/issue-$i"
     done
     # Orphan isolation branch (worktree already gone) — sweep phase 2.
     git -C "$dir" branch worktree-agent-orphan main
@@ -456,6 +473,72 @@ for kind in deleted moved noreturn; do
         ok "merge-shepherd mutant '$kind' fails the pin"
     fi
 done
+
+# --- 8. the sweep keeps live workers' worktrees (#546) --------------------------
+echo "8. sweep keeps unpushed, dirty and locked worktrees" >&2
+mkguards() { # <name> -> repo with one worktree per case; echoes the repo dir
+    local d id wt
+    d="$(mkscratch "$1" 0)"
+    # Never pushed: a live worker that switched to its feature branch.
+    wt="$d/.claude/worktrees/agent-unpushed"
+    git -C "$d" worktree add -q -b worktree-agent-unpushed "$wt" main
+    git -C "$wt" switch -q -c feat/unpushed
+    echo work >"$wt/work.txt"; git -C "$wt" add work.txt; git -C "$wt" commit -qm work
+    # Shipped (pushed, then deleted on origin): dirty-tracked, untracked file,
+    # locked, and the clean unlocked one that must still be swept.
+    for id in dirtytracked untracked locked merged; do
+        wt="$d/.claude/worktrees/agent-$id"
+        git -C "$d" worktree add -q -b "worktree-agent-$id" "$wt" main
+        git -C "$wt" switch -q -c "feat/$id"
+        git -C "$wt" push -q -u origin "feat/$id"
+        git -C "$d" push -q origin --delete "feat/$id"
+    done
+    echo edit >>"$d/.claude/worktrees/agent-dirtytracked/README.md"
+    echo scratch >"$d/.claude/worktrees/agent-untracked/new.txt"
+    git -C "$d" worktree lock --reason "agent running" "$d/.claude/worktrees/agent-locked"
+    # Branch still on origin (PR open): the pre-existing KEEP.
+    wt="$d/.claude/worktrees/agent-open"
+    git -C "$d" worktree add -q -b worktree-agent-open "$wt" main
+    git -C "$wt" switch -q -c feat/open
+    git -C "$wt" push -q -u origin feat/open
+    echo "$d"
+}
+survives() { [ -d "$1/.claude/worktrees/agent-$2" ]; }  # <repo> <id>
+
+D="$(mkguards sweepguards)"
+run_teardown "$D" --sweep
+expect_status "sweep over the guard fixture succeeds" 0
+expect_re "  unpushed worktree kept, with the never-pushed reason" 'KEEP \(branch has no upstream.*agent-unpushed \[feat/unpushed\]'
+expect_re "  tracked-change worktree kept, with the dirty reason" 'KEEP \(uncommitted changes or untracked files.*agent-dirtytracked'
+expect_re "  untracked-file worktree kept, with the dirty reason" 'KEEP \(uncommitted changes or untracked files.*agent-untracked'
+expect_re "  locked worktree kept, with the locked reason" 'KEEP \(worktree is locked.*agent-locked \[feat/locked\]'
+expect_re "  open-PR worktree kept (remote branch still exists)" 'KEEP \(remote branch still exists.*agent-open'
+expect_re "  clean, unlocked, [gone] worktree is still swept" 'gone/merged: .*/agent-merged \[feat/merged\]'
+for w in unpushed dirtytracked untracked locked open; do
+    if survives "$D" "$w"; then ok "  worktree agent-$w survived the sweep"; else bad "  worktree agent-$w was swept — a live worker lost its tree"; fi
+done
+if survives "$D" merged; then bad "  the merged worktree is still on disk"; else ok "  the merged worktree is gone"; fi
+if git -C "$D" show-ref --verify --quiet refs/heads/feat/unpushed; then ok "  the unpushed branch (and its commit) survived"; else bad "  the unpushed branch was deleted"; fi
+# The override stays available to an explicit path, locked or dirty.
+run_teardown "$D" .claude/worktrees/agent-locked .claude/worktrees/agent-dirtytracked
+expect_status "explicit paths still remove a locked and a dirty worktree" 0
+if survives "$D" locked || survives "$D" dirtytracked; then bad "  explicit teardown no longer overrides lock/dirt"; else ok "  both explicit paths removed"; fi
+
+# One mutant per guard: each must remove a live worktree, proving the matching
+# survival assertion above is not vacuously green.
+mutant_bites() { # <label> <sed_expr> <id_that_must_now_be_swept>
+    local mut="$WORK/mut-$1" md
+    mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+    sed -i.bak "$2" "$mut/teardown.sh"
+    if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant '$1' anchor drifted: nothing changed"; return; fi
+    md="$(mkguards "mutrepo-$1")"
+    OUT="$(cd "$md" && PATH="$BIN:$PATH" bash "$mut/teardown.sh" --sweep 2>&1)"; STATUS=$?
+    if survives "$md" "$3"; then bad "  mutant '$1' still kept agent-$3 — the guard is not what protects it"; dump
+    else ok "  mutant '$1' sweeps agent-$3 (the gate bites)"; fi
+}
+mutant_bites evidence 's/^    if \[ -z "\$upstream" \]; then/    upstream=x; track="[gone]"; if [ -z "$upstream" ]; then/' unpushed
+mutant_bites clean-tree 's/^    if \[ -n "\$dirty" \]; then/    if false; then/' dirtytracked
+mutant_bites unlocked 's/^    if worktree_locked "\$path"; then/    if false; then/' locked
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
