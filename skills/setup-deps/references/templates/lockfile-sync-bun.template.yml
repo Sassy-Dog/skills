@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-bun · version 13
+# TEMPLATE: lockfile-sync-bun · version 14
 # LEGACY FALLBACK — not the default for bun repos anymore. Dependabot's native
 # `bun` ecosystem (GA 2025-02) reads and rewrites the text bun.lock itself
 # (bun >= 1.1.39): the default render for a bun repo is the bun block in

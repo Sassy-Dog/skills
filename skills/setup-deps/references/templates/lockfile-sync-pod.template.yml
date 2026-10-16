@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-pod · version 7
+# TEMPLATE: lockfile-sync-pod · version 8
 # Rendered by sassy-dog:setup-deps for repos where
 # detect-ecosystems.sh reports cocoapods with lockfile_risk (a tracked Podfile).
 #
