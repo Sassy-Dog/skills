@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 7
+# TEMPLATE: deps-cadence-impl · version 8
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -45,6 +45,11 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
+# Version 8 (impl version, #548) applies the version 7 empty-npm rule to the
+# bun and npm exact-pin section: empty `npm outdated --json` output is listed in
+# its existing `**Could not evaluate**` list as `<manifest> (npm outdated
+# produced no output)`, no longer read as `{}` (nothing behind). No literal the
+# routines parser matches changes.
 # Version 7 (impl version, #539) closes two gaps in the holds report (a third, the untested branches, is
 # fixtures in scripts/test-deps-cadence-policy.sh): empty
 # `npm outdated --json` output is `Could not evaluate` (npm prints `{}` itself
@@ -63,7 +68,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 7
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 8
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -439,7 +444,12 @@ jobs:
                 # npm outdated exits 1 whenever something IS outdated, so its
                 # status says nothing; unparseable output is the failure.
                 out="$(cd "./$mdir" && npm outdated --json 2>/dev/null)" || true
-                [ -n "$out" ] || out='{}'
+                # npm prints {} itself when nothing is outdated, so silence
+                # means it never ran (not on PATH, or an engine check that
+                # writes only to stderr): never "nothing is behind".
+                if [ -z "$out" ]; then
+                  unevaluated+="$manifest (npm outdated produced no output)"$'\n'; continue
+                fi
                 if ! latest="$(parse_npm_outdated <<<"$out" 2>/dev/null)"; then
                   unevaluated+="$manifest (npm outdated output not recognised)"$'\n'; continue
                 fi

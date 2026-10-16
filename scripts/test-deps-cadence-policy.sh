@@ -146,7 +146,13 @@
 #      three branches that had no fixture (a name pattern, a crate not in
 #      Cargo.lock, an unreadable `ignore:` file, skipped as root) each have a
 #      fixture and a mutant. The routines
-#      parity file needs the new heading `### Bare ignore: holds`.
+#      parity file needs the new heading `### Bare ignore: holds`. Version 8
+#      (#548) applies the same empty-npm rule to the bun and npm exact-pin
+#      section: `<manifest> (npm outdated produced no output)` joins its
+#      existing `**Could not evaluate**` list (fixture plus mutant, no routines
+#      literal touched), and the unreadable-`ignore:` mutant sits behind the
+#      same `id -u` guard as its fixture, printing a `skipped as root` line, so
+#      the gate is green as root rather than red for an environmental reason.
 #
 # 13. THE OPT-IN CODEGEN WORKFLOW (deps-cadence-codegen.template.yml, #519) is
 #      pinned in its own section at the end of this file (cg_static for the
@@ -1267,6 +1273,16 @@ report_checks() {
     elif ! grep -q 'Could not evaluate' "$d.tmp/deps-cadence/pins.md" || grep -q 'No exact pin is behind' "$d.tmp/deps-cadence/pins.md"; then
         echo "a failing bun outdated was not reported as 'could not evaluate'"; rc=1
     fi
+    # Empty `npm outdated --json` output (npm never ran) is "could not evaluate", never current.
+    d="$WORK/r-npm-empty"; rm -rf "$d" "$d.tmp"; new_repo "$d"
+    if ! out="$(cd "$d" && gh_shell "$report" RUNNER_TEMP="$d.tmp" LANES="npm:/web" GITHUB_STEP_SUMMARY="$d.summary" \
+            FAKE_NPM_OUTDATED=/dev/null 2>&1)"; then
+        echo "empty npm output killed the exact-pin report: $(tail -n1 <<<"$out")"; rc=1
+    else
+        grep -qxF -- '- web/package.json (npm outdated produced no output)' "$d.tmp/deps-cadence/pins.md" \
+            || { echo "empty npm output was not listed as 'Could not evaluate': $(tail -n4 "$d.tmp/deps-cadence/pins.md")"; rc=1; }
+        ! grep -q 'No exact pin is behind' "$d.tmp/deps-cadence/pins.md" || { echo "empty npm output was read as current"; rc=1; }
+    fi
     # The report never waits on a change: it carries no condition at all.
     cond="$(step_block "$impl" "$REPORT_STEP" | sed -n 's/^        if: //p')"
     [ -z "$cond" ] \
@@ -1426,12 +1442,17 @@ mutate "pub entry with no current read as current" impl '| select(.latest.versio
 mutate "npm error envelope read as current" impl 'if jq -e '\''type == "object" and (.error | type == "object" and (has("code") or has("summary")) and (has("latest") | not))'\'' <<<"$out" >/dev/null 2>&1; then' 'if false; then'
 mutate "bun peer/optional suffix kept" impl 'sub(/ \((dev|peer|optional)\)$/, "", $2)' 'sub(/ \(dev\)$/, "", $2)'
 mutate "unparseable pub read as current" impl 'echo "flutter pub outdated output not recognised" > "$cache/$key.err"' 'true'
+mutate "empty npm output read as current in the exact-pin report" impl $'unevaluated+="$manifest (npm outdated produced no output)"$\'\\n\'; continue' $'out=\'{}\''
 mutate "empty npm output read as current" impl $'echo "npm outdated produced no output" > "$cache/$key.err"; return 0' $'out=\'{}\''
 mutate "name pattern looked up as a package" impl $'Could not evaluate (a name pattern, not a package)"$\'\\n\'; continue' $'x"$\'\\n\'; continue'
 mutate "crate missing from Cargo.lock read as current" impl $'Could not evaluate (not in Cargo.lock)"$\'\\n\'; continue' $'x"$\'\\n\'; checked=$((checked + 1)); continue'
 mutate "duplicate crate compared with its first copy" impl '"$cache/$key.direct" | sort -u)"' '"$cache/$key.meta" | sort -u | head -n1)"'
 mutate "ambiguous duplicate crate compared anyway" impl '-ne 1 ]; then' '-lt 0 ]; then'
-mutate "unreadable ignore: file read as no holds" impl $'holds=""; unevaluated+="- \\`.github/dependabot.yml\\`: Could not evaluate (its ignore: rules could not be read)"$\'\\n\'' 'holds=""'
+if [ "$(id -u)" -ne 0 ]; then
+    mutate "unreadable ignore: file read as no holds" impl $'holds=""; unevaluated+="- \\`.github/dependabot.yml\\`: Could not evaluate (its ignore: rules could not be read)"$\'\\n\'' 'holds=""'
+else
+    echo "skipped as root: mutation (unreadable ignore: file read as no holds), its fixture cannot run (root reads any file)"
+fi
 mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
 mutate "holds report skips the summary" impl '          cat "$section" >> "$report"
           cat "$section" >> "$GITHUB_STEP_SUMMARY"
