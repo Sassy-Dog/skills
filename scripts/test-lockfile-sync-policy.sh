@@ -34,7 +34,10 @@
 #      ubuntu-latest on job 2, which may name macOS nowhere. No `{{RUNNER}}`
 #      fact, no `self-hosted` anywhere outside a comment. A fact would let a
 #      consumer re-open the hole at render time.
-#   2. NO CACHE. No `actions/cache` anywhere. Under pull_request_target a save
+#   2. NO CACHE OF ANY KIND: no `actions/cache`, and every setup action's
+#      built-in cache disabled (#551): `no-cache: true` on every
+#      oven-sh/setup-bun step (it saves a `bun-<hash>` entry otherwise, and the
+#      bun template has two, one per pin arm). Under pull_request_target a save
 #      lands in the default-branch cache scope, built from an install of the PR
 #      head's lockfile: cache poisoning. This departs from #515's "actions/cache
 #      keyed on bun.lock" decision on purpose; every run is a cold install. For
@@ -255,6 +258,39 @@ split_jobs() {
 }
 
 # check_git_hardened <job label> — property 10 over the loaded STEP_BODY.
+# builtin_cache_violations <file> — one line per setup step whose built-in cache is
+# not off (#551). oven-sh/setup-bun needs `no-cache: true`, actions/setup-node
+# needs `package-manager-cache: false`; subosito/flutter-action and
+# dtolnay/rust-toolchain must set no `*cache*:` input at all (flutter's `cache:`
+# defaults to false, and rust-toolchain has none). Comment lines are ignored; a
+# step ends at the next line at or left of its own `- ` indent, so a later job
+# cannot satisfy an earlier step.
+builtin_cache_violations() {
+    grep -Ev '^[[:space:]]*#' "$1" | awk '
+        function ind(s) { match(s, /^ */); return RLENGTH }
+        function fin() {
+            if (kind == "bun" && !ok) print "setup-bun step without `no-cache: true`: " name
+            if (kind == "node" && !ok) print "setup-node step without `package-manager-cache: false`: " name
+            if ((kind == "flutter" || kind == "rust") && bad) print kind " step sets a cache input: " name
+            kind = ""
+        }
+        /^[[:space:]]*$/ { next }
+        {
+            if (kind != "" && ind($0) <= dash) fin()
+            if ($0 ~ /^[[:space:]]*- /) {
+                dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0
+                if ($0 ~ /uses:[[:space:]]*oven-sh\/setup-bun@/) kind = "bun"
+                else if ($0 ~ /uses:[[:space:]]*actions\/setup-node@/) kind = "node"
+                else if ($0 ~ /uses:[[:space:]]*subosito\/flutter-action@/) kind = "flutter"
+                else if ($0 ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) kind = "rust"
+            }
+            if (kind == "bun" && $0 ~ /^[[:space:]]+no-cache:[[:space:]]*true[[:space:]]*$/) ok = 1
+            if (kind == "node" && $0 ~ /^[[:space:]]+package-manager-cache:[[:space:]]*false[[:space:]]*$/) ok = 1
+            if ((kind == "flutter" || kind == "rust") && $0 ~ /^[[:space:]]+[A-Za-z_-]*cache[A-Za-z_-]*:/) bad = 1
+        }
+        END { fin() }'
+}
+
 check_git_hardened() {
     local label="$1" rc=0 i body line uses_git
     # A git call starts at line start, after whitespace, or after ( " or a
@@ -346,6 +382,11 @@ check_common() {
     if grep -Eqi 'actions/cache|restore-keys|\.bun/install/cache' <<<"$nonc"; then
         echo "an actions/cache step (or a cache path) is present: a save under pull_request_target poisons the default-branch cache scope"; rc=1
     fi
+    # ...and no setup action's built-in cache either: setup-bun saves one unless
+    # `no-cache: true` (#551).
+    while IFS= read -r line; do
+        [ -n "$line" ] && { echo "built-in cache not disabled ($line): a save under pull_request_target poisons the default-branch cache scope"; rc=1; }
+    done < <(builtin_cache_violations "$f")
 
     # 3. actor gate, on both jobs
     for i in 1 2; do
@@ -1053,6 +1094,9 @@ mutate_perl "self-hosted runs-on (token job only)" "hard-code runs-on" "s/(${J2}
 mutate "runner as a render fact" "{{RUNNER}} fact" 'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 
 # 2. no cache
+mutate_perl "setup-bun built-in cache left on (file arm)" "built-in cache not disabled" 's/(bun-version-file: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate_perl "setup-bun built-in cache left on (literal arm)" "built-in cache not disabled" 's/(bun-version: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate "setup-bun no-cache set false" "built-in cache not disabled" 'no-cache: true' 'no-cache: false'
 mutate_perl "actions/cache re-added" "actions/cache" 's/(      \# Restore the BASE branch.s bun\.lock)/      - uses: actions\/cache\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: ~\/.bun\/install\/cache\n          key: bun-\${{ runner.os }}-\${{ hashFiles(\x27{{PKG_DIR}}\/bun.lock\x27) }}\n\n$1/'
 mutate_perl "cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
 

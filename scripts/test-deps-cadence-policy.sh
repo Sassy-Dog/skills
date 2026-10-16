@@ -160,6 +160,16 @@
 #      mutations). The impl-side change it came with is pinned here too: every
 #      git call in open-pr passes `nohooks` (template-version 5).
 #
+# 14. NO BUILT-IN CACHE (#551, impl version 9, codegen version 4). The refresh
+#      and regen jobs run on the default branch, and a hosted run's saved
+#      `bun-<hash>` entry is restored by the self-hosted CI sharing the repo's
+#      cache scope (it broke every PR on francisco). So every `oven-sh/setup-bun`
+#      step sets `no-cache: true` and every `actions/setup-node` step sets
+#      `package-manager-cache: false`, in every IF arm of both templates, and
+#      `subosito/flutter-action` and `dtolnay/rust-toolchain` set no `*cache*:`
+#      input. Checked per step by builtin_cache_violations, with a mutant per
+#      arm of each template that removes the input.
+#
 # Vacuous-green guards: each step this gate executes or slices must be found
 # (a renamed step would otherwise check nothing), and every mutation must
 # change the template, or it proves nothing.
@@ -198,6 +208,39 @@ HOLDS_STEP="Report bare ignore holds"
 PR_STEP="Open the refresh PR and enqueue it"
 PACKAGE_STEP="Package the refresh as a patch"
 VALIDATE_STEP="Validate and apply the refresh patch"
+
+# builtin_cache_violations <file> — one line per setup step whose built-in cache is
+# not off (#551). oven-sh/setup-bun needs `no-cache: true`, actions/setup-node
+# needs `package-manager-cache: false`; subosito/flutter-action and
+# dtolnay/rust-toolchain must set no `*cache*:` input at all (flutter's `cache:`
+# defaults to false, and rust-toolchain has none). Comment lines are ignored; a
+# step ends at the next line at or left of its own `- ` indent, so a later job
+# cannot satisfy an earlier step.
+builtin_cache_violations() {
+    grep -Ev '^[[:space:]]*#' "$1" | awk '
+        function ind(s) { match(s, /^ */); return RLENGTH }
+        function fin() {
+            if (kind == "bun" && !ok) print "setup-bun step without `no-cache: true`: " name
+            if (kind == "node" && !ok) print "setup-node step without `package-manager-cache: false`: " name
+            if ((kind == "flutter" || kind == "rust") && bad) print kind " step sets a cache input: " name
+            kind = ""
+        }
+        /^[[:space:]]*$/ { next }
+        {
+            if (kind != "" && ind($0) <= dash) fin()
+            if ($0 ~ /^[[:space:]]*- /) {
+                dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0
+                if ($0 ~ /uses:[[:space:]]*oven-sh\/setup-bun@/) kind = "bun"
+                else if ($0 ~ /uses:[[:space:]]*actions\/setup-node@/) kind = "node"
+                else if ($0 ~ /uses:[[:space:]]*subosito\/flutter-action@/) kind = "flutter"
+                else if ($0 ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) kind = "rust"
+            }
+            if (kind == "bun" && $0 ~ /^[[:space:]]+no-cache:[[:space:]]*true[[:space:]]*$/) ok = 1
+            if (kind == "node" && $0 ~ /^[[:space:]]+package-manager-cache:[[:space:]]*false[[:space:]]*$/) ok = 1
+            if ((kind == "flutter" || kind == "rust") && $0 ~ /^[[:space:]]+[A-Za-z_-]*cache[A-Za-z_-]*:/) bad = 1
+        }
+        END { fin() }'
+}
 
 # code <file> — the template body (after `---`) without comment-only lines.
 # Comments explain the rules in the very words the checks forbid.
@@ -348,6 +391,13 @@ check() {
     if grep -qE ':[[:space:]]*write([[:space:]]|$)' <<<"$c"; then
         echo "impl permissions grant the built-in token write"; rc=1
     fi
+
+    # 14. NO BUILT-IN CACHE (#551). The refresh job runs on the default branch, and
+    #     a hosted run's saved `bun-<hash>` entry is restored by the self-hosted
+    #     CI that shares the repo's cache scope (it broke every PR on francisco).
+    while IFS= read -r line; do
+        [ -n "$line" ] && { echo "impl: built-in cache not disabled ($line)"; rc=1; }
+    done < <(builtin_cache_violations "$impl")
 
     # 10 (static). secrets only in the plan job's presence check and open-pr;
     # one mint, in open-pr; open-pr runs nothing but git, gh and three actions.
@@ -1361,6 +1411,12 @@ mutate() {
 }
 
 APP='GH_TOKEN: ${{ steps.app_token.outputs.token }}'
+mutate "setup-bun built-in cache left on (file arm)" impl $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n'
+mutate "setup-bun built-in cache left on (literal arm)" impl $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n'
+mutate "setup-node built-in cache left on (file arm)" impl $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n'
+mutate "setup-node built-in cache left on (literal arm)" impl $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n'
+mutate "setup-node cache switched on" impl 'package-manager-cache: false' 'package-manager-cache: true'
+mutate "flutter cache switched on" impl $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n' $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n          cache: true\n'
 mutate "GITHUB_TOKEN fallback"       impl    "$APP" 'GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}'
 mutate "PAT credential"              impl    "$APP" 'GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}'
 mutate "trigger secrets: inherit"    trigger $'    secrets:\n      PLATFORM_WRITER_APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n      PLATFORM_WRITER_APP_PRIVATE_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}' '    secrets: inherit'
@@ -1545,6 +1601,9 @@ cg_static() { # <codegen template> <impl template>
     jr="$(job_block "$tpl" regen | grep -vE '^[[:space:]]*#')"
     jp="$(job_block "$tpl" push | grep -vE '^[[:space:]]*#')"
     if [ -z "$jr" ] || [ -z "$jp" ]; then echo "could not slice the regen and push jobs (renamed?)"; return 1; fi
+    while IFS= read -r u; do
+        [ -n "$u" ] && { echo "codegen: built-in cache not disabled ($u)"; rc=1; }
+    done < <(builtin_cache_violations "$tpl")
 
     # Trigger: pull_request only, never pull_request_target, never a schedule.
     grep -qE '^  pull_request:$' <<<"$c" || { echo "the codegen workflow is not triggered by pull_request"; rc=1; }
@@ -2115,6 +2174,10 @@ cgmutate_impl() { # <name> <from> <to> — a mutation of the IMPL seen by the co
 }
 
 BOT_AUTHOR="github.event.pull_request.user.login == '$CG_BOT' &&"
+cgmutate "setup-bun built-in cache left on (file arm)" static $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n'
+cgmutate "setup-bun built-in cache left on (literal arm)" static $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n'
+cgmutate "setup-node built-in cache left on (file arm)" static $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n'
+cgmutate "setup-node built-in cache left on (literal arm)" static $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n'
 cgmutate "pull_request_target trigger" static $'on:\n  pull_request:' $'on:\n  pull_request_target:'
 cgmutate "regen drops the author gate" static "    if: >-
       $BOT_AUTHOR
