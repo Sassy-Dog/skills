@@ -519,18 +519,18 @@ blocks wholesale and collapses each `{{APP_DIR}}/` prefix to nothing (a `./` pre
 the `on.paths` filter), which keeps root renders byte-identical to v1 output.
 
 **Hand-render precondition for `{{PKG_DIR}}` and `{{APP_DIR}}`: refuse, and report why, a directory
-containing any character outside `[A-Za-z0-9._@,~/ -]` and non-ASCII.** An allowlist, not a growing
+containing a `..` segment or any character that is neither in `[A-Za-z0-9._@,~/ -]` nor non-ASCII.** An allowlist, not a growing
 denylist, because the directory is substituted into several places that each treat different characters
-specially: the `on.paths` filter entries (bun's `'<dir>/**/package.json'`; pod's pubspec and Podfile
-entries), the `working-directory:` lines (bun's two, pod's two), job 1's diff pathspec
+specially: the `on.paths` filter entries (bun's `'<dir>/**/package.json'`; pod's
+`'<dir>/pubspec.yaml'`), the `working-directory:` lines (bun's two, pod's two), job 1's diff pathspec
 (`-- '<dir>/…'`), and the validators' `allowed=` string (bun) or array (pod). In the `on.paths`
 entries, `+` and a leading `!` change how the filter reads the entry. In the pathspec, which is
 glob-matched (it carries no `:(literal)`), `*`, `?` and `[` match other files, `\` is an fnmatch
 escape (the pathspec `'a\b/bun.lock'` also matches `ab/bun.lock`), and a leading `:` is pathspec
 magic. A `'` breaks the single-quoted shell strings. `@`, `,` and `~` are inert at every one of those
-sites, so scoped roots such as `packages/@acme/ui` are allowed, matching the lane-directory charset.
+sites, so scoped roots such as `packages/@acme/ui` are allowed (the lane-directory charset admits `@` too).
 There is no render script to refuse at, so the renderer (you) stops here. Spaces and non-ASCII are
-allowed and handled by `--numstat -z`. Job 1's pathspecs are intentionally not `:(literal)`: refusal
+allowed; `--numstat -z` handles the non-ASCII paths git would otherwise C-quote. Job 1's pathspecs are intentionally not `:(literal)`: refusal
 is the single strategy.
 
 `{{PKG_DIR}}` is the same shape one template over: the **bun install root** for
@@ -549,7 +549,7 @@ both of its jobs since template version 11 (#528), as `dependabot-auto-merge` ha
 result (see "Credential-bearing workflows that run package-manager code" below). Version 12 splits it
 into two jobs so bun never shares a VM with the token, and drops the cache; version 13 leases the
 push to the head SHA; version 14 reads `--numstat -z`, so an install root whose path git C-quotes
-(non-ASCII, a space, or a `"` or `\` a hand render would refuse first) validates instead of being rejected; the record is split by hand rather
+(non-ASCII, or a `"` or `\` a hand render would refuse first) validates instead of being rejected; the record is split by hand rather
 than by `read`'s IFS, which would trim a leading or trailing tab from the path. Its bun is `oven-sh/setup-bun` at
 the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
 follows it exactly, first match wins:
