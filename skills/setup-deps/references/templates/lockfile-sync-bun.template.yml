@@ -147,7 +147,9 @@
 #      ignored and every git call passing -c core.hooksPath=/dev/null
 #      -c core.fsmonitor=false, since a hook or fsmonitor program would inherit
 #      the push step's environment.
-#   9. No actions/cache. Under pull_request_target a save lands in the
+#   9. No cache of any kind: no actions/cache, and setup-bun's built-in cache
+#      off (no-cache: true on both steps, #551). Under pull_request_target a
+#      save lands in the
 #      default-branch cache scope, built from an install of the PR head's
 #      lockfile, so a poisoned lock could seed a cache the base branch's own
 #      workflows restore. Every run is a cold install, which is fine for a

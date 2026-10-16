@@ -132,7 +132,7 @@ jobs:
 
 # {{ENDIF}}
 # {{IF:NODE_PIN_FILE}}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: '{{NODE_VERSION_FILE}}'
           package-manager-cache: false
@@ -140,7 +140,7 @@ jobs:
 # {{ENDIF}}
 # {{IF:NODE_PIN_LITERAL}}
       # CI pins node as a literal, so this copy of it moves only on a re-render.
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '{{NODE_VERSION}}'
           package-manager-cache: false

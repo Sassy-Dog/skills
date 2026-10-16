@@ -190,6 +190,8 @@ TPL_DIR="$ROOT/skills/setup-deps/references/templates"
 TRIGGER="$TPL_DIR/deps-cadence.template.yml"
 IMPL="$TPL_DIR/deps-cadence-impl.template.yml"
 FIX="$ROOT/scripts/fixtures/deps-cadence"
+# shellcheck source=lib-builtin-cache.sh
+. "$ROOT/scripts/lib-builtin-cache.sh"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -209,38 +211,6 @@ PR_STEP="Open the refresh PR and enqueue it"
 PACKAGE_STEP="Package the refresh as a patch"
 VALIDATE_STEP="Validate and apply the refresh patch"
 
-# builtin_cache_violations <file> — one line per setup step whose built-in cache is
-# not off (#551). oven-sh/setup-bun needs `no-cache: true`, actions/setup-node
-# needs `package-manager-cache: false`; subosito/flutter-action and
-# dtolnay/rust-toolchain must set no `*cache*:` input at all (flutter's `cache:`
-# defaults to false, and rust-toolchain has none). Comment lines are ignored; a
-# step ends at the next line at or left of its own `- ` indent, so a later job
-# cannot satisfy an earlier step.
-builtin_cache_violations() {
-    grep -Ev '^[[:space:]]*#' "$1" | awk '
-        function ind(s) { match(s, /^ */); return RLENGTH }
-        function fin() {
-            if (kind == "bun" && !ok) print "setup-bun step without `no-cache: true`: " name
-            if (kind == "node" && !ok) print "setup-node step without `package-manager-cache: false`: " name
-            if ((kind == "flutter" || kind == "rust") && bad) print kind " step sets a cache input: " name
-            kind = ""
-        }
-        /^[[:space:]]*$/ { next }
-        {
-            if (kind != "" && ind($0) <= dash) fin()
-            if ($0 ~ /^[[:space:]]*- /) {
-                dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0
-                if ($0 ~ /uses:[[:space:]]*oven-sh\/setup-bun@/) kind = "bun"
-                else if ($0 ~ /uses:[[:space:]]*actions\/setup-node@/) kind = "node"
-                else if ($0 ~ /uses:[[:space:]]*subosito\/flutter-action@/) kind = "flutter"
-                else if ($0 ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) kind = "rust"
-            }
-            if (kind == "bun" && $0 ~ /^[[:space:]]+no-cache:[[:space:]]*true[[:space:]]*$/) ok = 1
-            if (kind == "node" && $0 ~ /^[[:space:]]+package-manager-cache:[[:space:]]*false[[:space:]]*$/) ok = 1
-            if ((kind == "flutter" || kind == "rust") && $0 ~ /^[[:space:]]+[A-Za-z_-]*cache[A-Za-z_-]*:/) bad = 1
-        }
-        END { fin() }'
-}
 
 # code <file> — the template body (after `---`) without comment-only lines.
 # Comments explain the rules in the very words the checks forbid.
@@ -395,9 +365,10 @@ check() {
     # 14. NO BUILT-IN CACHE (#551). The refresh job runs on the default branch, and
     #     a hosted run's saved `bun-<hash>` entry is restored by the self-hosted
     #     CI that shares the repo's cache scope (it broke every PR on francisco).
-    while IFS= read -r line; do
-        [ -n "$line" ] && { echo "impl: built-in cache not disabled ($line)"; rc=1; }
-    done < <(builtin_cache_violations "$impl")
+    out="$(builtin_cache_violations "$impl" 2 2)" || {
+        while IFS= read -r line; do echo "impl: built-in cache not disabled ($line)"; done <<<"$out"
+        rc=1
+    }
 
     # 10 (static). secrets only in the plan job's presence check and open-pr;
     # one mint, in open-pr; open-pr runs nothing but git, gh and three actions.
@@ -1395,7 +1366,7 @@ fi
 # --- mutations: each regression must fail the check ---------------------------------
 # mutate <name> <target trigger|impl> <from> <to> — LITERAL replacement.
 mutate() {
-    local name="$1" which="$2" src mt mi
+    local name="$1" which="$2" src mt mi out
     if [ "$which" = "trigger" ]; then src="$TRIGGER"; else src="$IMPL"; fi
     mt="$WORK/mut-trigger.yml"; mi="$WORK/mut-impl.yml"
     cp "$TRIGGER" "$mt"; cp "$IMPL" "$mi"
@@ -1403,20 +1374,27 @@ mutate() {
     FROM="$3" TO="$4" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$src" > "$dst"
     if cmp -s "$dst" "$src"; then
         bad "mutation ($name) changed nothing, so it proves nothing (template reworded?)"
-    elif check "$mt" "$mi" >/dev/null 2>&1; then
+    elif out="$(check "$mt" "$mi" 2>&1)"; then
         bad "mutation ($name) PASSED the check — the gate cannot catch it"
+    elif [ -n "${5-}" ] && ! grep -qF -- "$5" <<<"$out"; then
+        bad "mutation ($name) failed, but not for the expected reason ($5)"
     else
         ok "mutation ($name) fails the check"
     fi
 }
 
 APP='GH_TOKEN: ${{ steps.app_token.outputs.token }}'
-mutate "setup-bun built-in cache left on (file arm)" impl $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n'
-mutate "setup-bun built-in cache left on (literal arm)" impl $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n'
-mutate "setup-node built-in cache left on (file arm)" impl $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n'
-mutate "setup-node built-in cache left on (literal arm)" impl $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n'
-mutate "setup-node cache switched on" impl 'package-manager-cache: false' 'package-manager-cache: true'
-mutate "flutter cache switched on" impl $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n' $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n          cache: true\n'
+mutate "setup-bun built-in cache left on (file arm)" impl $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+mutate "setup-bun built-in cache left on (literal arm)" impl $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n' 'built-in cache not disabled'
+mutate "setup-node built-in cache left on (file arm)" impl $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+mutate "setup-node built-in cache left on (literal arm)" impl $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n' 'built-in cache not disabled'
+mutate "setup-node cache switched on" impl 'package-manager-cache: false' 'package-manager-cache: true' 'built-in cache not disabled'
+mutate "flutter cache switched on" impl $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n' $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n          cache: true\n' 'built-in cache not disabled'
+mutate "setup-bun no-cache set false" impl 'no-cache: true' 'no-cache: false' 'built-in cache not disabled'
+mutate "setup-bun renamed (zero steps classified)" impl 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@' 'expected 2 setup-bun steps'
+mutate "setup-node renamed (zero steps classified)" impl 'uses: actions/setup-node@' 'uses: example/setup-node-renamed@' 'expected 2 setup-node steps'
+mutate "setup-bun in the name-first form, cache left on" impl $'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'      - name: Set up bun\n        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+mutate "rust cache switched on" impl $'          toolchain: ${{ steps.rust_pin.outputs.toolchain }}\n' $'          toolchain: ${{ steps.rust_pin.outputs.toolchain }}\n          cache: true\n' 'built-in cache not disabled'
 mutate "GITHUB_TOKEN fallback"       impl    "$APP" 'GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.GITHUB_TOKEN }}'
 mutate "PAT credential"              impl    "$APP" 'GH_TOKEN: ${{ secrets.DEPS_AUTOMATION_TOKEN }}'
 mutate "trigger secrets: inherit"    trigger $'    secrets:\n      PLATFORM_WRITER_APP_CLIENT_ID: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}\n      PLATFORM_WRITER_APP_PRIVATE_KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}' '    secrets: inherit'
@@ -1596,14 +1574,15 @@ if_block() {
 }
 
 cg_static() { # <codegen template> <impl template>
-    local tpl="$1" impl="$2" rc=0 c jr jp frag mint_ln val_ln cls_ln n u blocks bodies
+    local tpl="$1" impl="$2" rc=0 c jr jp frag mint_ln val_ln cls_ln n u blocks bodies out
     c="$(code "$tpl")"
     jr="$(job_block "$tpl" regen | grep -vE '^[[:space:]]*#')"
     jp="$(job_block "$tpl" push | grep -vE '^[[:space:]]*#')"
     if [ -z "$jr" ] || [ -z "$jp" ]; then echo "could not slice the regen and push jobs (renamed?)"; return 1; fi
-    while IFS= read -r u; do
-        [ -n "$u" ] && { echo "codegen: built-in cache not disabled ($u)"; rc=1; }
-    done < <(builtin_cache_violations "$tpl")
+    out="$(builtin_cache_violations "$tpl" 2 2)" || {
+        while IFS= read -r u; do echo "codegen: built-in cache not disabled ($u)"; done <<<"$out"
+        rc=1
+    }
 
     # Trigger: pull_request only, never pull_request_target, never a schedule.
     grep -qE '^  pull_request:$' <<<"$c" || { echo "the codegen workflow is not triggered by pull_request"; rc=1; }
@@ -2159,10 +2138,11 @@ fi
 
 # cgmutate <name> <static|exec|both> <from> <to> — LITERAL replacement in a copy.
 cgmutate() {
-    local name="$1" kind="$2" mt="$WORK/mut-codegen.yml"
+    local name="$1" kind="$2" mt="$WORK/mut-codegen.yml" cg_out
     FROM="$3" TO="$4" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$CODEGEN" > "$mt"
     if cmp -s "$mt" "$CODEGEN"; then bad "mutation ($name) changed nothing, so it proves nothing (template reworded?)"; return; fi
-    if [ "$kind" != exec ] && cg_static "$mt" "$IMPL" >/dev/null 2>&1; then bad "mutation ($name) PASSED the static check — the gate cannot catch it"; return; fi
+    if [ "$kind" != exec ] && cg_out="$(cg_static "$mt" "$IMPL" 2>&1)"; then bad "mutation ($name) PASSED the static check — the gate cannot catch it"; return; fi
+    if [ "$kind" != exec ] && [ -n "${5-}" ] && ! grep -qF -- "$5" <<<"$cg_out"; then bad "mutation ($name) failed, but not for the expected reason ($5)"; return; fi
     if [ "$kind" = exec ] && cg_exec "$mt" >/dev/null 2>&1; then bad "mutation ($name) PASSED the executed check — the gate cannot catch it"; return; fi
     ok "mutation ($name) fails the check"
 }
@@ -2174,10 +2154,17 @@ cgmutate_impl() { # <name> <from> <to> — a mutation of the IMPL seen by the co
 }
 
 BOT_AUTHOR="github.event.pull_request.user.login == '$CG_BOT' &&"
-cgmutate "setup-bun built-in cache left on (file arm)" static $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n'
-cgmutate "setup-bun built-in cache left on (literal arm)" static $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n'
-cgmutate "setup-node built-in cache left on (file arm)" static $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n'
-cgmutate "setup-node built-in cache left on (literal arm)" static $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n'
+cgmutate "setup-bun built-in cache left on (file arm)" static $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+cgmutate "setup-bun built-in cache left on (literal arm)" static $'          bun-version: \'{{BUN_VERSION}}\'\n          no-cache: true\n' $'          bun-version: \'{{BUN_VERSION}}\'\n' 'built-in cache not disabled'
+cgmutate "setup-node built-in cache left on (file arm)" static $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n          package-manager-cache: false\n' $'          node-version-file: \'{{NODE_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+cgmutate "setup-node built-in cache left on (literal arm)" static $'          node-version: \'{{NODE_VERSION}}\'\n          package-manager-cache: false\n' $'          node-version: \'{{NODE_VERSION}}\'\n' 'built-in cache not disabled'
+cgmutate "setup-bun no-cache set false" static 'no-cache: true' 'no-cache: false' 'built-in cache not disabled'
+cgmutate "setup-node cache switched on" static 'package-manager-cache: false' 'package-manager-cache: true' 'built-in cache not disabled'
+cgmutate "setup-bun renamed (zero steps classified)" static 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@' 'expected 2 setup-bun steps'
+cgmutate "setup-node renamed (zero steps classified)" static 'uses: actions/setup-node@' 'uses: example/setup-node-renamed@' 'expected 2 setup-node steps'
+cgmutate "setup-bun in the name-first form, cache left on" static $'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'      - name: Set up bun\n        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n        with:\n          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'built-in cache not disabled'
+cgmutate "flutter cache switched on" static $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n' $'          flutter-version: ${{ steps.flutter_pin.outputs.version }}\n          cache: true\n' 'built-in cache not disabled'
+cgmutate "rust cache switched on" static $'          toolchain: ${{ steps.rust_pin.outputs.toolchain }}\n' $'          toolchain: ${{ steps.rust_pin.outputs.toolchain }}\n          cache: true\n' 'built-in cache not disabled'
 cgmutate "pull_request_target trigger" static $'on:\n  pull_request:' $'on:\n  pull_request_target:'
 cgmutate "regen drops the author gate" static "    if: >-
       $BOT_AUTHOR

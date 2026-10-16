@@ -202,6 +202,8 @@ export LC_ALL=C
 command -v perl >/dev/null 2>&1 || { echo "  FAIL perl is required for the mutations and is not on PATH"; exit 1; }
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=lib-builtin-cache.sh
+. "$ROOT/scripts/lib-builtin-cache.sh"
 TPL_DIR="$ROOT/skills/setup-deps/references/templates"
 BUN_TEMPLATE="$TPL_DIR/lockfile-sync-bun.template.yml"
 WORK="$(mktemp -d)"
@@ -258,38 +260,6 @@ split_jobs() {
 }
 
 # check_git_hardened <job label> — property 10 over the loaded STEP_BODY.
-# builtin_cache_violations <file> — one line per setup step whose built-in cache is
-# not off (#551). oven-sh/setup-bun needs `no-cache: true`, actions/setup-node
-# needs `package-manager-cache: false`; subosito/flutter-action and
-# dtolnay/rust-toolchain must set no `*cache*:` input at all (flutter's `cache:`
-# defaults to false, and rust-toolchain has none). Comment lines are ignored; a
-# step ends at the next line at or left of its own `- ` indent, so a later job
-# cannot satisfy an earlier step.
-builtin_cache_violations() {
-    grep -Ev '^[[:space:]]*#' "$1" | awk '
-        function ind(s) { match(s, /^ */); return RLENGTH }
-        function fin() {
-            if (kind == "bun" && !ok) print "setup-bun step without `no-cache: true`: " name
-            if (kind == "node" && !ok) print "setup-node step without `package-manager-cache: false`: " name
-            if ((kind == "flutter" || kind == "rust") && bad) print kind " step sets a cache input: " name
-            kind = ""
-        }
-        /^[[:space:]]*$/ { next }
-        {
-            if (kind != "" && ind($0) <= dash) fin()
-            if ($0 ~ /^[[:space:]]*- /) {
-                dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0
-                if ($0 ~ /uses:[[:space:]]*oven-sh\/setup-bun@/) kind = "bun"
-                else if ($0 ~ /uses:[[:space:]]*actions\/setup-node@/) kind = "node"
-                else if ($0 ~ /uses:[[:space:]]*subosito\/flutter-action@/) kind = "flutter"
-                else if ($0 ~ /uses:[[:space:]]*dtolnay\/rust-toolchain@/) kind = "rust"
-            }
-            if (kind == "bun" && $0 ~ /^[[:space:]]+no-cache:[[:space:]]*true[[:space:]]*$/) ok = 1
-            if (kind == "node" && $0 ~ /^[[:space:]]+package-manager-cache:[[:space:]]*false[[:space:]]*$/) ok = 1
-            if ((kind == "flutter" || kind == "rust") && $0 ~ /^[[:space:]]+[A-Za-z_-]*cache[A-Za-z_-]*:/) bad = 1
-        }
-        END { fin() }'
-}
 
 check_git_hardened() {
     local label="$1" rc=0 i body line uses_git
@@ -347,7 +317,7 @@ check_checkout() {
 #   C_VALIDATE      the function that statically checks job 2's validate step
 check_common() {
     local f="$1" pm="$2" rc=0 d="$WORK/split" i line body nonc runs n
-    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up want j2nonc
+    local checkout download validate gate mint push installs=() j1 j2 uploads patch gateline up want j2nonc out
     # A package manager at command position: line start (after run:), or after
     # && ; | or $( — not a word inside a quoted message.
     local pm2='(^[[:space:]]*(run:[[:space:]]+)?|&&[[:space:]]*|;[[:space:]]*|\|[[:space:]]*|\$\([[:space:]]*)(bun|bunx|npm|npx|yarn|pnpm|pod|bundle|gem|flutter|dart)([[:space:]]|$)'
@@ -384,9 +354,14 @@ check_common() {
     fi
     # ...and no setup action's built-in cache either: setup-bun saves one unless
     # `no-cache: true` (#551).
-    while IFS= read -r line; do
-        [ -n "$line" ] && { echo "built-in cache not disabled ($line): a save under pull_request_target poisons the default-branch cache scope"; rc=1; }
-    done < <(builtin_cache_violations "$f")
+    # C_SETUP_BUN is the exact setup-bun step count (check_bun sets 2); unset
+    # for pod, which has none.
+    out="$(builtin_cache_violations "$f" "${C_SETUP_BUN-}")" || {
+        while IFS= read -r line; do
+            echo "built-in cache not disabled ($line): a save under pull_request_target poisons the default-branch cache scope"
+        done <<<"$out"
+        rc=1
+    }
 
     # 3. actor gate, on both jobs
     for i in 1 2; do
@@ -1008,6 +983,7 @@ check_bun() {
     C_J1=update-bun-lock; C_R1=ubuntu-latest; C_R2=ubuntu-latest
     C_PATHSPEC="-- '{{PKG_DIR}}/bun.lock'"; C_PATHSPEC_DESC="the one '{{PKG_DIR}}/bun.lock' pathspec"
     C_VALIDATE=static_validate_bun
+    C_SETUP_BUN=2
     check_common "$f" 'bun install' || rc=1
     check_validator "$f" || rc=1
 
@@ -1096,6 +1072,8 @@ mutate "runner as a render fact" "{{RUNNER}} fact" 'runs-on: ubuntu-latest' 'run
 # 2. no cache
 mutate_perl "setup-bun built-in cache left on (file arm)" "built-in cache not disabled" 's/(bun-version-file: [^\n]*\n)\s+no-cache: true\n/$1/'
 mutate_perl "setup-bun built-in cache left on (literal arm)" "built-in cache not disabled" 's/(bun-version: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate "setup-bun renamed (zero steps classified)" "expected 2 setup-bun steps" 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@'
+mutate_perl "setup-bun in the name-first form, cache left on" "built-in cache not disabled" 's/      - uses: (oven-sh\/setup-bun\@[^\n]*\n        with:\n          bun-version-file: [^\n]*\n)          no-cache: true\n/      - name: Set up bun\n        uses: $1/'
 mutate "setup-bun no-cache set false" "built-in cache not disabled" 'no-cache: true' 'no-cache: false'
 mutate_perl "actions/cache re-added" "actions/cache" 's/(      \# Restore the BASE branch.s bun\.lock)/      - uses: actions\/cache\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: ~\/.bun\/install\/cache\n          key: bun-\${{ runner.os }}-\${{ hashFiles(\x27{{PKG_DIR}}\/bun.lock\x27) }}\n\n$1/'
 mutate_perl "cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
