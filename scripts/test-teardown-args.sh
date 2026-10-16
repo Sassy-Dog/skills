@@ -63,9 +63,13 @@
 #      locked, readable HEAD, readable worktree list, readable git dir, the
 #      sequencer sentinel (a clean tree with only <gitdir>/sequencer left), the
 #      detached-HEAD reachability check (a detached commit no ref contains is
-#      kept; a reachable one is swept) and the unguarded detached removal. The
-#      four fail-closed branches are exercised with a
-#      PATH-shimmed `git` that fails only that call. Every mkscratch worktree is
+#      kept; a reachable one is swept), the isolation-branch filter (a worktree
+#      detached at the tip of its OWN worktree-agent-* branch is kept and that
+#      branch survives, since removal would delete the only ref holding the
+#      commit) and the unguarded detached removal. The five fail-closed
+#      branches are status, HEAD, git dir, worktree list and the reachability
+#      query; each is exercised with a PATH-shimmed `git` that fails only that
+#      call. Every mkscratch worktree is
 #      a SHIPPED one (pushed, then deleted on origin), because properties 1-2
 #      need the sweep to reclaim it.
 #
@@ -533,6 +537,12 @@ mkguards() { # <name> -> repo with one worktree per case; echoes the repo dir
     wt="$d/.claude/worktrees/agent-unreachable"
     git -C "$d" worktree add -q --detach "$wt" main
     echo lost >"$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm lost
+    # Detached at the tip of its OWN isolation branch: the only ref holding the
+    # commit is one the removal itself would delete, so it must not vouch for it.
+    wt="$d/.claude/worktrees/agent-isotip"
+    git -C "$d" worktree add -q -b worktree-agent-isotip "$wt" main
+    echo iso >"$wt/iso.txt"; git -C "$wt" add iso.txt; git -C "$wt" commit -qm iso
+    git -C "$wt" checkout -q --detach
     # A shipped branch whose multi-commit cherry-pick stopped on a conflict and
     # was then committed by hand: clean tree, no CHERRY_PICK_HEAD, but the
     # sequencer directory is still there.
@@ -611,7 +621,9 @@ for w in rb-clean rb-locked; do
 done
 expect_re "  detached worktree with an unreachable commit kept" 'KEEP \(detached HEAD is not reachable.*agent-unreachable'
 expect_re "  clean worktree with only a sequencer dir left behind kept" 'KEEP \(a git operation .*in progress.*agent-seq'
-for w in unreachable seq; do
+expect_re "  detached at its own isolation-branch tip kept (the isolation ref cannot vouch)" 'KEEP \(detached HEAD is not reachable.*agent-isotip'
+if git -C "$D" show-ref --verify --quiet refs/heads/worktree-agent-isotip; then ok "  its isolation branch survived"; else bad "  the isolation branch was deleted, dangling the commit"; fi
+for w in unreachable seq isotip; do
     if survives "$D" "$w"; then ok "  worktree agent-$w survived the sweep"; else bad "  worktree agent-$w was swept"; fi
 done
 if survives "$D" plain-detached; then bad "  the finished detached worktree is still on disk"; else ok "  the finished detached worktree is gone"; fi
@@ -644,21 +656,28 @@ mutant_bites untracked-all 's/--untracked-files=all/--untracked-files=no/' untra
 mutant_bites in-progress 's/^  if worktree_op_in_progress "\$path"; then/  if false; then/' rb-clean
 mutant_bites unlocked 's/^  if worktree_locked "\$path"; then/  if false; then/' locked
 mutant_bites reachability 's/^      if ! detached_head_reachable "\$path"; then/      if false; then/' unreachable
+mutant_bites iso-filter '/^    case "\$r" in "refs\/heads\/\$ISO_PREFIX"\*) continue ;; esac/d' isotip
 mutant_bites sequencer 's/ BISECT_LOG sequencer; do/ BISECT_LOG; do/' seq
 mutant_bites detached-unguarded 's/^      sweep_live_guard "\$path" "(detached)" || continue/      :/' rb-locked
 
 # Fail-closed branches, each exercised by a git that fails only that call and
 # each with its own mutant: unknown is a KEEP.
-shim_case() { # <label> <fail_pat> <nth> <keep_message> <mutant_sed_expr>
-    local d mut="$WORK/mut-$1"
-    d="$(mkshipped "shim-$1")"
+mkdetached() { # <name> -> repo with one clean, unlocked, detached-at-main worktree agent-s
+    local d
+    d="$(mkscratch "$1" 0)"
+    git -C "$d" worktree add -q --detach "$d/.claude/worktrees/agent-s" main
+    echo "$d"
+}
+shim_case() { # <label> <fail_pat> <nth> <keep_message> <mutant_sed_expr> [fixture_fn]
+    local d mut="$WORK/mut-$1" mk="${6:-mkshipped}"
+    d="$($mk "shim-$1")"
     shim_sweep "$d" "$TEARDOWN" "$2" "$3"
     expect "  $1: a failed call is a KEEP, with its reason" "$4"
     if survives "$d" s; then ok "  $1: the worktree survived"; else bad "  $1: the worktree was swept on an unreadable answer"; fi
     mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
     sed -i.bak "$5" "$mut/teardown.sh"
     if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  $1: mutant anchor drifted"; return; fi
-    d="$(mkshipped "shimmut-$1")"
+    d="$($mk "shimmut-$1")"
     shim_sweep "$d" "$mut/teardown.sh" "$2" "$3"
     if survives "$d" s; then bad "  $1: mutant without the fail-closed branch still kept the worktree"; dump
     else ok "  $1: mutant without the fail-closed branch sweeps it (the gate bites)"; fi
@@ -669,6 +688,7 @@ shim_sweep "$D" "$TEARDOWN" "no-such-call" 0
 if survives "$D" s; then bad "  control: the shipped worktree survived with nothing failing"; dump; else ok "  control: the shipped worktree is swept when nothing fails"; fi
 shim_case status "status --porcelain" 0 "could not read the worktree status" 's/if ! dirty=/dirty=""; if false \&\& ! dirty=/'
 shim_case head "symbolic-ref -q HEAD" 0 "could not read the worktree HEAD" 's/^    if \[ "\$ref_rc" -ne 0 \] \&\& \[ "\$ref_rc" -ne 1 \]; then/    if false; then/'
+shim_case reachability "--contains HEAD" 0 "detached HEAD is not reachable" 's/^  return 1  # no other ref contains HEAD/  return 0  # no other ref contains HEAD/' mkdetached
 shim_case git-dir "rev-parse --absolute-git-dir" 0 "git operation" '/--absolute-git-dir/s/ || return 0//;/^  \[ -n "\$gd" \] || return 0/d'
 shim_case worktree-list "worktree list --porcelain" 2 "worktree is locked" 's/wts="\$(git worktree list --porcelain)" || return 0/wts="$(git worktree list --porcelain)"/'
 

@@ -7,7 +7,9 @@
 # Usage:
 #   teardown.sh <worktree_path> [<worktree_path> ...]   # explicit, from the batch manifest
 #   teardown.sh --sweep                                  # every .claude/worktrees/agent-*
-#                                                        #   whose upstream is [gone] (clean, unlocked), PLUS
+#                                                        #   whose upstream is [gone], or that is detached
+#                                                        #   with its HEAD on another ref (either way
+#                                                        #   clean, idle, unlocked), PLUS
 #                                                        #   orphan isolation branches whose
 #                                                        #   worktree is already gone, PLUS
 #                                                        #   ordinary [gone] local branches
@@ -65,9 +67,10 @@
 # merge-shepherd.sh's inconclusive stack probe: unknown means wait, not act).
 #
 # Worktrees are removed with `-f -f`, which overrides a lock and a dirty tree. A
-# lock is treated as a live agent (observed 2026-10-16: a finished worker's
-# worktree was unlocked while two running workers' worktrees stayed locked); a lock
-# left behind by a crashed agent needs an explicit path. The override applies to
+# lock is treated as a live agent, a conservative policy (an observation recorded
+# on #546, 2026-10-16: a finished worker's worktree was unlocked while two running
+# workers' worktrees stayed locked); a lock left behind by a crashed agent needs an
+# explicit path. The override applies to
 # EXPLICIT paths only; --sweep never infers it (#546): a feature-branch worktree
 # is swept only if its upstream existed and is now [gone] AND its tree is clean AND
 # no git operation (rebase, merge, cherry-pick, revert, bisect, sequencer) is under
@@ -75,10 +78,13 @@
 # tree, an operation in progress or a lock is KEPT and reported, because a live
 # worker that switched branches but has not pushed looks exactly like a merged one
 # otherwise. A detached worktree gets the same live-worker guards (a paused rebase
-# is detached), and a git error reading HEAD is a KEEP, not "detached". A detached
-# worktree is also swept only if its HEAD is reachable from a branch, tag or remote
-# ref: commits made on a detached HEAD lose their only anchor (and the per-worktree
-# reflog) when the worktree goes.
+# is detached). Fail-closed KEEPs (unknown is not verified): an unreadable HEAD,
+# status, git dir or worktree list, and a reachability query that returns nothing.
+# A detached worktree is also swept only if its HEAD is reachable from a branch, tag
+# or remote ref other than an isolation branch (removal deletes that one): commits
+# made on a detached HEAD lose their only anchor (and the per-worktree reflog)
+# when the worktree goes. Accepted, predating #546: a clean, unlocked [gone]
+# branch worktree holding local commits made after the merge is still swept (-D).
 # Stashes are reported but NEVER auto-dropped (destructive — human's call).
 #
 # Checkout guard (#486): every mode below mutates the local checkout (worktree
@@ -139,11 +145,20 @@ worktree_op_in_progress() {  # $1 = worktree path — true if a rebase/merge/che
   return 1
 }
 
-detached_head_reachable() {  # $1 = worktree path — true if a branch, tag or remote ref contains its HEAD
-  # Any error answers "not reachable": unknown is not verified, so the sweep keeps it.
-  local refs
-  refs="$(git -C "$1" for-each-ref --contains HEAD --count=1 --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null)" || return 1
-  [ -n "$refs" ]
+detached_head_reachable() {  # $1 = worktree path — true if a branch, tag or remote ref OTHER than an isolation branch contains its HEAD
+  # Isolation branches (refs/heads/$ISO_PREFIX*) never count: removing the worktree
+  # deletes its own isolation branch (remove_worktree -> delete_isolation_branch),
+  # so that ref cannot vouch for commits it is about to lose. Their lifecycle
+  # belongs to the orphan phase. A failed query prints nothing, and empty output
+  # is "not reachable" below: that is the only fail-closed signal here.
+  local refs r
+  refs="$(git -C "$1" for-each-ref --contains HEAD --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null)"
+  while IFS= read -r r; do
+    [ -z "$r" ] && continue
+    case "$r" in "refs/heads/$ISO_PREFIX"*) continue ;; esac
+    return 0
+  done <<<"$refs"
+  return 1  # no other ref contains HEAD, or the query failed
 }
 
 # The shared "is a live worker in here" guards for --sweep: returns 0 only when
@@ -223,7 +238,9 @@ usage: teardown.sh [<worktree_path> ...] [--sweep]
        teardown.sh --reconcile-only
 
   <worktree_path> ...  tear these worktrees down explicitly (the batch manifest)
-  --sweep              reclaim every clean, unlocked agent worktree whose upstream is [gone],
+  --sweep              reclaim every agent worktree that is clean, unlocked and mid no git
+                       operation AND either has an upstream that is [gone] or is detached
+                       with its HEAD reachable from a non-isolation ref (others are KEPT),
                        orphan isolation branches, and ordinary [gone] branches
   --reconcile-only     ONLY reconcile the default branch — exclusive, never
                        combined with paths or --sweep
@@ -271,7 +288,7 @@ if [ "${#PATHS[@]}" -gt 0 ]; then
 fi
 
 if [ "$SWEEP_MODE" = "1" ]; then
-  echo "== sweep: agent worktrees whose upstream was deleted ([gone]; squash-merged + deleted) =="
+  echo "== sweep: agent worktrees whose upstream was deleted ([gone]; squash-merged + deleted), clean, idle, unlocked; or detached with a reachable HEAD =="
   git fetch --prune --quiet origin 2>/dev/null || true
   while IFS= read -r path; do
     [ -z "$path" ] && continue
@@ -286,7 +303,8 @@ if [ "$SWEEP_MODE" = "1" ]; then
     br="${ref#refs/heads/}"
     if [ -z "$br" ]; then
       # Detached HEAD: no branch evidence to weigh, so only the live-worker guards
-      # apply (readable+clean tree, no rebase/merge/cherry-pick/bisect, unlocked).
+      # apply (readable+clean tree, no rebase/merge/cherry-pick/revert/bisect/sequencer, unlocked)
+      # plus a HEAD reachable from a non-isolation ref.
       # A paused rebase is detached too, and is exactly a live worker.
       sweep_live_guard "$path" "(detached)" || continue
       if ! detached_head_reachable "$path"; then
@@ -307,8 +325,9 @@ if [ "$SWEEP_MODE" = "1" ]; then
     # A feature branch is "merged" only on POSITIVE evidence (#546): it had an
     # upstream and that upstream is now [gone]. "No remote branch" is also the
     # state of a live worker that switched to its feature branch and has not
-    # pushed yet, so it proves nothing. Three independent guards, each one
-    # sufficient to KEEP: never pushed, dirty tree, locked worktree.
+    # pushed yet, so it proves nothing. Each of these is sufficient to KEEP:
+    # never pushed, upstream not [gone], and (in sweep_live_guard) unreadable or
+    # dirty tree, an operation in progress, a locked worktree.
     upstream="$(git for-each-ref --format='%(upstream)' "refs/heads/$br" 2>/dev/null || true)"
     track="$(git for-each-ref --format='%(upstream:track)' "refs/heads/$br" 2>/dev/null || true)"
     if [ -z "$upstream" ]; then

@@ -295,7 +295,8 @@ reports, never infers: a branch with no upstream (never pushed: a live worker's 
 worktree with uncommitted or untracked files (even where `status.showUntrackedFiles=no`), one
 mid any in-progress git operation (rebase, merge, cherry-pick, revert, bisect), a locked worktree
 (a lock is treated as a live agent; a lock left behind by a crashed agent needs an explicit path),
-a detached HEAD no ref contains (its commits would be lost), and one whose HEAD cannot be read;
+a detached HEAD no ref other than an isolation branch contains (its commits would be lost), and
+one whose HEAD, status, git dir or worktree list cannot be read;
 pass such a path to `teardown.sh` explicitly to force it. The sweep
 deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
 isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
