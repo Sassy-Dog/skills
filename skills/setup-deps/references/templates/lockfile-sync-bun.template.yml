@@ -169,8 +169,8 @@ permissions:
 
 # One run per PR at a time; a second push to the same Dependabot branch queues
 # behind the run that is pushing the lockfile rather than racing it. Both jobs
-# check out the head SHA the event carried, so a branch that moved is a
-# non-fast-forward push, which fails closed.
+# check out the head SHA the event carried, and the push's --force-with-lease
+# on that SHA is the guard: a branch that moved or was deleted fails closed.
 concurrency:
   group: dependabot-bun-lock-sync-${{ github.event.pull_request.number }}
   cancel-in-progress: false

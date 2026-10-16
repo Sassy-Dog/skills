@@ -93,8 +93,9 @@
 #      --ignore-scripts.
 #  12. HEAD SHA AND CONCURRENCY. Both jobs bind PR_HEAD_SHA to
 #      github.event.pull_request.head.sha and check that out, not the branch
-#      name: a branch that moves between the jobs makes the push (still
-#      `HEAD:refs/heads/${PR_HEAD_REF}`) non-fast-forward, which fails closed. A
+#      name. The guard is the `--force-with-lease` on that SHA (property 15), not
+#      fast-forwardness: a branch that moved or was deleted between the jobs
+#      fails the lease closed. A
 #      top-level `concurrency:` group is keyed on the PR number with
 #      cancel-in-progress: false (the deps-cadence-codegen precedent).
 #  13. WIRING AND DESTINATION. Job 2 `needs:` job 1 (`update-bun-lock` /
@@ -137,7 +138,7 @@
 #      `w<e-acute> b`, pod the same app dir) beside the root and nested one, with
 #      every case run against it. Plain `--numstat` C-quotes such a path
 #      (`"w\303\251 b/bun.lock"`), so no compare matches and every patch for that
-#      root was rejected without a reason; the validators read `--numstat -z`
+#      root was rejected with a misleading `X is not Y` naming the C-quoted path; the validators read `--numstat -z`
 #      (NUL-terminated, unquoted) from a FILE (a shell variable drops NULs) and
 #      the staged-set check reads `diff --cached --name-only -z`. Mutants: the
 #      `-z` dropped from numstat, and from the staged-set read (the latter fails

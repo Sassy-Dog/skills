@@ -260,7 +260,7 @@ jobs:
           seen=$'\n'
           # No IFS trimming: tab is IFS whitespace, so `read added removed path`
           # would strip a leading or trailing tab from the path and bind a file
-          # named <TAB>bun.lock to bun.lock. Split the record on its first two
+          # named <TAB>pubspec.lock to pubspec.lock. Split the record on its first two
           # tabs by hand and refuse any path holding a tab or newline.
           while IFS= read -r -d '' rec; do
             added="${rec%%$'\t'*}"; rest="${rec#*$'\t'}"

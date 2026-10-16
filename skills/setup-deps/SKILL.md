@@ -519,12 +519,16 @@ blocks wholesale and collapses each `{{APP_DIR}}/` prefix to nothing (a `./` pre
 the `on.paths` filter), which keeps root renders byte-identical to v1 output.
 
 **Hand-render precondition for `{{PKG_DIR}}` and `{{APP_DIR}}`: refuse, and report why, a directory
-containing `'` or a glob character (`*`, `?`, `[`).** The validators quote the allowed path in a
-single-quoted shell string (`allowed='…'`), which a `'` breaks, and job 1's `git diff -- '<dir>/…'`
-pathspec is glob-matched (it carries no `:(literal)`), so a glob character would match other files.
-There is no render script to refuse at, so the renderer (you) stops here. Spaces, non-ASCII, `"` and
-`\` are handled by `--numstat -z`. (The job-1 pathspecs were left unchanged: refusal is the single
-strategy, and the template versions stay at 14 and 8, since this lands in the same unreleased PR.)
+containing any character outside `[A-Za-z0-9._/ -]` and non-ASCII letters.** An allowlist, not a growing
+denylist, because the directory is substituted into two places that each treat different characters
+specially. First, job 1's diff pathspec (`-- '<dir>/…'`) and the validators' `allowed='<dir>/…'`
+string: the pathspec is glob-matched (it carries no `:(literal)`), so `*`, `?` and `[` match other
+files and `\` is an fnmatch escape (the pathspec `'a\b/bun.lock'` also matches `ab/bun.lock`), while a
+`'` breaks the single-quoted shell string. Second, the `on.paths` filter entry (`'<dir>/**/package.json'`
+for bun, the pubspec and Podfile entries for pod): `+` and a leading `!` or `:` change how the filter
+reads the entry. There is no render script to refuse at, so the renderer (you) stops here. Spaces
+and non-ASCII are allowed and handled by `--numstat -z`. Job 1's pathspecs are intentionally not
+`:(literal)`: refusal is the single strategy.
 
 `{{PKG_DIR}}` is the same shape one template over: the **bun install root** for
 `lockfile-sync-bun` — the directory holding the `package.json` + `bun.lock` that workflow syncs
@@ -758,14 +762,14 @@ The patch is untrusted. Before the mint, `push-bun-lock` asks git what it would 
 hunk, more than one file, any path other than exactly the install root's `bun.lock`, and a path that
 is not a tracked regular file; it then applies with `git apply --index` and re-checks that only that
 path is staged and that nothing sits outside the index. Both jobs check out the PR's head SHA rather
-than its branch name (a branch that moved makes the push non-fast-forward, which fails closed), a
+than its branch name (the `--force-with-lease` on that SHA is the guard: a branch that moved or was deleted between the jobs fails the lease closed), a
 per-PR `concurrency` group serializes runs, and the push goes only to the PR's own head repo and
 branch. Both jobs keep the `github.actor == 'dependabot[bot]'` gate under `pull_request_target`.
 The push goes through an env-reading credential helper (no token in a URL or argv) with system and
 global git config ignored and hooks and fsmonitor off on every git call. `--numstat -z` (NUL-separated,
 unquoted paths, written to a file because a shell variable drops NULs) is deliberate: plain `--numstat`
 C-quotes a non-ASCII or special-character install root, so no path ever matched and every patch for
-that root was rejected without a reason; the post-apply staged-set check reads `diff --cached --name-only -z`
+that root was rejected with a misleading `X is not Y` naming the C-quoted path; the post-apply staged-set check reads `diff --cached --name-only -z`
 for the same reason.
 `scripts/test-lockfile-sync-policy.sh` pins each: statically the job split, the pins, the token's
 single binding and the push destination, and by execution the validator itself, run from the
@@ -775,8 +779,8 @@ while keeping its message; the two `git cannot parse it` sites, `--summary` and 
 have their own mutant, driven by a `git` that fails only `apply --summary` or only `apply --numstat`, and a tracked
 tab-named lockfile must be rejected by the read loop's own reason).
 
-`lockfile-sync-pod` has had the same two-job shape since template version 7 (version 8 reads `--numstat -z`, as bun's 14 does)
-([#529](https://github.com/Sassy-Dog/skills/issues/529)), not the single late-mint job that issue
+`lockfile-sync-pod` has had the same two-job shape since template version 7
+([#529](https://github.com/Sassy-Dog/skills/issues/529); version 8 reads `--numstat -z`, as bun's 14 does), not the single late-mint job that issue
 first described: `pod install` evaluates the Podfile and podspec Ruby, which is arbitrary code, so it
 must not share a VM with the token any more than bun does. The one difference is the first job's
 runner, because CocoaPods needs macOS:
@@ -838,12 +842,12 @@ none), the same way the exact-pin sections do, and the unevaluated ones follow a
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
 `template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `7`, and the optional
-`deps-cadence-codegen.yml` is `3`: impl version 1 ran on the fleet and minted the token first;
-version 2 ran the package managers and the token in one job; version 3 split the token from the
-package managers; version 4 adds the pub and cargo exact-pin section; version 5 passes the
+`deps-cadence-codegen.yml` is `3`). Impl history: impl version 1 ran on the fleet and minted the token first;
+impl version 2 ran the package managers and the token in one job; impl version 3 split the token from the
+package managers; impl version 4 adds the pub and cargo exact-pin section; impl version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; version 6 adds the bare `ignore:` holds section; version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; codegen version 2 widens the push job's
-`denied=` list to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`). The ownership rules in §1 apply to each. Re-render owned files with
+lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/issues/525)); codegen version 2 widens it
+to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`. The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
 **without** the marker is a hand copy: report it and skip it. Replacing a hand copy (several

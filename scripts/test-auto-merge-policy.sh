@@ -34,8 +34,10 @@
 #     every PR either merges or is held with a comment, never neither
 #
 # Vacuous-green guard: zero merge steps found is a FAILURE (a renamed command
-# or reflowed step would otherwise check nothing). Mutation-proof: the three
-# regressions above are applied to a copy and each must fail the check.
+# or reflowed step would otherwise check nothing). Mutation-proof: five
+# mutants are applied to a copy and each must fail the check: the three
+# regressions above plus the two runner mutants (a render-fact runner and a
+# self-hosted runs-on; the runner is hard-coded ubuntu-latest).
 #
 # Reads one tracked file. No gh, no network, no actionlint; perl for the
 # literal-string mutations.

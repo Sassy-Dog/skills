@@ -1550,7 +1550,9 @@
 #      which an empty update-type satisfies), gate the job on the triggering
 #      actor as well as the PR author, and hold everything else with a comment.
 #      actionlint cannot see either defect — the expressions are valid, just
-#      permissive. Source-level, with three mutation checks.
+#      permissive. The hard-coded `ubuntu-latest` runner (no {{RUNNER}} render fact,
+#      no self-hosted label) is a third property. Source-level, with five
+#      mutation checks: the three regressions plus the two runner mutants.
 #  57. deps-cadence policy tests (scripts/test-deps-cadence-policy.sh) — the
 #      monthly lockfile-refresh templates (issue #509): one App-token credential
 #      with no GITHUB_TOKEN or PAT fallback, a failed refresh fails the job, no
