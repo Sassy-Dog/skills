@@ -15,6 +15,12 @@
 #     form (`- name: X` then `uses: ...`) is checked too. Comment lines are
 #     ignored. A step ends at the next line at or left of its own `- ` indent,
 #     so a later job cannot satisfy an earlier step.
+#   - A `- ` line nested deeper than the open step's own dash (a list inside a
+#     `with:` block) belongs to that step and does not start a new one.
+#   - Callers MUST run under `set -o pipefail` (both do: `set -uo pipefail`).
+#     The scan is a pipeline into awk inside a command substitution, and only
+#     pipefail turns a failing grep or awk into the explicit "scan failed"
+#     return below instead of an empty, apparently clean result.
 #   - want_bun / want_node, when given, are the exact number of such steps the
 #     template must contain. Without them a renamed action would classify zero
 #     steps and the gate would go green on nothing.
@@ -31,7 +37,7 @@ builtin_cache_violations() {
         /^[[:space:]]*$/ { next }
         {
             if (kind != "" && ind($0) <= dash) fin()
-            if ($0 ~ /^[[:space:]]*- /) { dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0; open = 1 }
+            if ($0 ~ /^[[:space:]]*- / && (!open || ind($0) <= dash)) { dash = ind($0); kind = ""; ok = 0; bad = 0; name = $0; open = 1 }
             if (open && kind == "" && $0 ~ /(^|[[:space:]-])uses:[[:space:]]*/) {
                 if ($0 ~ /uses:[[:space:]]*oven-sh\/setup-bun@/) { kind = "bun"; nb++ }
                 else if ($0 ~ /uses:[[:space:]]*actions\/setup-node@/) { kind = "node"; nn++ }

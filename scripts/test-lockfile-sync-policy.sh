@@ -203,7 +203,7 @@ command -v perl >/dev/null 2>&1 || { echo "  FAIL perl is required for the mutat
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib-builtin-cache.sh
-. "$ROOT/scripts/lib-builtin-cache.sh"
+. "$ROOT/scripts/lib-builtin-cache.sh" || { echo "FAIL cannot source lib-builtin-cache.sh"; exit 1; }
 TPL_DIR="$ROOT/skills/setup-deps/references/templates"
 BUN_TEMPLATE="$TPL_DIR/lockfile-sync-bun.template.yml"
 WORK="$(mktemp -d)"
@@ -260,7 +260,6 @@ split_jobs() {
 }
 
 # check_git_hardened <job label> — property 10 over the loaded STEP_BODY.
-
 check_git_hardened() {
     local label="$1" rc=0 i body line uses_git
     # A git call starts at line start, after whitespace, or after ( " or a
@@ -1070,11 +1069,12 @@ mutate_perl "self-hosted runs-on (token job only)" "hard-code runs-on" "s/(${J2}
 mutate "runner as a render fact" "{{RUNNER}} fact" 'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 
 # 2. no cache
-mutate_perl "setup-bun built-in cache left on (file arm)" "built-in cache not disabled" 's/(bun-version-file: [^\n]*\n)\s+no-cache: true\n/$1/'
-mutate_perl "setup-bun built-in cache left on (literal arm)" "built-in cache not disabled" 's/(bun-version: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate_perl "setup-bun built-in cache left on (file arm)" "setup-bun step without" 's/(bun-version-file: [^\n]*\n)\s+no-cache: true\n/$1/'
+mutate_perl "setup-bun built-in cache left on (literal arm)" "setup-bun step without" 's/(bun-version: [^\n]*\n)\s+no-cache: true\n/$1/'
 mutate "setup-bun renamed (zero steps classified)" "expected 2 setup-bun steps" 'uses: oven-sh/setup-bun@' 'uses: example/setup-bun-renamed@'
-mutate_perl "setup-bun in the name-first form, cache left on" "built-in cache not disabled" 's/      - uses: (oven-sh\/setup-bun\@[^\n]*\n        with:\n          bun-version-file: [^\n]*\n)          no-cache: true\n/      - name: Set up bun\n        uses: $1/'
-mutate "setup-bun no-cache set false" "built-in cache not disabled" 'no-cache: true' 'no-cache: false'
+mutate_perl "setup-bun in the name-first form, cache left on" "setup-bun step without" 's/      - uses: (oven-sh\/setup-bun\@[^\n]*\n        with:\n          bun-version-file: [^\n]*\n)          no-cache: true\n/      - name: Set up bun\n        uses: $1/'
+mutate "setup-bun no-cache set false" "setup-bun step without" 'no-cache: true' 'no-cache: false'
+mutate "setup-bun no-cache replaced by a nested list item" "setup-bun step without" $'          no-cache: true\n' $'          extra:\n            - x\n'
 mutate_perl "actions/cache re-added" "actions/cache" 's/(      \# Restore the BASE branch.s bun\.lock)/      - uses: actions\/cache\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: ~\/.bun\/install\/cache\n          key: bun-\${{ runner.os }}-\${{ hashFiles(\x27{{PKG_DIR}}\/bun.lock\x27) }}\n\n$1/'
 mutate_perl "cache re-added to the token job" "actions/cache" 's/(      - uses: actions\/download-artifact)/      - uses: actions\/cache\/restore\@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0\n        with:\n          path: x\n          key: y\n\n$1/'
 
