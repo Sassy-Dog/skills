@@ -80,7 +80,7 @@
 #                  install root has its own lockfile to rewrite and push.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 13
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-bun | template-version: 14
 #
 # Refresh bun.lock on Dependabot npm PRs (the LEGACY npm + sync pairing —
 # native `bun` is the default for bun repos; see the render conditions above).
@@ -339,9 +339,13 @@ jobs:
           # or mode change shows up in --summary.
           summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
           [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
-          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
-          [ "$(printf '%s\n' "$numstat" | wc -l)" -eq 1 ] || reject "it touches more than one file"
-          while IFS=$'\t' read -r added removed path; do
+          # -z: NUL-terminated records with the path unquoted. Without it git
+          # C-quotes a path holding non-ASCII or special characters and no
+          # compare ever matches. A file, not a variable: a variable drops NULs.
+          numstat="$RUNNER_TEMP/numstat.z"
+          git "${nohooks[@]}" apply --numstat -z -- "$patch" > "$numstat" || reject "git cannot parse it"
+          [ "$(tr -cd '\0' < "$numstat" | wc -c)" -eq 1 ] || reject "it touches more than one file"
+          while IFS=$'\t' read -r -d '' added removed path; do
             [ "$added" != "-" ] || reject "$path is a binary change; bun.lock is text"
             # git prints "0 0 path" for a patch it parses but that changes no
             # line (headers only); it never prints an empty numstat for one.
@@ -350,11 +354,11 @@ jobs:
             mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
             [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
               || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
-          done <<<"$numstat"
+          done < "$numstat"
 
           git "${nohooks[@]}" apply --index -- "$patch"
           # Belt and braces: what is staged, and only that, is the lockfile.
-          [ "$(git "${nohooks[@]}" diff --cached --name-only)" = "$allowed" ] || reject "after applying, something other than $allowed is staged"
+          [ "$(git "${nohooks[@]}" diff --cached --name-only -z | tr '\0' '\n')" = "$allowed" ] || reject "after applying, something other than $allowed is staged"
           # Captured first so a failing `git status` aborts under set -e; a
           # `$(git status | grep)` would read the failure as a clean tree.
           tree="$(git "${nohooks[@]}" status --porcelain --untracked-files=all)"

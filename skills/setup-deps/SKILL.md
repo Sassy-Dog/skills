@@ -533,7 +533,8 @@ both of its jobs since template version 11 (#528), as `dependabot-auto-merge` ha
 `deps-cadence` always has, because it runs bun on PR-authored manifests and the App token pushes the
 result (see "Credential-bearing workflows that run package-manager code" below). Version 12 splits it
 into two jobs so bun never shares a VM with the token, and drops the cache; version 13 leases the
-push to the head SHA. Its bun is `oven-sh/setup-bun` at
+push to the head SHA; version 14 reads `--numstat -z`, so an install root with non-ASCII or special
+characters validates instead of being rejected. Its bun is `oven-sh/setup-bun` at
 the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
 follows it exactly, first match wins:
 
@@ -736,7 +737,7 @@ but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is 
 `render` takes no runner for it. `lockfile-sync-bun` follows it, runner since template version 11
 ([#528](https://github.com/Sassy-Dog/skills/issues/528)) and the never-share-a-VM split since version
 12, in two jobs rather than the three of `deps-cadence` (it has no plan step), each on its own fresh
-`ubuntu-latest` VM (version 13 adds the push lease below):
+`ubuntu-latest` VM (version 13 adds the push lease below; version 14 reads `git apply --numstat -z`):
 
 | Job | Runs | Holds |
 | --- | --- | --- |
@@ -744,7 +745,7 @@ but it hands the token to the runner's local `gh`): `runs-on: ubuntu-latest` is 
 | `push-bun-lock` | no package manager: checkout (`persist-credentials: false`), download the artifact, validate and apply the patch, the presence step, the mint, then commit and push | the App token, minted only after the patch is applied |
 
 The patch is untrusted. Before the mint, `push-bun-lock` asks git what it would do (`git apply
---summary` and `--numstat`) and rejects a create, delete, rename, copy or mode change, a binary
+--summary` and `--numstat -z`) and rejects a create, delete, rename, copy or mode change, a binary
 hunk, more than one file, any path other than exactly the install root's `bun.lock`, and a path that
 is not a tracked regular file; it then applies with `git apply --index` and re-checks that only that
 path is staged and that nothing sits outside the index. Both jobs check out the PR's head SHA rather
@@ -752,14 +753,20 @@ than its branch name (a branch that moved makes the push non-fast-forward, which
 per-PR `concurrency` group serializes runs, and the push goes only to the PR's own head repo and
 branch. Both jobs keep the `github.actor == 'dependabot[bot]'` gate under `pull_request_target`.
 The push goes through an env-reading credential helper (no token in a URL or argv) with system and
-global git config ignored and hooks and fsmonitor off on every git call.
+global git config ignored and hooks and fsmonitor off on every git call. `--numstat -z` (NUL-separated,
+unquoted paths, written to a file because a shell variable drops NULs) is deliberate: plain `--numstat`
+C-quotes a non-ASCII or special-character install root, so no path ever matched and every patch for
+that root was rejected without a reason; the post-apply staged-set check reads `diff --cached --name-only -z`
+for the same reason.
 `scripts/test-lockfile-sync-policy.sh` pins each: statically the job split, the pins, the token's
 single binding and the push destination, and by execution the validator itself, run from the
 extracted step against crafted patch artifacts for a root and a nested install root (each hostile
 patch must exit 1 with its own reason, and each enforcing construct has a mutant that neuters it
-while keeping its message).
+while keeping its message; the two `git cannot parse it` sites, `--summary` and `--numstat`, each
+have their own mutant, driven by a `git` shim that fails only that subcommand, and a non-ASCII
+install root with a space is a fixture).
 
-`lockfile-sync-pod` has had the same two-job shape since template version 7
+`lockfile-sync-pod` has had the same two-job shape since template version 7 (version 8 reads `--numstat -z`, as bun's 14 does)
 ([#529](https://github.com/Sassy-Dog/skills/issues/529)), not the single late-mint job that issue
 first described: `pod install` evaluates the Podfile and podspec Ruby, which is arbitrary code, so it
 must not share a VM with the token any more than bun does. The one difference is the first job's

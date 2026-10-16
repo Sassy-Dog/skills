@@ -108,7 +108,7 @@
 #      to the binary-hunk reject and the gate stayed green). So the validate
 #      step's run: body is extracted from the template, {{PKG_DIR}} is
 #      substituted for a root install ('.', the `{{PKG_DIR}}/` collapse) and a
-#      nested one (`web`), and it runs in a scratch git repo (tracked
+#      nested one (`web`), a non-ASCII one (see (b) below), and it runs in a scratch git repo (tracked
 #      bun.lock + package.json at the root and in web/) against crafted
 #      artifacts. A clean content change must exit 0 with exactly the allowed
 #      path staged. Each of these must exit 1 AND print its own reason, so a
@@ -127,6 +127,21 @@
 #      "it changes nothing" reject on `0 0` is the reachable form. The executed
 #      suite is memoised on the extracted body, so mutants that leave the step
 #      alone do not re-run it.
+#      Two further properties of the executed suite (#540). (a) THE PARSE
+#      FAILURES ARE SEPARATE SITES: `git apply --summary` and `--numstat` each
+#      `reject "git cannot parse it"`, and no single real patch can fail one and
+#      not the other (both read the same parse), so each is proved by a `git`
+#      shim on PATH that fails only that flag (as the `status` shim does), and
+#      each has its own mutant, so neither call site is covered by the other's.
+#      (b) A NON-ASCII, SPACE-CONTAINING INSTALL ROOT is a third location (bun
+#      `w<e-acute> b`, pod the same app dir) beside the root and nested one, with
+#      every case run against it. Plain `--numstat` C-quotes such a path
+#      (`"w\303\251 b/bun.lock"`), so no compare matches and every patch for that
+#      root was rejected without a reason; the validators read `--numstat -z`
+#      (NUL-terminated, unquoted) from a FILE (a shell variable drops NULs) and
+#      the staged-set check reads `diff --cached --name-only -z`. Mutants: the
+#      `-z` dropped from numstat, and from the staged-set read (the latter fails
+#      only for the non-ASCII root, which is its point).
 #
 #  15. THE LEASE. The push passes `--force-with-lease="refs/heads/${PR_HEAD_REF}:
 #      ${PR_HEAD_SHA}"`, the head SHA both jobs checked out, so a branch that
@@ -499,7 +514,7 @@ static_validate_bun() {
     if [[ "$body" != *'[ "$path" = "$allowed" ]'* ]]; then
         echo "the validator does not require the patched path to EQUAL the allowed path"; rc=1
     fi
-    [[ "$body" == *'wc -l'* && "$body" == *'-eq 1'* ]] || { echo "the validator does not require exactly one patched file"; rc=1; }
+    [[ "$body" == *'wc -c'* && "$body" == *'-eq 1'* ]] || { echo "the validator does not require exactly one patched file"; rc=1; }
     return "$rc"
 }
 
@@ -543,6 +558,10 @@ step_run() {
 vg() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"; }
 
 VX="$WORK/vx"
+# The non-ASCII, space-containing install root / app directory (UTF-8 e-acute,
+# spelled in octal so the source stays ASCII). git C-quotes such a path in plain
+# --numstat output, and `-z` is what lets the validators compare it.
+VX_UNI="$(printf 'w\303\251 b')"
 # The artifact dir, patch file name and patch-fixture prefix vx_run uses; each
 # check_validator* sets them for its template before running a case.
 VX_IN=bun-lock-in; VX_PF=bun-lock.patch; VX_PD=patch-
@@ -550,28 +569,34 @@ VX_IN=bun-lock-in; VX_PF=bun-lock.patch; VX_PD=patch-
 # install, each with a tracked package.json and bun.lock (a regular file, or a
 # symlink in the sym variant).
 vx_base() {
-    mkdir -p "$1/web"
+    mkdir -p "$1/web" "$1/$VX_UNI"
     (
         cd "$1" || exit 1
         vg init -q -b main .
         vg config user.name t; vg config user.email t@example.com
         printf '{"name":"root"}\n' > package.json
         printf '{"name":"web"}\n' > web/package.json
+        printf '{"name":"uni"}\n' > "$VX_UNI/package.json"
         if [ "$2" = sym ]; then
             ln -s package.json bun.lock
             ln -s package.json web/bun.lock
+            ln -s package.json "$VX_UNI/bun.lock"
         else
             printf 'lockfileVersion 1\ndep a 1.0.0\n' > bun.lock
             printf 'lockfileVersion 1\ndep b 2.0.0\n' > web/bun.lock
+            printf 'lockfileVersion 1\ndep c 3.0.0\n' > "$VX_UNI/bun.lock"
         fi
         vg add -A && vg commit -qm base
     )
 }
 
-# vx_patch <root|web> <case> — writes $VX/patch-<root|web>/<case>.patch.
+# vx_dir <root|web|uni> — the install root's directory.
+vx_dir() { case "$1" in root) echo . ;; web) echo web ;; uni) echo "$VX_UNI" ;; esac; }
+
+# vx_patch <root|web|uni> <case> — writes $VX/patch-<P>/<case>.patch.
 vx_patch() {
     local P="$1" c="$2" A=bun.lock O=web/bun.lock D=. base="$VX/base-text" g="$VX/gen"
-    [ "$P" = web ] && { A=web/bun.lock; O=bun.lock; D=web; }
+    [ "$P" != root ] && { D="$(vx_dir "$P")"; A="$D/bun.lock"; O=bun.lock; }
     [ "$c" = symlink ] && base="$VX/base-sym"
     mkdir -p "$VX/patch-$P"
     rm -rf "$g"; cp -R "$base" "$g"
@@ -588,7 +613,7 @@ vx_patch() {
             two)       echo 'dep a 1.0.1' >> "$A"; echo '{"x":1}' > "$D/package.json"; vg "${plain[@]}" > "$out" ;;
             wrongpath) echo 'dep z 9.9.9' >> "$O"; vg "${plain[@]}" > "$out" ;;
             symlink)   ln -sfn nowhere "$A"; vg "${plain[@]}" > "$out" ;;
-            nochange)  printf 'diff --git a/%s b/%s\nindex 1111111..1111111 100644\n--- a/%s\n+++ b/%s\n' "$A" "$A" "$A" "$A" > "$out" ;;
+            nochange)  echo 'dep a 1.0.1' >> "$A"; vg "${plain[@]}" | head -4 | sed '2s/.*/index 1111111..1111111 100644/' > "$out" ;;
             garbage)   printf 'this is not a patch\n' > "$out" ;;
             empty)     : > "$out" ;;
             *) exit 1 ;;
@@ -602,13 +627,19 @@ vx_build() {
     mkdir -p "$VX"
     vx_base "$VX/base-text" text
     vx_base "$VX/base-sym" sym
-    for P in root web; do
+    for P in root web uni; do
         for c in $VX_CASES; do vx_patch "$P" "$c" || return 1; done
     done
-    # A `git` that fails only for `status`, to prove a failing status aborts.
-    mkdir -p "$VX/failstatus"
-    printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = status ] && { echo "fatal: simulated status failure" >&2; exit 128; }; done\nexec %s "$@"\n' "$(command -v git)" > "$VX/failstatus/git"
-    chmod +x "$VX/failstatus/git"
+    # A `git` that fails only for one subcommand or flag, to prove each call
+    # site is load-bearing on its own: `status` (a failing status aborts), and
+    # `--summary` / `--numstat` (the two `git cannot parse it` sites, which one
+    # real patch cannot separate, because both read the same parse).
+    local w
+    for w in status --summary --numstat; do
+        mkdir -p "$VX/fail$w"
+        printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = %s ] && { echo "fatal: simulated %s failure" >&2; exit 128; }; done\nexec %s "$@"\n' "$w" "$w" "$(command -v git)" > "$VX/fail$w/git"
+        chmod +x "$VX/fail$w/git"
+    done
 }
 
 # vx_run <body.sh> <root|web> <case> <base> <prep> — runs the body in a fresh
@@ -624,6 +655,8 @@ vx_run() {
         staged)     echo x > "$run/extra.txt"; (cd "$run" && vg add extra.txt) ;;
         untracked)  echo x > "$run/stray.txt" ;;
         statusfail) path="$VX/failstatus:$PATH" ;;
+        summaryfail) path="$VX/fail--summary:$PATH" ;;
+        numstatfail) path="$VX/fail--numstat:$PATH" ;;
     esac
     (cd "$run" && env RUNNER_TEMP="$rt" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null PATH="$path" \
         bash --noprofile --norc -eo pipefail "$body" 2>&1)
@@ -633,14 +666,14 @@ vx_run() {
 # — one executed case; prints a reason when it does not behave.
 vx_expect() {
     local body="$1" P="$2" label="$3" c="$4" base="$5" prep="$6" want="$7" frag="$8" out rc A=bun.lock O=web/bun.lock
-    [ "$P" = web ] && { A=web/bun.lock; O=bun.lock; }
+    [ "$P" != root ] && { A="$(vx_dir "$P")/bun.lock"; O=bun.lock; }
     frag="${frag//@A/$A}"; frag="${frag//@O/$O}"
     out="$(vx_run "$body" "$P" "$c" "$base" "$prep")"; rc=$?
     if [ "$want" = ok ]; then
         if [ "$rc" -ne 0 ]; then
             echo "validator [$P] $label: a clean lockfile patch was rejected (rc=$rc): $(grep -m1 '::error::' <<<"$out")"; return 1
         fi
-        if [ "$(cd "$VX/run" && vg diff --cached --name-only)" != "$A" ] || [ "$(cd "$VX/run" && vg status --porcelain)" != "M  $A" ]; then
+        if [ "$(cd "$VX/run" && vg -c core.quotePath=false diff --cached --name-only)" != "$A" ] || [ "$(cd "$VX/run" && vg status --porcelain -z | tr '\0' '\n')" != "M  $A" ]; then
             echo "validator [$P] $label: accepted, but the staged set is not exactly $A"; return 1
         fi
         return 0
@@ -679,12 +712,12 @@ check_validator() {
     cache="$WORK/vcache.$key"
     if [ -f "$cache.rc" ]; then cat "$cache"; return "$(cat "$cache.rc")"; fi
     {
-        for P in root web; do
+        for P in root web uni; do
             body="$VX/body-$P.sh"
             if [ "$P" = root ]; then
                 sed 's#{{PKG_DIR}}/##g' <<<"$raw" > "$body"
             else
-                sed 's#{{PKG_DIR}}#web#g' <<<"$raw" > "$body"
+                sed "s#{{PKG_DIR}}#$(vx_dir "$P")#g" <<<"$raw" > "$body"
             fi
             if grep -qF '{{' "$body"; then echo "validator [$P]: an unsubstituted {{…}} placeholder survives in the run: body"; rc=1; fi
             vx_expect "$body" "$P" "clean content change"  clean     "$VX/base-text" ""         ok   ""                                                      || rc=1
@@ -703,6 +736,8 @@ check_validator() {
             vx_expect "$body" "$P" "pre-staged extra file" clean     "$VX/base-text" staged     rej  "something other than @A is staged"                     || rc=1
             vx_expect "$body" "$P" "stray untracked file"  clean     "$VX/base-text" untracked  rej  "the tree holds changes outside the index"               || rc=1
             vx_expect "$body" "$P" "git status failure"    clean     "$VX/base-text" statusfail fail "simulated status failure"                              || rc=1
+            vx_expect "$body" "$P" "summary parse failure" clean     "$VX/base-text" summaryfail rej "git cannot parse it"                                    || rc=1
+            vx_expect "$body" "$P" "numstat parse failure" clean     "$VX/base-text" numstatfail rej "git cannot parse it"                                    || rc=1
         done
     } > "$cache"
     printf '%s\n' "$rc" > "$cache.rc"
@@ -719,13 +754,13 @@ PXF="pubspec.yaml"
 # app, each with a tracked pubspec.yaml, pubspec.lock and ios/Podfile.lock (the
 # two locks regular files, or symlinks in the sym variant).
 px_base() {
-    mkdir -p "$1/ios" "$1/app/ios"
+    mkdir -p "$1/ios" "$1/app/ios" "$1/$VX_UNI/ios"
     (
         cd "$1" || exit 1
         vg init -q -b main .
         vg config user.name t; vg config user.email t@example.com
         local d
-        for d in . app; do
+        for d in . app "$VX_UNI"; do
             printf 'name: x\n' > "$d/$PXF"
             if [ "$2" = sym ]; then
                 ln -s "$PXF" "$d/pubspec.lock"
@@ -739,10 +774,13 @@ px_base() {
     )
 }
 
-# px_patch <root|app> <case> — writes $VX/ppatch-<root|app>/<case>.patch.
+# px_dir <root|app|uni> — the app's directory prefix ('' at the root).
+px_dir() { case "$1" in root) echo "" ;; app) echo "app/" ;; uni) echo "$VX_UNI/" ;; esac; }
+
+# px_patch <root|app|uni> <case> — writes $VX/ppatch-<P>/<case>.patch.
 px_patch() {
     local P="$1" c="$2" D="" O="app/ios/Podfile.lock" base="$VX/pbase-text" g="$VX/pgen"
-    [ "$P" = app ] && { D="app/"; O="ios/Podfile.lock"; }
+    [ "$P" != root ] && { D="$(px_dir "$P")"; O="ios/Podfile.lock"; }
     local A1="${D}pubspec.lock" A2="${D}ios/Podfile.lock"
     [ "$c" = symlink ] && base="$VX/pbase-sym"
     mkdir -p "$VX/ppatch-$P"
@@ -766,7 +804,7 @@ px_patch() {
                        vg add -A; vg commit -qm one
                        echo '  b: 1.0.2' >> "$A1"; vg "${plain[@]}" > "$g.p2"
                        cat "$g.p1" "$g.p2" > "$out" ;;
-            nochange)  printf 'diff --git a/%s b/%s\nindex 1111111..1111111 100644\n--- a/%s\n+++ b/%s\n' "$A1" "$A1" "$A1" "$A1" > "$out" ;;
+            nochange)  echo '  b: 1.0.1' >> "$A1"; vg "${plain[@]}" | head -4 | sed '2s/.*/index 1111111..1111111 100644/' > "$out" ;;
             garbage)   printf 'this is not a patch\n' > "$out" ;;
             empty)     : > "$out" ;;
             *) exit 1 ;;
@@ -779,7 +817,7 @@ px_build() {
     local P c
     px_base "$VX/pbase-text" text
     px_base "$VX/pbase-sym" sym
-    for P in root app; do
+    for P in root app uni; do
         for c in $PX_CASES; do px_patch "$P" "$c" || return 1; done
     done
 }
@@ -791,7 +829,7 @@ px_build() {
 px_expect() {
     local body="$1" P="$2" label="$3" c="$4" base="$5" prep="$6" want="$7" frag="$8" staged="${9:-}"
     local out rc D="" O="app/ios/Podfile.lock" t exp got
-    [ "$P" = app ] && { D="app/"; O="ios/Podfile.lock"; }
+    [ "$P" != root ] && { D="$(px_dir "$P")"; O="ios/Podfile.lock"; }
     local A1="${D}pubspec.lock" A2="${D}ios/Podfile.lock" T="${D}$PXF"
     frag="${frag//@A1/$A1}"; frag="${frag//@A2/$A2}"; frag="${frag//@O/$O}"; frag="${frag//@T/$T}"
     out="$(vx_run "$body" "$P" "$c" "$base" "$prep")"; rc=$?
@@ -800,7 +838,7 @@ px_expect() {
             echo "validator [$P] $label: a clean lockfile patch was rejected (rc=$rc): $(grep -m1 '::error::' <<<"$out")"; return 1
         fi
         exp="$(for t in ${staged//+/ }; do case "$t" in A1) echo "$A1" ;; A2) echo "$A2" ;; esac; done | sort)"
-        got="$(cd "$VX/run" && vg diff --cached --name-only | sort)"
+        got="$(cd "$VX/run" && vg -c core.quotePath=false diff --cached --name-only | sort)"
         if [ -z "$exp" ] || [ "$got" != "$exp" ] || [ -n "$(cd "$VX/run" && vg status --porcelain | grep -v '^M  ' || true)" ]; then
             echo "validator [$P] $label: accepted, but the staged set is not exactly ${staged//+/ and } (staged: ${got//$'\n'/ })"; return 1
         fi
@@ -838,12 +876,12 @@ check_validator_pod() {
     cache="$WORK/pvcache.$key"
     if [ -f "$cache.rc" ]; then cat "$cache"; return "$(cat "$cache.rc")"; fi
     {
-        for P in root app; do
+        for P in root app uni; do
             body="$VX/pbody-$P.sh"
             if [ "$P" = root ]; then
                 sed 's#{{APP_DIR}}/##g' <<<"$raw" > "$body"
             else
-                sed 's#{{APP_DIR}}#app#g' <<<"$raw" > "$body"
+                sed "s#{{APP_DIR}}#$(px_dir "$P" | sed 's#/$##')#g" <<<"$raw" > "$body"
             fi
             if grep -qF '{{' "$body"; then echo "validator [$P]: an unsubstituted {{…}} placeholder survives in the run: body"; rc=1; fi
             px_expect "$body" "$P" "pubspec.lock only"      clean1    "$VX/pbase-text" ""         ok   ""                                                  A1    || rc=1
@@ -865,6 +903,8 @@ check_validator_pod() {
             px_expect "$body" "$P" "pre-staged extra file"  clean     "$VX/pbase-text" staged     rej  "something other than the patched lockfiles is staged"   || rc=1
             px_expect "$body" "$P" "stray untracked file"   clean     "$VX/pbase-text" untracked  rej  "the tree holds changes outside the index"                || rc=1
             px_expect "$body" "$P" "git status failure"     clean     "$VX/pbase-text" statusfail fail "simulated status failure"                                || rc=1
+            px_expect "$body" "$P" "summary parse failure"  clean     "$VX/pbase-text" summaryfail rej "git cannot parse it"                                     || rc=1
+            px_expect "$body" "$P" "numstat parse failure"  clean     "$VX/pbase-text" numstatfail rej "git cannot parse it"                                     || rc=1
         done
     } > "$cache"
     printf '%s\n' "$rc" > "$cache.rc"
@@ -1024,7 +1064,7 @@ mutate "apply --numstat dropped" "does not read the patch with git apply --numst
 mutate "single-file rule dropped" "does not require exactly one patched file" '-eq 1 ]' '-ge 1 ]'
 mutate "regular-file mode check dropped" "does not require a tracked regular file" 'ls-files -s' 'ls-files'
 mutate "apply --index dropped" "does not apply the patch with git apply --index" 'apply --index' 'apply --3way'
-mutate "staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only)" = ' 'diff --cached --quiet)" = '
+mutate "staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only -z' 'diff --cached --stat -z'
 mutate "artifact download unpinned" "actions/download-artifact is not pinned" 'download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' 'download-artifact@v8'
 
 # 7. mint order
@@ -1092,9 +1132,12 @@ mutate "git call without nohooks inside \$( )" "job 2: step" 'summary="$(git "${
 # these, so only the executed suite can fail them, and it must fail for the case
 # that construct guards.
 mutate "validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
-mutate "validator: parse failures swallowed" "validator [root] garbage patch:" '|| reject "git cannot parse it"' '|| true'
+mutate "validator: --summary parse failure swallowed" "validator [root] summary parse failure:" $'apply --summary -- "$patch")" || reject "git cannot parse it"' $'apply --summary -- "$patch")" || true'
+mutate "validator: --numstat parse failure swallowed" "validator [root] numstat parse failure:" $'> "$numstat" || reject "git cannot parse it"' $'> "$numstat" || true'
+mutate "validator: staged set read C-quoted" "validator [uni] clean content change:" 'diff --cached --name-only -z' 'diff --cached --name-only'
+mutate "validator: numstat read without -z" "validator [root] clean content change:" 'apply --numstat -z --' 'apply --numstat --'
 mutate "validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'
-mutate "validator: one-file reject neutered" "validator [root] two files:" $'[ "$(printf \'%s\\n\' "$numstat" | wc -l)" -eq 1 ] || reject' 'true || reject'
+mutate "validator: one-file reject neutered" "validator [root] two files:" $'[ "$(tr -cd \'\\0\' < "$numstat" | wc -c)" -eq 1 ] || reject' 'true || reject'
 mutate "validator: binary reject neutered" "validator [root] binary hunk:" '[ "$added" != "-" ] || reject' 'true || reject'
 mutate "validator: changes-nothing reject neutered" "validator [root] no-op patch:" '[ "$added$removed" != "00" ] || reject' 'true || reject'
 mutate "validator: path-equality reject neutered" "validator [root] wrong path:" '[ "$path" = "$allowed" ] || reject' 'true || reject'
@@ -1169,7 +1212,7 @@ mutate "pod: apply --summary dropped" "does not read the patch with git apply --
 mutate "pod: apply --numstat dropped" "does not read the patch with git apply --numstat" 'apply --numstat' 'apply --stat'
 mutate "pod: regular-file mode check dropped" "does not require a tracked regular file" 'ls-files -s' 'ls-files'
 mutate "pod: apply --index dropped" "does not apply the patch with git apply --index" 'apply --index' 'apply --3way'
-mutate "pod: staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only | sort)"' 'diff --cached --stat | sort)"'
+mutate "pod: staged re-check dropped" "does not re-check the staged set" 'diff --cached --name-only -z' 'diff --cached --stat -z'
 mutate "pod: duplicate-path rule dropped" "does not reject a path that appears twice" 'appears more than once' 'appears twice'
 mutate "pod: artifact download unpinned" "actions/download-artifact is not pinned" 'download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2' 'download-artifact@v8'
 
@@ -1232,7 +1275,10 @@ mutate "pod: Flutter pin not a render fact" "FLUTTER_VERSION is not bound to the
 # 14. the validator, executed. Each enforcing construct neutered while its
 # message text stays, so only the executed suite can fail it.
 mutate "pod validator: empty-patch reject neutered" "validator [root] empty patch:" '[ -s "$patch" ] || reject' 'true || reject'
-mutate "pod validator: parse failures swallowed" "validator [root] garbage patch:" '|| reject "git cannot parse it"' '|| true'
+mutate "pod validator: --summary parse failure swallowed" "validator [root] summary parse failure:" $'apply --summary -- "$patch")" || reject "git cannot parse it"' $'apply --summary -- "$patch")" || true'
+mutate "pod validator: --numstat parse failure swallowed" "validator [root] numstat parse failure:" $'> "$numstat" || reject "git cannot parse it"' $'> "$numstat" || true'
+mutate "pod validator: staged set read C-quoted" "validator [uni] pubspec.lock only:" 'diff --cached --name-only -z' 'diff --cached --name-only'
+mutate "pod validator: numstat read without -z" "validator [root] binary hunk:" 'apply --numstat -z --' 'apply --numstat --'
 mutate "pod validator: summary-must-be-empty reject neutered" "validator [root] rename:" '[ -z "$summary" ] || reject' 'true || reject'
 mutate "pod validator: binary reject neutered" "validator [root] binary hunk:" '[ "$added" != "-" ] || reject' 'true || reject'
 mutate "pod validator: changes-nothing reject neutered" "validator [root] no-op patch:" '[ "$added$removed" != "00" ] || reject' 'true || reject'

@@ -46,7 +46,7 @@
 #   {{FLUTTER_VERSION}}  → keep in lockstep with the release workflow
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 7
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 8
 #
 # Refresh pubspec.lock + Podfile.lock on Dependabot pub PRs — the macOS twin of
 # dependabot-bun-lockfile.yml.
@@ -252,9 +252,13 @@ jobs:
           # or mode change shows up in --summary.
           summary="$(git "${nohooks[@]}" apply --summary -- "$patch")" || reject "git cannot parse it"
           [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
-          numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
+          # -z: NUL-terminated records with the path unquoted. Without it git
+          # C-quotes a path holding non-ASCII or special characters and no
+          # compare ever matches. A file, not a variable: a variable drops NULs.
+          numstat="$RUNNER_TEMP/numstat.z"
+          git "${nohooks[@]}" apply --numstat -z -- "$patch" > "$numstat" || reject "git cannot parse it"
           seen=$'\n'
-          while IFS=$'\t' read -r added removed path; do
+          while IFS=$'\t' read -r -d '' added removed path; do
             [ "$added" != "-" ] || reject "$path is a binary change; the lockfiles are text"
             # git prints "0 0 path" for a patch it parses but that changes no
             # line (headers only); it never prints an empty numstat for one.
@@ -271,13 +275,13 @@ jobs:
             mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
             [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
               || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
-          done <<<"$numstat"
+          done < "$numstat"
 
           git "${nohooks[@]}" apply --index -- "$patch"
           # Belt and braces: what is staged, and only that, is the set of paths
           # the validated patch named.
-          staged="$(git "${nohooks[@]}" diff --cached --name-only | sort)"
-          expected="$(printf '%s\n' "$numstat" | cut -f3 | sort)"
+          staged="$(git "${nohooks[@]}" diff --cached --name-only -z | tr '\0' '\n' | sort)"
+          expected="$(tr '\0' '\n' < "$numstat" | cut -f3 | sort)"
           [ "$staged" = "$expected" ] || reject "after applying, something other than the patched lockfiles is staged"
           # Captured first so a failing `git status` aborts under set -e; a
           # `$(git status | grep)` would read the failure as a clean tree.
