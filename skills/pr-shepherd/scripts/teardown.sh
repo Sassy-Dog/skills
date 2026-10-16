@@ -223,6 +223,10 @@ remove_worktree() {  # $1 = worktree path  $2 = "sweep" when the removal is swee
   # would otherwise be orphaned (issue #26).
   iso="worktree-$(basename "$path")"
   if [ ! -d "$path" ]; then
+    # Unreachable from --sweep for a directory already missing when the sweep reads it
+    # (the HEAD read fails and the worktree is KEPT first), so the from_sweep guard below
+    # has no sweep fixture (#560). A concurrent removal between that read and this check
+    # can still land here, so the guard is load-bearing for #557 — do not remove it as dead code.
     echo "  (already gone) $path"
     [ "$from_sweep" = "1" ] || delete_isolation_branch "$iso"
     return
