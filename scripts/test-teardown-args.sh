@@ -60,8 +60,11 @@
 #      check since an unpushed branch trips both), track-only (agent-open),
 #      readable status, untracked-files=all (agent-untracked, with
 #      status.showUntrackedFiles=no in the fixture), operation in progress,
-#      locked, readable HEAD, readable worktree list, and the unguarded
-#      detached removal. The three fail-closed branches are exercised with a
+#      locked, readable HEAD, readable worktree list, readable git dir, the
+#      sequencer sentinel (a clean tree with only <gitdir>/sequencer left), the
+#      detached-HEAD reachability check (a detached commit no ref contains is
+#      kept; a reachable one is swept) and the unguarded detached removal. The
+#      four fail-closed branches are exercised with a
 #      PATH-shimmed `git` that fails only that call. Every mkscratch worktree is
 #      a SHIPPED one (pushed, then deleted on origin), because properties 1-2
 #      need the sweep to reclaim it.
@@ -525,6 +528,34 @@ mkguards() { # <name> -> repo with one worktree per case; echoes the repo dir
     done
     git -C "$d" worktree lock --reason "agent running" "$d/.claude/worktrees/agent-rb-locked"
     git -C "$d" worktree add -q --detach "$d/.claude/worktrees/agent-plain-detached" main
+    # Detached with a commit no ref contains: clean and unlocked, but removing it
+    # would lose the commit (and the per-worktree reflog that anchors it).
+    wt="$d/.claude/worktrees/agent-unreachable"
+    git -C "$d" worktree add -q --detach "$wt" main
+    echo lost >"$wt/lost.txt"; git -C "$wt" add lost.txt; git -C "$wt" commit -qm lost
+    # A shipped branch whose multi-commit cherry-pick stopped on a conflict and
+    # was then committed by hand: clean tree, no CHERRY_PICK_HEAD, but the
+    # sequencer directory is still there.
+    git -C "$d" branch side main
+    git -C "$d" worktree add -q -b worktree-agent-seq "$d/.claude/worktrees/agent-seq" main
+    wt="$d/.claude/worktrees/agent-seq"
+    git -C "$wt" switch -q -c feat/seq
+    echo mine >>"$wt/README.md"; git -C "$wt" commit -qam mine
+    git -C "$wt" push -q -u origin feat/seq
+    git -C "$d" push -q origin --delete feat/seq
+    git -C "$d" worktree add -q "$d/.claude/worktrees/agent-sidework" side
+    echo side1 >>"$d/.claude/worktrees/agent-sidework/README.md"; git -C "$d/.claude/worktrees/agent-sidework" commit -qam side1
+    echo side2 >"$d/.claude/worktrees/agent-sidework/side2.txt"; git -C "$d/.claude/worktrees/agent-sidework" add side2.txt
+    git -C "$d/.claude/worktrees/agent-sidework" commit -qm side2
+    git -C "$d" worktree remove -f "$d/.claude/worktrees/agent-sidework"
+    git -C "$wt" cherry-pick side~1 side >/dev/null 2>&1
+    git -C "$wt" checkout -q --theirs README.md
+    git -C "$wt" add README.md
+    git -C "$wt" commit -qm resolved
+    if [ ! -d "$(git -C "$wt" rev-parse --absolute-git-dir)/sequencer" ] \
+        || [ -n "$(git -C "$wt" status --porcelain)" ]; then
+        echo "test-teardown-args: sequencer fixture did not reach a clean tree with sequencer present" >&2; exit 1
+    fi
     echo "$d"
 }
 # A repo with one clean, unlocked, shipped worktree: the only thing a fail-closed
@@ -572,11 +603,16 @@ expect_re "  clean, unlocked, [gone] worktree is still swept" 'gone/merged: .*/a
 # Detached and mid-rebase worktrees go through the same guards (the Blocking
 # finding on the first revision: the detached branch removed with -f -f before any
 # guard ran). Mid-rebase ones survive, the finished detached one is swept.
-expect_re "  mid-rebase clean unlocked worktree kept (operation in progress)" 'KEEP \(rebase, merge, cherry-pick or bisect in progress.*agent-rb-clean'
+expect_re "  mid-rebase clean unlocked worktree kept (operation in progress)" 'KEEP \(a git operation .*in progress.*agent-rb-clean'
 expect_re "  mid-rebase locked worktree kept" 'KEEP \(.*agent-rb-locked'
 expect_re "  finished, clean, unlocked detached worktree is still swept" 'detached → removing: .*agent-plain-detached'
 for w in rb-clean rb-locked; do
     if survives "$D" "$w"; then ok "  mid-rebase worktree agent-$w survived the sweep"; else bad "  mid-rebase worktree agent-$w was swept"; fi
+done
+expect_re "  detached worktree with an unreachable commit kept" 'KEEP \(detached HEAD is not reachable.*agent-unreachable'
+expect_re "  clean worktree with only a sequencer dir left behind kept" 'KEEP \(a git operation .*in progress.*agent-seq'
+for w in unreachable seq; do
+    if survives "$D" "$w"; then ok "  worktree agent-$w survived the sweep"; else bad "  worktree agent-$w was swept"; fi
 done
 if survives "$D" plain-detached; then bad "  the finished detached worktree is still on disk"; else ok "  the finished detached worktree is gone"; fi
 for w in unpushed dirtytracked untracked locked open; do
@@ -607,6 +643,8 @@ mutant_bites clean-tree 's/^  if \[ -n "\$dirty" \]; then/  if false; then/' dir
 mutant_bites untracked-all 's/--untracked-files=all/--untracked-files=no/' untracked
 mutant_bites in-progress 's/^  if worktree_op_in_progress "\$path"; then/  if false; then/' rb-clean
 mutant_bites unlocked 's/^  if worktree_locked "\$path"; then/  if false; then/' locked
+mutant_bites reachability 's/^      if ! detached_head_reachable "\$path"; then/      if false; then/' unreachable
+mutant_bites sequencer 's/ BISECT_LOG sequencer; do/ BISECT_LOG; do/' seq
 mutant_bites detached-unguarded 's/^      sweep_live_guard "\$path" "(detached)" || continue/      :/' rb-locked
 
 # Fail-closed branches, each exercised by a git that fails only that call and
@@ -631,6 +669,7 @@ shim_sweep "$D" "$TEARDOWN" "no-such-call" 0
 if survives "$D" s; then bad "  control: the shipped worktree survived with nothing failing"; dump; else ok "  control: the shipped worktree is swept when nothing fails"; fi
 shim_case status "status --porcelain" 0 "could not read the worktree status" 's/if ! dirty=/dirty=""; if false \&\& ! dirty=/'
 shim_case head "symbolic-ref -q HEAD" 0 "could not read the worktree HEAD" 's/^    if \[ "\$ref_rc" -ne 0 \] \&\& \[ "\$ref_rc" -ne 1 \]; then/    if false; then/'
+shim_case git-dir "rev-parse --absolute-git-dir" 0 "git operation" '/--absolute-git-dir/s/ || return 0//;/^  \[ -n "\$gd" \] || return 0/d'
 shim_case worktree-list "worktree list --porcelain" 2 "worktree is locked" 's/wts="\$(git worktree list --porcelain)" || return 0/wts="$(git worktree list --porcelain)"/'
 
 # ------------------------------------------------------------------------------

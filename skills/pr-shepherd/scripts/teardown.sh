@@ -64,16 +64,21 @@
 # fails, deletion is SKIPPED rather than run unguarded (same stance as
 # merge-shepherd.sh's inconclusive stack probe: unknown means wait, not act).
 #
-# Worktrees are removed with `-f -f`, which overrides a lock and a dirty tree. The
-# Agent runtime holds a worktree's lock only while the agent is alive, so a lock
-# means a live agent. The override applies to EXPLICIT paths only; --sweep never
-# infers it (#546): a feature-branch worktree is swept only if its upstream existed
-# and is now [gone] AND its tree is clean AND no rebase/merge/cherry-pick/bisect is
-# under way AND it is not locked; a branch with no upstream (never pushed), a dirty
+# Worktrees are removed with `-f -f`, which overrides a lock and a dirty tree. A
+# lock is treated as a live agent (observed 2026-10-16: a finished worker's
+# worktree was unlocked while two running workers' worktrees stayed locked); a lock
+# left behind by a crashed agent needs an explicit path. The override applies to
+# EXPLICIT paths only; --sweep never infers it (#546): a feature-branch worktree
+# is swept only if its upstream existed and is now [gone] AND its tree is clean AND
+# no git operation (rebase, merge, cherry-pick, revert, bisect, sequencer) is under
+# way AND it is not locked; a branch with no upstream (never pushed), a dirty
 # tree, an operation in progress or a lock is KEPT and reported, because a live
 # worker that switched branches but has not pushed looks exactly like a merged one
 # otherwise. A detached worktree gets the same live-worker guards (a paused rebase
-# is detached), and a git error reading HEAD is a KEEP, not "detached".
+# is detached), and a git error reading HEAD is a KEEP, not "detached". A detached
+# worktree is also swept only if its HEAD is reachable from a branch, tag or remote
+# ref: commits made on a detached HEAD lose their only anchor (and the per-worktree
+# reflog) when the worktree goes.
 # Stashes are reported but NEVER auto-dropped (destructive — human's call).
 #
 # Checkout guard (#486): every mode below mutates the local checkout (worktree
@@ -126,10 +131,19 @@ worktree_op_in_progress() {  # $1 = worktree path — true if a rebase/merge/che
   gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
   [ -n "$gd" ] || return 0
   local f
-  for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG; do
+  # sequencer outlives CHERRY_PICK_HEAD: a multi-commit pick/revert stopped on a
+  # conflict and then committed by hand leaves a clean tree with only this behind.
+  for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG sequencer; do
     [ -e "$gd/$f" ] && return 0
   done
   return 1
+}
+
+detached_head_reachable() {  # $1 = worktree path — true if a branch, tag or remote ref contains its HEAD
+  # Any error answers "not reachable": unknown is not verified, so the sweep keeps it.
+  local refs
+  refs="$(git -C "$1" for-each-ref --contains HEAD --count=1 --format='%(refname)' refs/heads refs/remotes refs/tags 2>/dev/null)" || return 1
+  [ -n "$refs" ]
 }
 
 # The shared "is a live worker in here" guards for --sweep: returns 0 only when
@@ -147,7 +161,7 @@ sweep_live_guard() {  # $1 = path  $2 = label for the KEEP line
     return 1
   fi
   if worktree_op_in_progress "$path"; then
-    echo "  KEEP (rebase, merge, cherry-pick or bisect in progress — a live worker; pass its path explicitly if debris): $path $label"
+    echo "  KEEP (a git operation (rebase, merge, cherry-pick, revert, bisect) is in progress — a live worker; pass its path explicitly if debris): $path $label"
     return 1
   fi
   if worktree_locked "$path"; then
@@ -275,6 +289,10 @@ if [ "$SWEEP_MODE" = "1" ]; then
       # apply (readable+clean tree, no rebase/merge/cherry-pick/bisect, unlocked).
       # A paused rebase is detached too, and is exactly a live worker.
       sweep_live_guard "$path" "(detached)" || continue
+      if ! detached_head_reachable "$path"; then
+        echo "  KEEP (detached HEAD is not reachable from any branch, tag or remote ref — removing it would lose its commits; pass its path explicitly if debris): $path (detached)"
+        continue
+      fi
       echo "  detached → removing: $path"; remove_worktree "$path"; continue
     fi
     case "$br" in

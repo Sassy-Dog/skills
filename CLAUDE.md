@@ -33,7 +33,7 @@ Which header to read, keyed by what you are touching:
 | `repo-health`'s tech-debt scan — `EXCLUDE_PATHSPECS` / the config `exclude_pathspecs` spelling, the built-in lockfile excludes (why they are bare rather than `**/`-prefixed), and why `SCAN_PATHS` is out of scope | `test-tech-debt-excludes.sh` |
 | `whats-on-fire`'s ranking and reporting — a security-labelled issue is never collapsed into a bare count | `test-security-listing.sh` |
 | `pull-repo-signals.sh`'s `default_branch_ci` — the recovery re-query's shape, and what a surviving null may mean | `test-repo-signals-recovery.sh` |
-| `pr-shepherd`'s `teardown.sh` arguments, and its refusal to mutate under a held checkout guard (exit 7; `merge-shepherd.sh`'s post-merge teardown makes the same `check`) | `test-teardown-args.sh` |
+| `pr-shepherd`'s `teardown.sh` arguments, `--sweep`'s live-worker guards (#546), and its refusal to mutate under a held checkout guard (exit 7; `merge-shepherd.sh`'s post-merge teardown makes the same `check`) | `test-teardown-args.sh` |
 | doc reconciliation, versioning/CalVer, the stale-cache diagnostic | `test-doc-reconciliation.sh`, `test-versioning.sh`, `test-stale-cache-diagnostic.sh` |
 | the release-lag checker, normalized runtime inventory, first-parent release baseline or pending-age clocks | `test-release-lag.sh` |
 | `${CLAUDE_PLUGIN_ROOT}` or `$PLUGIN_ROOT` in any `skills/*/references/*.md` command, or the root-resolution paragraph in any `skills/*/SKILL.md` | `test-plugin-root-in-references.sh`, `test-plugin-root-paragraph.sh` |

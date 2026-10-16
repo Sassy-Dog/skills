@@ -287,13 +287,16 @@ DEFAULT_BRANCH="$DEFAULT_BRANCH" \
   bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/teardown.sh --sweep
 ```
 
-`--sweep` removes every detached agent worktree under `.claude/worktrees/`, plus every one whose
-feature branch had an upstream that is now `[gone]` **and** whose tree is clean **and** that is not
-locked (positive evidence of a merge, #546). It KEEPS and reports, never infers: a branch with no
-upstream (never pushed: a live worker's normal state), a worktree with uncommitted or untracked
-files (even where `status.showUntrackedFiles=no`), one mid rebase, merge, cherry-pick or bisect,
-a locked worktree (a lock is held only while its agent is alive), and one whose HEAD cannot be
-read; a detached worktree gets the same guards; pass such a path to `teardown.sh` explicitly to force it. The sweep
+`--sweep` removes an agent worktree under `.claude/worktrees/` only on positive evidence: its
+feature branch had an upstream that is now `[gone]` **and** its tree is clean **and** no git
+operation is in progress **and** it is not locked (#546); or it is detached with the same clean,
+idle, unlocked state **and** its HEAD is reachable from a branch, tag or remote ref. It KEEPS and
+reports, never infers: a branch with no upstream (never pushed: a live worker's normal state), a
+worktree with uncommitted or untracked files (even where `status.showUntrackedFiles=no`), one
+mid any in-progress git operation (rebase, merge, cherry-pick, revert, bisect), a locked worktree
+(a lock is treated as a live agent; a lock left behind by a crashed agent needs an explicit path),
+a detached HEAD no ref contains (its commits would be lost), and one whose HEAD cannot be read;
+pass such a path to `teardown.sh` explicitly to force it. The sweep
 deletes their local branches **and** their `worktree-agent-*` isolation branches, sweeps orphan
 isolation branches whose worktree is already gone (ancestor-of-default OR merged-PR classification;
 genuinely unmerged ones are surfaced, never auto-deleted — and live ones, worktree still present,
