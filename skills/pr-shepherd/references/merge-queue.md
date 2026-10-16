@@ -87,7 +87,7 @@ bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/gh-retry.sh" -- \
   pr merge "$PR" --repo "$REPO" --squash --delete-branch
 ```
 
-- `--delete-branch` is required here (belt-and-suspenders even when `delete_branch_on_merge` is on) — teardown's "remote branch gone == merged" signal depends on the branch disappearing.
+- `--delete-branch` is required here (belt-and-suspenders even when `delete_branch_on_merge` is on) — teardown's "upstream deleted (`[gone]`) == merged" signal depends on the branch disappearing.
 - Without a queue, *you* are the serializer: coupled PRs (migrations, codegen) must be merged one at a time with a mergeable re-check between each — see `serialization.md`.
 
 ## Either regime: the mergeable check comes first

@@ -282,7 +282,7 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
       # Capture the checked-out branch BEFORE removal (gone after).
       wt_br="$(git -C "$WT" branch --show-current 2>/dev/null || true)"
       git -C "$MAIN_WT" worktree remove --force "$WT" 2>/dev/null && echo "  worktree removed" \
-        || echo "  ⚠ worktree not removed (locked/dirty?) — teardown.sh --sweep mops up later"
+        || echo "  ⚠ worktree not removed (locked/dirty?) — --sweep KEEPs those; pass its path to teardown.sh explicitly"
     fi
   fi
   git -C "$MAIN_WT" worktree prune 2>/dev/null || true
