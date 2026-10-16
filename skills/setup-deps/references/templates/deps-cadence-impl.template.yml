@@ -45,7 +45,8 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
-# Version 7 (impl version, #539) closes three gaps in the holds report: empty
+# Version 7 (impl version, #539) closes two gaps in the holds report (a third, the untested branches, is
+# fixtures in scripts/test-deps-cadence-policy.sh): empty
 # `npm outdated --json` output is `Could not evaluate` (npm prints `{}` itself
 # when nothing is outdated, so a `{}` default read a missing npm as current); a
 # crate with several versions in Cargo.lock is compared at the version a

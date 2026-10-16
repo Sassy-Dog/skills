@@ -68,8 +68,10 @@
 # diff, `push` refuses to stack a codegen commit on a head that already is one,
 # so a non-deterministic generator fails loudly instead of looping.
 #
-# The codegen commit never touches a lockfile (the validator rejects it), so a
-# lockfile-identity guard in the repo is unaffected.
+# The codegen commit never touches a path the validator's `denied=` list names
+# (the manifests, lockfiles and package-manager files on that one line), so a
+# lockfile-identity guard over those files is unaffected. A lockfile format the
+# list does not name is not covered by this claim.
 #
 # Re-render with sassy-dog:setup-deps instead of editing; edits to an owned
 # file are overwritten on the next refresh.
