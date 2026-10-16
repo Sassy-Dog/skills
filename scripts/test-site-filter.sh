@@ -28,9 +28,12 @@
 # terminal Ctrl-C signals only the foreground group and never reaches it, so the
 # scratch-dir trap (`cleanup`) also kills the probe's group while `closed_pid`
 # is set (initialised empty before the probe, cleared once it is reaped), and
-# INT and TERM trap to an explicit `exit` so that EXIT trap runs on /bin/bash 3.2
+# INT and TERM clean up and then RE-RAISE the signal (never `exit 130`: a child
+# that exits normally after SIGINT tells its caller the interrupt was handled, so
+# preflight.sh would score this gate failed and run the rest) on /bin/bash 3.2
 # and 5.x alike. (b) Nothing used to fail if R32 went back to `kill -9 PID`, and
-# R32 and M35 both stay red-then-green around exactly that leak. So guard G3,
+# R32 and M35 both stay red-then-green around exactly that leak. So leak check L1 (a plain assertion, not a guard mutant, so the "guards"
+# count never includes it),
 # right after M35's child run, asserts that no process from THAT run survives:
 # the child records the probe's group id (R32's `closed_pid`, a group leader
 # under `set -m`) to a file the parent hands it, and the parent lists every
@@ -38,8 +41,8 @@
 # own `$WORK/` path. Group and path, never PPID or process name, so a concurrent
 # preflight in another worktree cannot be mistaken for a leak. The group id is
 # needed because a PID-only kill leaves a bare `cat`, whose argv carries no
-# path. M43 is the mutant that proves G3 is not vacuous: it runs a patched copy
-# of THIS file with R32's kill reverted to PID-only over the M35 tree, and G3
+# path. M43 is the mutant that proves L1 is not vacuous: it runs a patched copy
+# of THIS file with R32's kill reverted to PID-only over the M35 tree, and L1
 # must see the orphan (it then kills it). A target quoted in a `script_mutate`
 # call is split with an empty `''` pair so it cannot match its own quotation.
 #
@@ -263,17 +266,17 @@ fi
 # is that group's leader while the probe is live and "" otherwise; the trap kills
 # the group before it removes $WORK, so an interrupt inside R32's ~5s window
 # leaves no `queue-snapshot.sh` and no `$(cat)` grandchild behind. INT and TERM
-# are trapped to an explicit `exit` so the EXIT trap runs on every bash this
-# repo meets (/bin/bash 3.2 and 5.x) instead of depending on whether a fatal
-# signal runs it.
+# run the same cleanup once (the EXIT trap is cleared first) and then re-raise the
+# signal on this shell, so a caller still sees the interrupt and stops, on every
+# bash this repo meets (/bin/bash 3.2 and 5.x).
 closed_pid=""
 cleanup() {
     [ -n "${closed_pid:-}" ] && kill -9 -- "-$closed_pid" 2>/dev/null
     rm -rf "$WORK"
 }
 trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'trap - EXIT INT; cleanup; kill -INT $$' INT
+trap 'trap - EXIT TERM; cleanup; kill -TERM $$' TERM
 
 # --- text helpers -------------------------------------------------------------
 # raw_region <file> <start-prefix> <stop-prefix> — the lines from the first line
@@ -566,7 +569,7 @@ set -m
 PATH="$BIN:$PATH" bash "$Q" --sites-of <&- >"$WORK/closed.out" 2>/dev/null &
 closed_pid=$!
 set +m
-# The mutation section's leak guard (G3) needs the probe's group id, which is
+# The mutation section's leak guard (L1) needs the probe's group id, which is
 # $closed_pid because `set -m` made the probe its leader. Written only when the
 # parent asks for it.
 [ -n "${SITE_FILTER_PGID_FILE:-}" ] && echo "$closed_pid" >"$SITE_FILTER_PGID_FILE"
@@ -777,7 +780,7 @@ mutate() { # <label> <named-row>; the caller has already staged the edits
     esac
 }
 
-# G3's survivor search, scoped to ONE child run. Survivors are found two ways:
+# L1's survivor search, scoped to ONE child run. Survivors are found two ways:
 # any process in the probe's process group (the id the child recorded; a
 # PID-only kill leaves M35's blocked `cat` in it, and its argv is a bare `cat`
 # that no path match can see), and any process whose command line holds this
@@ -812,7 +815,7 @@ leak_check() { # <label> <pgid-file> <expect: none|leak>
 
 # A mutant of THIS file: <label> <from> <to>. A target quoted here must not
 # match its own quotation, so callers split it with an empty '' pair. Runs a patched copy over the
-# already-staged tree and expects G3 to find the leak.
+# already-staged tree and expects L1 to find the leak.
 script_mutate() {
     local label="$1" copy="$WORK/self-mutant.sh"
     printf '%s\n' "$label" >>"$MUTANT_LABELS"
@@ -1080,11 +1083,11 @@ PGID_FILE="$WORK/m35.pgid"
 rm -f "$PGID_FILE"
 mutate "M35: the closed-fd guard is dropped — the resolver hangs instead of refusing" R32
 PGID_FILE=""
-leak_check "G3: M35's child run" "$WORK/m35.pgid" none
+leak_check "L1: M35's child run" "$WORK/m35.pgid" none
 
 # M43: R32's kill reverts to PID-only. That mutates THIS file rather than a
-# subject, so it runs a patched copy of the script over the same M35 tree. G3
-# must see the orphaned `cat`; if it does not, G3 proves nothing.
+# subject, so it runs a patched copy of the script over the same M35 tree. L1
+# must see the orphaned `cat`; if it does not, L1 proves nothing.
 start_mutant
 edit "$REL_SNAP" \
     '    { exec 3<&0; } 2>/dev/null || { echo "$SITES_USAGE" >&2; exit 64; }
