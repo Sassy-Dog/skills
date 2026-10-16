@@ -519,16 +519,19 @@ blocks wholesale and collapses each `{{APP_DIR}}/` prefix to nothing (a `./` pre
 the `on.paths` filter), which keeps root renders byte-identical to v1 output.
 
 **Hand-render precondition for `{{PKG_DIR}}` and `{{APP_DIR}}`: refuse, and report why, a directory
-containing any character outside `[A-Za-z0-9._/ -]` and non-ASCII letters.** An allowlist, not a growing
-denylist, because the directory is substituted into two places that each treat different characters
-specially. First, job 1's diff pathspec (`-- '<dir>/…'`) and the validators' `allowed='<dir>/…'`
-string: the pathspec is glob-matched (it carries no `:(literal)`), so `*`, `?` and `[` match other
-files and `\` is an fnmatch escape (the pathspec `'a\b/bun.lock'` also matches `ab/bun.lock`), while a
-`'` breaks the single-quoted shell string. Second, the `on.paths` filter entry (`'<dir>/**/package.json'`
-for bun, the pubspec and Podfile entries for pod): `+` and a leading `!` or `:` change how the filter
-reads the entry. There is no render script to refuse at, so the renderer (you) stops here. Spaces
-and non-ASCII are allowed and handled by `--numstat -z`. Job 1's pathspecs are intentionally not
-`:(literal)`: refusal is the single strategy.
+containing any character outside `[A-Za-z0-9._@,~/ -]` and non-ASCII.** An allowlist, not a growing
+denylist, because the directory is substituted into several places that each treat different characters
+specially: the `on.paths` filter entries (bun's `'<dir>/**/package.json'`; pod's pubspec and Podfile
+entries), the `working-directory:` lines (bun's two, pod's two), job 1's diff pathspec
+(`-- '<dir>/…'`), and the validators' `allowed=` string (bun) or array (pod). In the `on.paths`
+entries, `+` and a leading `!` change how the filter reads the entry. In the pathspec, which is
+glob-matched (it carries no `:(literal)`), `*`, `?` and `[` match other files, `\` is an fnmatch
+escape (the pathspec `'a\b/bun.lock'` also matches `ab/bun.lock`), and a leading `:` is pathspec
+magic. A `'` breaks the single-quoted shell strings. `@`, `,` and `~` are inert at every one of those
+sites, so scoped roots such as `packages/@acme/ui` are allowed, matching the lane-directory charset.
+There is no render script to refuse at, so the renderer (you) stops here. Spaces and non-ASCII are
+allowed and handled by `--numstat -z`. Job 1's pathspecs are intentionally not `:(literal)`: refusal
+is the single strategy.
 
 `{{PKG_DIR}}` is the same shape one template over: the **bun install root** for
 `lockfile-sync-bun` — the directory holding the `package.json` + `bun.lock` that workflow syncs
@@ -546,7 +549,7 @@ both of its jobs since template version 11 (#528), as `dependabot-auto-merge` ha
 result (see "Credential-bearing workflows that run package-manager code" below). Version 12 splits it
 into two jobs so bun never shares a VM with the token, and drops the cache; version 13 leases the
 push to the head SHA; version 14 reads `--numstat -z`, so an install root whose path git C-quotes
-(non-ASCII, a space, `"`, `\`) validates instead of being rejected; the record is split by hand rather
+(non-ASCII, a space, or a `"` or `\` a hand render would refuse first) validates instead of being rejected; the record is split by hand rather
 than by `read`'s IFS, which would trim a leading or trailing tab from the path. Its bun is `oven-sh/setup-bun` at
 the **repo's own pin**. The derivation is `render-cadence.sh`'s `derive_setup_pin`, and a hand render
 follows it exactly, first match wins:
@@ -846,7 +849,7 @@ none), the same way the exact-pin sections do, and the unevaluated ones follow a
 impl version 2 ran the package managers and the token in one job; impl version 3 split the token from the
 package managers; impl version 4 adds the pub and cargo exact-pin section; impl version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/issues/525)); codegen version 2 widens it
+lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
 to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`. The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`
