@@ -44,9 +44,13 @@
 # MUTATION PROOF. Each mutant below is applied to a scratch copy and must make
 # the gate FAIL with its own reason: a bumped workflow SHA, a lagging comment, a
 # downgraded template, an action missing from the workflow, a stale workflow
-# entry, an unpinned template use, a new action the workflow lacks, and each
-# unsafe workflow shape (a second trigger, a permission, a run step, a secret,
-# no job guard).
+# entry, an unpinned template use, a new action the workflow lacks, each
+# vacuous-green guard (no templates, no workflow pins, no template pin read), the
+# exempt-action rule (an exempt action added to the workflow), and each unsafe
+# workflow shape (a second trigger, workflow or job permissions, a run step, a
+# secret, no job guard, a guard that can fire, a second unguarded job). The
+# job guard must equal the literal never-true expression, not merely exist.
+# 21 checks in all: the baseline plus 20 mutants.
 set -uo pipefail
 export LC_ALL=C
 
@@ -116,9 +120,18 @@ check() {
         echo "workflow has a trigger besides workflow_dispatch"
     fi
     grep -qE '^permissions:[[:space:]]*\{\}[[:space:]]*$' "$wf" || echo "workflow permissions are not {}"
-    grep -qE '^    if:[[:space:]]*[^[:space:]]' "$wf" || echo "workflow job has no if: guard"
+    if [ "$(sed -n '/^jobs:/,$p' "$wf" | grep -cE '^  [A-Za-z0-9_-]+:')" != "1" ]; then
+        echo "workflow does not have exactly one job"
+    fi
+    guard="$(sed -nE 's/^    if:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' "$wf")"
+    if [ -z "$guard" ]; then
+        echo "workflow job has no if: guard"
+    elif [ "$guard" != "github.event_name == 'never-fires'" ]; then
+        echo "workflow job if: is not the never-true guard (got '$guard')"
+    fi
+    if grep -qE '^[[:space:]]+permissions:' "$wf"; then echo "workflow has a job-level permissions: block"; fi
     if grep -qE '^[[:space:]]*(-[[:space:]]*)?run:' "$wf"; then echo "workflow has a run: step"; fi
-    if grep -qE 'secrets\.|GITHUB_TOKEN' "$wf"; then echo "workflow references a secret or token"; fi
+    if grep -qE 'secrets|GITHUB_TOKEN' "$wf"; then echo "workflow references a secret or token"; fi
 }
 
 echo "template-action-pins"
@@ -136,16 +149,20 @@ TARGET_TPL="lockfile-sync-bun.template.yml"
 
 # mutate <label> <reason-substring> <tpl|wf> <perl -0 substitution>
 mutate() {
-    local label="$1" reason="$2" which="$3" sub="$4" out orig
+    local label="$1" reason="$2" which="$3" sub="$4" out orig f
     rm -rf "$SCRATCH/t" "$SCRATCH/wf.yml"
     mkdir "$SCRATCH/t"
     cp "$REPO_ROOT/$TEMPLATES_REL"/*.template.yml "$SCRATCH/t/"
     cp "$REPO_ROOT/$WORKFLOW_REL" "$SCRATCH/wf.yml"
-    if [ "$which" = wf ]; then
+    if [ "$which" = empty ]; then
+        rm -f "$SCRATCH/t"/*.template.yml
+    elif [ "$which" = alltpl ]; then
+        for f in "$SCRATCH/t"/*.template.yml; do perl -0pi -e "$sub" "$f"; done
+    elif [ "$which" = wf ]; then
         orig="$REPO_ROOT/$WORKFLOW_REL"
         perl -0pi -e "$sub" "$SCRATCH/wf.yml"
         cmp -s "$SCRATCH/wf.yml" "$orig" && { bad "mutant '$label' did not apply"; return; }
-    else
+    elif [ "$which" = tpl ]; then
         orig="$REPO_ROOT/$TEMPLATES_REL/$TARGET_TPL"
         perl -0pi -e "$sub" "$SCRATCH/t/$TARGET_TPL"
         cmp -s "$SCRATCH/t/$TARGET_TPL" "$orig" && { bad "mutant '$label' did not apply"; return; }
@@ -168,6 +185,14 @@ mutate "template adopts an action the workflow lacks" "is missing from the workf
 mutate "workflow gains a second trigger" "besides workflow_dispatch" wf 's/(\n  workflow_dispatch:\n)/$1  pull_request:\n/'
 mutate "workflow gains permissions" "permissions are not {}" wf 's/\npermissions: \{\}\n/\npermissions:\n  contents: write\n/'
 mutate "workflow loses its job guard" "has no if: guard" wf 's/\n    if: [^\n]*//'
+mutate "workflow job guard can fire" "is not the never-true guard" wf 's/(\n    if: )[^\n]*/$1github.event_name == \x27workflow_dispatch\x27/'
+mutate "workflow gains an unguarded second job" "does not have exactly one job" wf 's/\z/\n  second:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions\/checkout\@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n/'
+mutate "workflow job gains permissions" "job-level permissions: block" wf 's/(\n    runs-on: [^\n]*\n)/$1    permissions:\n      contents: write\n/'
+mutate "workflow inherits secrets" "references a secret or token" wf 's/(\n    runs-on: [^\n]*\n)/$1    secrets: inherit\n/'
+mutate "no templates found" "no templates found" empty ''
+mutate "workflow pins no action" "workflow pins no action" wf 's/[^\n]*- uses: [^\n]*\n//g'
+mutate "no template pin read" "no template pin was read" alltpl 's/uses:/used:/g'
+mutate "exempt action added to workflow" "appears in the workflow" wf 's/(      - uses: actions\/checkout[^\n]*\n)/$1      - uses: dtolnay\/rust-toolchain\@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable\n/'
 mutate "workflow gains a run step" "has a run: step" wf 's/(\n    steps:\n)/$1      - run: echo hi\n/'
 mutate "workflow references a secret" "references a secret or token" wf 's/(\n    runs-on: [^\n]*\n)/$1    env:\n      X: \${{ secrets.X }}\n/'
 
