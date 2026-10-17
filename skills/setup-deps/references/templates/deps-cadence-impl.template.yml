@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 9
+# TEMPLATE: deps-cadence-impl · version 10
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -68,7 +68,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 9
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 10
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -221,7 +221,7 @@ jobs:
       # the repo's own pin. A different bun, npm, Flutter or cargo can write a
       # different lockfile from the one CI then validates.
 # {{IF:BUN_PIN_FILE}}
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: '{{BUN_VERSION_FILE}}'
           no-cache: true
@@ -229,7 +229,7 @@ jobs:
 # {{ENDIF}}
 # {{IF:BUN_PIN_LITERAL}}
       # CI pins bun as a literal, so this copy of it moves only on a re-render.
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: '{{BUN_VERSION}}'
           no-cache: true
@@ -278,7 +278,7 @@ jobs:
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
 
-      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ steps.flutter_pin.outputs.version }}
 
@@ -1053,7 +1053,7 @@ jobs:
       # this job's timeout.
       - name: Mint GitHub App token
         id: app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}

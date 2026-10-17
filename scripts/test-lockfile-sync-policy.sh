@@ -1085,7 +1085,7 @@ mutate "actor gate dropped from job 2" "job 2 has no github.actor" "github.actor
 # 4. job 1 is token-free
 mutate_perl "token in an install's env" "token-free" 's/(      - name: Update bun\.lock for the bumped packages only\n)/$1        env:\n          GH_TOKEN: \${{ steps.app_token.outputs.token }}\n/'
 mutate_perl "App secret in job 1's env" "token-free" 's/(    steps:\n)/    env:\n      PLATFORM_WRITER_APP_PRIVATE_KEY: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n$1/'
-mutate_perl "mint action in job 1" "token-free" 's/(      - name: Assert the lock is frozen-valid\n)/      - uses: actions\/create-github-app-token\@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n$1/'
+mutate_perl "mint action in job 1" "token-free" 's/(      - name: Assert the lock is frozen-valid\n)/      - uses: actions\/create-github-app-token\@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0\n\n$1/'
 mutate_perl "job 1 loses contents: read" "job 1 does not set job-level permissions: contents: read" 's/(    timeout-minutes: 15\n    permissions:\n      contents: )read/$1write/'
 mutate_perl "job 1 patch not limited to bun.lock" "is not limited to the one" "s/ -- '\\{\\{PKG_DIR\\}\\}\\/bun\\.lock' >/ >/"
 mutate "job 1 patch with textconv allowed" "does not package the change with git diff HEAD --binary" ' --no-textconv --' ' -- '
@@ -1094,7 +1094,7 @@ mutate_perl "job 1 upload unpinned" "job 1 must upload the patch with exactly on
 # 5. job 2 runs no package manager
 mutate_perl "bun install in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: bun install --ignore-scripts\n\n$1/'
 mutate_perl "npm in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: cd x \&\& npm ci\n\n$1/'
-mutate_perl "setup-bun in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: oven-sh\\/setup-bun\\\@0c5077e51419868618aeaa5fe8019c62421857d6 # v2\n\n\$2/s"
+mutate_perl "setup-bun in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: oven-sh\\/setup-bun\\\@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0\n\n\$2/s"
 
 # 6. validate before the mint
 mutate_perl "validate moved after the mint" "is validated (step" "s/$VALIDATE_BLOCK$MINT_BLOCK$PUSH_COMMENT/\$2\$1/s"
@@ -1139,7 +1139,7 @@ mutate "hooksPath left on" "does not define nohooks with core.hooksPath=/dev/nul
 
 # 11. bun
 mutate "setup-bun removed" "expected two setup-bun uses" 'oven-sh/setup-bun@' 'oven-sh/setup-node@'
-mutate "setup-bun unpinned" "a setup-bun use is not pinned to a 40-hex SHA" 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2' 'oven-sh/setup-bun@v2'
+mutate "setup-bun unpinned" "a setup-bun use is not pinned to a 40-hex SHA" 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' 'oven-sh/setup-bun@v2'
 mutate "install scripts enabled" "a bun install runs without --ignore-scripts" 'bun install --ignore-scripts --frozen-lockfile' 'bun install --frozen-lockfile'
 
 # 12. head SHA pin and concurrency
@@ -1229,7 +1229,7 @@ mutate "pod: actor gate dropped from job 2" "job 2 has no github.actor" "github.
 # 4. job 1 is token-free
 mutate_perl "pod: token in an install's env" "token-free" 's/(      - name: Regenerate Podfile\.lock\n)/$1        env:\n          GH_TOKEN: \${{ steps.app_token.outputs.token }}\n/'
 mutate_perl "pod: App secret in job 1's env" "token-free" 's/(    steps:\n)/    env:\n      PLATFORM_WRITER_APP_PRIVATE_KEY: \${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n$1/'
-mutate_perl "pod: mint action in job 1" "token-free" 's/(      - name: Regenerate Podfile\.lock\n)/      - uses: actions\/create-github-app-token\@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0\n\n$1/'
+mutate_perl "pod: mint action in job 1" "token-free" 's/(      - name: Regenerate Podfile\.lock\n)/      - uses: actions\/create-github-app-token\@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0\n\n$1/'
 mutate_perl "pod: job 1 loses contents: read" "job 1 does not set job-level permissions: contents: read" 's/(    timeout-minutes: 30\n    permissions:\n      contents: )read/$1write/'
 mutate "pod: patch not limited to the two lockfiles (one dropped)" "is not limited to the two" " '{{APP_DIR}}/ios/Podfile.lock' >" ' >'
 mutate "pod: patch widened to a glob" "is not limited to the two" "'{{APP_DIR}}/pubspec.lock' '{{APP_DIR}}/ios/Podfile.lock' >" "'*.lock' >"
@@ -1241,7 +1241,7 @@ mutate "pod: upload tolerates a missing patch" "if-no-files-found: error" 'if-no
 mutate_perl "pod: pod install in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: pod install --repo-update\n\n$1/'
 mutate_perl "pod: flutter pub get in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: cd x \&\& flutter pub get\n\n$1/'
 mutate_perl "pod: bundler in the token job" "job 2 (the token job) runs a package manager" 's/(      - name: Require the app credentials\n)/      - name: Interloper\n        run: bundle exec pod install\n\n$1/'
-mutate_perl "pod: the Flutter action in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: subosito\\/flutter-action\\\@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0\n\n\$2/s"
+mutate_perl "pod: the Flutter action in the token job" "job 2 (the token job) runs a package manager" "s/(${J2})(      - uses: actions\\/download-artifact)/\$1      - uses: subosito\\/flutter-action\\\@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0\n\n\$2/s"
 
 # 6. validate before the mint
 VALIDATE_BLOCK='(      \# Every rule here is about the patch.*?\n\n)'
@@ -1310,7 +1310,7 @@ mutate "pod: push forced outright" "the push is not leased to the head SHA" '--f
 
 # Flutter
 mutate "pod: Flutter action removed" "expected exactly one flutter-action use" 'subosito/flutter-action@' 'subosito/setup-flutter@'
-mutate "pod: Flutter action unpinned" "the flutter-action use is not pinned to a 40-hex SHA" 'subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0' 'subosito/flutter-action@v2'
+mutate "pod: Flutter action unpinned" "the flutter-action use is not pinned to a 40-hex SHA" 'subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0' 'subosito/flutter-action@v2'
 mutate "pod: Flutter taken from the image" "flutter-action does not take the repo's pin" 'flutter-version: ${{ env.FLUTTER_VERSION }}' 'flutter-version: stable'
 mutate "pod: Flutter pin not a render fact" "FLUTTER_VERSION is not bound to the {{FLUTTER_VERSION}} fact" "FLUTTER_VERSION: '{{FLUTTER_VERSION}}'" "FLUTTER_VERSION: '3.35.1'"
 
