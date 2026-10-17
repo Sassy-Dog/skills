@@ -230,8 +230,10 @@ n_files="$(git -C "$REPO_ROOT" ls-files 'scripts/test-*.sh' | grep -c .)"
 # `if` OR `elif`: test-template-actionlint.sh is reached through an `elif`,
 # because preflight skips the actionlint pair in CI (the pinned binary reaches
 # only LATER steps) and runs it locally. An `^if`-only pattern reported 32 of 33
-# on this check's very first run.
-n_wired="$(grep -cE '^(el)?if bash scripts/test-[a-z0-9-]+\.sh' "$REPO_ROOT/scripts/preflight.sh")"
+# on this check's very first run. Since #567 a gate is reached through the
+# parallel runner, `pg_gate` (or `pg_gate_serial`); that each test is wired
+# EXACTLY ONCE, by name, is test-preflight-wiring.sh's job — this is the count.
+n_wired="$(grep -cE '^(el)?if pg_gate(_serial)? scripts/test-[a-z0-9-]+\.sh' "$REPO_ROOT/scripts/preflight.sh")"
 n_said="$(grep -oE 'the [0-9]+ `scripts/test-\*\.sh` gates' "$REPO_ROOT/CLAUDE.md" | grep -oE '[0-9]+' | head -1)"
 
 if [ -z "$n_said" ]; then

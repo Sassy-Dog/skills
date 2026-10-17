@@ -180,6 +180,22 @@
 # No gh, no network, no actionlint (test-template-actionlint.sh lints the
 # renders). git, jq and perl; fake bun / cargo / gh on PATH.
 #
+# SHARDED WHEN PREFLIGHT RUNS IT IN PARALLEL (#567). This is by far the longest
+# gate (about two thirds of the serial run), and ~97% of it is the mutation
+# batteries: every `mutate`, `cgmutate` and `cgmutate_impl` call re-runs a whole
+# check, ~9 s each. So when PREFLIGHT_JOBS (or CADENCE_POLICY_SHARDS) is above 1
+# the script re-runs ITSELF as that many shard processes, each owning every Nth
+# mutation call (round-robin, by call order, so the same call is the same
+# shard's in every process) and each doing the cheap non-mutation checks too,
+# duplicated so no shard depends on another. Shard 0 alone prints the
+# non-mutation `ok` lines; a `bad` line is printed by every shard, so a failure
+# is never swallowed by one that is not shard 0. The parent prints the shards'
+# output in shard order and exits non-zero if any shard did. Nothing about WHAT is
+# checked changes: the same checks run, exactly once each per mutation, and a
+# shard is a normal run with its own `mktemp -d`. Run standalone (neither variable
+# set) it is the old single process. The skipped-as-root note is printed by shard 0
+# only, like any other non-mutation line.
+#
 # Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-deps-cadence-policy.sh
 set -uo pipefail
@@ -196,7 +212,34 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 fail=0
-ok()  { echo "  ok   $*"; }
+
+# --- sharding (see the header) ----------------------------------------------------
+SHARDS="${CADENCE_POLICY_SHARDS:-${PREFLIGHT_JOBS:-1}}"
+case "$SHARDS" in ''|*[!0-9]*|0) SHARDS=1 ;; esac
+[ "$SHARDS" -le 8 ] || SHARDS=8
+if [ -z "${CADENCE_POLICY_SHARD-}" ] && [ "$SHARDS" -gt 1 ]; then
+    shard_pids=""
+    for ((s = 0; s < SHARDS; s++)); do
+        CADENCE_POLICY_SHARD=$s CADENCE_POLICY_SHARDS=$SHARDS bash "$0" >"$WORK/shard.$s.out" 2>&1 </dev/null &
+        shard_pids="$shard_pids $!"
+    done
+    s=0
+    for p in $shard_pids; do
+        wait "$p" || fail=1
+        cat "$WORK/shard.$s.out"
+        s=$((s + 1))
+    done
+    exit "$fail"
+fi
+MUT_SHARD="${CADENCE_POLICY_SHARD:-0}"
+MUT_SHARDS="$SHARDS"
+mut_seq=0
+in_mut=0
+# mut_mine — true when this process owns the next mutation call (call order mod
+# shard count), so every process agrees on the split without talking.
+mut_mine() { local n=$mut_seq; mut_seq=$((mut_seq + 1)); [ $((n % MUT_SHARDS)) -eq "$MUT_SHARD" ]; }
+
+ok()  { if [ "$MUT_SHARD" -eq 0 ] || [ "$in_mut" -eq 1 ]; then echo "  ok   $*"; fi; }
 bad() { echo "  FAIL $*"; fail=1; }
 
 for need in git jq perl; do
@@ -1364,7 +1407,7 @@ fi
 
 # --- mutations: each regression must fail the check ---------------------------------
 # mutate <name> <target trigger|impl> <from> <to> — LITERAL replacement.
-mutate() {
+_mutate() {
     local name="$1" which="$2" src mt mi out
     if [ "$which" = "trigger" ]; then src="$TRIGGER"; else src="$IMPL"; fi
     mt="$WORK/mut-trigger.yml"; mi="$WORK/mut-impl.yml"
@@ -1381,6 +1424,9 @@ mutate() {
         ok "mutation ($name) fails the check"
     fi
 }
+
+# Sharded (#567): only the owning process runs a mutation call; see the header.
+mutate() { mut_mine || return 0; in_mut=1; _mutate "$@"; in_mut=0; }
 
 APP='GH_TOKEN: ${{ steps.app_token.outputs.token }}'
 mutate "setup-bun built-in cache left on (file arm)" impl $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'setup-bun step without'
@@ -1507,7 +1553,7 @@ mutate "ambiguous duplicate crate compared anyway" impl '-ne 1 ]; then' '-lt 0 ]
 if [ "$(id -u)" -ne 0 ]; then
     mutate "unreadable ignore: file read as no holds" impl $'holds=""; unevaluated+="- \\`.github/dependabot.yml\\`: Could not evaluate (its ignore: rules could not be read)"$\'\\n\'' 'holds=""'
 else
-    echo "skipped as root: mutation (unreadable ignore: file read as no holds), its fixture cannot run (root reads any file)"
+    [ "$MUT_SHARD" -ne 0 ] || echo "skipped as root: mutation (unreadable ignore: file read as no holds), its fixture cannot run (root reads any file)"
 fi
 mutate "holds heading reworded" impl 'echo "### Bare ignore: holds"' 'echo "### Bare ignores"'
 mutate "holds report skips the summary" impl '          cat "$section" >> "$report"
@@ -2159,7 +2205,7 @@ else
 fi
 
 # cgmutate <name> <static|exec|both> <from> <to> — LITERAL replacement in a copy.
-cgmutate() {
+_cgmutate() {
     local name="$1" kind="$2" mt="$WORK/mut-codegen.yml" cg_out
     FROM="$3" TO="$4" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$CODEGEN" > "$mt"
     if cmp -s "$mt" "$CODEGEN"; then bad "mutation ($name) changed nothing, so it proves nothing (template reworded?)"; return; fi
@@ -2168,12 +2214,15 @@ cgmutate() {
     if [ "$kind" = exec ] && cg_exec "$mt" >/dev/null 2>&1; then bad "mutation ($name) PASSED the executed check — the gate cannot catch it"; return; fi
     ok "mutation ($name) fails the check"
 }
-cgmutate_impl() { # <name> <from> <to> — a mutation of the IMPL seen by the codegen static check
+_cgmutate_impl() { # <name> <from> <to> — a mutation of the IMPL seen by the codegen static check
     local mi="$WORK/mut-impl-cg.yml"
     FROM="$2" TO="$3" perl -0pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$IMPL" > "$mi"
     if cmp -s "$mi" "$IMPL"; then bad "mutation ($1) changed nothing, so it proves nothing"; return; fi
     if cg_static "$CODEGEN" "$mi" >/dev/null 2>&1; then bad "mutation ($1) PASSED the check — the gate cannot catch it"; else ok "mutation ($1) fails the check"; fi
 }
+
+cgmutate() { mut_mine || return 0; in_mut=1; _cgmutate "$@"; in_mut=0; }
+cgmutate_impl() { mut_mine || return 0; in_mut=1; _cgmutate_impl "$@"; in_mut=0; }
 
 BOT_AUTHOR="github.event.pull_request.user.login == '$CG_BOT' &&"
 cgmutate "setup-bun built-in cache left on (file arm)" static $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'setup-bun step without'

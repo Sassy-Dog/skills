@@ -64,7 +64,9 @@ jobs:
       # All gates live in scripts/preflight.sh (single source of truth for the
       # guard regexes — run the same script locally before a PR). It skips
       # actionlint under CI=true; the pinned-binary step below owns that gate
-      # here.
+      # here. The scripts/test-*.sh gates run in parallel inside it, at most
+      # PREFLIGHT_JOBS at a time (default: the runner's CPU count, 4 on
+      # ubuntu-latest), which is why this stays ONE step of ONE job (#567).
       - name: Preflight gates (shellcheck, frontmatter, guards, manifests, markdownlint)
         run: bash scripts/preflight.sh
 
