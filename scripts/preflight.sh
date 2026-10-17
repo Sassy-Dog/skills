@@ -13,6 +13,37 @@
 # Run it before every PR; `--fix` lets markdownlint auto-fix first.
 #
 # Usage: bash scripts/preflight.sh [--fix]
+#        PREFLIGHT_JOBS=N bash scripts/preflight.sh   # N test-gate slots (see below)
+#
+# THE TEST GATES RUN IN PARALLEL (issue #567). The serial run took ~15 minutes on
+# CI (903 s in the merge queue, nearly all of it the scripts/test-*.sh suites),
+# and every merge waits on it twice. The cheap, order-dependent gates (shellcheck,
+# frontmatter, the guards, manifests, markdownlint, actionlint, config-source)
+# stay serial and inline. Every scripts/test-*.sh is started up front by a
+# background scheduler, largest file first, at most PREFLIGHT_JOBS slots at a time
+# (default: the CPU count, via getconf/nproc/sysctl; `PREFLIGHT_JOBS=1` is the old
+# fully serial behaviour, with no scheduler and no capture). Each suite's output
+# is captured to its own file and printed WHOLE, where its gate sits below, so the
+# log stays in the stable numbered order and never interleaves two suites. All
+# gates still run after a failure; the closing summary names EVERY failed gate.
+# The runner is scripts/lib-parallel-gates.sh (bash 3.2 compatible). `--fix`
+# runs markdownlint's rewrite before any suite starts, because the prose gates read
+# the Markdown it rewrites. The suites were audited for parallel safety (each
+# works in its own `mktemp -d`; none writes inside the checkout or to a fixed
+# path; none uses a port or a named container); a suite that ever could not be
+# run beside the others goes through `pg_gate_serial` instead of `pg_gate`, which
+# runs it inline at its gate, and its reason is recorded here. None does today.
+# Gate 62 pins that every suite is wired exactly once, and the runner's behaviour.
+# The per-suite parallel-safety audit itself is recorded in PR #568
+# (https://github.com/Sassy-Dog/skills/pull/568).
+#
+# PREFLIGHT_JOBS BOUNDS THE SLOTS, NOT THE TOTAL PROCESS COUNT. It is the number of
+# gates the scheduler runs at once; test-deps-cadence-policy.sh forks min(JOBS, 8)
+# shards of its own outside that count (decided over capping: those shards keep the
+# longest gate from being the floor), so concurrency can exceed PREFLIGHT_JOBS by
+# at most that. An interrupt (INT/TERM) or exit kills every gate's whole process
+# tree; a runner killed without recording a result is a FAILED, named gate, and
+# ci.yml sets a job timeout so a hang can never run to the platform limit.
 #
 # Gates, in CI order:
 #   1. shellcheck -S warning over every tracked *.sh, PLUS a second pass for
@@ -1623,9 +1654,19 @@
 #      workflow that lets this repo's Dependabot track them (issue #564); its own
 #      safety shape (manual trigger, empty permissions, job guard, no run or
 #      secret) is pinned too. Mutation-proven. No gh, no network.
+#  62. preflight-wiring tests (scripts/test-preflight-wiring.sh) — every tracked
+#      scripts/test-*.sh is wired into this script through exactly one
+#      `pg_gate`/`pg_gate_serial` line (none unwired, none doubled, none left in
+#      the pre-runner `bash` form, no typo'd name, no whitespace in a path), each
+#      proved by a mutant of this file; plus the runner's bound, status and
+#      output hand-back against stub scripts, and an end-to-end run of this very
+#      script over a stub tree: a non-zero exit, BOTH failing gates named,
+#      contiguous output, and PREFLIGHT_JOBS=1 and a parallel run printing the same
+#      PASS/FAIL/SKIP lines. No gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
-# check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
+# check-frontmatter.sh) and the summary lists each failed one. Exit 0 = all pass,
+# 1 = any fail, 64 = bad usage (an unknown flag, a non-numeric PREFLIGHT_JOBS). Tools that are not
 # installed locally SKIP with a note — CI still enforces them.
 set -uo pipefail
 
@@ -1650,8 +1691,40 @@ pass() { echo "PASS  $1" >&2; }
 # redden this run rather than hang it — measured: exactly that hung a run for ten
 # minutes before the gate grew its own `</dev/null` (issue #263).
 exec </dev/null
-failed() { echo "FAIL  $1" >&2; fail=1; }
+failed_gates=""
+failed() { echo "FAIL  $1" >&2; fail=1; failed_gates="$failed_gates$1"$'\n'; }
 skip() { echo "SKIP  $1" >&2; }
+
+# --- parallel test gates (issue #567) ------------------------------------------
+# Start every scripts/test-*.sh up front, longest first, at most PREFLIGHT_JOBS at
+# a time; each gate below collects its own result where it sits (lib header).
+# --fix runs markdownlint's rewrite FIRST, before any test starts, because the
+# prose gates read the same Markdown the fixer rewrites.
+# shellcheck source=scripts/lib-parallel-gates.sh
+. "$ROOT/scripts/lib-parallel-gates.sh"
+trap pg_stop EXIT
+trap 'pg_stop; exit 130' INT TERM
+
+if [ "$FIX" = "1" ] && command -v npx >/dev/null 2>&1; then
+    npx -y "$MARKDOWNLINT_PKG" --fix "**/*.md" >/dev/null 2>&1 || true
+fi
+
+# Exported: scripts/test-deps-cadence-policy.sh shards ITSELF by this value.
+PREFLIGHT_JOBS="${PREFLIGHT_JOBS:-$(pg_cpu_count)}"
+export PREFLIGHT_JOBS
+case "$PREFLIGHT_JOBS" in
+    ''|*[!0-9]*|0) echo "preflight: PREFLIGHT_JOBS must be a positive integer (got '$PREFLIGHT_JOBS')" >&2; exit 64 ;;
+esac
+# Launch order is size-descending: file size tracks run time well enough (the
+# mutation-heavy suites are the large ones), and a list kept by hand would be a
+# second copy of the gate list. Under CI=true gate 26 is not run here (ci.yml
+# runs it as its own step), so it is not launched either.
+PG_LIST=$(git ls-files 'scripts/test-*.sh' | while IFS= read -r f; do
+    [ "${CI:-}" = "true" ] && [ "$f" = "scripts/test-template-actionlint.sh" ] && continue
+    printf '%s %s\n' "$(wc -c <"$f" | tr -d ' ')" "$f"
+done | sort -rn | cut -d' ' -f2)
+# shellcheck disable=SC2086  # newline-separated tracked paths; test-preflight-wiring.sh fails one containing whitespace
+pg_start "$PREFLIGHT_JOBS" $PG_LIST
 
 # --- 1. shellcheck ----------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
@@ -1689,8 +1762,8 @@ if command -v shellcheck >/dev/null 2>&1; then
     # across 11 rules on this tree, which is not adoptable today. Two passes is
     # the cheap option, not the lazy one.
     #
-    # COST, measured: the SC2006 pass is ~5s against a ~48s preflight, about
-    # 11%. It re-parses every tracked *.sh, which is the price of shellcheck
+    # COST, measured: the SC2006 pass is ~5s of serial time, ahead of the
+    # parallel test gates' wall-clock. It re-parses every tracked *.sh, which is the price of shellcheck
     # having no way to ask one question of an existing parse.
     #
     # Bare `xargs` here and in the pass above ASSUMES no tracked `*.sh` path
@@ -1914,14 +1987,14 @@ else
 fi
 
 # --- 6. versioning tests -------------------------------------------------------
-if bash scripts/test-versioning.sh; then
+if pg_gate scripts/test-versioning.sh; then
     pass "versioning tests (scripts/test-versioning.sh)"
 else
     failed "versioning tests (scripts/test-versioning.sh)"
 fi
 
 # --- 7. ownership-matcher tests -----------------------------------------------
-if bash scripts/test-ownership-matchers.sh; then
+if pg_gate scripts/test-ownership-matchers.sh; then
     pass "ownership-matcher tests (scripts/test-ownership-matchers.sh)"
 else
     failed "ownership-matcher tests (scripts/test-ownership-matchers.sh)"
@@ -1932,7 +2005,7 @@ fi
 # because it MUTATES other repos — this gate runs neither applying mode, only
 # the cross-set colour check (`--collisions`, which needs no repo and no
 # network) and issue-claim.sh's reconcile logic against a recorded mock.
-if bash scripts/test-label-taxonomy.sh; then
+if pg_gate scripts/test-label-taxonomy.sh; then
     pass "label-taxonomy tests (scripts/test-label-taxonomy.sh)"
 else
     failed "label-taxonomy tests (scripts/test-label-taxonomy.sh)"
@@ -1945,7 +2018,7 @@ fi
 # mock gh that records writes, plus a source-level invariant (one delete call
 # site, inside the gate, downstream of the re-query) and a mutation that
 # neuters the gate to show the withheld delete was withheld BY it (issue #163).
-if bash scripts/test-label-migrate.sh; then
+if pg_gate scripts/test-label-migrate.sh; then
     pass "label-migrate tests (scripts/test-label-migrate.sh)"
 else
     failed "label-migrate tests (scripts/test-label-migrate.sh)"
@@ -1958,7 +2031,7 @@ fi
 # time by validate-dependabot.sh against the repo being written into. The gate
 # also asserts the OLD shape fails: a validator that accepts every lane
 # collapsed onto "/" proves nothing.
-if bash scripts/test-dependabot-render.sh; then
+if pg_gate scripts/test-dependabot-render.sh; then
     pass "dependabot-render tests (scripts/test-dependabot-render.sh)"
 else
     failed "dependabot-render tests (scripts/test-dependabot-render.sh)"
@@ -1972,7 +2045,7 @@ fi
 # small fixture proves nothing here, so the test builds a 20k-path index-only
 # repo and asserts BOTH that the pre-fix shape still fails on it (else the test
 # has gone vacuous) and that the shipped probe does not.
-if bash scripts/test-detect-hook-stack.sh; then
+if pg_gate scripts/test-detect-hook-stack.sh; then
     pass "detect-hook-stack tests (scripts/test-detect-hook-stack.sh)"
 else
     failed "detect-hook-stack tests (scripts/test-detect-hook-stack.sh)"
@@ -1986,14 +2059,14 @@ fi
 # is invisible at render time and surfaces elsewhere, later, looking unrelated.
 # #186 widened this from the auto-merge workflow to every template that mints
 # the App token, after the same failure was found open through two other doors.
-if bash scripts/test-visibility-preconditions.sh; then
+if pg_gate scripts/test-visibility-preconditions.sh; then
     pass "visibility precondition tests (scripts/test-visibility-preconditions.sh)"
 else
     failed "visibility precondition tests (scripts/test-visibility-preconditions.sh)"
 fi
 
 # --- 13. verify-issue-refs tests ---------------------------------------------
-if bash scripts/test-verify-issue-refs.sh; then
+if pg_gate scripts/test-verify-issue-refs.sh; then
     pass "verify-issue-refs tests (scripts/test-verify-issue-refs.sh)"
 else
     failed "verify-issue-refs tests (scripts/test-verify-issue-refs.sh)"
@@ -2005,7 +2078,7 @@ fi
 # clean repo, a prefix collision points a human at live work, and a truncated
 # pull returns the empty list a clean pull returns. The prefix fixture is
 # mutation-proved live rather than trusted. Mock gh only: no repo, no network.
-if bash scripts/test-stale-issues.sh; then
+if pg_gate scripts/test-stale-issues.sh; then
     pass "stale-issues tests (scripts/test-stale-issues.sh)"
 else
     failed "stale-issues tests (scripts/test-stale-issues.sh)"
@@ -2019,7 +2092,7 @@ fi
 # list mutates nothing at all. Scratch repos + a mock gh: no real repo, no
 # network, and the fixture is verified to be its own git root before teardown
 # runs in it (teardown resolves its target by walking up from cwd).
-if bash scripts/test-teardown-args.sh; then
+if pg_gate scripts/test-teardown-args.sh; then
     pass "teardown-args tests (scripts/test-teardown-args.sh)"
 else
     failed "teardown-args tests (scripts/test-teardown-args.sh)"
@@ -2029,7 +2102,7 @@ fi
 # Every failure mode here emits well-formed JSON carrying a plausible number, so
 # nothing downstream can tell a wrong answer from a right one. Mock gh only: no
 # repo, no network.
-if bash scripts/test-scanning-states.sh; then
+if pg_gate scripts/test-scanning-states.sh; then
     pass "scanning-states tests (scripts/test-scanning-states.sh)"
 else
     failed "scanning-states tests (scripts/test-scanning-states.sh)"
@@ -2047,7 +2120,7 @@ fi
 # asserted at all four sites that state it. The run prints its own assertion
 # count, so no inventory number here can go stale.
 # Eight tracked files: no gh, no network.
-if bash scripts/test-sentry-verification.sh; then
+if pg_gate scripts/test-sentry-verification.sh; then
     pass "sentry-verification tests (scripts/test-sentry-verification.sh)"
 else
     failed "sentry-verification tests (scripts/test-sentry-verification.sh)"
@@ -2057,7 +2130,7 @@ fi
 # Also prose, and the failure it guards is a false CLEAN rather than a false
 # alarm: an under-reported count does not look wrong, it looks quiet. Reads four
 # tracked files; no gh, no network, no Sentry call.
-if bash scripts/test-sentry-counts.sh; then
+if pg_gate scripts/test-sentry-counts.sh; then
     pass "sentry-counts tests (scripts/test-sentry-counts.sh)"
 else
     failed "sentry-counts tests (scripts/test-sentry-counts.sh)"
@@ -2067,7 +2140,7 @@ fi
 # Also prose, and also a false CLEAN rather than a false alarm: the issue was
 # counted, so the report looked complete while naming nothing. Two tracked
 # files; no gh, no network.
-if bash scripts/test-security-listing.sh; then
+if pg_gate scripts/test-security-listing.sh; then
     pass "security-listing tests (scripts/test-security-listing.sh)"
 else
     failed "security-listing tests (scripts/test-security-listing.sh)"
@@ -2075,9 +2148,7 @@ fi
 
 # --- 16. markdownlint --------------------------------------------------------
 if command -v npx >/dev/null 2>&1; then
-    if [ "$FIX" = "1" ]; then
-        npx -y "$MARKDOWNLINT_PKG" --fix "**/*.md" >/dev/null 2>&1 || true
-    fi
+    # (--fix already ran, before the test gates started.)
     if md_out=$(npx -y "$MARKDOWNLINT_PKG" "**/*.md" 2>&1); then
         pass "markdownlint ($MARKDOWNLINT_PKG)"
     else
@@ -2131,7 +2202,7 @@ else
 fi
 
 # --- 23. artifact-guard tests -------------------------------------------------
-if bash scripts/test-artifact-guard.sh; then
+if pg_gate scripts/test-artifact-guard.sh; then
     pass "artifact-guard tests (scripts/test-artifact-guard.sh)"
 else
     failed "artifact-guard tests (scripts/test-artifact-guard.sh)"
@@ -2140,7 +2211,7 @@ fi
 # --- 24. doc-reconciliation tests --------------------------------------------
 # Gates the instruction, not staleness — see the header note. The sub-agent
 # briefs are the half that gets missed. Three tracked files; no gh, no network.
-if bash scripts/test-doc-reconciliation.sh; then
+if pg_gate scripts/test-doc-reconciliation.sh; then
     pass "doc-reconciliation tests (scripts/test-doc-reconciliation.sh)"
 else
     failed "doc-reconciliation tests (scripts/test-doc-reconciliation.sh)"
@@ -2152,7 +2223,7 @@ fi
 # coordinator down the recovery branch with no warning at all. Section 1 also
 # carries the "no per-PR counter" decision: the run must reach the global
 # ceiling rather than resolve early. Mock gh: no repo, no network.
-if bash scripts/test-poll-queue-eject.sh; then
+if pg_gate scripts/test-poll-queue-eject.sh; then
     pass "poll-queue-eject tests (scripts/test-poll-queue-eject.sh)"
 else
     failed "poll-queue-eject tests (scripts/test-poll-queue-eject.sh)"
@@ -2166,7 +2237,7 @@ fi
 # CI=true and actionlint is missing, so the CI step cannot quietly no-op.
 if [ "${CI:-}" = "true" ]; then
     skip "template-actionlint (separate CI step)"
-elif bash scripts/test-template-actionlint.sh; then
+elif pg_gate scripts/test-template-actionlint.sh; then
     pass "template-actionlint tests (scripts/test-template-actionlint.sh)"
 else
     failed "template-actionlint tests (scripts/test-template-actionlint.sh)"
@@ -2179,7 +2250,7 @@ fi
 # one passes every other gate, works when its author tests it, and fails only in
 # a consumer repo. A file-listing comparison against agents/, in the shape of
 # gate 8's no-third-copy guard. No gh, no network.
-if bash scripts/test-review-orchestrator-allowlist.sh; then
+if pg_gate scripts/test-review-orchestrator-allowlist.sh; then
     pass "review-orchestrator allowlist tests (scripts/test-review-orchestrator-allowlist.sh)"
 else
     failed "review-orchestrator allowlist tests (scripts/test-review-orchestrator-allowlist.sh)"
@@ -2190,7 +2261,7 @@ fi
 # an issue body only when its asserted state was confirmed. So the fixture that
 # matters is the stale one, and the failure mode that matters is degrading to a
 # skip when gh is missing. Mock gh, symlink-sandboxed PATH: no repo, no network.
-if bash scripts/test-gotcha-claims.sh; then
+if pg_gate scripts/test-gotcha-claims.sh; then
     pass "gotcha-claims tests (scripts/test-gotcha-claims.sh)"
 else
     failed "gotcha-claims tests (scripts/test-gotcha-claims.sh)"
@@ -2213,7 +2284,7 @@ fi
 # here is one
 # nothing holds. The counts live in the gate list above, where the gate
 # re-derives them.
-if bash scripts/test-review-gate-decisions.sh; then
+if pg_gate scripts/test-review-gate-decisions.sh; then
     pass "review-gate decision tests (scripts/test-review-gate-decisions.sh)"
 else
     failed "review-gate decision tests (scripts/test-review-gate-decisions.sh)"
@@ -2226,7 +2297,7 @@ fi
 # printf/echo allowlist is the settled rule (#256) and the guard's header
 # carries both its rationale and its known limitation — read that before
 # widening or narrowing it. Tracked fixtures, no gh, no network.
-if bash scripts/test-pipefail-grep.sh; then
+if pg_gate scripts/test-pipefail-grep.sh; then
     pass "pipefail-grep guard (scripts/test-pipefail-grep.sh)"
 else
     failed "pipefail-grep guard (scripts/test-pipefail-grep.sh)"
@@ -2239,7 +2310,7 @@ fi
 # rejected — a symmetric `release`, and aligning dispatch-ready's §3/§4 — and
 # both read as tidying, which is why they are asserted rather than described.
 # Mock gh only: no repo, no network.
-if bash scripts/test-claim-lifecycle.sh; then
+if pg_gate scripts/test-claim-lifecycle.sh; then
     pass "claim-lifecycle tests (scripts/test-claim-lifecycle.sh)"
 else
     failed "claim-lifecycle tests (scripts/test-claim-lifecycle.sh)"
@@ -2265,7 +2336,7 @@ fi
 # layers — canon, inventory, consumption — each added after a review defeated the
 # one before it. Three tracked files — `dispatch-ready/SKILL.md`,
 # `issue-claim.sh` and `merge-shepherd.sh` — no gh, no network.
-if bash scripts/test-drain-terminal-states.sh; then
+if pg_gate scripts/test-drain-terminal-states.sh; then
     pass "drain terminal-state tests (scripts/test-drain-terminal-states.sh)"
 else
     failed "drain terminal-state tests (scripts/test-drain-terminal-states.sh)"
@@ -2287,7 +2358,7 @@ fi
 # It pins the PREVIEW half only: the coverage record does not yet reach the
 # filed Epic, which is issue #294 and is stated rather than claimed. Three
 # tracked files, no gh, no network.
-if bash scripts/test-audit-lost-reviewer.sh; then
+if pg_gate scripts/test-audit-lost-reviewer.sh; then
     pass "audit lost-reviewer tests (scripts/test-audit-lost-reviewer.sh)"
 else
     failed "audit lost-reviewer tests (scripts/test-audit-lost-reviewer.sh)"
@@ -2306,7 +2377,7 @@ fi
 # an equality against the directory), and the SKILL.md decision sections are
 # checked SECTION-scoped, because a whole-file grep is satisfied by the probe's
 # own section. No repo, no network.
-if bash scripts/test-platform-health-probe.sh; then
+if pg_gate scripts/test-platform-health-probe.sh; then
     pass "platform-health-probe tests (scripts/test-platform-health-probe.sh)"
 else
     failed "platform-health-probe tests (scripts/test-platform-health-probe.sh)"
@@ -2326,7 +2397,7 @@ fi
 # the paragraph underneath explains every one by name — a presence check
 # satisfied by the prose ABOUT a guard rather than by the guard. Three mutants
 # proved that before the window existed. Two tracked files, no gh, no network.
-if bash scripts/test-stale-cache-diagnostic.sh; then
+if pg_gate scripts/test-stale-cache-diagnostic.sh; then
     pass "stale-cache diagnostic tests (scripts/test-stale-cache-diagnostic.sh)"
 else
     failed "stale-cache diagnostic tests (scripts/test-stale-cache-diagnostic.sh)"
@@ -2346,7 +2417,7 @@ fi
 # repo which merely documents the surface still trips detection; and a
 # nested-`.claude` fixture records the root-anchoring decision. Mock `gh`, git
 # isolated from global and system config, no network.
-if bash scripts/test-detect-capabilities.sh; then
+if pg_gate scripts/test-detect-capabilities.sh; then
     pass "detect-capabilities tests (scripts/test-detect-capabilities.sh)"
 else
     failed "detect-capabilities tests (scripts/test-detect-capabilities.sh)"
@@ -2356,7 +2427,7 @@ fi
 # `${CLAUDE_PLUGIN_ROOT}` is substituted into SKILL.md at load time and nowhere
 # else, so a reference doc writing it in a command resolves against `/` and
 # exits 127. The header entry above carries the rest.
-if bash scripts/test-plugin-root-in-references.sh; then
+if pg_gate scripts/test-plugin-root-in-references.sh; then
     pass "plugin-root-in-references tests (scripts/test-plugin-root-in-references.sh)"
 else
     failed "plugin-root-in-references tests (scripts/test-plugin-root-in-references.sh)"
@@ -2371,7 +2442,7 @@ fi
 # marker that is a PREFIX of an existing one is not swallowed on EITHER route)
 # and the refusal to file when the scan could not be performed. Mock `gh`, no
 # network, and no real issue is ever filed.
-if bash scripts/test-file-or-link-issue.sh; then
+if pg_gate scripts/test-file-or-link-issue.sh; then
     pass "file-or-link-issue tests (scripts/test-file-or-link-issue.sh)"
 else
     failed "file-or-link-issue tests (scripts/test-file-or-link-issue.sh)"
@@ -2384,7 +2455,7 @@ fi
 # an empty value, and the fail-safe rule — several labels are a conflict, never
 # "any site". Mutant reach is derived from a baseline diff rather than asserted
 # in prose. Mock `gh`, no repo, no network.
-if bash scripts/test-queue-snapshot-site.sh; then
+if pg_gate scripts/test-queue-snapshot-site.sh; then
     pass "queue-snapshot site tests (scripts/test-queue-snapshot-site.sh)"
 else
     failed "queue-snapshot site tests (scripts/test-queue-snapshot-site.sh)"
@@ -2403,7 +2474,7 @@ fi
 # need because the buckets are label-scoped. Mutant reach is derived from a
 # baseline diff of the gate re-run against mutated copies; two guard mutants
 # require the run to abort instead. No repo, no network.
-if bash scripts/test-site-filter.sh; then
+if pg_gate scripts/test-site-filter.sh; then
     pass "site filter tests (scripts/test-site-filter.sh)"
 else
     failed "site filter tests (scripts/test-site-filter.sh)"
@@ -2420,13 +2491,13 @@ fi
 # Mutant reach is derived from a baseline diff of the gate re-run against
 # mutated copies; the rows no mutant reddens must be the empty declared set.
 # Copies only, no repo, no network.
-if bash scripts/test-execution-site-surface.sh; then
+if pg_gate scripts/test-execution-site-surface.sh; then
     pass "execution-site surface tests (scripts/test-execution-site-surface.sh)"
 else
     failed "execution-site surface tests (scripts/test-execution-site-surface.sh)"
 fi
 
-if bash scripts/test-plugin-drift.sh; then
+if pg_gate scripts/test-plugin-drift.sh; then
     pass "plugin drift tests (scripts/test-plugin-drift.sh)"
 else
     failed "plugin drift tests (scripts/test-plugin-drift.sh)"
@@ -2445,7 +2516,7 @@ fi
 # Mutant reach is derived by re-running the matrix against seven mutated copies
 # (nostrip greedy noguard noloop nobuiltin nofence norootlock);
 # the unreached rows must equal the two declared fixture-adequacy preconditions.
-if bash scripts/test-tech-debt-excludes.sh; then
+if pg_gate scripts/test-tech-debt-excludes.sh; then
     pass "tech-debt exclude tests (scripts/test-tech-debt-excludes.sh)"
 else
     failed "tech-debt exclude tests (scripts/test-tech-debt-excludes.sh)"
@@ -2466,7 +2537,7 @@ fi
 # unknown ages becoming zero on both paths. Reach is derived over the gate's
 # enumerated mutants; unreached rows must equal the two declared preconditions.
 # "No network" is structural (shim check, #348).
-if bash scripts/test-repo-signals-recovery.sh; then
+if pg_gate scripts/test-repo-signals-recovery.sh; then
     pass "repo-signals recovery tests (scripts/test-repo-signals-recovery.sh)"
 else
     failed "repo-signals recovery tests (scripts/test-repo-signals-recovery.sh)"
@@ -2475,7 +2546,7 @@ fi
 # --- 45. release-lag tests ------------------------------------------------------
 # The scheduled reminder alone gates on live lag. Here only fixture behavior
 # is checked, so overdue runtime work cannot block its own dedicated release PR.
-if bash scripts/test-release-lag.sh; then
+if pg_gate scripts/test-release-lag.sh; then
     pass "release-lag tests (scripts/test-release-lag.sh)"
 else
     failed "release-lag tests (scripts/test-release-lag.sh)"
@@ -2486,7 +2557,7 @@ fi
 # the sentinels the consumer and docs/ROUTINES.md must agree on, the handle
 # grammar's one home, and the slug rule against real workflow names. Source-
 # level, no network.
-if bash scripts/test-fire-watch-block.sh; then
+if pg_gate scripts/test-fire-watch-block.sh; then
     pass "fire-watch block tests (scripts/test-fire-watch-block.sh)"
 else
     failed "fire-watch block tests (scripts/test-fire-watch-block.sh)"
@@ -2495,7 +2566,7 @@ fi
 # --- 47. model-tier tests -------------------------------------------------------
 # Dispatch sites name a tier, never inherit the session model, and every inline
 # binding matches docs/MODEL-TIERS.md. Source-level, no network.
-if bash scripts/test-model-tiers.sh; then
+if pg_gate scripts/test-model-tiers.sh; then
     pass "model-tier tests (scripts/test-model-tiers.sh)"
 else
     failed "model-tier tests (scripts/test-model-tiers.sh)"
@@ -2504,7 +2575,7 @@ fi
 # --- 48. testflight JWT tests ---------------------------------------------------
 # The App Store Connect signer is openssl only and its ES256 output verifies.
 # Throwaway key, no gh, no network.
-if bash scripts/test-testflight-jwt.sh; then
+if pg_gate scripts/test-testflight-jwt.sh; then
     pass "testflight JWT tests (scripts/test-testflight-jwt.sh)"
 else
     failed "testflight JWT tests (scripts/test-testflight-jwt.sh)"
@@ -2513,7 +2584,7 @@ fi
 # --- 49. board-snapshot call tests ----------------------------------------------
 # Fenced board-snapshot.sh commands use the environment form and pass no flag.
 # Source-level, no network.
-if bash scripts/test-board-snapshot-calls.sh; then
+if pg_gate scripts/test-board-snapshot-calls.sh; then
     pass "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
 else
     failed "board-snapshot call tests (scripts/test-board-snapshot-calls.sh)"
@@ -2523,7 +2594,7 @@ fi
 # Every SKILL.md carrying the plugin-root token carries the root-resolution
 # paragraph before the first fenced command, and no paragraph spells the token.
 # Source-level, no network.
-if bash scripts/test-plugin-root-paragraph.sh; then
+if pg_gate scripts/test-plugin-root-paragraph.sh; then
     pass "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
 else
     failed "plugin-root-paragraph tests (scripts/test-plugin-root-paragraph.sh)"
@@ -2533,7 +2604,7 @@ fi
 # take-it confirms isolation before a parallel dispatch and fails closed or runs a
 # guarded serial worker; the design doc's claims agree. Source-level, no omp, no
 # network. The guard's behaviour is entry 54's.
-if bash scripts/test-isolation-contract.sh; then
+if pg_gate scripts/test-isolation-contract.sh; then
     pass "isolation-contract tests (scripts/test-isolation-contract.sh)"
 else
     failed "isolation-contract tests (scripts/test-isolation-contract.sh)"
@@ -2542,7 +2613,7 @@ fi
 # --- 52. config-fallback-paragraph tests ----------------------------------------
 # The unrun-config paragraph sits in the four carriers, exactly and directly under
 # the config line, and in none of the four stoppers. Source-level, no network.
-if bash scripts/test-config-fallback-paragraph.sh; then
+if pg_gate scripts/test-config-fallback-paragraph.sh; then
     pass "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
 else
     failed "config-fallback-paragraph tests (scripts/test-config-fallback-paragraph.sh)"
@@ -2553,7 +2624,7 @@ fi
 # every fact that defines them (the .gitignore lines and their order, tracked and
 # ignored status of settings.json and each owned script, the sassy-dog negation),
 # and plan/apply/verify reach the target. Rows + named repros + mutants. No network.
-if bash scripts/test-tracking-state.sh; then
+if pg_gate scripts/test-tracking-state.sh; then
     pass "tracking-state tests (scripts/test-tracking-state.sh)"
 else
     failed "tracking-state tests (scripts/test-tracking-state.sh)"
@@ -2562,7 +2633,7 @@ fi
 # --- 54. checkout-guard tests ---------------------------------------------------
 # The ownership guard and the foreground runner against real processes, temporary
 # Git consumers and local bare remotes. No model, gh or network.
-if bash scripts/test-checkout-guard.sh; then
+if pg_gate scripts/test-checkout-guard.sh; then
     pass "checkout-guard tests (scripts/test-checkout-guard.sh)"
 else
     failed "checkout-guard tests (scripts/test-checkout-guard.sh)"
@@ -2572,7 +2643,7 @@ fi
 # sentry-triage's escalation pulls event lists and breadcrumbs through the MCP
 # tool catalog, groom-backlog re-validates sentry-source issues, and a missing
 # catalog tool is UNKNOWN rather than "needs human" (issue #489). Source-level.
-if bash scripts/test-sentry-breadcrumbs.sh; then
+if pg_gate scripts/test-sentry-breadcrumbs.sh; then
     pass "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
 else
     failed "sentry-breadcrumbs tests (scripts/test-sentry-breadcrumbs.sh)"
@@ -2581,7 +2652,7 @@ fi
 # --- 56. auto-merge policy tests ------------------------------------------------
 # The auto-merge template merges only an explicit minor/patch and only on a
 # Dependabot-triggered run; everything else is held. Source-level, no network.
-if bash scripts/test-auto-merge-policy.sh; then
+if pg_gate scripts/test-auto-merge-policy.sh; then
     pass "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
 else
     failed "auto-merge policy tests (scripts/test-auto-merge-policy.sh)"
@@ -2591,7 +2662,7 @@ fi
 # The monthly refresh opens its PR with the App token only, fails on a failed
 # refresh, stages only lane files and enqueues with plain --auto. Executed
 # against scratch repos; no network.
-if bash scripts/test-deps-cadence-policy.sh; then
+if pg_gate scripts/test-deps-cadence-policy.sh; then
     pass "deps-cadence policy tests (scripts/test-deps-cadence-policy.sh)"
 else
     failed "deps-cadence policy tests (scripts/test-deps-cadence-policy.sh)"
@@ -2600,7 +2671,7 @@ fi
 # --- 58. deps-cadence render tests ---------------------------------------------
 # render-cadence.sh derives LANES and toolchain sources from the repo, and
 # refuses or declines rather than guessing. Synthetic trees; no network.
-if bash scripts/test-deps-cadence-render.sh; then
+if pg_gate scripts/test-deps-cadence-render.sh; then
     pass "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
 else
     failed "deps-cadence render tests (scripts/test-deps-cadence-render.sh)"
@@ -2609,7 +2680,7 @@ fi
 # --- 59. npm-lane conversion tests ---------------------------------------------
 # convert-npm-lanes.sh rewrites npm lanes on a text bun.lock as native bun and
 # reports the sync and auto-merge workflows that leaves stale. No network.
-if bash scripts/test-npm-lane-conversion.sh; then
+if pg_gate scripts/test-npm-lane-conversion.sh; then
     pass "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
 else
     failed "npm-lane conversion tests (scripts/test-npm-lane-conversion.sh)"
@@ -2618,7 +2689,7 @@ fi
 # --- 60. lockfile-sync policy tests --------------------------------------------
 # The bun sync template runs on a hosted runner, mints the App token last and
 # pushes through a credential helper. Source-level, no network.
-if bash scripts/test-lockfile-sync-policy.sh; then
+if pg_gate scripts/test-lockfile-sync-policy.sh; then
     pass "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
 else
     failed "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
@@ -2626,10 +2697,19 @@ fi
 
 # --- 61. template-action-pins tests --------------------------------------------
 # Template action pins track the workflow Dependabot bumps. Source-level, no network.
-if bash scripts/test-template-action-pins.sh; then
+if pg_gate scripts/test-template-action-pins.sh; then
     pass "template-action-pins tests (scripts/test-template-action-pins.sh)"
 else
     failed "template-action-pins tests (scripts/test-template-action-pins.sh)"
+fi
+
+# --- 62. preflight-wiring tests ------------------------------------------------
+# Every scripts/test-*.sh wired exactly once, and the parallel runner's contract
+# (bound, status, contiguous output, every failed gate named). No gh, no network.
+if pg_gate scripts/test-preflight-wiring.sh; then
+    pass "preflight-wiring tests (scripts/test-preflight-wiring.sh)"
+else
+    failed "preflight-wiring tests (scripts/test-preflight-wiring.sh)"
 fi
 
 # ------------------------------------------------------------------------------
@@ -2638,5 +2718,7 @@ if [ "$fail" -eq 0 ]; then
     exit 0
 else
     echo "preflight: FAILURES above" >&2
+    echo "preflight: failed gates:" >&2
+    printf '%s' "$failed_gates" | sed 's/^/  - /' >&2
     exit 1
 fi

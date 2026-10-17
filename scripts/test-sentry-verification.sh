@@ -3224,7 +3224,7 @@ fi
 # stating two. Every gate in preflight ends its entry the same way, so the
 # anchor has to be the invocation, not the phrase.
 pf_inv="$(awk '
-    /^if bash scripts\/test-sentry-verification\.sh; then/ { for (i = 1; i < n; i++) print buf[i]; exit }
+    /^if pg_gate scripts\/test-sentry-verification\.sh; then/ { for (i = 1; i < n; i++) print buf[i]; exit }
     /^#/ { buf[n++] = $0; next }
     { n = 1 }' scripts/preflight.sh)"
 if [ -n "$pf_inv" ]; then

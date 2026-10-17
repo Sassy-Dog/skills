@@ -27,6 +27,9 @@ jobs:
     # back to `[self-hosted, …]` while the repo is public and this trigger is
     # unguarded.
     runs-on: ubuntu-latest
+    # A hung gate must fail the run, not hold a merge-queue slot for the 6 h
+    # platform default. The run takes about 5 minutes; 30 is generous.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -64,7 +67,11 @@ jobs:
       # All gates live in scripts/preflight.sh (single source of truth for the
       # guard regexes — run the same script locally before a PR). It skips
       # actionlint under CI=true; the pinned-binary step below owns that gate
-      # here.
+      # here. The scripts/test-*.sh gates run in parallel inside it,
+      # PREFLIGHT_JOBS slots at a time (default: the runner's CPU count, 4 on
+      # ubuntu-latest; the longest gate shards itself on top of that, so the
+      # process count can exceed it), which is why this stays ONE step of ONE
+      # job (#567).
       - name: Preflight gates (shellcheck, frontmatter, guards, manifests, markdownlint)
         run: bash scripts/preflight.sh
 
