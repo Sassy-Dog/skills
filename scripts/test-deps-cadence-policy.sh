@@ -193,7 +193,10 @@
 # output in shard order and exits non-zero if any shard did. Nothing about WHAT is
 # checked changes: the same checks run, exactly once each per mutation, and a
 # shard is a normal run with its own `mktemp -d`. Run standalone (neither variable
-# set) it is the old single process. The skipped-as-root note is printed by shard 0
+# set) it is the old single process. The parent also checks the split itself: each
+# shard reports how many mutation calls it saw and ran, and the parent fails unless
+# they agree on the total and the ran-counts sum to it (a skipped or duplicated
+# call, a missing report), with a self-check of that check on fake reports. The skipped-as-root note is printed by shard 0
 # only, like any other non-mutation line.
 #
 # Wired into scripts/preflight.sh; run directly:
@@ -217,10 +220,55 @@ fail=0
 SHARDS="${CADENCE_POLICY_SHARDS:-${PREFLIGHT_JOBS:-1}}"
 case "$SHARDS" in ''|*[!0-9]*|0) SHARDS=1 ;; esac
 [ "$SHARDS" -le 8 ] || SHARDS=8
+# shard_coverage_violations <report-dir> <shards> — one reason per line, empty when
+# the shards together ran every mutation call exactly once. Each shard writes
+# "<calls seen> <calls it ran>"; all must have seen the same total, and what they
+# ran must sum to it. A shard that skipped a call, a missing report, or a shard
+# that saw a different sequence (a conditional mutate call) are all caught here,
+# because the round-robin split is otherwise unverified.
+shard_coverage_violations() {
+    local d="$1" n="$2" i seen ran total="" sum=0 line
+    for ((i = 0; i < n; i++)); do
+        if [ ! -s "$d/shard.$i" ]; then echo "shard $i wrote no coverage report"; continue; fi
+        line=$(cat "$d/shard.$i"); seen=${line% *}; ran=${line#* }
+        case "$seen$ran" in ''|*[!0-9]*) echo "shard $i wrote an unreadable report: $line"; continue ;; esac
+        if [ -z "$total" ]; then total=$seen
+        elif [ "$seen" != "$total" ]; then echo "shard $i saw $seen mutation calls, the others $total"; fi
+        sum=$((sum + ran))
+    done
+    if [ -n "$total" ] && [ "$sum" != "$total" ]; then
+        echo "the shards ran $sum mutation calls in all but each shard saw $total"
+    fi
+    return 0
+}
+# Self-check of the check above, with fake reports: the clean split passes and
+# each way of losing coverage is flagged (the mutants of this check).
+cov_t="$WORK/cov"; mkdir -p "$cov_t"
+cov_case() { # <name> <expect: clean|flagged> <report lines for shard 0..2>
+    local name="$1" want="$2" i=0 out; shift 2
+    rm -f "$cov_t"/shard.*
+    for r in "$@"; do [ "$r" = MISSING ] || echo "$r" > "$cov_t/shard.$i"; i=$((i + 1)); done
+    out="$(shard_coverage_violations "$cov_t" 3)"
+    if [ "$want" = clean ] && [ -z "$out" ]; then :
+    elif [ "$want" = flagged ] && [ -n "$out" ]; then :
+    else echo "  FAIL shard-coverage check: '$name' expected $want, got: ${out:-nothing}"; fail=1; fi
+}
+cov_case "even split"                  clean   "10 4" "10 3" "10 3"
+cov_case "a shard skipped one call"    flagged "10 4" "10 3" "10 2"
+cov_case "a call run twice"            flagged "10 4" "10 4" "10 3"
+cov_case "a shard saw another total"   flagged "10 4" "9 3"  "10 3"
+cov_case "a shard wrote no report"     flagged "10 4" "10 3" MISSING
+cov_case "an unreadable report"        flagged "10 4" "ten 3" "10 3"
+
 if [ -z "${CADENCE_POLICY_SHARD-}" ] && [ "$SHARDS" -gt 1 ]; then
+    # shellcheck source=lib-parallel-gates.sh
+    . "$ROOT/scripts/lib-parallel-gates.sh"
+    mkdir -p "$WORK/report"
     shard_pids=""
+    # An interrupted parent takes its shards, and whatever they started, with it.
+    trap 'for p in $shard_pids; do pg_killtree "$p"; done; exit 143' INT TERM
     for ((s = 0; s < SHARDS; s++)); do
-        CADENCE_POLICY_SHARD=$s CADENCE_POLICY_SHARDS=$SHARDS bash "$0" >"$WORK/shard.$s.out" 2>&1 </dev/null &
+        CADENCE_POLICY_SHARD=$s CADENCE_POLICY_SHARDS=$SHARDS CADENCE_POLICY_REPORT="$WORK/report/shard.$s" bash "$0" >"$WORK/shard.$s.out" 2>&1 </dev/null &
         shard_pids="$shard_pids $!"
     done
     s=0
@@ -229,15 +277,27 @@ if [ -z "${CADENCE_POLICY_SHARD-}" ] && [ "$SHARDS" -gt 1 ]; then
         cat "$WORK/shard.$s.out"
         s=$((s + 1))
     done
+    cov="$(shard_coverage_violations "$WORK/report" "$SHARDS")"
+    if [ -n "$cov" ]; then
+        while IFS= read -r l; do echo "  FAIL $l"; done <<<"$cov"
+        fail=1
+    else
+        echo "  ok   the $SHARDS shards together ran every mutation call exactly once"
+    fi
     exit "$fail"
 fi
 MUT_SHARD="${CADENCE_POLICY_SHARD:-0}"
 MUT_SHARDS="$SHARDS"
 mut_seq=0
+mut_ran=0
 in_mut=0
 # mut_mine — true when this process owns the next mutation call (call order mod
 # shard count), so every process agrees on the split without talking.
-mut_mine() { local n=$mut_seq; mut_seq=$((mut_seq + 1)); [ $((n % MUT_SHARDS)) -eq "$MUT_SHARD" ]; }
+mut_mine() {
+    local n=$mut_seq; mut_seq=$((mut_seq + 1))
+    [ $((n % MUT_SHARDS)) -eq "$MUT_SHARD" ] || return 1
+    mut_ran=$((mut_ran + 1))
+}
 
 ok()  { if [ "$MUT_SHARD" -eq 0 ] || [ "$in_mut" -eq 1 ]; then echo "  ok   $*"; fi; }
 bad() { echo "  FAIL $*"; fail=1; }
@@ -2316,4 +2376,6 @@ cgmutate "garbage classification stays armed" exec '[ "${SUBSTANTIVE:-}" = "fals
 cgmutate "no review comment" exec 'gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"' 'true'
 cgmutate "push commits as nobody" exec 'git config user.name "${APP_SLUG}[bot]"' 'git config user.name "someone"'
 
+# Coverage report for the sharding parent (see shard_coverage_violations).
+[ -z "${CADENCE_POLICY_REPORT-}" ] || echo "$mut_seq $mut_ran" > "$CADENCE_POLICY_REPORT"
 exit "$fail"

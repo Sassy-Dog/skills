@@ -13,14 +13,14 @@
 # Run it before every PR; `--fix` lets markdownlint auto-fix first.
 #
 # Usage: bash scripts/preflight.sh [--fix]
-#        PREFLIGHT_JOBS=N bash scripts/preflight.sh   # N test gates at a time
+#        PREFLIGHT_JOBS=N bash scripts/preflight.sh   # N test-gate slots (see below)
 #
 # THE TEST GATES RUN IN PARALLEL (issue #567). The serial run took ~15 minutes on
 # CI (903 s in the merge queue, nearly all of it the scripts/test-*.sh suites),
 # and every merge waits on it twice. The cheap, order-dependent gates (shellcheck,
 # frontmatter, the guards, manifests, markdownlint, actionlint, config-source)
 # stay serial and inline. Every scripts/test-*.sh is started up front by a
-# background scheduler, largest file first, at most PREFLIGHT_JOBS at a time
+# background scheduler, largest file first, at most PREFLIGHT_JOBS slots at a time
 # (default: the CPU count, via getconf/nproc/sysctl; `PREFLIGHT_JOBS=1` is the old
 # fully serial behaviour, with no scheduler and no capture). Each suite's output
 # is captured to its own file and printed WHOLE, where its gate sits below, so the
@@ -34,6 +34,16 @@
 # run beside the others goes through `pg_gate_serial` instead of `pg_gate`, which
 # runs it inline at its gate, and its reason is recorded here. None does today.
 # Gate 62 pins that every suite is wired exactly once, and the runner's behaviour.
+# The per-suite parallel-safety audit itself is recorded in PR #568
+# (https://github.com/Sassy-Dog/skills/pull/568).
+#
+# PREFLIGHT_JOBS BOUNDS THE SLOTS, NOT THE TOTAL PROCESS COUNT. It is the number of
+# gates the scheduler runs at once; test-deps-cadence-policy.sh forks min(JOBS, 8)
+# shards of its own outside that count (decided over capping: those shards keep the
+# longest gate from being the floor), so concurrency can exceed PREFLIGHT_JOBS by
+# at most that. An interrupt (INT/TERM) or exit kills every gate's whole process
+# tree; a runner killed without recording a result is a FAILED, named gate, and
+# ci.yml sets a job timeout so a hang can never run to the platform limit.
 #
 # Gates, in CI order:
 #   1. shellcheck -S warning over every tracked *.sh, PLUS a second pass for

@@ -38,9 +38,10 @@
 #     so the run needs no network and no pinned tool.
 #
 # NOT CHECKED HERE, and stated so a later reader does not assume it: that the
-# real 53-odd suites are safe to run side by side. That is an audit of each
-# script's scratch space and git usage, recorded in the PR that introduced the
-# runner; this gate only guarantees the wiring and the runner's own behaviour.
+# real suites are safe to run side by side. That is an audit of each script's
+# scratch space and git usage, recorded in PR #568
+# (https://github.com/Sassy-Dog/skills/pull/568); this gate only guarantees the
+# wiring and the runner's own behaviour.
 # No gh, no network.
 set -uo pipefail
 export LC_ALL=C
@@ -201,6 +202,107 @@ if [ -n "$capdir" ] && [ ! -e "$capdir" ]; then ok "pg_stop removed the capture 
     pg_gate "$STUBS/bad.sh" >"$WORK/s-bad.out" 2>&1; echo "$?" >"$WORK/s-bad.rc"
 ) >"$WORK/s-all.out" 2>&1
 if [ "$(cat "$WORK/s-bad.rc" 2>/dev/null)" = 3 ] && ! grep -q SCHEDULER-STARTED "$WORK/s-all.out"; then ok "JOBS=1 starts no scheduler and runs gates inline with their own status"; else bad "JOBS=1 is not serial/inline: $(cat "$WORK/s-all.out")"; fi
+
+# ---------------------------------------------------------------------------
+# 2b. failure modes of the runner, each with a mutant of the runner
+# ---------------------------------------------------------------------------
+# Four cases, run against a runner copy under a watchdog (a hang is a result, not
+# a stuck test):
+#   A  runners killed (kill -9) before they recorded a result, with every slot
+#      taken: the killed gates must read as FAILED (never pass) and must free
+#      their slots, or the gate queued behind them never starts and the run spins.
+#   B  a gate that dies by signal returns non-zero.
+#   C  a gate with an EMPTY capture and exit 0 passes (no "silent means broken").
+#   D  pg_stop leaves no gate process and no grandchild alive.
+CASE_DIR="$WORK/cases"
+mkdir -p "$CASE_DIR"
+cat >"$CASE_DIR/slow.sh" <<'EOF'
+echo $$ >"$PIDS/$(basename "$0").pid"
+sleep 60
+EOF
+printf 'exit 0\n' >"$CASE_DIR/quick.sh"
+printf 'kill -9 $$\n' >"$CASE_DIR/sig.sh"
+cp "$CASE_DIR/slow.sh" "$CASE_DIR/slow2.sh"
+cat >"$CASE_DIR/tree.sh" <<'EOF'
+sleep 60 &
+echo $! >"$PIDS/tree-sleep.pid"
+echo $$ >"$PIDS/tree.pid"
+wait
+EOF
+
+# run_cases <lib> — prints one result line: A1= A2= Aq= B= C= D=
+run_cases() {
+    local lib="$1" pids="$WORK/pids.$RANDOM" out="$WORK/cases.out.$RANDOM" i
+    mkdir -p "$pids"
+    (
+        export PIDS="$pids"
+        # shellcheck source=lib-parallel-gates.sh
+        . "$lib"
+        nz() { if [ "$1" = 0 ]; then echo 0; else echo nz; fi; }
+        wait_for() { local n=0; while [ ! -s "$1" ] && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done; }
+
+        # A: both slots held by slow gates, a third queued; kill both runners.
+        pg_start 2 "$CASE_DIR/slow.sh" "$CASE_DIR/slow2.sh" "$CASE_DIR/quick.sh"
+        k1=$(pg_key "$CASE_DIR/slow.sh"); k2=$(pg_key "$CASE_DIR/slow2.sh")
+        wait_for "$PG_DIR/$k1.wpid"; wait_for "$PG_DIR/$k2.wpid"
+        wait_for "$pids/slow.sh.pid"; wait_for "$pids/slow2.sh.pid"
+        kill -9 "$(cat "$PG_DIR/$k1.wpid")" "$(cat "$PG_DIR/$k2.wpid")" 2>/dev/null
+        pg_gate "$CASE_DIR/slow.sh" >/dev/null 2>&1; a1=$?
+        pg_gate "$CASE_DIR/slow2.sh" >/dev/null 2>&1; a2=$?
+        pg_gate "$CASE_DIR/quick.sh" >/dev/null 2>&1; aq=$?
+        # the orphaned gates outlive their killed runners; reap them here
+        for f in "$pids/slow.sh.pid" "$pids/slow2.sh.pid"; do [ -s "$f" ] && pg_killtree "$(cat "$f")"; done
+        pg_stop
+
+        # B and C share a run.
+        pg_start 2 "$CASE_DIR/sig.sh" "$CASE_DIR/quick.sh"
+        pg_gate "$CASE_DIR/sig.sh" >/dev/null 2>&1; b=$?
+        c_out=$(pg_gate "$CASE_DIR/quick.sh" 2>&1 >/dev/null); c=$?
+        case "$c_out" in "--- "*) ;; *) c=99 ;; esac   # header only, nothing else
+        pg_stop
+
+        # D: a gate and its grandchild die with pg_stop.
+        pg_start 2 "$CASE_DIR/tree.sh"
+        wait_for "$pids/tree-sleep.pid"; wait_for "$pids/tree.pid"
+        pg_stop
+        sleep 1
+        d=dead
+        for f in "$pids/tree.pid" "$pids/tree-sleep.pid"; do
+            if [ -s "$f" ] && kill -0 "$(cat "$f")" 2>/dev/null; then d=ALIVE; kill -9 "$(cat "$f")" 2>/dev/null; fi
+        done
+        echo "A1=$(nz $a1) A2=$(nz $a2) Aq=$(nz $aq) B=$(nz $b) C=$(nz $c) D=$d"
+    ) >"$out" 2>&1 &
+    local pid=$! n=0
+    while kill -0 "$pid" 2>/dev/null && [ $n -lt 300 ]; do sleep 0.1; n=$((n + 1)); done
+    if kill -0 "$pid" 2>/dev/null; then
+        pg_killtree_local() { local p="$1" c; for c in $(ps -eo pid=,ppid= | while read -r a b; do [ "$b" = "$p" ] && echo "$a"; done); do pg_killtree_local "$c"; done; kill -9 "$p" 2>/dev/null; }
+        pg_killtree_local "$pid"
+        for i in "$pids"/*.pid; do [ -s "$i" ] && kill -9 "$(cat "$i")" 2>/dev/null; done
+        echo "TIMEOUT (the runner hung)"
+    else
+        tail -1 "$out"
+    fi
+}
+
+WANT="A1=nz A2=nz Aq=0 B=nz C=0 D=dead"
+got=$(run_cases "$LIB")
+if [ "$got" = "$WANT" ]; then ok "runner failure modes: killed runners FAIL and free their slots; signal exit is non-zero; empty capture + exit 0 passes; pg_stop leaves no process alive"; else bad "runner failure modes: wanted '$WANT', got '$got'"; fi
+
+# mutant_lib <name> <sed expression> <expected substring of the wrong result>
+mutant_lib() {
+    local name="$1" expr="$2" want="$3" m="$WORK/mlib.$RANDOM.sh" r
+    sed "$expr" "$LIB" >"$m"
+    if cmp -s "$m" "$LIB"; then bad "runner mutant '$name' changed nothing, so it proves nothing"; return; fi
+    r=$(run_cases "$m")
+    if [ "$r" = "$WANT" ]; then bad "runner mutant '$name' was NOT detected"
+    elif grep -qF -- "$want" <<<"$r"; then ok "runner mutant '$name' detected ($want)"
+    else bad "runner mutant '$name' detected, but not as '$want': $r"; fi
+}
+mutant_lib "a runner with no result reads as passing" 's/return 1 # PG-DEAD-WRAPPER/return 0/' "A1=0"
+mutant_lib "slots held by a missing .rc, not a live runner" 's/running=.*# PG-SLOTS/running=$(( $(find "$PG_DIR" -maxdepth 1 -name "*.wpid" | wc -l) - $(find "$PG_DIR" -maxdepth 1 -name "*.rc" | wc -l) ))/' "TIMEOUT"
+mutant_lib "signal exit normalised to success" 's/rc=.* # PG-RC/rc=0 # PG-RC/' "B=0"
+mutant_lib "empty capture read as failure" 's/rc=.*# PG-RCREAD/rc=$(cat "$PG_DIR\/$k.rc"); [ -s "$PG_DIR\/$k.out" ] || rc=1/' "C=nz"
+mutant_lib "pg_stop SIGKILLs the scheduler, orphaning the tree" 's/pg_killtree "\$PG_SCHED_PID"/kill -9 "$PG_SCHED_PID"/' "D=ALIVE"
 
 # ---------------------------------------------------------------------------
 # 3. end to end: the real preflight.sh over a stub tree

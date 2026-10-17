@@ -10,7 +10,7 @@ cd skills
 bash scripts/preflight.sh
 ```
 
-There is **no build step**. The entire repo is Markdown (skills and agents) plus the Bash scripts bundled inside them. `scripts/preflight.sh` runs every gate CI runs, so run it before every PR. `--fix` auto-fixes markdownlint findings. The `scripts/test-*.sh` gates run in parallel, `PREFLIGHT_JOBS` at a time (default: your CPU count); set `PREFLIGHT_JOBS=1` for the old one-at-a-time run, e.g. to read a single gate's output live.
+There is **no build step**. The entire repo is Markdown (skills and agents) plus the Bash scripts bundled inside them. `scripts/preflight.sh` runs every gate CI runs, so run it before every PR. `--fix` auto-fixes markdownlint findings. The `scripts/test-*.sh` gates run in parallel, `PREFLIGHT_JOBS` slots at a time (default: your CPU count; the longest gate shards itself on top of that, so total processes can exceed it); set `PREFLIGHT_JOBS=1` for the old one-at-a-time run, e.g. to read a single gate's output live.
 
 Two ways it can pass locally and still fail in CI, both worth knowing:
 
