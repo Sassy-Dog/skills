@@ -1617,6 +1617,12 @@
 #      or two-lockfile patch and a repeated path), each asserted by exit 1 and
 #      its own reason, with a mutant per enforcing construct that neuters it and
 #      keeps its message. No network.
+#  61. template-action-pins tests (scripts/test-template-action-pins.sh) — every
+#      action SHA and version comment pinned in a setup-deps workflow template
+#      equals the pin in .github/workflows/template-action-pins.yml, the never-run
+#      workflow that lets this repo's Dependabot track them (issue #564); its own
+#      safety shape (manual trigger, empty permissions, job guard, no run or
+#      secret) is pinned too. Mutation-proven. No gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh). Exit 0 = all pass, 1 = any fail. Tools that are not
@@ -2616,6 +2622,14 @@ if bash scripts/test-lockfile-sync-policy.sh; then
     pass "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
 else
     failed "lockfile-sync policy tests (scripts/test-lockfile-sync-policy.sh)"
+fi
+
+# --- 61. template-action-pins tests --------------------------------------------
+# Template action pins track the workflow Dependabot bumps. Source-level, no network.
+if bash scripts/test-template-action-pins.sh; then
+    pass "template-action-pins tests (scripts/test-template-action-pins.sh)"
+else
+    failed "template-action-pins tests (scripts/test-template-action-pins.sh)"
 fi
 
 # ------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-# TEMPLATE: lockfile-sync-pod · version 8
+# TEMPLATE: lockfile-sync-pod · version 9
 # Rendered by sassy-dog:setup-deps for repos where
 # detect-ecosystems.sh reports cocoapods with lockfile_risk (a tracked Podfile).
 #
@@ -46,7 +46,7 @@
 #   {{FLUTTER_VERSION}}  → keep in lockstep with the release workflow
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 8
+# generated-by: sassy-dog:setup-deps | template: lockfile-sync-pod | template-version: 9
 #
 # Refresh pubspec.lock + Podfile.lock on Dependabot pub PRs — the macOS twin of
 # dependabot-bun-lockfile.yml.
@@ -159,7 +159,7 @@ jobs:
 
       # Flutter from the repo's own pin, never the image's. No `cache:` input:
       # the action saves through actions/cache (see the posture above).
-      - uses: subosito/flutter-action@fd55f4c5af5b953cc57a2be44cb082c8f6635e8e # v2.21.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
 
@@ -329,7 +329,7 @@ jobs:
 
       - name: Mint GitHub App token
         id: app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}

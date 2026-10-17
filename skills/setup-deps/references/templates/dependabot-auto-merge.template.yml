@@ -1,4 +1,4 @@
-# TEMPLATE: dependabot-auto-merge · version 5
+# TEMPLATE: dependabot-auto-merge · version 6
 # Rendered by sassy-dog:setup-deps.
 #   {{FACT}}              → replace with the detected/confirmed value
 #   # {{IF:FLAG}} ... # {{ENDIF}}
@@ -7,7 +7,7 @@
 #                           and every render is valid by construction.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 5
+# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 6
 #
 # Auto-merge green Dependabot PRs so security bumps do not rot in the queue.
 #
@@ -98,7 +98,7 @@ jobs:
 
       - name: Mint GitHub App token
         id: app_token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ secrets.PLATFORM_WRITER_APP_CLIENT_ID }}
           private-key: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}
