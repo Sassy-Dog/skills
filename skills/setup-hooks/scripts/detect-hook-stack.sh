@@ -201,7 +201,53 @@ add shellcheck "$det" "$why"
 # --- dart / rustfmt / gofmt / dotnet-format: manifest presence ----------------
 # Tracked ANYWHERE in the tree, vendored paths excluded — see manifest_tool.
 manifest_tool dart '(^|/)pubspec\.yaml$' pubspec.yaml
-manifest_tool rustfmt '(^|/)Cargo\.toml$' Cargo.toml
+# rustfmt: a tracked Cargo.toml AND a tracked rustfmt config declaring `edition`.
+# Bare `rustfmt <file>` never reads Cargo.toml, so with no `edition` in a
+# rustfmt.toml it formats as edition 2015 while `cargo fmt` passes the crate's
+# real edition: 2018+ files fail to parse (E0670, swallowed by the route's
+# error suppression) and the rest are reformatted in 2015 style, which then
+# fails `cargo fmt --check` (issue #569). So the route renders only when the
+# edition is declared in repo config. We deliberately do NOT read the edition
+# out of Cargo.toml and pass `--edition`: that is a configured fact that drifts.
+#
+# rustfmt resolves its config by walking UP from the formatted file's directory
+# to the nearest rustfmt.toml / .rustfmt.toml. So the rule is per crate: EVERY
+# non-vendored Cargo.toml directory must have a declaring config in that same
+# directory or an ancestor (a root config covers all members). One uncovered
+# crate withholds the route and the reason names it, because the route is one
+# `*.rs` case for the whole tree and cannot be partial. A config counts only if
+# it is tracked, non-vendored, and holds an uncommented `edition =` line
+# (`style_edition` does not count).
+rustfmt_cargo=$(grep -E '(^|/)Cargo\.toml$' <<<"$TRACKED_FILES")
+if [ -z "$rustfmt_cargo" ]; then
+    manifest_tool rustfmt '(^|/)Cargo\.toml$' Cargo.toml
+else
+    rustfmt_cfg_dirs=" "
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] && [ -f "$cfg" ] || continue
+        if grep -qE '^[[:space:]]*edition[[:space:]]*=' "$cfg" 2>/dev/null; then
+            d="${cfg%/*}"; [ "$d" = "$cfg" ] && d="."
+            rustfmt_cfg_dirs+="$d "
+        fi
+    done < <(grep -E '(^|/)\.?rustfmt\.toml$' <<<"$TRACKED_FILES")
+    rustfmt_uncovered=""
+    while IFS= read -r cargo; do
+        d="${cargo%/*}"; [ "$d" = "$cargo" ] && d="."
+        walk="$d"; covered=0
+        while :; do
+            case "$rustfmt_cfg_dirs" in *" $walk "*) covered=1; break ;; esac
+            [ "$walk" = "." ] && break
+            case "$walk" in */*) walk="${walk%/*}" ;; *) walk="." ;; esac
+        done
+        [ "$covered" = 1 ] || { rustfmt_uncovered="$cargo"; break; }
+    done <<<"$rustfmt_cargo"
+    if [ -z "$rustfmt_uncovered" ]; then
+        add rustfmt 1 "tracked Cargo.toml + rustfmt config declaring edition"
+    else
+        add rustfmt 0 "tracked $rustfmt_uncovered has no rustfmt.toml / .rustfmt.toml declaring edition in its directory or an ancestor; bare rustfmt would format as edition 2015; add rustfmt.toml with edition = \"<the crate's edition>\" to opt in"
+        note "rustfmt: route skipped; $rustfmt_uncovered has no tracked rustfmt.toml/.rustfmt.toml declaring edition (bare rustfmt ignores Cargo.toml and formats as edition 2015, so it would fail to parse 2018+ files and reformat the rest wrongly); add rustfmt.toml containing edition = \"<the crate's edition>\" (matching Cargo.toml) and re-run"
+    fi
+fi
 manifest_tool gofmt '(^|/)go\.mod$' go.mod
 why=""; det=0
 if has_tracked '\.sln$' || has_tracked '\.csproj$'; then

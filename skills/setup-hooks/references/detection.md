@@ -21,9 +21,20 @@ hook error.
 | `markdownlint` | A `.markdownlint-cli2.*` / `.markdownlint.*` config AND tracked `*.md` | `*.md` → `markdownlint-cli2 --fix`, then re-check; unfixable exit 2 | The version pin is **not optional** — see below. An unpinned `npx -y` resolves to latest and blocks on rules CI does not run. |
 | `shellcheck` | Tracked `*.sh` (shellcheck in a CI workflow strengthens the evidence and is reported in `why`) | `*.sh` → `shellcheck -S warning`; findings exit 2 | Lint-only — never rewrites. There is no standard shellcheck config file, so tracked shell IS the evidence. |
 | `dart` | A tracked `pubspec.yaml` **anywhere** in the tree | `*.dart` → `dart format` | Format-only; `dart analyze` is too slow per-edit. |
-| `rustfmt` | A tracked `Cargo.toml` **anywhere** in the tree | `*.rs` → `rustfmt` | Format-only; `cargo clippy` per edit is far too slow. |
+| `rustfmt` | A tracked `Cargo.toml` **anywhere** in the tree AND, for every such `Cargo.toml`, a tracked `rustfmt.toml` / `.rustfmt.toml` declaring `edition` in its directory or an ancestor (see below) | `*.rs` → `rustfmt` | Format-only; `cargo clippy` per edit is far too slow. Bare `rustfmt <file>` never reads `Cargo.toml`: with no `edition` in a rustfmt config it formats as **edition 2015** (parse errors on 2018+ syntax, swallowed by the route's error suppression, and 2015-style reordering that fails `cargo fmt --check`). A `Cargo.toml` with no declaring config is reported NOT detected, with the fix in `why` and `detect_failures`. |
 | `gofmt` | A tracked `go.mod` **anywhere** in the tree | `*.go` → `gofmt -w` | — |
 | `dotnet_format` | Tracked `*.sln` / `*.csproj` | `*.cs` → `dotnet format --include <file>` | **SLOW** (solution load per invocation) — always opt-in via the Phase 2 interview, never auto-included. |
+
+## rustfmt needs a declared edition (issue #569)
+
+rustfmt resolves its config by walking **up** from the formatted file's directory to the nearest
+`rustfmt.toml` / `.rustfmt.toml`. The rule mirrors that: every non-vendored tracked `Cargo.toml`
+directory needs a tracked config holding an uncommented `edition =` line (`style_edition` does not
+count) in that directory or any ancestor, so one root config covers a whole workspace. The route is a
+single `*.rs` case for the tree, so one uncovered crate withholds it, and the skip reason names that
+`Cargo.toml`. The edition is deliberately **not** read from `Cargo.toml` and passed as `--edition`:
+that is a configured fact that drifts when the edition moves. In the preview, state the skip and the
+fix: add a `rustfmt.toml` holding `edition = "<the crate's edition>"`, then re-run.
 
 ## Manifest probes are monorepo-safe (`dart` / `rustfmt` / `gofmt`)
 

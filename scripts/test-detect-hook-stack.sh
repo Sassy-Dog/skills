@@ -13,7 +13,8 @@
 # fixture would prove nothing, which is why property 1 below fails loudly if the
 # fixture ever stops being big enough to trip the old shape.
 #
-# Five properties are asserted:
+# Six properties are asserted (the sixth, rustfmt needing a declared edition, is
+# issue #569; it carries its own mutant, built by deleting the requirement):
 #
 #   1. The big fixture IS big enough: the PRE-FIX shape, transcribed here,
 #      returns non-zero on it despite thousands of matches. If that shape ever
@@ -179,6 +180,80 @@ if grep -qE '\|[[:space:]]*(head|grep|tail|sed)\b' <<<"$def_line"; then
     bad "has_tracked contains a pipeline: $def_line — under pipefail a reader that exits early makes the writer's SIGPIPE (141) the answer, so a match reads as a miss (issue #172). Match the corpus with a herestring instead"
 else
     ok "has_tracked has no pipeline (SIGPIPE cannot decide its answer)"
+fi
+
+# --- 6. rustfmt needs a declared edition (issue #569) -------------------------
+# Bare `rustfmt <file>` ignores Cargo.toml and formats as edition 2015, so the
+# route renders only when a tracked rustfmt.toml/.rustfmt.toml declares
+# `edition` in the crate's directory or an ancestor. Cases run the shipped
+# detector inside real (working-tree + index) fixtures.
+rustrepo() { # <name> -> dir; files are written by the caller then tracked
+    local d="$WORK/rust-$1"
+    mkdir -p "$d"
+    git -C "$d" init -q
+    printf '%s\n' "$d"
+}
+rust_track() { # <dir> -- track everything on disk
+    git -C "$1" add -A >/dev/null 2>&1
+}
+rust_case() { # <name> <expected true|false> <reason-substring-or-empty> <detector-script>
+    local d="$WORK/rust-$1" out det why notes
+    out=$(cd "$d" && bash "$4")
+    det=$(jq -r '.tools.rustfmt.detected' <<<"$out")
+    why=$(jq -r '.tools.rustfmt.why' <<<"$out")
+    notes=$(jq -r '.detect_failures | join("\n")' <<<"$out")
+    if [ "$det" != "$2" ]; then
+        bad "rustfmt/$1: detected=$det, expected $2 (why: $why)"; return
+    fi
+    if [ -n "$3" ]; then
+        if grep -qF -- "$3" <<<"$why" && grep -qF -- "$3" <<<"$notes" && grep -qF 'edition = "' <<<"$notes"; then
+            ok "rustfmt/$1: detected=$2, skip reason surfaced in why and detect_failures with the fix"
+        else
+            bad "rustfmt/$1: skipped but the reason/fix is not surfaced (why: $why | notes: $notes)"
+        fi
+    else
+        ok "rustfmt/$1: detected=$2"
+    fi
+}
+
+d=$(rustrepo declared); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo dotfile); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'edition = "2021"\n' >"$d/.rustfmt.toml"; rust_track "$d"
+d=$(rustrepo none); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; rust_track "$d"
+d=$(rustrepo noedition); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'max_width = 100\nstyle_edition = "2024"\n# edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo ws-root); mkdir -p "$d/crates/a" "$d/crates/b"
+printf '[workspace]\n' >"$d/Cargo.toml"; printf '[package]\nname="a"\n' >"$d/crates/a/Cargo.toml"; printf '[package]\nname="b"\n' >"$d/crates/b/Cargo.toml"
+printf 'edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo ws-partial); mkdir -p "$d/crates/a" "$d/crates/b"
+printf '[package]\nname="a"\n' >"$d/crates/a/Cargo.toml"; printf '[package]\nname="b"\n' >"$d/crates/b/Cargo.toml"
+printf 'edition = "2024"\n' >"$d/crates/a/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo vendored-cfg); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; mkdir -p "$d/examples"; printf 'edition = "2024"\n' >"$d/examples/rustfmt.toml"; rust_track "$d"
+
+rust_matrix() { # <detector-script>
+    rust_case declared true "" "$1"
+    rust_case dotfile true "" "$1"
+    rust_case none false "declaring edition" "$1"
+    rust_case noedition false "declaring edition" "$1"
+    rust_case ws-root true "" "$1"
+    rust_case ws-partial false "crates/b/Cargo.toml" "$1"
+    rust_case vendored-cfg false "declaring edition" "$1"
+}
+rust_matrix "$REPO_ROOT/$DETECT"
+
+# Mutation: neuter the edition requirement (any tracked Cargo.toml detects, the
+# old behaviour). The matrix MUST fail against it, or it asserts nothing.
+MUT="$WORK/detect-mutant.sh"
+awk '/^rustfmt_cargo=/ {print "manifest_tool rustfmt \x27(^|/)Cargo\\.toml$\x27 Cargo.toml"; skip=1; next}
+     skip && /^fi$/ {skip=0; next}
+     !skip {print}' "$REPO_ROOT/$DETECT" >"$MUT"
+if bash -n "$MUT" && ! diff -q "$MUT" "$REPO_ROOT/$DETECT" >/dev/null; then
+    mut_fail=$( { rust_matrix "$MUT"; } 2>&1 | grep -c 'FAIL' )
+    if [ "$mut_fail" -gt 0 ]; then
+        ok "rustfmt mutant (edition requirement removed) is caught by $mut_fail assertion(s)"
+    else
+        bad "rustfmt mutant (edition requirement removed) passed the matrix: the new assertions are vacuous"
+    fi
+else
+    bad "rustfmt mutant could not be built (anchor 'rustfmt_cargo=' moved?)"
 fi
 
 # ------------------------------------------------------------------------------
