@@ -201,7 +201,92 @@ add shellcheck "$det" "$why"
 # --- dart / rustfmt / gofmt / dotnet-format: manifest presence ----------------
 # Tracked ANYWHERE in the tree, vendored paths excluded — see manifest_tool.
 manifest_tool dart '(^|/)pubspec\.yaml$' pubspec.yaml
-manifest_tool rustfmt '(^|/)Cargo\.toml$' Cargo.toml
+# rustfmt: a tracked Cargo.toml AND a tracked rustfmt config declaring `edition`.
+# Bare `rustfmt <file>` never reads Cargo.toml, so with no `edition` in a
+# rustfmt.toml it formats as edition 2015 while `cargo fmt` passes the crate's
+# real edition: 2018+ files fail to parse (E0670, swallowed by the route's
+# error suppression) and the rest are reformatted in 2015 style, which then
+# fails `cargo fmt --check` (issue #569). So the route renders only when the
+# edition is declared in repo config. We deliberately do NOT read the edition
+# out of Cargo.toml and pass `--edition`: that is a configured fact that drifts.
+#
+# rustfmt resolves its config by walking UP from the formatted file's directory
+# and uses ONLY the NEAREST directory that holds any config (configs are never
+# merged), preferring `.rustfmt.toml` over `rustfmt.toml` within one directory.
+# So a nearer non-declaring config SHADOWS a declaring ancestor. The rule:
+# record each directory's EFFECTIVE config (`.rustfmt.toml` first) whether or
+# not it declares edition, then for every directory that holds a tracked
+# non-vendored `*.rs` or `Cargo.toml` walk up to the first directory with ANY
+# config and require THAT one to declare. Seeding from `*.rs` directories (not
+# just Cargo.toml) is because a config can sit below a crate root, e.g.
+# crates/b/src/rustfmt.toml. One uncovered directory withholds the route and the
+# reason names it, because the route is one `*.rs` case for the whole tree. A
+# config counts only if tracked, non-vendored, with an uncommented `edition =`
+# line (`style_edition` does not count). Directory sets are newline-delimited
+# and matched with `grep -Fxq` on a herestring: a space-joined string would let
+# `my crate` falsely match `my`, and a pipe into `grep -q` is the #172 trap.
+# This block's own corpus: `git ls-files` C-quotes non-ASCII paths by default
+# (`é/Cargo.toml` -> `"\303\251/Cargo.toml"`), so the `$`-anchored regexes below
+# would never match them and a non-ASCII directory's shadowing config would go
+# unseen. quotepath=false keeps the raw names. Scoped here on purpose: the
+# shared corpus above is left as it was for the other probes.
+RUSTFMT_FILES="$(git -c core.quotepath=false ls-files 2>/dev/null | grep -Ev "$VENDORED_RE")"
+rustfmt_cargo=$(grep -E '(^|/)Cargo\.toml$' <<<"$RUSTFMT_FILES")
+if [ -z "$rustfmt_cargo" ]; then
+    manifest_tool rustfmt '(^|/)Cargo\.toml$' Cargo.toml
+else
+    rustfmt_any_dirs=""; rustfmt_decl_dirs=""; rustfmt_dot_dirs=""
+    # `.rustfmt.toml` listed first so it is recorded before a sibling `rustfmt.toml`
+    while IFS= read -r cfg; do
+        [ -n "$cfg" ] || continue
+        d="${cfg%/*}"; [ "$d" = "$cfg" ] && d="."
+        if [ "${cfg##*/}" = "rustfmt.toml" ] && grep -Fxq -- "$d" <<<"$rustfmt_dot_dirs"; then continue; fi
+        [ "${cfg##*/}" = ".rustfmt.toml" ] && rustfmt_dot_dirs+="$d"$'\n'
+        rustfmt_any_dirs+="$d"$'\n'
+        if [ -f "$cfg" ] && grep -qE '^[[:space:]]*edition[[:space:]]*=' "$cfg" 2>/dev/null; then
+            rustfmt_decl_dirs+="$d"$'\n'
+        fi
+    done < <(grep -E '(^|/)\.rustfmt\.toml$' <<<"$RUSTFMT_FILES"; grep -E '(^|/)rustfmt\.toml$' <<<"$RUSTFMT_FILES")
+    rustfmt_uncovered=""; rustfmt_covering=""
+    rustfmt_seeds=$(while IFS= read -r p; do
+        d="${p%/*}"; [ "$d" = "$p" ] && d="."; printf '%s\n' "$d"
+    done < <(grep -E '(^|/)Cargo\.toml$|\.rs$' <<<"$RUSTFMT_FILES") | sort -u)
+    while IFS= read -r seed; do
+        [ -n "$seed" ] || continue
+        walk="$seed"; verdict=""
+        while :; do
+            if grep -Fxq -- "$walk" <<<"$rustfmt_any_dirs"; then
+                if grep -Fxq -- "$walk" <<<"$rustfmt_decl_dirs"; then verdict="ok:$walk"; else verdict="bad:$walk"; fi
+                break
+            fi
+            [ "$walk" = "." ] && break
+            case "$walk" in */*) walk="${walk%/*}" ;; *) walk="." ;; esac
+        done
+        case "$verdict" in
+            ok:*) rustfmt_covering+="${verdict#ok:}"$'\n' ;;
+            bad:*)
+                # name the EFFECTIVE file (`.rustfmt.toml` wins in one directory)
+                bd="${verdict#bad:}"; bf="rustfmt.toml"
+                grep -Fxq -- "$bd" <<<"$rustfmt_dot_dirs" && bf=".rustfmt.toml"
+                rustfmt_cfgpath="$bd/$bf"; [ "$bd" = "." ] && rustfmt_cfgpath="./$bf"
+                rustfmt_uncovered="$seed/ (its nearest rustfmt config, $rustfmt_cfgpath, does not declare edition)"
+                rustfmt_fix="add edition = \"<the crate's edition>\" to $rustfmt_cfgpath (creating a rustfmt.toml would not help: that file is the one rustfmt uses)"
+                break ;;
+            *)
+                rustfmt_uncovered="$seed/ (no rustfmt.toml / .rustfmt.toml in it or any ancestor)"
+                rustfmt_fix="create a rustfmt.toml holding edition = \"<the crate's edition>\" (no config exists in that directory or any ancestor)"
+                break ;;
+        esac
+    done <<<"$rustfmt_seeds"
+    if [ -z "$rustfmt_uncovered" ]; then
+        # drop the blank line the trailing newline of the last entry leaves behind
+        rustfmt_cov_list=$(grep -v '^$' <<<"$rustfmt_covering" | sort -u | paste -sd, -)
+        add rustfmt 1 "tracked Cargo.toml + nearest rustfmt config declares edition (config dir(s): $rustfmt_cov_list)"
+    else
+        add rustfmt 0 "rustfmt would format files in $rustfmt_uncovered as edition 2015; rustfmt uses only the nearest config, so to opt in: $rustfmt_fix"
+        note "rustfmt: route skipped; files in $rustfmt_uncovered would be formatted as edition 2015. Bare rustfmt ignores Cargo.toml and uses only the nearest rustfmt.toml/.rustfmt.toml, so without a declared edition it fails to parse 2018+ files and reformats the rest wrongly; fix: $rustfmt_fix, matching Cargo.toml, then re-run"
+    fi
+fi
 manifest_tool gofmt '(^|/)go\.mod$' go.mod
 why=""; det=0
 if has_tracked '\.sln$' || has_tracked '\.csproj$'; then

@@ -147,6 +147,17 @@ this hook worth having:
   pinning markdownlint-cli2 in CI (workflow, `Makefile`/`justfile`, or `package.json`) earns the
   blocking half back on the next refresh.
 
+**A skipped rustfmt route is named in the preview, with its fix.** `tools.rustfmt.detected` is false
+for a repo with a tracked `Cargo.toml` where some directory's NEAREST `rustfmt.toml` /
+`.rustfmt.toml` (rustfmt uses only that one, never a merge; `.rustfmt.toml` wins in a directory) is
+missing or does not declare `edition`, because bare `rustfmt <file>` ignores `Cargo.toml` and
+formats as edition 2015. Surface the `detect_failures` entry that starts
+`rustfmt: route skipped`, say the `*.rs` route is omitted on purpose, and relay the file the
+entry names: tell the user to add `edition = "<the crate's edition>"` to that named config (it
+changes nothing for `cargo fmt`), and to create a `rustfmt.toml` only when the entry says no config
+exists in that directory or any ancestor (creating one beside a non-declaring `.rustfmt.toml`, or
+above a nearer config, does nothing). Then re-run. Do not render the route anyway and do not pass `--edition` read from `Cargo.toml`.
+
 Never introduce a `{{...}}` placeholder into executable shell for the version — braces there trip
 SC1083 and break the lint-clean-as-is invariant. Prettier is the deliberate contrast and needs no
 equivalent: `npx --no-install` makes the repo's own lockfile its pin, so leave it exactly as it is.
