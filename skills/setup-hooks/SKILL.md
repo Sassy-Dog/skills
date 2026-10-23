@@ -148,9 +148,10 @@ this hook worth having:
   blocking half back on the next refresh.
 
 **A skipped rustfmt route is named in the preview, with its fix.** `tools.rustfmt.detected` is false
-for a repo with a tracked `Cargo.toml` but no tracked `rustfmt.toml` / `.rustfmt.toml` declaring
-`edition` (in that crate's directory or an ancestor), because bare `rustfmt <file>` ignores
-`Cargo.toml` and formats as edition 2015. Surface the `detect_failures` entry that starts
+for a repo with a tracked `Cargo.toml` where some directory's NEAREST `rustfmt.toml` /
+`.rustfmt.toml` (rustfmt uses only that one, never a merge; `.rustfmt.toml` wins in a directory) is
+missing or does not declare `edition`, because bare `rustfmt <file>` ignores `Cargo.toml` and
+formats as edition 2015. Surface the `detect_failures` entry that starts
 `rustfmt: route skipped`, say the `*.rs` route is omitted on purpose, and tell the user to add a
 `rustfmt.toml` holding `edition = "<the crate's edition>"` (it changes nothing for `cargo fmt`) and
 re-run. Do not render the route anyway and do not pass `--edition` read from `Cargo.toml`.

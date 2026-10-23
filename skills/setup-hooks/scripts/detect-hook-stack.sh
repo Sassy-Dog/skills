@@ -211,41 +211,63 @@ manifest_tool dart '(^|/)pubspec\.yaml$' pubspec.yaml
 # out of Cargo.toml and pass `--edition`: that is a configured fact that drifts.
 #
 # rustfmt resolves its config by walking UP from the formatted file's directory
-# to the nearest rustfmt.toml / .rustfmt.toml. So the rule is per crate: EVERY
-# non-vendored Cargo.toml directory must have a declaring config in that same
-# directory or an ancestor (a root config covers all members). One uncovered
-# crate withholds the route and the reason names it, because the route is one
-# `*.rs` case for the whole tree and cannot be partial. A config counts only if
-# it is tracked, non-vendored, and holds an uncommented `edition =` line
-# (`style_edition` does not count).
+# and uses ONLY the NEAREST directory that holds any config (configs are never
+# merged), preferring `.rustfmt.toml` over `rustfmt.toml` within one directory.
+# So a nearer non-declaring config SHADOWS a declaring ancestor. The rule:
+# record each directory's EFFECTIVE config (`.rustfmt.toml` first) whether or
+# not it declares edition, then for every directory that holds a tracked
+# non-vendored `*.rs` or `Cargo.toml` walk up to the first directory with ANY
+# config and require THAT one to declare. Seeding from `*.rs` directories (not
+# just Cargo.toml) is because a config can sit below a crate root, e.g.
+# crates/b/src/rustfmt.toml. One uncovered directory withholds the route and the
+# reason names it, because the route is one `*.rs` case for the whole tree. A
+# config counts only if tracked, non-vendored, with an uncommented `edition =`
+# line (`style_edition` does not count). Directory sets are newline-delimited
+# and matched with `grep -Fxq` on a herestring: a space-joined string would let
+# `my crate` falsely match `my`, and a pipe into `grep -q` is the #172 trap.
 rustfmt_cargo=$(grep -E '(^|/)Cargo\.toml$' <<<"$TRACKED_FILES")
 if [ -z "$rustfmt_cargo" ]; then
     manifest_tool rustfmt '(^|/)Cargo\.toml$' Cargo.toml
 else
-    rustfmt_cfg_dirs=" "
+    rustfmt_any_dirs=""; rustfmt_decl_dirs=""; rustfmt_dot_dirs=""
+    # `.rustfmt.toml` listed first so it is recorded before a sibling `rustfmt.toml`
     while IFS= read -r cfg; do
-        [ -n "$cfg" ] && [ -f "$cfg" ] || continue
-        if grep -qE '^[[:space:]]*edition[[:space:]]*=' "$cfg" 2>/dev/null; then
-            d="${cfg%/*}"; [ "$d" = "$cfg" ] && d="."
-            rustfmt_cfg_dirs+="$d "
+        [ -n "$cfg" ] || continue
+        d="${cfg%/*}"; [ "$d" = "$cfg" ] && d="."
+        if [ "${cfg##*/}" = "rustfmt.toml" ] && grep -Fxq -- "$d" <<<"$rustfmt_dot_dirs"; then continue; fi
+        [ "${cfg##*/}" = ".rustfmt.toml" ] && rustfmt_dot_dirs+="$d"$'\n'
+        rustfmt_any_dirs+="$d"$'\n'
+        if [ -f "$cfg" ] && grep -qE '^[[:space:]]*edition[[:space:]]*=' "$cfg" 2>/dev/null; then
+            rustfmt_decl_dirs+="$d"$'\n'
         fi
-    done < <(grep -E '(^|/)\.?rustfmt\.toml$' <<<"$TRACKED_FILES")
-    rustfmt_uncovered=""
-    while IFS= read -r cargo; do
-        d="${cargo%/*}"; [ "$d" = "$cargo" ] && d="."
-        walk="$d"; covered=0
+    done < <(grep -E '(^|/)\.rustfmt\.toml$' <<<"$TRACKED_FILES"; grep -E '(^|/)rustfmt\.toml$' <<<"$TRACKED_FILES")
+    rustfmt_uncovered=""; rustfmt_covering=""
+    rustfmt_seeds=$(while IFS= read -r p; do
+        d="${p%/*}"; [ "$d" = "$p" ] && d="."; printf '%s\n' "$d"
+    done < <(grep -E '(^|/)Cargo\.toml$|\.rs$' <<<"$TRACKED_FILES") | sort -u)
+    while IFS= read -r seed; do
+        [ -n "$seed" ] || continue
+        walk="$seed"; verdict=""
         while :; do
-            case "$rustfmt_cfg_dirs" in *" $walk "*) covered=1; break ;; esac
+            if grep -Fxq -- "$walk" <<<"$rustfmt_any_dirs"; then
+                if grep -Fxq -- "$walk" <<<"$rustfmt_decl_dirs"; then verdict="ok:$walk"; else verdict="bad:$walk"; fi
+                break
+            fi
             [ "$walk" = "." ] && break
             case "$walk" in */*) walk="${walk%/*}" ;; *) walk="." ;; esac
         done
-        [ "$covered" = 1 ] || { rustfmt_uncovered="$cargo"; break; }
-    done <<<"$rustfmt_cargo"
+        case "$verdict" in
+            ok:*) rustfmt_covering+="${verdict#ok:}"$'\n' ;;
+            bad:*) rustfmt_uncovered="$seed/ (its nearest rustfmt config, in ${verdict#bad:}/, does not declare edition)"; break ;;
+            *) rustfmt_uncovered="$seed/ (no rustfmt.toml / .rustfmt.toml in it or any ancestor)"; break ;;
+        esac
+    done <<<"$rustfmt_seeds"
     if [ -z "$rustfmt_uncovered" ]; then
-        add rustfmt 1 "tracked Cargo.toml + rustfmt config declaring edition"
+        rustfmt_cov_list=$(sort -u <<<"$rustfmt_covering" | paste -sd, -)
+        add rustfmt 1 "tracked Cargo.toml + nearest rustfmt config declares edition (config dir(s): $rustfmt_cov_list)"
     else
-        add rustfmt 0 "tracked $rustfmt_uncovered has no rustfmt.toml / .rustfmt.toml declaring edition in its directory or an ancestor; bare rustfmt would format as edition 2015; add rustfmt.toml with edition = \"<the crate's edition>\" to opt in"
-        note "rustfmt: route skipped; $rustfmt_uncovered has no tracked rustfmt.toml/.rustfmt.toml declaring edition (bare rustfmt ignores Cargo.toml and formats as edition 2015, so it would fail to parse 2018+ files and reformat the rest wrongly); add rustfmt.toml containing edition = \"<the crate's edition>\" (matching Cargo.toml) and re-run"
+        add rustfmt 0 "rustfmt would format files in $rustfmt_uncovered as edition 2015; rustfmt uses only the nearest config, so that one must declare edition = \"<the crate's edition>\" (add it there, or create rustfmt.toml) to opt in"
+        note "rustfmt: route skipped; files in $rustfmt_uncovered would be formatted as edition 2015. Bare rustfmt ignores Cargo.toml and uses only the nearest rustfmt.toml/.rustfmt.toml, so without a declared edition it fails to parse 2018+ files and reformats the rest wrongly; add edition = \"<the crate's edition>\" (matching Cargo.toml) to that nearest config and re-run"
     fi
 fi
 manifest_tool gofmt '(^|/)go\.mod$' go.mod

@@ -21,18 +21,22 @@ hook error.
 | `markdownlint` | A `.markdownlint-cli2.*` / `.markdownlint.*` config AND tracked `*.md` | `*.md` → `markdownlint-cli2 --fix`, then re-check; unfixable exit 2 | The version pin is **not optional** — see below. An unpinned `npx -y` resolves to latest and blocks on rules CI does not run. |
 | `shellcheck` | Tracked `*.sh` (shellcheck in a CI workflow strengthens the evidence and is reported in `why`) | `*.sh` → `shellcheck -S warning`; findings exit 2 | Lint-only — never rewrites. There is no standard shellcheck config file, so tracked shell IS the evidence. |
 | `dart` | A tracked `pubspec.yaml` **anywhere** in the tree | `*.dart` → `dart format` | Format-only; `dart analyze` is too slow per-edit. |
-| `rustfmt` | A tracked `Cargo.toml` **anywhere** in the tree AND, for every such `Cargo.toml`, a tracked `rustfmt.toml` / `.rustfmt.toml` declaring `edition` in its directory or an ancestor (see below) | `*.rs` → `rustfmt` | Format-only; `cargo clippy` per edit is far too slow. Bare `rustfmt <file>` never reads `Cargo.toml`: with no `edition` in a rustfmt config it formats as **edition 2015** (parse errors on 2018+ syntax, swallowed by the route's error suppression, and 2015-style reordering that fails `cargo fmt --check`). A `Cargo.toml` with no declaring config is reported NOT detected, with the fix in `why` and `detect_failures`. |
+| `rustfmt` | A tracked `Cargo.toml` **anywhere** in the tree AND, for every directory with tracked `Cargo.toml` / `*.rs`, the NEAREST tracked `rustfmt.toml` / `.rustfmt.toml` declares `edition` (see below) | `*.rs` → `rustfmt` | Format-only; `cargo clippy` per edit is far too slow. Bare `rustfmt <file>` never reads `Cargo.toml`: with no `edition` in a rustfmt config it formats as **edition 2015** (parse errors on 2018+ syntax, swallowed by the route's error suppression, and 2015-style reordering that fails `cargo fmt --check`). A `Cargo.toml` with no declaring config is reported NOT detected, with the fix in `why` and `detect_failures`. |
 | `gofmt` | A tracked `go.mod` **anywhere** in the tree | `*.go` → `gofmt -w` | — |
 | `dotnet_format` | Tracked `*.sln` / `*.csproj` | `*.cs` → `dotnet format --include <file>` | **SLOW** (solution load per invocation) — always opt-in via the Phase 2 interview, never auto-included. |
 
 ## rustfmt needs a declared edition (issue #569)
 
 rustfmt resolves its config by walking **up** from the formatted file's directory to the nearest
-`rustfmt.toml` / `.rustfmt.toml`. The rule mirrors that: every non-vendored tracked `Cargo.toml`
-directory needs a tracked config holding an uncommented `edition =` line (`style_edition` does not
-count) in that directory or any ancestor, so one root config covers a whole workspace. The route is a
-single `*.rs` case for the tree, so one uncovered crate withholds it, and the skip reason names that
-`Cargo.toml`. The edition is deliberately **not** read from `Cargo.toml` and passed as `--edition`:
+`rustfmt.toml` / `.rustfmt.toml`, and **uses only that one**: configs are never merged, so a nearer
+config without `edition` shadows a declaring ancestor, and within one directory `.rustfmt.toml` wins
+over `rustfmt.toml`. The probe mirrors that: for every directory holding a tracked non-vendored
+`Cargo.toml` or `*.rs` file (`.rs` too, because a config can sit below the crate root, such as
+`crates/b/src/rustfmt.toml`), walk up to the first directory with any tracked config (the effective
+one) and require **that** config to hold an uncommented `edition =` line (`style_edition` does not
+count). A root config therefore covers a workspace only where no nearer config exists. The route is
+a single `*.rs` case for the tree, so one uncovered directory withholds it, and the skip reason names
+that directory and, for a shadowing config, where it is. The edition is deliberately **not** read from `Cargo.toml` and passed as `--edition`:
 that is a configured fact that drifts when the edition moves. In the preview, state the skip and the
 fix: add a `rustfmt.toml` holding `edition = "<the crate's edition>"`, then re-run.
 
@@ -41,8 +45,10 @@ fix: add a `rustfmt.toml` holding `edition = "<the crate's edition>"`, then re-r
 These three match a **path regex over the tracked tree**, anchored with `(^|/)`, not a root-only
 file test. A `[ -f pubspec.yaml ]` (or a bare `pubspec.yaml` pathspec) matches the repo root only,
 which reported "no dart" for every monorepo in the org — velovate keeps its Flutter app at
-`apps/mobile/`, so the render carried no `*.dart` route and nothing errored. The `why` string names
-the file that matched, because in a monorepo *which* manifest armed the route is the useful fact.
+`apps/mobile/`, so the render carried no `*.dart` route and nothing errored. For dart and gofmt the
+`why` string names the file that matched, because in a monorepo *which* manifest armed the route is
+the useful fact; rustfmt's `why` names the directory of the config(s) that covered it instead (or the
+uncovered directory when skipped).
 
 **A vendored example manifest is not a project.** Scaffolder templates, test fixtures and sample
 projects commit real-looking manifests, so the corpus drops

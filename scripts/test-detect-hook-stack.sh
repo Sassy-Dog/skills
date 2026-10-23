@@ -30,6 +30,21 @@
 #   5. Source-level shape guard: the shipped has_tracked contains no `head` and
 #      no pipeline. Property 1 depends on a measured buffer size; this one holds
 #      even if a future platform's pipe never blocks.
+#   6. rustfmt needs a declared edition (#569). Bare `rustfmt` ignores Cargo.toml
+#      and formats as edition 2015, and uses only the NEAREST config (never a
+#      merge), so the route is detected only if, for every tracked non-vendored
+#      Cargo.toml / *.rs directory, the nearest rustfmt.toml/.rustfmt.toml
+#      (`.rustfmt.toml` wins in one directory) declares `edition`. Fifteen
+#      fixtures: declared, dotfile, none, no-edition (style_edition/commented),
+#      workspace root, partial workspace, vendored-only config, a nearer
+#      non-declaring config shadowing a root one (`shadow`), a same-directory
+#      non-declaring `.rustfmt.toml` (`samedir`) and its reverse (`dotwins`), a
+#      config below the crate root (`below-crate`), per-crate configs with no root
+#      config, an intermediate-directory config, an unconfigured vendored manifest,
+#      and a space in a directory name. Seven mutants, each rewriting one construct
+#      of the shipped block, must each fail the matrix: requirement removed, any
+#      declaring ancestor, no walk up, root only, vendored paths seeding the walk,
+#      substring directory match, and rustfmt.toml preferred over .rustfmt.toml.
 #
 # Fixtures are built in a temp dir from a git index only (no working-tree
 # files), which is why 20k paths costs ~100ms. Nothing here touches a real repo,
@@ -216,45 +231,87 @@ rust_case() { # <name> <expected true|false> <reason-substring-or-empty> <detect
     fi
 }
 
-d=$(rustrepo declared); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
-d=$(rustrepo dotfile); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'edition = "2021"\n' >"$d/.rustfmt.toml"; rust_track "$d"
-d=$(rustrepo none); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; rust_track "$d"
-d=$(rustrepo noedition); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; printf 'max_width = 100\nstyle_edition = "2024"\n# edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
+mkcargo() { printf '[package]\nname="x"\n' >"$1"; }
+mkdecl() { printf 'edition = "2024"\n' >"$1"; }
+mkplain() { printf 'max_width = 100\n' >"$1"; }
+
+d=$(rustrepo declared); mkcargo "$d/Cargo.toml"; mkdecl "$d/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo dotfile); mkcargo "$d/Cargo.toml"; printf 'edition = "2021"\n' >"$d/.rustfmt.toml"; rust_track "$d"
+d=$(rustrepo none); mkcargo "$d/Cargo.toml"; rust_track "$d"
+d=$(rustrepo noedition); mkcargo "$d/Cargo.toml"; printf 'max_width = 100\nstyle_edition = "2024"\n# edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
 d=$(rustrepo ws-root); mkdir -p "$d/crates/a" "$d/crates/b"
-printf '[workspace]\n' >"$d/Cargo.toml"; printf '[package]\nname="a"\n' >"$d/crates/a/Cargo.toml"; printf '[package]\nname="b"\n' >"$d/crates/b/Cargo.toml"
-printf 'edition = "2024"\n' >"$d/rustfmt.toml"; rust_track "$d"
+printf '[workspace]\n' >"$d/Cargo.toml"; mkcargo "$d/crates/a/Cargo.toml"; mkcargo "$d/crates/b/Cargo.toml"
+mkdecl "$d/rustfmt.toml"; rust_track "$d"
 d=$(rustrepo ws-partial); mkdir -p "$d/crates/a" "$d/crates/b"
-printf '[package]\nname="a"\n' >"$d/crates/a/Cargo.toml"; printf '[package]\nname="b"\n' >"$d/crates/b/Cargo.toml"
-printf 'edition = "2024"\n' >"$d/crates/a/rustfmt.toml"; rust_track "$d"
-d=$(rustrepo vendored-cfg); printf '[package]\nname="a"\n' >"$d/Cargo.toml"; mkdir -p "$d/examples"; printf 'edition = "2024"\n' >"$d/examples/rustfmt.toml"; rust_track "$d"
+mkcargo "$d/crates/a/Cargo.toml"; mkcargo "$d/crates/b/Cargo.toml"
+mkdecl "$d/crates/a/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo vendored-cfg); mkcargo "$d/Cargo.toml"; mkdir -p "$d/examples"; mkdecl "$d/examples/rustfmt.toml"; rust_track "$d"
+# nearest config wins, and configs are never merged (issue #569 review): a nearer
+# non-declaring config shadows a declaring ancestor
+d=$(rustrepo shadow); mkdir -p "$d/crates/b"; mkdecl "$d/rustfmt.toml"; mkcargo "$d/Cargo.toml"
+mkcargo "$d/crates/b/Cargo.toml"; mkplain "$d/crates/b/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo samedir); mkcargo "$d/Cargo.toml"; mkdecl "$d/rustfmt.toml"; mkplain "$d/.rustfmt.toml"; rust_track "$d"
+d=$(rustrepo dotwins); mkcargo "$d/Cargo.toml"; mkplain "$d/rustfmt.toml"; mkdecl "$d/.rustfmt.toml"; rust_track "$d"
+# a config below the crate root governs the .rs files beside it
+d=$(rustrepo below-crate); mkdir -p "$d/crates/b/src"; mkdecl "$d/rustfmt.toml"; mkcargo "$d/Cargo.toml"
+mkcargo "$d/crates/b/Cargo.toml"; mkplain "$d/crates/b/src/rustfmt.toml"; : >"$d/crates/b/src/lib.rs"; rust_track "$d"
+# positives that need the whole walk: per-crate configs with no root config, and an
+# intermediate-directory config two levels above its Cargo.toml
+d=$(rustrepo per-crate); mkdir -p "$d/crates/a" "$d/crates/b"
+mkcargo "$d/crates/a/Cargo.toml"; mkcargo "$d/crates/b/Cargo.toml"; mkdecl "$d/crates/a/rustfmt.toml"; mkdecl "$d/crates/b/.rustfmt.toml"; rust_track "$d"
+d=$(rustrepo intermediate); mkdir -p "$d/crates/x/y"; mkcargo "$d/crates/x/y/Cargo.toml"; mkdecl "$d/crates/rustfmt.toml"; rust_track "$d"
+# a vendored, unconfigured manifest is not a project (catches rustfmt_cargo/seeds
+# switching to ALL_TRACKED)
+d=$(rustrepo vendored-cargo); mkdir -p "$d/templates/x" "$d/crates/a"; mkcargo "$d/crates/a/Cargo.toml"; mkdecl "$d/crates/a/rustfmt.toml"; mkcargo "$d/templates/x/Cargo.toml"; rust_track "$d"
+# a directory name containing a space must not cover a shorter sibling name
+d=$(rustrepo spaces); mkdir -p "$d/my crate" "$d/my"; mkcargo "$d/my/Cargo.toml"; mkcargo "$d/my crate/Cargo.toml"; mkdecl "$d/my crate/rustfmt.toml"; rust_track "$d"
 
 rust_matrix() { # <detector-script>
     rust_case declared true "" "$1"
     rust_case dotfile true "" "$1"
-    rust_case none false "declaring edition" "$1"
-    rust_case noedition false "declaring edition" "$1"
+    rust_case none false "edition 2015" "$1"
+    rust_case noedition false "edition 2015" "$1"
     rust_case ws-root true "" "$1"
-    rust_case ws-partial false "crates/b/Cargo.toml" "$1"
-    rust_case vendored-cfg false "declaring edition" "$1"
+    rust_case ws-partial false "crates/b/" "$1"
+    rust_case vendored-cfg false "edition 2015" "$1"
+    rust_case shadow false "crates/b/" "$1"
+    rust_case samedir false "edition 2015" "$1"
+    rust_case dotwins true "" "$1"
+    rust_case below-crate false "crates/b/src/" "$1"
+    rust_case per-crate true "" "$1"
+    rust_case intermediate true "" "$1"
+    rust_case vendored-cargo true "" "$1"
+    rust_case spaces false "my/" "$1"
 }
 rust_matrix "$REPO_ROOT/$DETECT"
 
-# Mutation: neuter the edition requirement (any tracked Cargo.toml detects, the
-# old behaviour). The matrix MUST fail against it, or it asserts nothing.
-MUT="$WORK/detect-mutant.sh"
-awk '/^rustfmt_cargo=/ {print "manifest_tool rustfmt \x27(^|/)Cargo\\.toml$\x27 Cargo.toml"; skip=1; next}
-     skip && /^fi$/ {skip=0; next}
-     !skip {print}' "$REPO_ROOT/$DETECT" >"$MUT"
-if bash -n "$MUT" && ! diff -q "$MUT" "$REPO_ROOT/$DETECT" >/dev/null; then
-    mut_fail=$( { rust_matrix "$MUT"; } 2>&1 | grep -c 'FAIL' )
-    if [ "$mut_fail" -gt 0 ]; then
-        ok "rustfmt mutant (edition requirement removed) is caught by $mut_fail assertion(s)"
+# Mutations: each rewrites ONE construct of the shipped rustfmt block, and the
+# matrix MUST fail against every one, or the new assertions are vacuous.
+rust_mutant() { # <label> <sed-expr>
+    local m="$WORK/detect-mutant.sh" n
+    sed -e "$2" "$REPO_ROOT/$DETECT" >"$m"
+    if bash -n "$m" && ! diff -q "$m" "$REPO_ROOT/$DETECT" >/dev/null; then
+        n=$( { rust_matrix "$m"; } 2>&1 | grep -c 'FAIL' )
+        if [ "$n" -gt 0 ]; then ok "rustfmt mutant '$1' is caught by $n assertion(s)"
+        else bad "rustfmt mutant '$1' passed the matrix: the new assertions are vacuous"; fi
     else
-        bad "rustfmt mutant (edition requirement removed) passed the matrix: the new assertions are vacuous"
+        bad "rustfmt mutant '$1' could not be built (anchor moved?)"
     fi
-else
-    bad "rustfmt mutant could not be built (anchor 'rustfmt_cargo=' moved?)"
-fi
+}
+# 1. no edition requirement at all (the pre-fix behaviour)
+rust_mutant 'edition requirement removed' 's|^rustfmt_cargo=.*|rustfmt_cargo=""|'
+# 2. any declaring ancestor counts (restores the shadowed-config bug)
+rust_mutant 'any declaring ancestor' 's|if grep -Fxq -- "\$walk" <<<"\$rustfmt_any_dirs"; then|if grep -Fxq -- "$walk" <<<"$rustfmt_decl_dirs"; then|'
+# 3. never climbs: only the seed directory itself is checked
+rust_mutant 'no walk up' 's|\[ "\$walk" = "\." \] \&\& break|break|'
+# 4. only the root config is consulted
+rust_mutant 'root only' 's|walk="\$seed"; verdict=""|walk="."; verdict=""|'
+# 5. vendored paths seed the walk
+rust_mutant 'vendored paths seed' 's#done < <(grep -E .(^|/)Cargo\\.toml\$|\\.rs\$. <<<"\$TRACKED_FILES")#done < <(grep -E "(^|/)Cargo\\.toml\$|\\.rs\$" <<<"$ALL_TRACKED")#'
+# 6. substring (not whole-line) directory match
+rust_mutant 'substring dir match' 's#grep -Fxq -- "\$walk"#grep -Fq -- "$walk"#g'
+# 7. rustfmt.toml preferred over .rustfmt.toml in one directory
+rust_mutant 'rustfmt.toml wins over dotfile' 's|\[ "\${cfg##\*/}" = "rustfmt.toml" \] \&\& grep -Fxq -- "\$d" <<<"\$rustfmt_dot_dirs"|false|'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
