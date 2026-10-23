@@ -152,9 +152,11 @@ for a repo with a tracked `Cargo.toml` where some directory's NEAREST `rustfmt.t
 `.rustfmt.toml` (rustfmt uses only that one, never a merge; `.rustfmt.toml` wins in a directory) is
 missing or does not declare `edition`, because bare `rustfmt <file>` ignores `Cargo.toml` and
 formats as edition 2015. Surface the `detect_failures` entry that starts
-`rustfmt: route skipped`, say the `*.rs` route is omitted on purpose, and tell the user to add a
-`rustfmt.toml` holding `edition = "<the crate's edition>"` (it changes nothing for `cargo fmt`) and
-re-run. Do not render the route anyway and do not pass `--edition` read from `Cargo.toml`.
+`rustfmt: route skipped`, say the `*.rs` route is omitted on purpose, and relay the file the
+entry names: tell the user to add `edition = "<the crate's edition>"` to that named config (it
+changes nothing for `cargo fmt`), and to create a `rustfmt.toml` only when the entry says no config
+exists in that directory or any ancestor (creating one beside a non-declaring `.rustfmt.toml`, or
+above a nearer config, does nothing). Then re-run. Do not render the route anyway and do not pass `--edition` read from `Cargo.toml`.
 
 Never introduce a `{{...}}` placeholder into executable shell for the version — braces there trip
 SC1083 and break the lint-clean-as-is invariant. Prettier is the deliberate contrast and needs no

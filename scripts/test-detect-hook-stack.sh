@@ -34,17 +34,21 @@
 #      and formats as edition 2015, and uses only the NEAREST config (never a
 #      merge), so the route is detected only if, for every tracked non-vendored
 #      Cargo.toml / *.rs directory, the nearest rustfmt.toml/.rustfmt.toml
-#      (`.rustfmt.toml` wins in one directory) declares `edition`. Fifteen
-#      fixtures: declared, dotfile, none, no-edition (style_edition/commented),
+#      (`.rustfmt.toml` wins in one directory) declares `edition`; the skip
+#      reason and note name that effective FILE (`./.rustfmt.toml`,
+#      `crates/b/rustfmt.toml`), a successful `why` lists no blank config dir,
+#      and non-ASCII directories are matched raw (core.quotepath=false).
+#      Sixteen fixtures (adding `unicode`): declared, dotfile, none, no-edition (style_edition/commented),
 #      workspace root, partial workspace, vendored-only config, a nearer
 #      non-declaring config shadowing a root one (`shadow`), a same-directory
 #      non-declaring `.rustfmt.toml` (`samedir`) and its reverse (`dotwins`), a
 #      config below the crate root (`below-crate`), per-crate configs with no root
 #      config, an intermediate-directory config, an unconfigured vendored manifest,
-#      and a space in a directory name. Seven mutants, each rewriting one construct
+#      and a space in a directory name. Nine mutants, each rewriting one construct
 #      of the shipped block, must each fail the matrix: requirement removed, any
 #      declaring ancestor, no walk up, root only, vendored paths seeding the walk,
-#      substring directory match, and rustfmt.toml preferred over .rustfmt.toml.
+#      substring directory match, rustfmt.toml preferred over .rustfmt.toml, the quotepath
+#      setting dropped, and a blank covering entry kept.
 #
 # Fixtures are built in a temp dir from a git index only (no working-tree
 # files), which is why 20k paths costs ~100ms. Nothing here touches a real repo,
@@ -220,6 +224,14 @@ rust_case() { # <name> <expected true|false> <reason-substring-or-empty> <detect
     if [ "$det" != "$2" ]; then
         bad "rustfmt/$1: detected=$det, expected $2 (why: $why)"; return
     fi
+    # <extra>: a substring the why (and, when skipped, the note) must carry. A
+    # positive's why must also not start its list with a comma (blank-entry bug).
+    if [ "$2" = true ] && grep -qF 'dir(s): ,' <<<"$why"; then
+        bad "rustfmt/$1: why lists a blank config dir (leading comma): $why"; return
+    fi
+    if [ -n "${5:-}" ] && ! { grep -qF -- "$5" <<<"$why" && { [ "$2" = true ] || grep -qF -- "$5" <<<"$notes"; }; }; then
+        bad "rustfmt/$1: expected '$5' in why (and the note when skipped) (why: $why | notes: $notes)"; return
+    fi
     if [ -n "$3" ]; then
         if grep -qF -- "$3" <<<"$why" && grep -qF -- "$3" <<<"$notes" && grep -qF 'edition = "' <<<"$notes"; then
             ok "rustfmt/$1: detected=$2, skip reason surfaced in why and detect_failures with the fix"
@@ -250,6 +262,8 @@ d=$(rustrepo vendored-cfg); mkcargo "$d/Cargo.toml"; mkdir -p "$d/examples"; mkd
 # non-declaring config shadows a declaring ancestor
 d=$(rustrepo shadow); mkdir -p "$d/crates/b"; mkdecl "$d/rustfmt.toml"; mkcargo "$d/Cargo.toml"
 mkcargo "$d/crates/b/Cargo.toml"; mkplain "$d/crates/b/rustfmt.toml"; rust_track "$d"
+d=$(rustrepo unicode); mkdir -p "$d/é"; mkdecl "$d/rustfmt.toml"; mkcargo "$d/Cargo.toml"
+mkcargo "$d/é/Cargo.toml"; mkplain "$d/é/rustfmt.toml"; rust_track "$d"
 d=$(rustrepo samedir); mkcargo "$d/Cargo.toml"; mkdecl "$d/rustfmt.toml"; mkplain "$d/.rustfmt.toml"; rust_track "$d"
 d=$(rustrepo dotwins); mkcargo "$d/Cargo.toml"; mkplain "$d/rustfmt.toml"; mkdecl "$d/.rustfmt.toml"; rust_track "$d"
 # a config below the crate root governs the .rs files beside it
@@ -267,15 +281,16 @@ d=$(rustrepo vendored-cargo); mkdir -p "$d/templates/x" "$d/crates/a"; mkcargo "
 d=$(rustrepo spaces); mkdir -p "$d/my crate" "$d/my"; mkcargo "$d/my/Cargo.toml"; mkcargo "$d/my crate/Cargo.toml"; mkdecl "$d/my crate/rustfmt.toml"; rust_track "$d"
 
 rust_matrix() { # <detector-script>
-    rust_case declared true "" "$1"
+    rust_case declared true "" "$1" "config dir(s): .)"
     rust_case dotfile true "" "$1"
     rust_case none false "edition 2015" "$1"
     rust_case noedition false "edition 2015" "$1"
     rust_case ws-root true "" "$1"
     rust_case ws-partial false "crates/b/" "$1"
     rust_case vendored-cfg false "edition 2015" "$1"
-    rust_case shadow false "crates/b/" "$1"
-    rust_case samedir false "edition 2015" "$1"
+    rust_case shadow false "crates/b/" "$1" "crates/b/rustfmt.toml"
+    rust_case samedir false "edition 2015" "$1" "./.rustfmt.toml"
+    rust_case unicode false "é/" "$1" "é/rustfmt.toml"
     rust_case dotwins true "" "$1"
     rust_case below-crate false "crates/b/src/" "$1"
     rust_case per-crate true "" "$1"
@@ -307,9 +322,13 @@ rust_mutant 'no walk up' 's|\[ "\$walk" = "\." \] \&\& break|break|'
 # 4. only the root config is consulted
 rust_mutant 'root only' 's|walk="\$seed"; verdict=""|walk="."; verdict=""|'
 # 5. vendored paths seed the walk
-rust_mutant 'vendored paths seed' 's#done < <(grep -E .(^|/)Cargo\\.toml\$|\\.rs\$. <<<"\$TRACKED_FILES")#done < <(grep -E "(^|/)Cargo\\.toml\$|\\.rs\$" <<<"$ALL_TRACKED")#'
+rust_mutant 'vendored paths seed' 's#done < <(grep -E .(^|/)Cargo\\.toml\$|\\.rs\$. <<<"\$RUSTFMT_FILES")#done < <(grep -E "(^|/)Cargo\\.toml\$|\\.rs\$" <<<"$ALL_TRACKED")#'
 # 6. substring (not whole-line) directory match
 rust_mutant 'substring dir match' 's#grep -Fxq -- "\$walk"#grep -Fq -- "$walk"#g'
+# 8. git's default C-quoting of non-ASCII paths (quotepath setting dropped)
+rust_mutant 'quotepath setting dropped' 's#git -c core.quotepath=false ls-files#git ls-files#'
+# 9. blank entry kept in the covering list (leading comma)
+rust_mutant 'blank covering entry kept' "s#grep -v '^\$' <<<\"\\\$rustfmt_covering\" | sort -u#sort -u <<<\"\$rustfmt_covering\"#"
 # 7. rustfmt.toml preferred over .rustfmt.toml in one directory
 rust_mutant 'rustfmt.toml wins over dotfile' 's|\[ "\${cfg##\*/}" = "rustfmt.toml" \] \&\& grep -Fxq -- "\$d" <<<"\$rustfmt_dot_dirs"|false|'
 

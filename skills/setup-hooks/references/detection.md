@@ -36,9 +36,13 @@ over `rustfmt.toml`. The probe mirrors that: for every directory holding a track
 one) and require **that** config to hold an uncommented `edition =` line (`style_edition` does not
 count). A root config therefore covers a workspace only where no nearer config exists. The route is
 a single `*.rs` case for the tree, so one uncovered directory withholds it, and the skip reason names
-that directory and, for a shadowing config, where it is. The edition is deliberately **not** read from `Cargo.toml` and passed as `--edition`:
-that is a configured fact that drifts when the edition moves. In the preview, state the skip and the
-fix: add a `rustfmt.toml` holding `edition = "<the crate's edition>"`, then re-run.
+that directory and the EFFECTIVE config file that fails to declare it (for example
+`./.rustfmt.toml`, even when a declaring `./rustfmt.toml` sits beside it). The probe lists paths with
+`core.quotepath=false` so non-ASCII directory names match raw instead of C-quoted. The edition is
+deliberately **not** read from `Cargo.toml` and passed as `--edition`: that is a configured fact
+that drifts when the edition moves. In the preview, state the skip and the fix: add
+`edition = "<the crate's edition>"` to the named file; create a `rustfmt.toml` only when no config
+exists in that directory or any ancestor. Then re-run.
 
 ## Manifest probes are monorepo-safe (`dart` / `rustfmt` / `gofmt`)
 
