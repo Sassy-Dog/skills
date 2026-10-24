@@ -604,21 +604,22 @@
 #      as a total transcribed here to go stale. Twenty-one tracked files plus a
 #      tracked-source sweep for a fourth site, no gh, no network.
 #  30. pipefail-grep guard (scripts/test-pipefail-grep.sh) — no script under
-#      `pipefail` may feed an UNBOUNDED writer into `grep -q` (issue #256,
-#      generalising #172). grep -q closes the pipe on its first match, the
-#      writer takes SIGPIPE, pipefail promotes the 141 — so the pipeline reports
-#      failure precisely WHEN IT MATCHED, but only once the output outruns the
-#      ~64KB pipe buffer. Nothing generalised #172: gate 11 pins one function by
-#      name, and the shape recurred in PR #252, where a `scan … | grep -q` made
-#      three of that gate's four mutation proofs report `undetected`. The RULE
-#      is deliberately narrow and must not be "simplified": flag every pipeline
-#      into `grep -q` whose SOURCE stage is not `printf` or `echo` — purely
-#      syntactic, ~12 sites on the tree it landed on, all fixed in that PR. Both
-#      wider options were rejected on #256 (a per-site opt-out marker: ~128
-#      annotations that degrade into paste; a blanket ban: a ~131-line rewrite
-#      of the scripts this repo relies on to catch its own regressions). Its
-#      known limitation is stated in its own header: a huge variable through
-#      `printf` slips past, because no syntactic check knows a variable's size.
+#      `pipefail` may pipe ANY writer into `grep -q` (issue #571, reversing
+#      #256's printf/echo allowlist; generalising #172). grep -q closes the pipe
+#      on its first match, the writer takes SIGPIPE, pipefail promotes the 141 —
+#      so the pipeline reports failure precisely WHEN IT MATCHED: for a command
+#      writer once the output outruns the ~64KB pipe buffer, for a builtin
+#      `printf`/`echo` whenever the match is on a line before the last (it
+#      writes line by line; PR #570's main CI). Nothing generalised #172: gate
+#      11 pins one function by name, and the shape recurred in PR #252, where a
+#      `scan … | grep -q` made three of that gate's four mutation proofs report
+#      `undetected`. The RULE is purely syntactic — every pipeline into
+#      `grep -q` is flagged, and the fix is a here-string (capture first when a
+#      middle stage transforms the value). #256 allowed `printf`/`echo` sources
+#      on the premise that an in-memory value is bounded and rejected the
+#      blanket ban as a ~131-line rewrite; #571 measured that premise false and
+#      made the 239-site rewrite with a quote-aware script. The per-site opt-out
+#      marker stays rejected; exemptions live in the guard's central table.
 #      The linter does NOT cover this — verified against shellcheck 0.11.0,
 #      which says nothing about the shape and whose SC2143 actively RECOMMENDS
 #      `grep -q`.
@@ -1964,7 +1965,7 @@ if command -v jq >/dev/null 2>&1; then
         # downgrade to version-ordering consumers. Stamp via
         # scripts/stamp-version.sh, never by hand.
         plugin_version=$(jq -r '.version // empty' .claude-plugin/plugin.json)
-        if echo "$plugin_version" | grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$'; then
+        if grep -qE '^[0-9]{4}\.[0-9]{1,2}\.[0-9]+$' <<<"$plugin_version"; then
             pass "plugin version is CalVer ($plugin_version)"
         else
             failed "plugin version '$plugin_version' is not CalVer (YYYY.M.P) — stamp via scripts/stamp-version.sh (docs/VERSIONING.md)"
@@ -2292,11 +2293,12 @@ fi
 
 # --- 30. pipefail-grep guard --------------------------------------------------
 # Source-level, and the one gate whose subject is the OTHER gates: a `| grep -q`
-# under pipefail reports a match as a miss once the writer outruns the pipe
-# buffer, which is how PR #252's mutation proofs came back `undetected`. The
-# printf/echo allowlist is the settled rule (#256) and the guard's header
-# carries both its rationale and its known limitation — read that before
-# widening or narrowing it. Tracked fixtures, no gh, no network.
+# under pipefail can report a match as a miss — past the pipe buffer for a
+# command writer, at any size for a multi-line builtin one — which is how PR
+# #252's mutation proofs came back `undetected` and PR #570's main CI went red.
+# Every pipeline into `grep -q` is flagged (#571, reversing #256's printf/echo
+# allowlist); the guard's header carries the rationale and the reversal — read
+# that before widening or narrowing it. Tracked fixtures, no gh, no network.
 if pg_gate scripts/test-pipefail-grep.sh; then
     pass "pipefail-grep guard (scripts/test-pipefail-grep.sh)"
 else

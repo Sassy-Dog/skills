@@ -81,27 +81,27 @@ plate_flat="$(flat "$PLATE")"
 
 # --- 1. Search is discovery, not scoring -------------------------------------
 
-if printf '%s' "$skill_flat" | grep -qiE 'DISCOVERY tool, never a SCORING tool'; then
+if grep -qiE 'DISCOVERY tool, never a SCORING tool' <<<"$skill_flat"; then
     ok "SKILL.md separates discovery from scoring"
 else
     bad "SKILL.md lost the discovery-vs-scoring split"
 fi
 
-if printf '%s' "$skill_flat" | grep -qiE 'must never reach a gate|never reach a gate'; then
+if grep -qiE 'must never reach a gate|never reach a gate' <<<"$skill_flat"; then
     ok "search counts are barred from the gate"
 else
     bad "SKILL.md no longer bars search counts from the gate"
 fi
 
 # The measurement is what stops this being re-litigated as over-caution.
-if printf '%s' "$skill_flat" | grep -q '30×' || printf '%s' "$skill_flat" | grep -qi '30x undercount'; then
+if grep -q '30×' <<<"$skill_flat" || grep -qi '30x undercount' <<<"$skill_flat"; then
     ok "SKILL.md carries the measured undercount"
 else
     bad "SKILL.md dropped the measured evidence for the rule"
 fi
 
 # Widening the window is the first fix anyone reaches for, and it does not work.
-if printf '%s' "$skill_flat" | grep -qi 'not a workaround'; then
+if grep -qi 'not a workaround' <<<"$skill_flat"; then
     ok "SKILL.md records that a wider period is not a workaround"
 else
     bad "SKILL.md no longer rules out widening \`period\`"
@@ -126,8 +126,10 @@ else
     bad "confirmation no longer sits between the pull and the gate (pull=$pull_line confirm=$confirm_line gate=$gate_line)"
 fi
 
-if printf '%s' "$gate_flat" | grep -qiE '^| *0\. \*\*Counts confirmed as lifetime' ||
-   printf '%s' "$gate_flat" | grep -qi 'Counts confirmed as lifetime'; then
+# `(^| )`, never `^|`: an empty ERE alternative matches every line, which made
+# this pass with the rule deleted (found by #571's empty-input review).
+if grep -qiE '(^| )0\. \*\*Counts confirmed as lifetime' <<<"$gate_flat" ||
+   grep -qi 'Counts confirmed as lifetime' <<<"$gate_flat"; then
     ok "the gate carries a numbered lifetime-counts rule"
 else
     bad "the gate has no lifetime-counts rule"
@@ -142,7 +144,7 @@ else
     bad "rule 0 does not precede rule 3 (rule0=$rule0_line rule3=$rule3_line)"
 fi
 
-if printf '%s' "$gate_flat" | grep -qi 'Evaluation order is part of the gate'; then
+if grep -qi 'Evaluation order is part of the gate' <<<"$gate_flat"; then
     ok "evaluation order is stated as part of the gate"
 else
     bad "the gate no longer states that evaluation order is part of it"
@@ -152,27 +154,27 @@ fi
 #
 # The single most deletable rule here: it reads as a missing optimization.
 
-if printf '%s' "$skill_flat" | grep -qi 'Never use a windowed count to decide which issues are worth confirming'; then
+if grep -qi 'Never use a windowed count to decide which issues are worth confirming' <<<"$skill_flat"; then
     ok "SKILL.md forbids selecting confirmations by windowed count"
 else
     bad "SKILL.md lost the ban on pre-filtering by windowed count"
 fi
 
 # Without the reason, the ban reads as arbitrary and gets optimized away.
-if printf '%s' "$skill_flat" | grep -qiE 're-?creates? the bug one step earlier'; then
+if grep -qiE 're-?creates? the bug one step earlier' <<<"$skill_flat"; then
     ok "the ban carries its reason (the pre-filter re-creates the bug)"
 else
     bad "the ban on pre-filtering no longer says why"
 fi
 
-if printf '%s' "$gate_flat" | grep -qiE 're-?creates? the bug one step earlier'; then
+if grep -qiE 're-?creates? the bug one step earlier' <<<"$gate_flat"; then
     ok "the gate repeats the pre-filter reasoning"
 else
     bad "the gate dropped the pre-filter reasoning"
 fi
 
 # The narrowing must be done by the rules that read no count at all.
-if printf '%s' "$gate_flat" | grep -qi 'count-independent rules'; then
+if grep -qi 'count-independent rules' <<<"$gate_flat"; then
     ok "the gate names the count-independent rules as the narrowing step"
 else
     bad "the gate no longer names which rules do the narrowing"
@@ -180,41 +182,41 @@ fi
 
 # --- 4. skip-unconfirmed: cannot qualify, and is always reported -------------
 
-if printf '%s' "$gate_flat" | grep -q 'skip-unconfirmed'; then
+if grep -q 'skip-unconfirmed' <<<"$gate_flat"; then
     ok "the gate defines \`skip-unconfirmed\`"
 else
     bad "the gate has no \`skip-unconfirmed\` tag"
 fi
 
 # Both halves. Either one alone is a silent failure in one direction.
-if printf '%s' "$gate_flat" | grep -qiE 'cannot qualify|can never qualify'; then
+if grep -qiE 'cannot qualify|can never qualify' <<<"$gate_flat"; then
     ok "an unconfirmed count can never qualify"
 else
     bad "unconfirmed counts are no longer barred from qualifying"
 fi
 
-if printf '%s' "$gate_flat" | grep -qiE 'reported, never dropped'; then
+if grep -qiE 'reported, never dropped' <<<"$gate_flat"; then
     ok "\`skip-unconfirmed\` is reported, never dropped"
 else
     bad "\`skip-unconfirmed\` may now be dropped silently"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'reported, never dropped'; then
+if grep -qi 'reported, never dropped' <<<"$skill_flat"; then
     ok "SKILL.md repeats the report-never-drop rule"
 else
     bad "SKILL.md dropped the report-never-drop rule"
 fi
 
 # It must appear in the tag list the report groups by, or it exists on paper only.
-if printf '%s' "$skill_flat" | grep -q 'skip-unconfirmed' &&
-   printf '%s' "$gate_flat" | grep -qi 'tagged in working data.*skip-unconfirmed'; then
+if grep -q 'skip-unconfirmed' <<<"$skill_flat" &&
+   grep -qi 'tagged in working data.*skip-unconfirmed' <<<"$gate_flat"; then
     ok "\`skip-unconfirmed\` is in the reported skip-tag list"
 else
     bad "\`skip-unconfirmed\` is missing from the reported skip-tag list"
 fi
 
 # Fail-open is the tempting compromise and it reinstates the undercount.
-if printf '%s' "$gate_flat" | grep -qi 'Failing open'; then
+if grep -qi 'Failing open' <<<"$gate_flat"; then
     ok "the gate explicitly rejects failing open"
 else
     bad "the gate no longer rejects failing open on unconfirmed counts"
@@ -234,7 +236,7 @@ for f in "$SKILL" "$GATE" "$SYNTAX"; do
     fi
 done
 
-if printf '%s' "$gate_flat" | grep -qi 'rescales identically'; then
+if grep -qi 'rescales identically' <<<"$gate_flat"; then
     ok "rule 0 confirms \`firstSeen\` from the same fetch as the counts"
 else
     bad "rule 0 no longer pulls \`firstSeen\` from the confirming fetch"
@@ -242,7 +244,7 @@ fi
 
 # The query TERM was never shown to be broken; conflating the two would be a
 # false claim in a reference doc, so the distinction is pinned.
-if printf '%s' "$syntax_flat" | grep -qi 'only the second is known bad'; then
+if grep -qi 'only the second is known bad' <<<"$syntax_flat"; then
     ok "query-syntax separates the \`firstSeen:\` query term from the returned field"
 else
     bad "query-syntax no longer separates the query term from the returned field"
@@ -250,13 +252,13 @@ fi
 
 # --- 5. The report renders count provenance ----------------------------------
 
-if printf '%s' "$skill_flat" | grep -qi 'renders its provenance'; then
+if grep -qi 'renders its provenance' <<<"$skill_flat"; then
     ok "the report renders count provenance"
 else
     bad "the report no longer distinguishes confirmed from unconfirmed counts"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'windowed, unconfirmed'; then
+if grep -qi 'windowed, unconfirmed' <<<"$skill_flat"; then
     ok "the provenance rule shows the unconfirmed rendering"
 else
     bad "the provenance rule gives no unconfirmed form to render"
@@ -265,14 +267,14 @@ fi
 # The hard-prohibition list is where a reader who skims stops; the rule must be there.
 prohibitions="$(awk '/^## Hard prohibitions/{f=1; next} /^## /{f=0} f' "$SKILL")"
 prohibitions_flat="$(printf '%s' "$prohibitions" | tr '\n' ' ' | tr -s ' ')"
-if printf '%s' "$prohibitions_flat" | grep -qiE 'has not confirmed as lifetime'; then
+if grep -qiE 'has not confirmed as lifetime' <<<"$prohibitions_flat"; then
     ok "the hard prohibitions bar scoring on unconfirmed counts"
 else
     bad "the hard-prohibition list does not mention unconfirmed counts"
 fi
 
 # Dismissal is half the failure: the velovate miss was a false CLEAN, not a false file.
-if printf '%s' "$prohibitions_flat" | grep -qi 'dismiss'; then
+if grep -qi 'dismiss' <<<"$prohibitions_flat"; then
     ok "the prohibition covers dismissal, not only escalation"
 else
     bad "the prohibition covers escalation only — a false 'clean' is the bug that shipped"
@@ -291,20 +293,20 @@ fi
 rest_row="$(printf '%s\n' "$table_rows" | grep -i 'REST')"
 mcp_row="$(printf '%s\n' "$table_rows" | grep -i 'search_issues')"
 
-if [ -n "$rest_row" ] && printf '%s' "$rest_row" | grep -qi 'lifetime'; then
+if [ -n "$rest_row" ] && grep -qi 'lifetime' <<<"$rest_row"; then
     ok "the REST row states its counts are lifetime"
 else
     bad "the REST row is missing or no longer states lifetime"
 fi
 
-if [ -n "$mcp_row" ] && printf '%s' "$mcp_row" | grep -qi 'windowed'; then
+if [ -n "$mcp_row" ] && grep -qi 'windowed' <<<"$mcp_row"; then
     ok "the MCP row states its counts are windowed"
 else
     bad "the MCP row is missing or no longer states windowed"
 fi
 
 # REST being accidentally right must not become "prefer REST, skip confirmation".
-if printf '%s' "$fallback_flat" | grep -qiE 'not a reason to prefer it or to skip confirmation'; then
+if grep -qiE 'not a reason to prefer it or to skip confirmation' <<<"$fallback_flat"; then
     ok "REST's correctness is explicitly not an exemption from confirmation"
 else
     bad "nothing stops REST being read as exempt from confirmation"
@@ -314,25 +316,25 @@ fi
 
 # Mutation proof: the pre-#218 bare claim, which sent search counts straight to
 # the gate. Flattened, because it sat on one line and the fix wraps.
-if printf '%s' "$syntax_flat" | grep -qi 'Both feed the qualifying gate'; then
+if grep -qi 'Both feed the qualifying gate' <<<"$syntax_flat"; then
     bad "query-syntax.md reverted to 'both feed the qualifying gate'"
 else
     ok "query-syntax.md carries no direct-to-gate claim"
 fi
 
-if printf '%s' "$syntax_flat" | grep -qi 'Neither goes to the gate as returned'; then
+if grep -qi 'Neither goes to the gate as returned' <<<"$syntax_flat"; then
     ok "query-syntax.md routes counts through rule 0"
 else
     bad "query-syntax.md no longer routes counts through rule 0"
 fi
 
-if printf '%s' "$plate_flat" | grep -qi 'mean \*\*lifetime\*\* totals'; then
+if grep -qi 'mean \*\*lifetime\*\* totals' <<<"$plate_flat"; then
     ok "survey-work states the impact formula takes lifetime totals"
 else
     bad "survey-work no longer states that the formula takes lifetime totals"
 fi
 
-if printf '%s' "$plate_flat" | grep -qi 'skip-unconfirmed'; then
+if grep -qi 'skip-unconfirmed' <<<"$plate_flat"; then
     ok "survey-work refuses to quote an unconfirmed figure"
 else
     bad "survey-work may quote a \`skip-unconfirmed\` figure as measured"

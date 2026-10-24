@@ -172,15 +172,17 @@
 # and a line-scoped grep reports a FALSE PASS. (Must-exist checks may stay
 # line-scoped: a wrap there fails loudly, which is safe.)
 #
-# No `| grep -q` pipeline here takes a command as its writer: every one is fed by
-# a single-argument `printf`, the shape scripts/test-pipefail-grep.sh permits.
-# MEASURED, because an earlier version of this file asserted a size limit that
-# does not exist: `printf '%s' "$one_unterminated_line" | grep -q` returns 0 at
-# 64KB, 256KB, 1MB and 4MB on both bash 3.2.57 and 5.3.15, because `grep -q`
-# cannot exit early on a line whose terminator it has not seen — and `tr '\n' ' '`
-# makes every haystack here exactly one unterminated line. A COMMAND writer
-# emitting many lines returns 141 at 64KB, which is the shape #256's syntactic
-# rule targets and the reason that rule cannot be replaced by a size check.
+# Every `grep -q` here reads a here-string, never a pipe — the shape
+# scripts/test-pipefail-grep.sh requires since issue #571. Before that each was
+# fed by a single-argument `printf`, and it was safe HERE for a MEASURED reason
+# (an earlier version of this file asserted a size limit that does not exist):
+# `printf '%s' "$one_unterminated_line" | grep -q` returns 0 at 64KB, 256KB, 1MB
+# and 4MB on both bash 3.2.57 and 5.3.15, because `grep -q` cannot exit early on
+# a line whose terminator it has not seen — and `tr '\n' ' '` makes every
+# haystack here exactly one unterminated line. A COMMAND writer emitting many
+# lines returns 141 at 64KB, and a builtin writing two or more lines can at any
+# size (#571); the guard sees neither size nor line count, which is why its rule
+# is syntactic and why the safety of this file's old shape could not be checked.
 #
 # No gh, no network, no repo mutation — it reads eight tracked files.
 #
@@ -247,7 +249,7 @@ else
     bad "detection.md has no Sentry project hand-check bullet"
 fi
 
-if printf '%s' "$culprit_bullet" | grep -qi 'culprit'; then
+if grep -qi 'culprit' <<<"$culprit_bullet"; then
     ok "the Sentry hand-check verifies by culprit"
 else
     bad "the Sentry hand-check does not mention culprit — name match is back"
@@ -255,19 +257,19 @@ fi
 
 # The culprit has to be resolved against the repo being configured. A rule that
 # samples culprits and never checks them against this tree proves nothing.
-if printf '%s' "$culprit_bullet" | grep -qiE 'resolve in the repo being configured|resolve in this repo'; then
+if grep -qiE 'resolve in the repo being configured|resolve in this repo' <<<"$culprit_bullet"; then
     ok "culprits must resolve in the repo being configured"
 else
     bad "the hand-check never requires culprits to resolve in THIS repo"
 fi
 
-if printf '%s' "$culprit_bullet" | grep -qi 'name similarity is not evidence'; then
+if grep -qi 'name similarity is not evidence' <<<"$culprit_bullet"; then
     ok "the rule states name similarity is not evidence"
 else
     bad "the rule no longer states that name similarity is not evidence"
 fi
 
-if printf '%s' "$culprit_bullet" | grep -qiE 'regardless of what it is called|regardless of (its|the) name'; then
+if grep -qiE 'regardless of what it is called|regardless of (its|the) name' <<<"$culprit_bullet"; then
     ok "a non-matching project is wrong regardless of its name"
 else
     bad "the rule lost the 'wrong project regardless of its name' clause"
@@ -275,7 +277,7 @@ fi
 
 # Mutation proof: the pre-#213 rule, flattened so a re-wrap cannot hide it.
 detection_flat="$(tr '\n' ' ' < "$DETECTION" | tr -s ' ')"
-if printf '%s' "$detection_flat" | grep -qi 'list projects for the org to propose'; then
+if grep -qi 'list projects for the org to propose' <<<"$detection_flat"; then
     bad "detection.md reverted to the name-match rule (list projects to propose)"
 else
     ok "detection.md carries no name-match propose rule"
@@ -283,13 +285,13 @@ fi
 
 # --- B. A failed verification writes `sentry: none` ---------------------------
 
-if printf '%s' "$culprit_bullet" | grep -q 'sentry: none'; then
+if grep -q 'sentry: none' <<<"$culprit_bullet"; then
     ok "failed verification is routed to \`sentry: none\`"
 else
     bad "the hand-check never names \`sentry: none\` as the failure outcome"
 fi
 
-if printf '%s' "$culprit_bullet" | grep -qiE 'never a guessed block|not a guessed block'; then
+if grep -qiE 'never a guessed block|not a guessed block' <<<"$culprit_bullet"; then
     ok "the hand-check forbids a guessed block"
 else
     bad "the hand-check no longer forbids writing a guessed block"
@@ -303,13 +305,13 @@ else
     bad "detection.md has no prior-claim sibling scan"
 fi
 
-if printf '%s' "$claim_bullet" | grep -qi 'secondary'; then
+if grep -qi 'secondary' <<<"$claim_bullet"; then
     ok "the prior-claim scan is marked secondary"
 else
     bad "the prior-claim scan is no longer marked secondary"
 fi
 
-if printf '%s' "$claim_bullet" | grep -qiE 'never block|never blocks|non-blocking|never fatal'; then
+if grep -qiE 'never block|never blocks|non-blocking|never fatal' <<<"$claim_bullet"; then
     ok "the prior-claim scan is non-blocking"
 else
     bad "the prior-claim scan no longer states that a miss does not block"
@@ -318,21 +320,21 @@ fi
 # The REASON is the part a later edit trims as redundant, and losing it is what
 # lets someone promote the scan to the guard: it finds nothing in a cloud session
 # and says nothing about having found nothing.
-if printf '%s' "$claim_bullet" | grep -qi 'cloud session' &&
-   printf '%s' "$claim_bullet" | grep -qi 'sibling'; then
+if grep -qi 'cloud session' <<<"$claim_bullet" &&
+   grep -qi 'sibling' <<<"$claim_bullet"; then
     ok "the scan's secondary status carries its reason (no siblings in a cloud session)"
 else
     bad "the prior-claim scan states no reason for being secondary"
 fi
 
-if printf '%s' "$detection_flat" | grep -qi 'never be the only guard'; then
+if grep -qi 'never be the only guard' <<<"$detection_flat"; then
     ok "the scan is explicitly never the only guard"
 else
     bad "detection.md lost the 'never the only guard' rule"
 fi
 
-if printf '%s' "$claim_bullet" | grep -qi 'already owned' &&
-   printf '%s' "$claim_bullet" | grep -qi 'confirm'; then
+if grep -qi 'already owned' <<<"$claim_bullet" &&
+   grep -qi 'confirm' <<<"$claim_bullet"; then
     ok "a prior claim defaults to already-owned and needs explicit confirmation"
 else
     bad "a prior claim no longer defaults to owned / requires confirmation"
@@ -354,14 +356,14 @@ fi
 
 # It must read AS an exception. Slipped in as though the principle never existed,
 # it is indistinguishable from drift and gets 'corrected' away.
-if printf '%s' "$exception_section" | grep -qiE 'first documented exception|one documented exception|first exception'; then
+if grep -qiE 'first documented exception|one documented exception|first exception' <<<"$exception_section"; then
     ok "the exception is marked as an exception to the principle"
 else
     bad "the exception no longer identifies itself as the first exception"
 fi
 
 # ...with its reason attached, which is what makes it survive a consistency sweep.
-if printf '%s' "$exception_section" | grep -qi 'verified by culprit'; then
+if grep -qi 'verified by culprit' <<<"$exception_section"; then
     ok "the exception carries its reason (culprit verification can fail)"
 else
     bad "the exception no longer explains why it exists"
@@ -372,9 +374,9 @@ fi
 row_verified=0 row_none=0 row_absent=0
 while IFS= read -r row; do
     case "$row" in
-        *'block with'*) printf '%s' "$row" | grep -qi 'surface runs' && row_verified=1 ;;
-        *'sentry: none'*) printf '%s' "$row" | grep -qi 'blind spot' && row_none=1 ;;
-        *'key absent'*) printf '%s' "$row" | grep -qi 'blind spot' && row_absent=1 ;;
+        *'block with'*) grep -qi 'surface runs' <<<"$row" && row_verified=1 ;;
+        *'sentry: none'*) grep -qi 'blind spot' <<<"$row" && row_none=1 ;;
+        *'key absent'*) grep -qi 'blind spot' <<<"$row" && row_absent=1 ;;
     esac
 done < <(printf '%s\n' "$exception_section" | grep '^|')
 if [ "$row_verified" = 1 ] && [ "$row_none" = 1 ] && [ "$row_absent" = 1 ]; then
@@ -386,7 +388,7 @@ fi
 # The bare claim a reader meets first must point at the exception, or the section
 # contradicts itself for anyone who stops reading at the paragraph.
 contract_flat="$(tr '\n' ' ' < "$CONTRACT" | tr -s ' ')"
-if printf '%s' "$contract_flat" | grep -qiE 'exception to this principle is `sentry: none`'; then
+if grep -qiE 'exception to this principle is `sentry: none`' <<<"$contract_flat"; then
     ok "the 'no \`sentry: false\`' paragraph points forward to the exception"
 else
     bad "the 'no \`sentry: false\`' claim stands bare, with no pointer to \`sentry: none\`"
@@ -397,14 +399,14 @@ fi
 template_header="$(awk '/^<!--/{f=1} f{print} /-->/{if (f) exit}' "$TEMPLATE")"
 header_flat="$(printf '%s' "$template_header" | tr '\n' ' ' | tr -s ' ')"
 
-if printf '%s' "$header_flat" | grep -q 'sentry: none'; then
+if grep -q 'sentry: none' <<<"$header_flat"; then
     ok "the template header names the \`sentry: none\` form"
 else
     bad "the template header asserts presence-is-the-toggle without naming \`sentry: none\`"
 fi
 
 # Mutation proof: the pre-#213 sentence, which asserted the bare rule.
-if printf '%s' "$header_flat" | grep -qi 'toggle; there is no `sentry: false`'; then
+if grep -qi 'toggle; there is no `sentry: false`' <<<"$header_flat"; then
     bad "the template header reverted to the bare 'there is no \`sentry: false\`' claim"
 else
     ok "the template header carries no bare no-false assertion"
@@ -413,20 +415,20 @@ fi
 # --- F. SKILL.md agrees with the rule ----------------------------------------
 
 skill_flat="$(tr '\n' ' ' < "$SKILL" | tr -s ' ')"
-if printf '%s' "$skill_flat" | grep -qi 'Sentry slugs via MCP'; then
+if grep -qi 'Sentry slugs via MCP' <<<"$skill_flat"; then
     bad "setup-config/SKILL.md still summarises the check as 'Sentry slugs via MCP'"
 else
     ok "setup-config/SKILL.md carries no 'Sentry slugs via MCP' summary"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'culprit' &&
-   printf '%s' "$skill_flat" | grep -q 'sentry: none'; then
+if grep -qi 'culprit' <<<"$skill_flat" &&
+   grep -q 'sentry: none' <<<"$skill_flat"; then
     ok "setup-config/SKILL.md names both the culprit check and \`sentry: none\`"
 else
     bad "setup-config/SKILL.md does not agree with the culprit rule"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'name similarity is not evidence'; then
+if grep -qi 'name similarity is not evidence' <<<"$skill_flat"; then
     ok "setup-config/SKILL.md repeats that name similarity is not evidence"
 else
     bad "setup-config/SKILL.md dropped the name-similarity warning"
@@ -443,8 +445,8 @@ else
     bad "interview.md has no prior-claim question"
 fi
 
-if printf '%s' "$q2b_flat" | grep -qi 'already owned' &&
-   printf '%s' "$q2b_flat" | grep -qi 'confirm'; then
+if grep -qi 'already owned' <<<"$q2b_flat" &&
+   grep -qi 'confirm' <<<"$q2b_flat"; then
     ok "the prompt defaults to already-owned and requires explicit confirmation"
 else
     bad "the prompt no longer defaults to owned / requires confirmation"
@@ -452,7 +454,7 @@ fi
 
 # The question must not become "which project is this repo's?" — that is the name
 # match wearing a question mark.
-if printf '%s' "$q2b_flat" | grep -qi 'never ask'; then
+if grep -qi 'never ask' <<<"$q2b_flat"; then
     ok "the interview forbids asking the user to pick a project by name"
 else
     bad "the interview lost its 'never ask which project' instruction"
@@ -489,8 +491,8 @@ fi
 
 # Distinct in WORDING, not just in the key it quotes: a confirmed-absent surface
 # was not 'NOT checked', and saying so is the collapse this row exists to stop.
-if printf '%s' "$none_row" | grep -qi 'confirmed' &&
-   ! printf '%s' "$none_row" | grep -q 'NOT checked'; then
+if grep -qi 'confirmed' <<<"$none_row" &&
+   ! grep -q 'NOT checked' <<<"$none_row"; then
     ok "the confirmed-absent row reads as confirmed, not as unchecked"
 else
     bad "the \`sentry: none\` row is worded as an unchecked surface"
@@ -500,20 +502,20 @@ fi
 # AND a culprit check that could not run, so the row may claim no *verified*
 # project and must not claim the repo has none — a distinction nothing downstream
 # can recover once the row has asserted it.
-if printf '%s' "$none_row" | grep -qi 'verified'; then
+if grep -qi 'verified' <<<"$none_row"; then
     ok "the \`sentry: none\` row claims no VERIFIED project, not an absent one"
 else
     bad "the \`sentry: none\` row no longer scopes its claim to verification"
 fi
 
-if printf '%s' "$none_row" | grep -qiE '(repo|this repo) has no error monitoring'; then
+if grep -qiE '(repo|this repo) has no error monitoring' <<<"$none_row"; then
     bad "the \`sentry: none\` row over-claims: it covers a check that could not run too"
 else
     ok "the \`sentry: none\` row makes no bare no-error-monitoring claim"
 fi
 
 # The same over-claim in detection.md, which is where the value is written.
-if printf '%s' "$detection_flat" | grep -qi 'must never be glossed as'; then
+if grep -qi 'must never be glossed as' <<<"$detection_flat"; then
     ok "detection.md forbids glossing \`sentry: none\` as a plain absence"
 else
     bad "detection.md no longer distinguishes an absence from a check that could not run"
@@ -1676,7 +1678,7 @@ for pair in "clause_break(t, b)|hard_break(|the skip-region subset" \
     body="$(sed -n "/^        function ${outer%%(*}(/,/^        }\$/p" "$SELF")"
     if [ -z "$body" ]; then
         bad "${outer%%(*} could not be located in this file — the source check is measuring nothing"
-    elif printf '%s' "$body" | grep -q "$inner"; then
+    elif grep -q "$inner" <<<"$body"; then
         ok "${outer%%(*} is an expression of ${inner%(}, not a second transcription of it"
     else
         bad "${outer%%(*} no longer calls ${inner%(} — $what is now a separate list that can drift"
@@ -2277,7 +2279,7 @@ while IFS= read -r row; do
 done <<EOF
 $(table_rows "$three_state")
 EOF
-if printf '%s' "$ts_meaning" | grep -qi 'verified'; then
+if grep -qi 'verified' <<<"$ts_meaning"; then
     ok "the three-state table scopes \`sentry: none\` to verification"
 else
     bad "the three-state table's \`sentry: none\` meaning is not scoped to verification (got: ${ts_meaning:-<none>})"
@@ -2285,26 +2287,25 @@ fi
 
 # --- I3. The contract's rationales and exclusions ------------------------------
 
-if printf '%s' "$contract_flat" |
-   grep -qi 'error monitoring is a gap somebody could close; an absent mobile app is a product fact'; then
+if grep -qi 'error monitoring is a gap somebody could close; an absent mobile app is a product fact' <<<"$contract_flat"; then
     ok "the contract keeps the gap-versus-product-fact rationale"
 else
     bad "the contract lost the rationale for the asymmetry (gap vs product fact)"
 fi
 
-if printf '%s' "$contract_flat" | grep -qi 'Do not "align the .none. forms'; then
+if grep -qi 'Do not "align the .none. forms' <<<"$contract_flat"; then
     ok "the contract warns against aligning the \`none\` forms"
 else
     bad "the contract no longer warns a sweep off aligning the \`none\` forms"
 fi
 
-if printf '%s' "$contract_flat" | grep -qiE 'A second reason, and it applies to .sentry:. alone'; then
+if grep -qiE 'A second reason, and it applies to .sentry:. alone' <<<"$contract_flat"; then
     ok "the contract carries the second reason (\`sentry: none\` means two things)"
 else
     bad "the contract lost the two-outcomes reason for keeping sentry's row"
 fi
 
-if printf '%s' "$contract_flat" | grep -qi 'unfinished verification wearing the same value'; then
+if grep -qi 'unfinished verification wearing the same value' <<<"$contract_flat"; then
     ok "the contract names the unverifiable outcome as not a confirmed absence"
 else
     bad "the contract no longer distinguishes confirmed-absent from could-not-verify"
@@ -2320,13 +2321,13 @@ assert_sentence_affirms "the contract says \`sentry: none\` is re-derived on a r
 assert_no_sentence_affirms "the contract never carries \`sentry: none\` forward" \
     "$contract_flat" 'sentry: none' "$CARRY_VOCAB"
 
-if printf '%s' "$contract_flat" | grep -qi 'Why this section is still headed'; then
+if grep -qi 'Why this section is still headed' <<<"$contract_flat"; then
     ok "the contract records why the heading still names \`sentry: none\` alone"
 else
     bad "the contract no longer explains its heading/body mismatch"
 fi
 
-if printf '%s' "$contract_flat" | grep -qi '.posthog: false. is not one of the forms'; then
+if grep -qi '.posthog: false. is not one of the forms' <<<"$contract_flat"; then
     ok "the contract rules \`posthog: false\` out as a config form"
 else
     bad "the contract no longer rules out \`posthog: false\`"
@@ -2336,14 +2337,14 @@ for excl in '`board:` is excluded' '`stacked_prs:` is excluded' \
             '`review_agent:` and `review_site:` are excluded' \
             'None of them render a blind-spot row' \
             '`ci_workflow:` is excluded'; do
-    if printf '%s' "$contract_flat" | grep -qiF "$excl"; then
+    if grep -qiF "$excl" <<<"$contract_flat"; then
         ok "exclusion stated: $excl"
     else
         bad "the contract lost an exclusion: $excl"
     fi
 done
 
-if printf '%s' "$contract_flat" | grep -qi 'boardless form'; then
+if grep -qi 'boardless form' <<<"$contract_flat"; then
     ok "the \`board:\` exclusion carries its reason (§3B's boardless form)"
 else
     bad "the \`board:\` exclusion lost its reason"
@@ -2351,13 +2352,13 @@ fi
 
 # The four-key claim, at the three sites that state it in prose rather than in the
 # table. Each could be reverted to one key while the table still claims four.
-if printf '%s' "$contract_flat" | grep -qiE 'scoped to the four keys whose absence'; then
+if grep -qiE 'scoped to the four keys whose absence' <<<"$contract_flat"; then
     ok "the contract's scope sentence still names four keys"
 else
     bad "the contract's scope sentence no longer names four keys"
 fi
 
-if printf '%s' "$contract_flat" | grep -qiE 'Four of these keys .{0,80}additionally accept the scalar'; then
+if grep -qiE 'Four of these keys .{0,80}additionally accept the scalar' <<<"$contract_flat"; then
     ok "the shared-blocks note still names four keys accepting \`none\`"
 else
     bad "the shared-blocks note no longer names the four keys accepting \`none\`"
@@ -2368,13 +2369,13 @@ fi
 # and `The exception is scoped to **\`sentry:\`** alone.` slipped past a check on
 # the plain flatten alone.
 contract_bare="$(printf '%s' "$contract_flat" | tr -d '*_')"
-if printf '%s' "$contract_bare" | grep -qi 'The exception is scoped to .sentry:. alone'; then
+if grep -qi 'The exception is scoped to .sentry:. alone' <<<"$contract_bare"; then
     bad "the contract reverted to scoping the exception to \`sentry:\` alone"
 else
     ok "the contract no longer scopes the exception to \`sentry:\` alone"
 fi
 
-if printf '%s' "$contract_bare" | grep -qi 'No other key has a .none. form'; then
+if grep -qi 'No other key has a .none. form' <<<"$contract_bare"; then
     bad "the contract still claims no other key has a \`none\` form"
 else
     ok "the contract carries no 'no other key has a \`none\` form' claim"
@@ -2394,7 +2395,7 @@ template_bare="$(tr '\n' ' ' < "$TEMPLATE" | tr -s ' ' | tr -d '*_')"
 GLOSS='confirmed: no error monitoring|confirmed( at setup)?( that)? this repo has no error monitoring'
 check_gloss() {
     local where="$1" hay="$2"
-    if printf '%s' "$hay" | grep -qiE "$GLOSS"; then
+    if grep -qiE "$GLOSS" <<<"$hay"; then
         bad "$where glosses \`sentry: none\` as a plain absence — detection.md forbids exactly this"
     else
         ok "$where makes no bare no-error-monitoring claim"
@@ -2441,7 +2442,7 @@ for key in testflight posthog mobile; do
         continue
     fi
     assert_dest "\`$key: none\` routes to the clean line" "$win" "$CLEAN_DEST" '+'
-    if printf '%s' "$win" | grep -qiF "$NA_MARKER"; then
+    if grep -qiF "$NA_MARKER" <<<"$win"; then
         ok "\`$key: none\` carries the \`(n/a)\` marker"
     else
         bad "\`$key: none\` lost the \`(n/a)\` marker that distinguishes it from empty"
@@ -2449,7 +2450,7 @@ for key in testflight posthog mobile; do
     assert_dest "\`$key: none\` states it takes no blind-spot row" "$win" "$ROW_DEST" '-'
     # The collapse this whole form exists to prevent, in the other direction: a
     # confirmed absence described as something the plate failed to look at.
-    if printf '%s' "$win" | grep -qi 'not checked'; then
+    if grep -qi 'not checked' <<<"$win"; then
         bad "\`$key: none\` is worded as an unchecked surface"
     else
         ok "\`$key: none\` is not worded as an unchecked surface"
@@ -2475,7 +2476,7 @@ else
         "$sentry_win" "$CLEAN_DEST" '-'
     # Anchored to the phrase, not to the bare word `confirmed`, which the
     # neighbouring "§6's *Confirmed N/A* rule" reference supplies for free.
-    if printf '%s' "$sentry_win" | grep -qi 'worded as confirmed'; then
+    if grep -qi 'worded as confirmed' <<<"$sentry_win"; then
         ok "\`sentry: none\` is worded as confirmed in §3, not as unconfigured"
     else
         bad "\`sentry: none\` is no longer explicitly worded as confirmed in §3"
@@ -2502,13 +2503,13 @@ fi
 
 # --- I5. survey-work's §6 render rules ----------------------------------------
 
-if printf '%s' "$plate_flat" | grep -qiE 'Four of those keys also accept the scalar .none.'; then
+if grep -qiE 'Four of those keys also accept the scalar .none.' <<<"$plate_flat"; then
     ok "survey-work §1 states the four-key form itself"
 else
     bad "survey-work §1 no longer states which keys accept \`none\`"
 fi
 
-if printf '%s' "$plate_flat" | grep -qiE 'Confirmed N/A is a[n]? (THIRD|3rd) state'; then
+if grep -qiE 'Confirmed N/A is a[n]? (THIRD|3rd) state' <<<"$plate_flat"; then
     ok "survey-work §6 names confirmed-N/A as a third state, distinct from empty"
 else
     bad "survey-work §6 no longer distinguishes confirmed-N/A from checked-and-empty"
@@ -2565,13 +2566,13 @@ else
     # The three-key half.
     assert_dest "§6 routes the three keys to the clean line" "$na_three" "$CLEAN_DEST" '+'
     assert_dest "§6 states the three keys get no blind-spot row" "$na_three" "$ROW_DEST" '-'
-    if printf '%s' "$na_three" | grep -qiF "$NA_MARKER"; then
+    if grep -qiF "$NA_MARKER" <<<"$na_three"; then
         ok "§6's three-key rule carries the \`(n/a)\` marker"
     else
         bad "§6's three-key rule lost the \`(n/a)\` marker"
     fi
     for k in testflight posthog mobile; do
-        if printf '%s' "$na_three" | grep -qF "\`$k: none\`"; then
+        if grep -qF "\`$k: none\`" <<<"$na_three"; then
             ok "§6's Confirmed-N/A rule names \`$k: none\`"
         else
             bad "§6's Confirmed-N/A rule no longer names \`$k: none\`"
@@ -2585,7 +2586,7 @@ else
         "$na_sentry" "$ROW_DEST" '+'
     assert_dest "§6's \`sentry: none\` rule affirms no clean-line destination" \
         "$na_sentry" "$CLEAN_DEST" '0'
-    if printf '%s' "$na_sentry" | grep -qiF "$NA_MARKER"; then
+    if grep -qiF "$NA_MARKER" <<<"$na_sentry"; then
         bad "§6 gives \`sentry: none\` the \`(n/a)\` marker — that is the three keys' form"
     else
         ok "§6 gives \`sentry: none\` no \`(n/a)\` marker"
@@ -2593,19 +2594,19 @@ else
 fi
 
 # The `✓ Clean today:` template line is the literal block a plate is copied from.
-if printf '%s' "$plate_flat" | grep -qi 'Clean today: <checked-and-empty surface>'; then
+if grep -qi 'Clean today: <checked-and-empty surface>' <<<"$plate_flat"; then
     ok "§6's output template shows the confirmed-absent token on the clean line"
 else
     bad "§6's output template no longer shows a confirmed-absent token"
 fi
 
-if printf '%s' "$plate_flat" | grep -qiE '[*]{0,2}no[*]{0,2} .skipped [^ ]* token on the sources line'; then
+if grep -qiE '[*]{0,2}no[*]{0,2} .skipped [^ ]* token on the sources line' <<<"$plate_flat"; then
     ok "a confirmed-absent surface takes no \`skipped —\` token on the sources line"
 else
     bad "survey-work does not exempt a confirmed-absent surface from the sources-line token"
 fi
 
-if printf '%s' "$plate_flat" | grep -qiE 'Never widen it into a claim that the repo has no Sentry'; then
+if grep -qiE 'Never widen it into a claim that the repo has no Sentry' <<<"$plate_flat"; then
     ok "survey-work forbids widening the row into a no-Sentry claim"
 else
     bad "survey-work lost the ban on widening \`sentry: none\` into a no-Sentry claim"
@@ -2618,7 +2619,7 @@ else
     bad "cannot locate survey-work's '### Blind spots' subsection"
 fi
 
-if printf '%s' "$plate_rules" | grep -qi 'A confirmed absence is not a dark surface'; then
+if grep -qi 'A confirmed absence is not a dark surface' <<<"$plate_rules"; then
     ok "the Blind spots rules exclude a confirmed absence from the section"
 else
     bad "the Blind spots rules no longer exclude a confirmed absence"
@@ -2671,7 +2672,7 @@ else
         bad "the Blind spots bullet no longer names \`sentry: none\`"
     fi
     for k in testflight posthog mobile; do
-        if printf '%s' "$b_three" | grep -qF "\`$k: none\`"; then
+        if grep -qF "\`$k: none\`" <<<"$b_three"; then
             ok "the Blind spots bullet names \`$k: none\` among the excluded"
         else
             bad "the Blind spots bullet no longer excludes \`$k: none\` from the section"
@@ -2694,7 +2695,7 @@ fi
 # line-scoped grep and reports a FALSE PASS. Measured both ways.
 plate_blind_flat="$(printf '%s\n' "$plate_blind" | tr '\n' ' ' | tr -s ' ')"
 for key in testflight posthog mobile; do
-    if printf '%s' "$plate_blind_flat" | grep -qi "$key: none"; then
+    if grep -qi "$key: none" <<<"$plate_blind_flat"; then
         bad "survey-work's blind-spot example still renders a \`$key: none\` row"
     else
         ok "survey-work's blind-spot example renders no \`$key: none\` row"
@@ -2712,7 +2713,7 @@ else
 fi
 
 for key in testflight posthog mobile; do
-    if printf '%s' "$q2c" | grep -qF "\`$key: none\`"; then
+    if grep -qF "\`$key: none\`" <<<"$q2c"; then
         ok "§2c names the \`$key: none\` value it writes"
     else
         bad "§2c never names \`$key: none\` — the key it covers is unstated"
@@ -2722,13 +2723,13 @@ done
 # The TRIGGER. "Keys detection could not establish" silently excluded `posthog`,
 # whose detector always answers true/false — so the key that motivated the form
 # was unreachable on the very path that writes it.
-if printf '%s' "$q2c" | grep -qi 'would otherwise leave'; then
+if grep -qi 'would otherwise leave' <<<"$q2c"; then
     ok "§2c triggers on a key being left absent, not on detection failing"
 else
     bad "§2c's trigger is not the absent-key one — \`posthog\` may be unreachable again"
 fi
 
-if printf '%s' "$q2c" | grep -qi 'always answers'; then
+if grep -qi 'always answers' <<<"$q2c"; then
     ok "§2c names why \`posthog\` needs the absent-key trigger"
 else
     bad "§2c no longer explains why a detection-based trigger excluded \`posthog\`"
@@ -2759,7 +2760,7 @@ for mode in create update migrate adopt; do
     # The LIST ENTRY, not a mention. A bare `grep "migrate mode"` is satisfied by
     # a sentence that demotes the mode ("Migrate mode inherits whatever the
     # legacy render supplied"), which is the inversion this must catch.
-    if printf '%s' "$q2c_bare" | grep -qi "In $mode mode:"; then
+    if grep -qi "In $mode mode:" <<<"$q2c_bare"; then
         ok "§2c commits to asking in $mode mode"
     else
         bad "§2c does not commit to asking in $mode mode — that path leaves the keys absent"
@@ -2778,13 +2779,13 @@ for mode in create update migrate adopt; do
         "$mode_win" "$SKIP_VOCAB" '0'
 done
 
-if printf '%s' "$q2c" | grep -qi 'never default'; then
+if grep -qi 'never default' <<<"$q2c"; then
     ok "§2c forbids defaulting a \`none\`"
 else
     bad "§2c no longer forbids defaulting a \`none\`"
 fi
 
-if printf '%s' "$q2c" | grep -qi 'Do not offer the same question for .sentry:.'; then
+if grep -qi 'Do not offer the same question for .sentry:.' <<<"$q2c"; then
     ok "§2c keeps \`sentry:\` out of the confirmed-absent question"
 else
     bad "§2c no longer excludes \`sentry:\` from the confirmed-absent question"
@@ -2796,9 +2797,9 @@ fi
 # contradict each other: the rule itself, the explicit rejection of absent-only,
 # and the value it exists for. Measured: narrowing only the explanation to "an
 # absent key is the only case" left a two-part check green.
-if printf '%s' "$q2c" | grep -qi 'leave carrying a value the contract no longer defines' &&
-   printf '%s' "$q2c" | grep -qi 'not "absent" alone' &&
-   printf '%s' "$q2c" | grep -qi 'posthog: false'; then
+if grep -qi 'leave carrying a value the contract no longer defines' <<<"$q2c" &&
+   grep -qi 'not "absent" alone' <<<"$q2c" &&
+   grep -qi 'posthog: false' <<<"$q2c"; then
     ok "§2c's trigger covers a legacy \`posthog: false\`, not only an absent key"
 else
     bad "§2c's trigger is absent-only — a legacy \`posthog: false\` is dropped and the row survives"
@@ -2815,14 +2816,14 @@ if [ -z "$carry_win" ]; then
     bad "update mode has no carry-a-\`none\`-forward rule"
 else
     ok "update mode carries the carry-a-\`none\`-forward rule"
-    if printf '%s' "$carry_win" | grep -qi 'never re-ask'; then
+    if grep -qi 'never re-ask' <<<"$carry_win"; then
         ok "the rule forbids re-asking an existing \`none\`"
     else
         bad "the rule no longer forbids re-asking an existing \`none\`"
     fi
     # Anchored to the phrase. A bare `grep -qi confirmation` is satisfied by the
     # window's own opening sentence, which made this assertion unfailable.
-    if printf '%s' "$carry_win" | grep -qiE 'cannot re-derive is the .{0,4}confirmation'; then
+    if grep -qiE 'cannot re-derive is the .{0,4}confirmation' <<<"$carry_win"; then
         ok "the rule names the CONFIRMATION as the thing that cannot be re-derived"
     else
         bad "the rule no longer says it is the confirmation that cannot be re-derived"
@@ -2852,12 +2853,12 @@ if [ -z "$pos_win" ]; then
     bad "update mode has no rule for positive evidence against a \`none\`"
 else
     ok "update mode carries the positive-evidence rule"
-    if printf '%s' "$pos_win" | grep -qi 'stop and surface'; then
+    if grep -qi 'stop and surface' <<<"$pos_win"; then
         ok "positive evidence against a \`none\` is a stop-and-surface"
     else
         bad "positive evidence against a \`none\` is no longer a stop-and-surface"
     fi
-    if printf '%s' "$pos_win" | grep -qiE '[Nn]ever silently rewrite'; then
+    if grep -qiE '[Nn]ever silently rewrite' <<<"$pos_win"; then
         ok "a contradicted \`none\` is never silently rewritten"
     else
         bad "update mode lost the never-silently-rewrite rule"
@@ -2871,22 +2872,22 @@ if [ -z "$absent_win" ]; then
     bad "update mode has no path to WRITE a \`none\` — the rollout is a no-op"
 else
     ok "update mode has a path to write a \`none\` for an absent key"
-    if printf '%s' "$absent_win" | grep -q '§2c'; then
+    if grep -q '§2c' <<<"$absent_win"; then
         ok "an absent key routes to interview §2c"
     else
         bad "the absent-key path names no question to ask"
     fi
-    if printf '%s' "$absent_win" | grep -qi 'Do not gate that on the tree being quiet'; then
+    if grep -qi 'Do not gate that on the tree being quiet' <<<"$absent_win"; then
         ok "the absent-key path is not gated on a quiet tree"
     else
         bad "the absent-key path is gated on a quiet tree — a dismissed hit is skipped"
     fi
-    if printf '%s' "$absent_win" | grep -qi 'posthog: false'; then
+    if grep -qi 'posthog: false' <<<"$absent_win"; then
         ok "the absent-key path also covers a legacy \`posthog: false\`"
     else
         bad "the absent-key path ignores a legacy \`posthog: false\`"
     fi
-    if printf '%s' "$absent_win" | grep -qi 'Not sure'; then
+    if grep -qi 'Not sure' <<<"$absent_win"; then
         ok "the absent-key path keeps an answer that leaves the key absent"
     else
         bad "the absent-key path no longer offers an answer that leaves the key absent"
@@ -2896,7 +2897,7 @@ fi
 # Mutation proof: the claim this rule shipped with and which is FALSE —
 # `detect-capabilities.sh` derives `posthog` outright, and detection proposes all
 # three. An agent that believes it never runs the tree check the rule depends on.
-if printf '%s' "$update_flat" | tr -d '*_' | grep -qi 'None of the four is re-derivable'; then
+if grep -qi 'None of the four is re-derivable' <<<"$(tr -d '*_' <<<"$update_flat")"; then
     bad "update mode reasserts that none of the four is re-derivable (posthog is)"
 else
     ok "update mode makes no blanket not-re-derivable claim"
@@ -2904,15 +2905,15 @@ fi
 
 # Migrate mode reaches the same absent-key state, and its own doc is a different
 # file. A note here is not enough on its own, so both are required.
-if printf '%s' "$update_flat" | grep -qi 'Migrate mode inherits'; then
+if grep -qi 'Migrate mode inherits' <<<"$update_flat"; then
     ok "update-mode.md hands the rule to migrate mode"
 else
     bad "update-mode.md says nothing about migrate mode, which needs this most"
 fi
 
 migrate_flat="$(tr '\n' ' ' < "$MIGRATE" | tr -s ' ')"
-if printf '%s' "$migrate_flat" | grep -qi 'ask §2c for the three confirmed-absent keys' &&
-   printf '%s' "$migrate_flat" | grep -qi 'extraction can never produce one'; then
+if grep -qi 'ask §2c for the three confirmed-absent keys' <<<"$migrate_flat" &&
+   grep -qi 'extraction can never produce one' <<<"$migrate_flat"; then
     ok "migrate-mode.md has its own step asking §2c for the three keys"
 else
     bad "migrate-mode.md has no §2c step — every migrated repo keeps the rows"
@@ -2930,13 +2931,13 @@ if [ -z "$adopt_sec" ]; then
     bad "cannot locate update-mode.md's Adopt mode section"
 else
     ok "located update-mode.md's Adopt mode section"
-    if printf '%s' "$adopt_sec" | grep -q '§2c'; then
+    if grep -q '§2c' <<<"$adopt_sec"; then
         ok "adopt mode names interview §2c"
     else
         bad "adopt mode names no §2c step — every adopted repo keeps the three rows"
     fi
     assert_dest "adopt mode's §2c step affirmatively asks" "$adopt_sec" "$ASK_VOCAB" '+'
-    if printf '%s' "$adopt_sec" | grep -qi 'always'; then
+    if grep -qi 'always' <<<"$adopt_sec"; then
         ok "adopt mode's §2c step is unconditional"
     else
         bad "adopt mode's §2c step is conditional — create mode's trigger does not reach it"
@@ -2945,8 +2946,8 @@ else
     # plain-substring check for the phrase misses it — the trap already recorded
     # for §2c's mode names.
     adopt_bare="$(printf '%s' "$adopt_sec" | tr -d '*_')"
-    if printf '%s' "$adopt_bare" | grep -qi 'sentry' &&
-       printf '%s' "$adopt_bare" | grep -qi 'not part of this question'; then
+    if grep -qi 'sentry' <<<"$adopt_bare" &&
+       grep -qi 'not part of this question' <<<"$adopt_bare"; then
         ok "adopt mode keeps \`sentry:\` out of the confirmed-absent question"
     else
         bad "adopt mode does not exclude \`sentry:\` from the §2c question"
@@ -2967,12 +2968,12 @@ if [ -z "$nodefault_win" ]; then
     bad "setup-config/SKILL.md has no never-default-a-\`none\` rule"
 else
     ok "setup-config/SKILL.md forbids defaulting a \`none\`"
-    if printf '%s' "$nodefault_win" | grep -q '§2c'; then
+    if grep -q '§2c' <<<"$nodefault_win"; then
         ok "Phase 2 routes the three keys to interview §2c"
     else
         bad "Phase 2 no longer names §2c as the only writer of the three keys"
     fi
-    if printf '%s' "$nodefault_win" | grep -qi 'quiet tree'; then
+    if grep -qi 'quiet tree' <<<"$nodefault_win"; then
         ok "Phase 2 names the trap (a quiet tree is not a confirmation)"
     else
         bad "Phase 2 no longer explains why detection alone cannot write a \`none\`"
@@ -2986,12 +2987,12 @@ if [ -z "$phase4_win" ]; then
     bad "setup-config/SKILL.md Phase 4 states nothing about the \`none\` answers"
 else
     ok "setup-config/SKILL.md Phase 4 covers the \`none\` answers"
-    if printf '%s' "$phase4_win" | grep -qi 'not re-asked'; then
+    if grep -qi 'not re-asked' <<<"$phase4_win"; then
         ok "Phase 4 carries an existing \`none\` forward"
     else
         bad "Phase 4 no longer carries an existing \`none\` forward"
     fi
-    if printf '%s' "$phase4_win" | grep -q '§2c'; then
+    if grep -q '§2c' <<<"$phase4_win"; then
         ok "Phase 4 asks §2c where one of the three keys is missing entirely"
     else
         bad "Phase 4 has no path to write a \`none\` for a missing key"
@@ -3027,7 +3028,7 @@ if [ -z "$nevercopy" ]; then
     bad "cannot locate setup-config's never-copy-a-fact-forward guardrail"
 else
     ok "located the never-copy-a-fact-forward guardrail"
-    if printf '%s' "$nevercopy" | grep -q '`none`'; then
+    if grep -q '`none`' <<<"$nevercopy"; then
         ok "the never-copy guardrail names the \`none\` answers as an exception"
     else
         bad "the never-copy guardrail no longer excepts the \`none\` answers"
@@ -3064,13 +3065,13 @@ fi
 
 # --- I9. The rendered template names the form and its asymmetry --------------
 
-if printf '%s' "$header_flat" | grep -qi 'FOUR keys carry it'; then
+if grep -qi 'FOUR keys carry it' <<<"$header_flat"; then
     ok "the template header names all four keys carrying the \`none\` form"
 else
     bad "the template header no longer names the four-key \`none\` form"
 fi
 
-if printf '%s' "$header_flat" | grep -qi 'only .sentry: none. still renders a blind-spot'; then
+if grep -qi 'only .sentry: none. still renders a blind-spot' <<<"$header_flat"; then
     ok "the template header states the asymmetry"
 else
     bad "the template header no longer states which key keeps its blind-spot row"

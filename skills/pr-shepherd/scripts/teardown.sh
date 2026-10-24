@@ -432,7 +432,7 @@ if [ "$SWEEP_MODE" = "1" ]; then
         echo "  ⚠ KEEP $br — open-PR base lookup failed (gh offline?); skipping deletion rather than deleting unguarded — re-run when gh works"
         GONE_HELD=$((GONE_HELD+1)); continue
       fi
-      if printf '%s\n' "$OPEN_BASES" | grep -qxF "$br"; then
+      if grep -qxF "$br" <<<"$OPEN_BASES"; then
         echo "  KEEP $br (base of an OPEN PR — deleting it would close that PR)"; GONE_HELD=$((GONE_HELD+1)); continue
       fi
       if git branch -D "$br" >/dev/null 2>&1; then

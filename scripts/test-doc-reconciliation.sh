@@ -116,7 +116,7 @@ dispatch_flat="$(flat "$DISPATCH")"
 
 for pair in "send-it:$send_flat" "take-it:$take_flat" "dispatch-ready:$dispatch_flat"; do
     name="${pair%%:*}"; body="${pair#*:}"
-    if printf '%s' "$body" | grep -qiE 'doc-reconciliation|Reconcile the docs|Reconcile the docs against the repo|reconcile the docs against the repo'; then
+    if grep -qiE 'doc-reconciliation|Reconcile the docs|Reconcile the docs against the repo|reconcile the docs against the repo' <<<"$body"; then
         ok "$name carries a doc-reconciliation step"
     else
         bad "$name has no doc-reconciliation step"
@@ -142,7 +142,7 @@ else
 fi
 
 # ...and it says WHY, which is what stops it being moved later as a tidy-up.
-if printf '%s' "$send_flat" | grep -qi 'same PR as the change that invalidated it'; then
+if grep -qi 'same PR as the change that invalidated it' <<<"$send_flat"; then
     ok "send-it explains why the step runs before the body"
 else
     bad "send-it no longer explains why the doc step must precede the body"
@@ -153,7 +153,7 @@ fi
 for pair in "send-it:$send_flat" "take-it:$take_flat"; do
     name="${pair%%:*}"; body="${pair#*:}"
 
-    if printf '%s' "$body" | grep -qi 'Issue state is not evidence'; then
+    if grep -qi 'Issue state is not evidence' <<<"$body"; then
         ok "$name keeps the issue-state trap"
     else
         bad "$name lost the issue-state trap"
@@ -161,22 +161,22 @@ for pair in "send-it:$send_flat" "take-it:$take_flat"; do
 
     # Both halves. "Closed doesn't mean done" alone still lets someone treat an
     # OPEN issue as proof the behaviour is absent, which is the other direction.
-    if printf '%s' "$body" | grep -qi 'closed issue does not prove' &&
-       printf '%s' "$body" | grep -qiE 'open one does not prove'; then
+    if grep -qi 'closed issue does not prove' <<<"$body" &&
+       grep -qiE 'open one does not prove' <<<"$body"; then
         ok "$name states BOTH directions of the issue-state trap"
     else
         bad "$name states only one direction of the issue-state trap"
     fi
 
-    if printf '%s' "$body" | grep -qiE 'absence rot silently|deliberate absence'; then
+    if grep -qiE 'absence rot silently|deliberate absence' <<<"$body"; then
         ok "$name keeps the deliberate-absence trap"
     else
         bad "$name lost the deliberate-absence trap"
     fi
 
     # The reason is the deletable part, and without it the rule reads as fussy.
-    if printf '%s' "$body" | grep -qi 'nothing fails when they stop being true' ||
-       printf '%s' "$body" | grep -qi 'nothing fails when these stop being true'; then
+    if grep -qi 'nothing fails when they stop being true' <<<"$body" ||
+       grep -qi 'nothing fails when these stop being true' <<<"$body"; then
         ok "$name keeps the reason absence-claims rot"
     else
         bad "$name dropped why deliberate-absence claims rot"
@@ -189,7 +189,7 @@ done
 
 for pair in "send-it:$send_flat" "take-it:$take_flat"; do
     name="${pair%%:*}"; body="${pair#*:}"
-    if printf '%s' "$body" | grep -qiE 'not every markdown file'; then
+    if grep -qiE 'not every markdown file' <<<"$body"; then
         ok "$name bounds the step (not every markdown file)"
     else
         bad "$name lost the scope limiter — an unbounded doc step gets skipped"
@@ -202,13 +202,13 @@ done
 # to name the doc step among the rules the reuse must preserve, exactly as it
 # already does for the shared-state isolation rules. If it does not, a future
 # edit that rebuilds the prompt drops the doc step and nothing notices.
-if printf '%s' "$dispatch_flat" | grep -qi 'doc-reconciliation step'; then
+if grep -qi 'doc-reconciliation step' <<<"$dispatch_flat"; then
     ok "dispatch-ready names the doc step among the reused rules"
 else
     bad "dispatch-ready does not name the doc step as reuse-critical"
 fi
 
-if printf '%s' "$dispatch_flat" | grep -qiE 'never see an interactive session|cold worktree'; then
+if grep -qiE 'never see an interactive session|cold worktree' <<<"$dispatch_flat"; then
     ok "dispatch-ready records why its sub-agents need the rule spelled out"
 else
     bad "dispatch-ready lost the reason its sub-agents need the rule"

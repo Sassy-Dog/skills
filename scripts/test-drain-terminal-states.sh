@@ -1430,7 +1430,7 @@ assert_in "$deg_flat" 'ONE[*][*] in-flight PR, not each' \
 # only by presence passes on a document that also states its inverse.
 assert_in "$deg_flat" 'unknown` is NOT degraded' \
     "unknown is explicitly NOT degraded"
-if printf '%s' "$deg_flat" | grep -qi 'unknown[^.]\{0,80\}counts as degraded'; then
+if grep -qi 'unknown[^.]\{0,80\}counts as degraded' <<<"$deg_flat"; then
     bad "the file now says unknown counts as degraded — that stops a loop that could not measure"
 else
     ok "and nothing readmits unknown as a degraded verdict"
@@ -1452,7 +1452,7 @@ assert_in "$deg_flat" 'foreign' \
 # let either confirmation clear the other's clock.
 assert_in "$deg_flat" 'dispatch-ready-degraded.json' \
     "the degraded record is its own file, not the stall record"
-if printf '%s' "$deg_flat" | grep -q 'dispatch-ready-stall.json'; then
+if grep -q 'dispatch-ready-stall.json' <<<"$deg_flat"; then
     bad "DEGRADED writes the STALL record — the two clocks would clear each other"
 else
     ok "and it never writes dispatch-ready-stall.json"
@@ -1463,7 +1463,7 @@ assert_in "$deg_flat" 'second degraded tick ends the loop' \
 # ONE stop path. A second cancel implementation is the defect, not the feature.
 assert_in "$deg_flat" 'same stop path as DRAIN COMPLETE' \
     "it reaches the EXISTING stop path — one path, never a parallel one"
-if printf '%s' "$deg_flat" | grep -qi 'CronDelete'; then
+if grep -qi 'CronDelete' <<<"$deg_flat"; then
     bad "DEGRADED carries its own cron-cancel logic — that is a parallel stop path"
 else
     ok "and carries no cancel logic of its own"
@@ -1616,7 +1616,7 @@ assert_has "$deferred_flat" \
 assert_has "$deferred_flat" \
     'Then take the **same stop path as DRAIN COMPLETE** below — one path, never a parallel one, and the cron self-cancel is not optional on it.' \
     "it reaches the EXISTING stop path — one path, never a parallel one, cron self-cancel included"
-if printf '%s' "$deferred_flat" | grep -qi 'CronDelete'; then
+if grep -qi 'CronDelete' <<<"$deferred_flat"; then
     bad "DEFERRED carries its own cron-cancel logic — that is a parallel stop path"
 else
     ok "and carries no cancel logic of its own"

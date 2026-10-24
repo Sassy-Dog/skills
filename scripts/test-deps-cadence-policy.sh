@@ -1978,7 +1978,7 @@ echo "gh $*" >> "$GHS/log"
 case "$1 $2" in
   "api users/"*) echo 4242 ;;
   "api graphql")
-    if printf '%s' "$*" | grep -q dequeuePullRequest; then echo false > "$GHS/queued"; echo '{}'; exit 0; fi
+    if grep -q dequeuePullRequest <<<"$*"; then echo false > "$GHS/queued"; echo '{}'; exit 0; fi
     echo "PR_kwDO $(cat "$GHS/queued") $(cat "$GHS/armed")" ;;
   "pr merge")
     [ -e "$GHS/fail_disable" ] && { echo "disable failed" >&2; exit 1; }

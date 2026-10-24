@@ -1,6 +1,6 @@
 # pipefail-grep fixtures
 
-Inputs for `scripts/test-pipefail-grep.sh` (issue #256).
+Inputs for `scripts/test-pipefail-grep.sh` (issues #256 and #571).
 
 They are deliberately **not** named `*.sh`. That keeps them out of preflight's
 shellcheck pathspec (`git ls-files '*.sh'`) and out of the guard's own scan
@@ -19,6 +19,7 @@ exactly what the first draft did.
 | `risky-file.bash` | a file reader (`grep … "$FILE"`) as the writer |
 | `risky-continued.bash` | the writer on the line *above* the `grep -q`, across a `\` continuation |
 | `risky-trailing-pipe.bash` | the other continuation spelling — a line ending in a bare pipe character |
-| `safe-allowlisted.bash` | every allowlisted `printf`/`echo` writer shape found in the tree |
+| `risky-builtin.bash` | the seven `printf`/`echo` writer shapes #256 once allowed, each flagged since #571 — counted, so re-allowing one fails |
+| `safe-herestring.bash` | the prescribed here-string fix in each shape the #571 sweep produced, none of which may be flagged |
 | `comment-only.bash` | the shape described in prose, which is not a finding |
 | `no-pipefail.bash` | the shape in a script with no `pipefail` — out of scope |

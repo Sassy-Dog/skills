@@ -249,7 +249,7 @@ expect_fail() {
     git -C "$dst" add -A >/dev/null 2>&1
     if out=$(python3 "$CHECKER" "$dst" 2>&1); then
         bad "$name: mutant PASSED — that property is vacuous"
-    elif printf '%s' "$out" | grep -qF -- "$why"; then
+    elif grep -qF -- "$why" <<<"$out"; then
         ok "$name: fails, naming its own property"
     else
         bad "$name: fails, but NOT for its own reason (wanted '$why') — the proof measures something else"

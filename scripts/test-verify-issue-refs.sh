@@ -161,7 +161,7 @@ cat > "$WORK/b1.md" <<'MD'
 The per-repo view lives in `app/src-tauri/src/repos.rs`.
 MD
 run "$WORK/b1.md"; rc=$RC
-if [ "$rc" = 0 ] && echo "$OUT" | grep -q 'new .*repos\.rs'; then
+if [ "$rc" = 0 ] && grep -q 'new .*repos\.rs' <<<"$OUT"; then
     pass "missing file with no similar sibling is new, not gated"
 else
     fail "parent-exists alone must not gate (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -176,7 +176,7 @@ cat > "$WORK/b1b.md" <<'MD'
 The GitHub client lives in `app/src-tauri/src/githb.rs`.
 MD
 run "$WORK/b1b.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `app/src-tauri/src/github\.rs`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `app/src-tauri/src/github\.rs`' <<<"$OUT"; then
     pass "near-match sibling is drift, and the sibling is suggested"
 else
     fail "sibling-evidence drift + suggestion (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -194,8 +194,8 @@ Add the stale fixtures beside the existing one.
 touches: app/ui/sample-usage-stale.json app/ui/sample-cronmonitors-stale.json
 MD
 run "$WORK/b1c.md"; rc=$RC
-if [ "$rc" = 0 ] && echo "$OUT" | grep -q 'new .*sample-usage-stale\.json' \
-   && ! echo "$OUT" | grep -q 'DRIFT'; then
+if [ "$rc" = 0 ] && grep -q 'new .*sample-usage-stale\.json' <<<"$OUT" \
+   && ! grep -q 'DRIFT' <<<"$OUT"; then
     pass "touches: paths are reported as new even beside a near match"
 else
     fail "touches: path must never gate (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -209,7 +209,7 @@ cat > "$WORK/b2.md" <<'MD'
 Add the crate at `crates/crashreport/src/lib.rs` and wire it up.
 MD
 run "$WORK/b2.md"; rc=$RC
-if [ "$rc" = 0 ] && echo "$OUT" | grep -q 'new .*crashreport'; then
+if [ "$rc" = 0 ] && grep -q 'new .*crashreport' <<<"$OUT"; then
     pass "path under a missing directory is reported as new, not gated"
 else
     fail "new subtree must not gate (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -223,7 +223,7 @@ cat > "$WORK/b3.md" <<'MD'
 Open it with `Store::open_at` before reading settings.
 MD
 run "$WORK/b3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `open_in`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `open_in`' <<<"$OUT"; then
     pass "renamed method is drift, and the rename is suggested"
 else
     fail "renamed method + suggestion (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -233,7 +233,7 @@ fi
 # difflib ranks `open` (0.727) above `open_in` (0.714) because it is shorter,
 # and a confidently wrong suggestion is worse than none — it is the line a
 # reader acts on without re-checking.
-if echo "$OUT" | grep -q 'did you mean `open`?'; then
+if grep -q 'did you mean `open`?' <<<"$OUT"; then
     fail "suggestion ranked the shorter neighbour over the rename"
 else
     pass "suggestion prefers shared prefix over raw ratio"
@@ -249,7 +249,7 @@ cargo test -p store
 ```
 MD
 run "$WORK/b4.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `solador-store`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `solador-store`' <<<"$OUT"; then
     pass "unprefixed package is drift, and the real name is suggested"
 else
     fail "unprefixed package + suggestion (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -276,7 +276,7 @@ cargo test -p solador-store
 touches: crates/store/src/lib.rs app/ui/**
 MD
 run "$WORK/b5.md"; rc=$RC
-if [ "$rc" = 0 ] && ! echo "$OUT" | grep -q 'DRIFT'; then
+if [ "$rc" = 0 ] && ! grep -q 'DRIFT' <<<"$OUT"; then
     pass "a body whose references all resolve exits 0 silently"
 else
     fail "clean body must not report drift (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -696,10 +696,10 @@ cat > "$WORK/s0.md" <<'MD'
 Widen `read_monitrs()`, then call `fetch_confg()` and `dev_servr()`.
 MD
 run_at "$MUTANT_PRE" "$SHTREE" "$WORK/s0.md"
-if echo "$OUT" | grep -q 'readMonitorsBody' \
-   && ! echo "$OUT" | grep -q 'did you mean `read_monitors`' \
-   && ! echo "$OUT" | grep -q 'did you mean `fetch_config`' \
-   && ! echo "$OUT" | grep -q 'did you mean `dev_server`'; then
+if grep -q 'readMonitorsBody' <<<"$OUT" \
+   && ! grep -q 'did you mean `read_monitors`' <<<"$OUT" \
+   && ! grep -q 'did you mean `fetch_config`' <<<"$OUT" \
+   && ! grep -q 'did you mean `dev_server`' <<<"$OUT"; then
     pass "shell fixture: the pre-#263 pool holds readMonitorsBody and no shell name"
 else
     fail "shell fixture inadequate: a shell name was already reachable pre-fix"
@@ -719,7 +719,7 @@ cat > "$WORK/s1.md" <<'MD'
 The monitor list comes from `read_monitors()` in `scripts/check-sentry-monitors.sh`.
 MD
 run_at "$SCRIPT" "$SHTREE" "$WORK/s1.md"; rc=$RC
-if [ "$rc" = 0 ] && ! echo "$OUT" | grep -q 'DRIFT'; then
+if [ "$rc" = 0 ] && ! grep -q 'DRIFT' <<<"$OUT"; then
     pass "POSIX-defined shell function does not gate (case 12 carries the pool proof)"
 else
     fail "defined shell function must not gate (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -735,8 +735,8 @@ cat > "$WORK/s2.md" <<'MD'
 Widen the window inside `read_monitrs()` before the gate runs.
 MD
 run_at "$SCRIPT" "$SHTREE" "$WORK/s2.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `read_monitors`' \
-   && ! echo "$OUT" | grep -q 'readMonitorsBody'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `read_monitors`' <<<"$OUT" \
+   && ! grep -q 'readMonitorsBody' <<<"$OUT"; then
     pass "missing shell function is drift, suggested from shell names"
 else
     fail "shell near-match must beat the other language's name (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -777,19 +777,19 @@ Call `list_widgts()`, `poll_statu()`, `inner_helpr()`, `render_widgt()`, `doc_on
 `invented_by_space_indnt()`, `invented_digit_delm()`, `flus()` and `node_bin_helpr()`.
 MD
 run_at "$SCRIPT" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 0 ] && ! echo "$OUT" | grep -q 'did you mean' \
-   && echo "$OUT" | grep -q 'new .*list_widgts' \
-   && echo "$OUT" | grep -q 'new .*poll_statu' \
-   && echo "$OUT" | grep -q 'new .*inner_helpr' \
-   && echo "$OUT" | grep -q 'new .*render_widgt' \
-   && echo "$OUT" | grep -q 'new .*doc_only_helpr' \
-   && echo "$OUT" | grep -q 'new .*invented_from_paylod' \
-   && echo "$OUT" | grep -q 'new .*invented_from_b_bdy' \
-   && echo "$OUT" | grep -q 'new .*leaked_from_outsid' \
-   && echo "$OUT" | grep -q 'new .*invented_by_space_indnt' \
-   && echo "$OUT" | grep -q 'new .*invented_digit_delm' \
-   && echo "$OUT" | grep -q 'new .*flus()' \
-   && echo "$OUT" | grep -q 'new .*node_bin_helpr'; then
+if [ "$rc" = 0 ] && ! grep -q 'did you mean' <<<"$OUT" \
+   && grep -q 'new .*list_widgts' <<<"$OUT" \
+   && grep -q 'new .*poll_statu' <<<"$OUT" \
+   && grep -q 'new .*inner_helpr' <<<"$OUT" \
+   && grep -q 'new .*render_widgt' <<<"$OUT" \
+   && grep -q 'new .*doc_only_helpr' <<<"$OUT" \
+   && grep -q 'new .*invented_from_paylod' <<<"$OUT" \
+   && grep -q 'new .*invented_from_b_bdy' <<<"$OUT" \
+   && grep -q 'new .*leaked_from_outsid' <<<"$OUT" \
+   && grep -q 'new .*invented_by_space_indnt' <<<"$OUT" \
+   && grep -q 'new .*invented_digit_delm' <<<"$OUT" \
+   && grep -q 'new .*flus()' <<<"$OUT" \
+   && grep -q 'new .*node_bin_helpr' <<<"$OUT"; then
     pass "no name() from another language, a heredoc payload, or quoted prose enters the pool"
 else
     fail "non-shell name() must not enter the pool (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -814,14 +814,14 @@ Wire `fetch_confg()`, `dev_servr()`, `parse_lne()`, `run_al()`, `tail_helpr()`,
 `zsh_entry_poin()`, `mask_helpr()` and `after_hyphn()` together.
 MD
 run_at "$SCRIPT" "$SHTREE" "$WORK/s4.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `fetch_config`' \
-   && echo "$OUT" | grep -q 'did you mean `dev_server`' \
-   && echo "$OUT" | grep -q 'did you mean `parse_line`' \
-   && echo "$OUT" | grep -q 'did you mean `run_all`' \
-   && echo "$OUT" | grep -q 'did you mean `tail_helper`' \
-   && echo "$OUT" | grep -q 'did you mean `zsh_entry_point`' \
-   && echo "$OUT" | grep -q 'did you mean `mask_helper`' \
-   && echo "$OUT" | grep -q 'did you mean `after_hyphen`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `fetch_config`' <<<"$OUT" \
+   && grep -q 'did you mean `dev_server`' <<<"$OUT" \
+   && grep -q 'did you mean `parse_line`' <<<"$OUT" \
+   && grep -q 'did you mean `run_all`' <<<"$OUT" \
+   && grep -q 'did you mean `tail_helper`' <<<"$OUT" \
+   && grep -q 'did you mean `zsh_entry_point`' <<<"$OUT" \
+   && grep -q 'did you mean `mask_helper`' <<<"$OUT" \
+   && grep -q 'did you mean `after_hyphen`' <<<"$OUT"; then
     pass "pool holds *.sh, sh and zsh shebangs, post-here-string, post-heredoc and post-comment names"
 else
     fail "a shell definition is missing from the pool (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -856,14 +856,14 @@ fi
 # something else: a mutation "detected" by an assertion that would also fire on
 # a crash proves nothing.
 run_at "$MUTANT_PRE" "$SHTREE" "$WORK/s2.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `readMonitorsBody`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `readMonitorsBody`' <<<"$OUT"; then
     pass "proof: pre-#263, read_monitrs() was answered with the TypeScript name"
 else
     fail "MUTANT_PRE undetected by case 10 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
 run_at "$MUTANT_PRE" "$SHTREE" "$WORK/s4.md"; rc=$RC
-if [ "$rc" = 0 ] && echo "$OUT" | grep -q 'new .*dev_servr'; then
+if [ "$rc" = 0 ] && grep -q 'new .*dev_servr' <<<"$OUT"; then
     pass "proof: pre-#263, dev_servr() passed the gate silently as likely-new"
 else
     fail "MUTANT_PRE undetected by case 12 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -873,7 +873,7 @@ fi
 # pool and answers a reference that must read as `new` — a suggestion drawn from
 # a language the harvest is not supposed to be reading at all.
 run_at "$MUTANT_SCOPE" "$TREE" "$WORK/b6.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `render_at`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `render_at`' <<<"$OUT"; then
     pass "proof: unscoped, a TypeScript method answers render_a()"
 else
     fail "MUTANT_SCOPE undetected by case 13/b6 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -882,7 +882,7 @@ fi
 # Rule 2: without the heredoc skip, the TypeScript method inside a heredoc in a
 # real shell file reaches the pool and case 11's `render_widgt()` gates on it.
 run_at "$MUTANT_HEREDOC" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `render_widget`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `render_widget`' <<<"$OUT"; then
     pass "proof: without the heredoc skip, a heredoc payload becomes a suggestion"
 else
     fail "MUTANT_HEREDOC undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -892,14 +892,14 @@ fi
 # a second opener never tracked, each scan a payload as code — so a name that
 # exists only inside a TypeScript payload becomes a suggestion.
 run_at "$MUTANT_DASH" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `invented_from_payload`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `invented_from_payload`' <<<"$OUT"; then
     pass "proof: with any indent closing a heredoc, its payload is harvested"
 else
     fail "MUTANT_DASH undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
 run_at "$MUTANT_QUEUE" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `invented_from_b_body`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `invented_from_b_body`' <<<"$OUT"; then
     pass "proof: with only the first opener tracked, the second payload is harvested"
 else
     fail "MUTANT_QUEUE undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -910,21 +910,21 @@ fi
 # shell — a `<<-` payload, a digit-led delimiter, and a call site inside a quoted
 # awk program, which is where the reference repo's own fabricated name came from.
 run_at "$MUTANT_SPACEDASH" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `invented_by_space_indent`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `invented_by_space_indent`' <<<"$OUT"; then
     pass "proof: stripping spaces for a dash heredoc closes on a payload line and harvests it"
 else
     fail "MUTANT_SPACEDASH undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
 run_at "$MUTANT_DIGIT" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `invented_digit_delim`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `invented_digit_delim`' <<<"$OUT"; then
     pass "proof: rejecting a digit-led delimiter scans its payload as code"
 else
     fail "MUTANT_DIGIT undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
 run_at "$MUTANT_BRACE" "$SHTREE" "$WORK/s3.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `flush`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `flush`' <<<"$OUT"; then
     pass "proof: without a body requirement, a call site in an awk program is a definition"
 else
     fail "MUTANT_BRACE undetected by case 11 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -939,16 +939,16 @@ fi
 # repo's own pool, `boundary_ok` included. Measured before and after: three
 # stuck files, then zero.
 run_at "$MUTANT_SHIFT" "$SHTREE" "$WORK/s4.md"; rc=$RC
-if [ "$rc" = 3 ] && ! echo "$OUT" | grep -q 'did you mean `mask_helper`' \
-   && ! echo "$OUT" | grep -q 'did you mean `after_hyphen`'; then
+if [ "$rc" = 3 ] && ! grep -q 'did you mean `mask_helper`' <<<"$OUT" \
+   && ! grep -q 'did you mean `after_hyphen`' <<<"$OUT"; then
     pass "proof: an all-digit delimiter opens a phantom heredoc and loses the file tail"
 else
     fail "MUTANT_SHIFT undetected by case 12 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
 fi
 
 run_at "$MUTANT_MANGLE" "$SHTREE" "$WORK/s4.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `mask_helper`' \
-   && ! echo "$OUT" | grep -q 'did you mean `after_hyphen`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `mask_helper`' <<<"$OUT" \
+   && ! grep -q 'did you mean `after_hyphen`' <<<"$OUT"; then
     pass "proof: mangling the delimiter loses everything after a hyphenated one"
 else
     fail "MUTANT_MANGLE undetected by case 12 (exit $rc)"; echo "$OUT" | sed 's/^/       /'
@@ -992,7 +992,7 @@ else
 fi
 
 run_at "$SCRIPT" "$MAGIC" "$WORK/s2.md"; rc=$RC
-if [ "$rc" = 3 ] && echo "$OUT" | grep -q 'did you mean `read_monitors`'; then
+if [ "$rc" = 3 ] && grep -q 'did you mean `read_monitors`' <<<"$OUT"; then
     pass "pathspec magic, leading dash and = in tracked names do not empty the pool"
 else
     fail "a hostile tracked filename emptied the harvest (exit $rc)"; echo "$OUT" | sed 's/^/       /'

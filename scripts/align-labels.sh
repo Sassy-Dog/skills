@@ -327,7 +327,7 @@ parse_migrate_map() {
         done
 
         key="$(lower "$repo")|$(lower "$old")"
-        if printf '%s' "$sources" | grep -Fqx "$key"; then
+        if grep -Fqx "$key" <<<"$sources"; then
             map_reject "$lineno" "'$old' is already mapped for $repo — one source, one target"
         fi
         sources+="$key"$'\n'
@@ -342,12 +342,12 @@ parse_migrate_map() {
     [[ "${#MIGRATE_SPECS[@]}" -eq 0 ]] && return 0
     for spec in "${MIGRATE_SPECS[@]}"; do
         IFS='|' read -r s_repo s_old s_new <<<"$spec"
-        if printf '%s' "$sources" | grep -Fqx "$(lower "$s_repo")|$(lower "$s_new")"; then
+        if grep -Fqx "$(lower "$s_repo")|$(lower "$s_new")" <<<"$sources"; then
             echo "align-labels: mapping file $migrate_file: chained mapping in $s_repo — '$s_old' -> '$s_new'" >&2
             echo "  while '$s_new' is itself mapped away. The result would depend on evaluation order." >&2
             exit 64
         fi
-        if printf '%s' "$targets" | grep -Fqx "$(lower "$s_repo")|$(lower "$s_old")"; then
+        if grep -Fqx "$(lower "$s_repo")|$(lower "$s_old")" <<<"$targets"; then
             echo "align-labels: mapping file $migrate_file: chained mapping in $s_repo — '$s_old' is both a" >&2
             echo "  migration source and another mapping's target. The result would depend on order." >&2
             exit 64

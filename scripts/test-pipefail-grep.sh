@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# test-pipefail-grep.sh — no script under `set -o pipefail` may feed an
-# UNBOUNDED writer into `grep -q` (issue #256, generalising issue #172).
+# test-pipefail-grep.sh — no script under `set -o pipefail` may pipe ANY
+# writer into `grep -q` (issue #571, reversing #256's printf/echo allowlist;
+# #256 generalised issue #172).
 #
 # THE FAILURE. `grep -q` exits on its first match and closes the pipe; the
 # writer upstream takes SIGPIPE and dies with 141; `pipefail` promotes that 141
 # to the pipeline's status. The pipeline therefore reports FAILURE precisely
-# when it matched — a match reads as a miss. It only happens once the writer's
-# output outruns the ~64KB pipe buffer, which is what makes it invisible in
-# review and in small fixtures: the identical line is correct today and wrong
-# later, with no code change, when the tree or file or API page it reads grows.
+# when it matched — a match reads as a miss. For a COMMAND writer it only
+# happens once the output outruns the ~64KB pipe buffer, which is what makes it
+# invisible in review and in small fixtures: the identical line is correct today
+# and wrong later, with no code change, when the tree or file or API page it
+# reads grows. A builtin writer races at ANY size — see WHY THE ALLOWLIST WENT.
 #
 # The two original failures were inside code written to prevent silent passes:
 #   #172  setup-hooks' has_tracked (`git ls-files <glob> | head -1 | grep -q .`)
@@ -20,31 +22,46 @@
 #         purpose is refusing vacuous greens was reporting vacuously. It
 #         surfaced only because the author checked the proofs actually fired.
 #
-# THE RULE, and why it is this rule (settled 2026-08-24 on issue #256 — do not
-# "simplify" it into the blanket ban below). A pipeline into `grep -q` is
-# flagged unless the pipeline's SOURCE stage is `printf` or `echo`. Purely
-# syntactic: no judgement about any particular site lives in this script, and
-# the allowlisted writers use values already materialized in memory. That is
-# not a size bound or proof that their pipe writes will finish.
+# THE RULE (settled 2026-10-24 on issue #571). Every pipeline into `grep -q` is
+# flagged, whatever its source stage. Purely syntactic: no judgement about any
+# particular site lives in this script. The fix is a here-string —
+# `grep -q pat <<<"$v"` — which is a redirection, not a pipeline: no writer
+# process runs beside grep, so there is no status for pipefail to fold in. When
+# a middle stage transforms the value, capture it first:
+# `grep -q b <<<"$(grep a <<<"$v")"`. Do not re-admit a "safe" writer: the
+# last one admitted is the subject of the next section.
 #
-# KNOWN LIMITATION, accepted. The allowlist is a HEURISTIC, not a proof.
-# `printf '%s' "$huge" | grep -q x` slips through, because the writer is
-# `printf` and nothing here can know how large `$huge` is. The original failures
-# involved COMMAND writers — `git ls-files` over a large tree, or `grep`/`jq`
-# over a file. A large variable later hit the same boundary in
-# test-tech-debt-excludes.sh (main CI after PR #481); that helper now uses a
-# here-string and carries a large-value regression. The syntactic allowlist
-# stays unchanged: this scanner does not infer data size.
+# WHY THE ALLOWLIST WENT. From 2026-08-24 (#256) a `printf` or `echo` source
+# was exempt, on the premise that a value already in memory is bounded and its
+# write finishes before `grep -q` can exit. Both halves failed in CI. A large
+# variable hit the 64KB boundary in test-tech-debt-excludes.sh (main CI after
+# PR #481); that helper uses a here-string and carries a large-value
+# regression. Then size turned out not to be the only trigger: bash flushes a
+# builtin's output to a pipe line by line, so a value whose match sits on any
+# line before its last can lose the race at a few hundred bytes.
+# test-isolation-contract.sh's mutation check did, on a 170-byte, two-line
+# value (main CI after PR #570, while the same SHA passed in the merge queue;
+# reproduced as 18 misses in 18,000 contended runs, and 0 for the same text on
+# one line or through a here-string). A single unterminated line cannot race,
+# because `grep -q` cannot match before it sees the line end — but this scanner
+# can no more see a value's line count than its size, and a rule resting on
+# either is a rule nothing checks. #571 rewrote the 239 allowlisted sites the
+# tree then carried to here-strings (and the one at fault into a helper with
+# its own regression), mechanically: a quote-aware rewriter that refused every
+# shape it could not prove, checked by this guard's zero-finding run.
 #
-# REJECTED on #256, recorded so it is not re-litigated:
+# REJECTED on #256 and still rejected, recorded so it is not re-litigated:
 #   * Flag everything, opt out with an inline `# pipefail-safe:` marker. It
 #     moves the bounded/unbounded judgement to a human at each site, but costs
-#     ~128 one-off annotations on today's tree, and a marker that dense
-#     degrades into something pasted without being read.
-#   * Ban the pipeline outright, rewriting every site to a captured variable.
-#     It removes the class entirely, but is a ~131-line diff across the very
+#     a one-off annotation per site, and a marker that dense degrades into
+#     something pasted without being read. The judgement it delegates is
+#     exactly the one #571 found wrong twice.
+# REJECTED on #256, ADOPTED on #571:
+#   * Ban the pipeline outright. #256 weighed a ~131-line rewrite of the very
 #     test scripts this repo relies on to catch its own regressions — real
-#     transcription risk in exactly the place a silent error costs the most.
+#     transcription risk where a silent error costs the most — against a class
+#     it believed the allowlist already contained. It did not, and the rewrite
+#     was done by a script rather than transcribed by hand.
 #
 # THE LINTER DOES NOT COVER THIS. Verified against shellcheck 0.11.0 rather
 # than assumed: on `git ls-files | head -1 | grep -q .` under `set -o pipefail`
@@ -63,8 +80,8 @@
 # to carry a copy of the shape it exists to flag.
 #
 # SCANNER NOTES. It works on LOGICAL lines — `\` and trailing-`|` continuations
-# are joined, because five of the real sites put the writer on the line above
-# the `grep -q`. It skips whole-line comments. It is otherwise quote-blind and
+# are joined, because real sites have put the writer on the line above the
+# `grep -q` (five did when #256 landed). It skips whole-line comments. It is otherwise quote-blind and
 # heredoc-blind, and every ambiguity resolves toward FLAGGING: over-flagging is
 # a loud failure a human fixes in one line, under-flagging is the silence this
 # gate exists to end. A consequence worth knowing before you "tidy" the
@@ -76,9 +93,9 @@
 #
 # Self-checks, because a gate that scans nothing passes vacuously: the corpus
 # must be non-empty, each risky fixture must be FLAGGED (the mutation proof,
-# built in), the allowlisted ones must not be, a file with no `pipefail` must be
-# out of scope WHILE the scanner can still see its shape, and every exemption
-# must still be in use.
+# built in) and every builtin-writer shape counted, the here-string fix must
+# not be, a file with no `pipefail` must be out of scope WHILE the scanner can
+# still see its shape, and every exemption must still be in use.
 #
 # Reads tracked files plus a tmpdir: no gh, no network, no repo mutation.
 #
@@ -155,12 +172,12 @@ scan_file() {
             return ""
         }
 
-        # The command that SOURCES the pipeline feeding grep. Command separators
-        # are collapsed first so `a && printf x` is read as `printf x`, then the
-        # remaining command list is split on `|` and its FIRST stage taken —
-        # the source is what determines whether the data is bounded; a later
-        # stage can only shrink it. `#172`s shape is caught here: the first
-        # stage of `git ls-files … | head -1` is `git`, not `head`.
+        # The command that SOURCES the pipeline feeding grep — reporting only
+        # since #571, which removed the allowlist that read it: it names the
+        # writer a reader has to replace. Command separators are collapsed
+        # first so `a && printf x` is read as `printf x`, then the remaining
+        # command list is split on `|` and its FIRST stage taken: for `#172`s
+        # shape that is `git`, not `head`.
         function sourcehead(pre,   s, n, arr, p, brr) {
             s = pre
             gsub(/\|\|/, SEP, s)
@@ -184,12 +201,10 @@ scan_file() {
                 if (pre ~ /\|[[:space:]]*$/) continue
                 if (!isquiet(after)) continue
                 head = sourcehead(pre)
-                if (head == "printf" || head == "echo") continue
-                # Reporting only. A quoted `(`, `)` or `;` inside an earlier
-                # stage (a jq program, say) makes sourcehead land on an empty
-                # fragment; it still FLAGS — ambiguity resolves toward flagging
-                # — but "?" is a useless thing to hand a reader, so name the
-                # command from the uncollapsed text instead.
+                # A quoted `(`, `)` or `;` inside an earlier stage (a jq program,
+                # say) makes sourcehead land on an empty fragment. The finding
+                # stands either way, but "?" is a useless thing to hand a
+                # reader, so name the command from the uncollapsed text instead.
                 label = head
                 if (label == "") {
                     split(pre, brr, "|")
@@ -266,18 +281,33 @@ for fx in risky-tree risky-file risky-continued risky-trailing-pipe; do
     fi
 done
 
-# --- 3. the allowlist actually allows -----------------------------------------
-# If these were flagged the gate would be unusable, and an unusable gate is
-# turned off — the same outcome as not having one.
-path="$FIXTURES/safe-allowlisted.bash"
+# --- 3. builtin writers are flagged; the prescribed fix is not ----------------
+# 3a counts all SEVEN shapes in the fixture, not "at least one": an allowlist
+# reintroduced for a single shape would otherwise pass on the other six. 3b
+# keeps the gate usable — if its own recommended fix tripped it, it would be
+# turned off, the same outcome as not having one.
+path="$FIXTURES/risky-builtin.bash"
 if [ ! -f "$path" ]; then
-    bad "fixture $path is missing — the allowlist is unproven"
+    bad "fixture $path is missing — builtin writers are unproven"
 else
-    found="$(scan_file "$path" safe-allowlisted)"
-    if [ -z "$found" ]; then
-        ok "allowlist: printf/echo writers pass, through \`!\`, \`&&\`, \`||\` and a case label"
+    found="$(scan_file "$path" risky-builtin)"
+    n_found=0
+    [ -n "$found" ] && n_found="$(grep -c . <<<"$found")"
+    if [ "$n_found" -eq 7 ]; then
+        ok "builtin writers: all 7 printf/echo shapes are flagged, through \`!\`, \`&&\`, \`||\`, a case label and a continuation"
     else
-        bad "allowlist: a bounded printf/echo writer was flagged — $(tr '\n' ';' <<<"$found")"
+        bad "builtin writers: $n_found of 7 printf/echo shapes flagged — a builtin writer is being allowed again (#571)"
+    fi
+fi
+path="$FIXTURES/safe-herestring.bash"
+if [ ! -f "$path" ]; then
+    bad "fixture $path is missing — the prescribed fix is unproven"
+else
+    found="$(scan_file "$path" safe-herestring)"
+    if [ -z "$found" ]; then
+        ok "prescribed fix: here-string forms pass, through \`!\`, \`&&\`, \`||\` and a case label"
+    else
+        bad "prescribed fix: a here-string was flagged — $(tr '\n' ';' <<<"$found")"
     fi
 fi
 
@@ -338,9 +368,9 @@ done <"$WORK/findings"
 
 n_reported=$(grep -c '' "$WORK/reported")
 if [ "$n_reported" -eq 0 ]; then
-    ok "tree: no unbounded writer feeds \`grep -q\` in any script under pipefail"
+    ok "tree: no writer is piped into \`grep -q\` in any script under pipefail"
 else
-    bad "tree: $n_reported pipeline(s) feed an unbounded writer into \`grep -q\` under pipefail (issue #256)"
+    bad "tree: $n_reported pipeline(s) pipe a writer into \`grep -q\` under pipefail (issues #256, #571)"
     while IFS= read -r finding; do
         [ -z "$finding" ] && continue
         loc="${finding%%$'\t'*}"
