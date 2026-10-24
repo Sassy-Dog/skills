@@ -127,7 +127,7 @@ fi
 #    pre-#186 file fails: its visibility section spoke only of the auto-merge
 #    workflow, so both lockfile templates rendered into public repos.
 for tpl in auto-merge bun-lockfile pod-lockfile deps-cadence; do
-    if printf '%s' "$visibility_section" | grep -qE "$tpl"; then
+    if grep -qE "$tpl" <<<"$visibility_section"; then
         ok "visibility veto names $tpl"
     else
         bad "visibility veto does not name $tpl — it renders into public repos"
@@ -139,7 +139,7 @@ done
 #    the shape that let #178 cover one template and miss two.
 while IFS= read -r row; do
     file="$(printf '%s' "$row" | sed -E 's/^\| *`([^`]+)`.*/\1/')"
-    if printf '%s' "$row" | grep -qiE 'not public|non-public|public'; then
+    if grep -qiE 'not public|non-public|public' <<<"$row"; then
         ok "render table row for $file carries the visibility precondition"
     else
         bad "render table row for $file has no visibility precondition"
@@ -155,12 +155,12 @@ guardrails="$(awk '/^## Guardrails/{f=1; next} /^## /{f=0} f' "$SKILL")"
 # guardrail and 'lockfile' in an unrelated one satisfy it.
 guardrail_bullets="$(printf '%s\n' "$guardrails" |
     awk '/^- /{if (b != "") print b; b=$0; next} {b = b " " $0} END{if (b != "") print b}')"
-if printf '%s' "$guardrails" | grep -qiE 'public'; then
+if grep -qiE 'public' <<<"$guardrails"; then
     ok "Guardrails section carries the public-repo rule"
 else
     bad "Guardrails section does not mention the public-repo rule"
 fi
-if printf '%s\n' "$guardrail_bullets" | grep -iE 'public' | grep -qiE 'lockfile'; then
+if grep -qiE 'lockfile' <<<"$(grep -iE 'public' <<<"$guardrail_bullets")"; then
     ok "Guardrails public-repo rule covers the lockfile-sync templates"
 else
     bad "Guardrails public-repo rule is still scoped to auto-merge alone"
@@ -169,14 +169,14 @@ fi
 # 6. (#186) The no-gate arm used to read "Render `dependabot.yml` and the
 #    lockfile-sync workflows only" — an unconditional instruction that
 #    contradicts the veto in exactly the repos this change is about.
-if printf '%s' "$skill_flat" | grep -qE 'lockfile-sync workflows only'; then
+if grep -qE 'lockfile-sync workflows only' <<<"$skill_flat"; then
     bad "no-gate arm still instructs an unconditional lockfile-sync render"
 else
     ok "no-gate arm carries no unconditional lockfile-sync render"
 fi
 # ...and that arm must still require a gate, so deleting the paragraph outright
 # cannot pass this check.
-if printf '%s' "$skill_flat" | grep -qiE 'needs a gate first|repo needs a gate'; then
+if grep -qiE 'needs a gate first|repo needs a gate' <<<"$skill_flat"; then
     ok "no-gate arm still tells the user a gate is required"
 else
     bad "no-gate arm no longer states that the repo needs a gate"
@@ -185,7 +185,7 @@ fi
 # 7. (#186) A veto with no next step leaves every npm-path Dependabot PR in a
 #    public bun repo dead on arrival with nothing said about it. The skip report
 #    must name the consequence and a manual path.
-if printf '%s' "$visibility_section" | grep -qiE 'frozen|dead on arrival|fail.*CI|CI.*reject'; then
+if grep -qiE 'frozen|dead on arrival|fail.*CI|CI.*reject' <<<"$visibility_section"; then
     ok "skip report names the consequence of the missing lockfile sync"
 else
     bad "skip report does not name what breaks without lockfile sync"
@@ -194,7 +194,7 @@ fi
 # "by hand" passes on the unrelated 403 sentence further down this very section
 # ("...reviewing Dependabot PRs by hand is the enforcement"), which would make
 # this assertion vacuous — it did, before #186.
-if printf '%s' "$visibility_section" | grep -iE 'lockfile' | grep -qiE 'regenerat|by hand|manually|locally'; then
+if grep -qiE 'regenerat|by hand|manually|locally' <<<"$(grep -iE 'lockfile' <<<"$visibility_section")"; then
     ok "skip report names a manual workaround for the lockfile"
 else
     bad "skip report offers no lockfile workaround for a public repo needing sync"
@@ -206,12 +206,12 @@ fi
 #     credential inside a public repo, which is the one outcome the decision
 #     exists to prevent. Pinned on the pairing of a decision word with the
 #     do-not-automate instruction, so softening it to a TODO fails here.
-if printf '%s' "$skill_flat" | grep -qiE 'deliberate non-automation|is the answer for public'; then
+if grep -qiE 'deliberate non-automation|is the answer for public' <<<"$skill_flat"; then
     ok "public-repo lockfile answer is stated as a decision"
 else
     bad "public-repo lockfile answer no longer reads as a decision (#190)"
 fi
-if printf '%s' "$skill_flat" | grep -qiE 'do not automate it|Do not automate'; then
+if grep -qiE 'do not automate it|Do not automate' <<<"$skill_flat"; then
     ok "SKILL.md instructs not to automate the public-repo path"
 else
     bad "SKILL.md lost the do-not-automate instruction for public repos"
@@ -223,7 +223,7 @@ fi
 # Flattened for the same false-pass reason as the SKILL.md must-not-exist checks
 # above: the forbidden claim lives in a wrapped comment block.
 template_flat="$(tr '\n' ' ' < "$TEMPLATE" | tr -s ' ')"
-if printf '%s' "$template_flat" | grep -qE 'holds them anyway'; then
+if grep -qE 'holds them anyway' <<<"$template_flat"; then
     bad "template still asserts auto-merge 'holds them anyway' unconditionally"
 else
     ok "template makes no unconditional auto-merge coverage claim"
@@ -304,19 +304,19 @@ for tf in $TOKEN_TEMPLATES; do
 
     if [ -z "$mint_step" ] || [ -z "$gate_step" ]; then
         bad "$t: could not slice the credential steps — 'Require the app credentials' and/or 'Mint GitHub App token' no longer parse at the expected indent"
-    elif ! printf '%s\n' "$mint_step" | grep -q 'client-id:[[:space:]]*\${{[[:space:]]*secrets\.PLATFORM_WRITER_APP_CLIENT_ID[[:space:]]*}}'; then
+    elif ! grep -q 'client-id:[[:space:]]*\${{[[:space:]]*secrets\.PLATFORM_WRITER_APP_CLIENT_ID[[:space:]]*}}' <<<"$mint_step"; then
         bad "$t: the mint step does not pass client-id: PLATFORM_WRITER_APP_CLIENT_ID (#316)"
-    elif printf '%s\n' "$mint_step" | grep -qEi '^[[:space:]]*"?app[-_]id"?[[:space:]]*:'; then
+    elif grep -qEi '^[[:space:]]*"?app[-_]id"?[[:space:]]*:' <<<"$mint_step"; then
         bad "$t: the mint step still passes the deprecated app-id: input — it warns on every consumer run and breaks when the fallback is dropped"
-    elif printf '%s\n' "$mint_step" | grep -q 'PLATFORM_WRITER_APP_ID'; then
+    elif grep -q 'PLATFORM_WRITER_APP_ID' <<<"$mint_step"; then
         bad "$t: the mint step references PLATFORM_WRITER_APP_ID — a DIFFERENT value from the client ID; passing it through client-id: is the shortcut SKILL.md rules out"
     elif [ -z "$env_key" ]; then
         bad "$t: the presence gate binds no env var to PLATFORM_WRITER_APP_CLIENT_ID, so it cannot be checking the secret the mint uses"
-    elif ! printf '%s\n' "$gate_step" | grep -qF "[ -n \"\$$env_key\" ]"; then
+    elif ! grep -qF "[ -n \"\$$env_key\" ]" <<<"$gate_step"; then
         bad "$t: the presence gate binds \$$env_key but never tests it — an unprovisioned client ID is no longer caught here and dies opaquely inside the mint"
-    elif ! printf '%s\n' "$gate_step" | grep -q 'missing PLATFORM_WRITER_APP_CLIENT_ID'; then
+    elif ! grep -q 'missing PLATFORM_WRITER_APP_CLIENT_ID' <<<"$gate_step"; then
         bad "$t: the presence gate tests \$$env_key but names a different secret in its failure message"
-    elif ! printf '%s\n' "$gate_step" | grep -qE '^[[:space:]]*exit 1$'; then
+    elif ! grep -qE '^[[:space:]]*exit 1$' <<<"$gate_step"; then
         bad "$t: the presence gate no longer exits non-zero — it degrades to a warning and stops gating"
     else
         ok "$t: mints with client-id: PLATFORM_WRITER_APP_CLIENT_ID, and its presence gate tests \$$env_key and exits"
@@ -351,7 +351,7 @@ done
 # asserted on the IDENTIFIER alone: pinning the sentence would fail identically
 # on a harmless reflow and on a genuine revert.
 skill_s4="$(awk '/^## 4\. Prerequisites/{f=1} f&&/^## 5\./{exit} f' "$SKILL")"
-if printf '%s\n' "$skill_s4" | grep -q 'PLATFORM_WRITER_APP_CLIENT_ID'; then
+if grep -q 'PLATFORM_WRITER_APP_CLIENT_ID' <<<"$skill_s4"; then
     ok "SKILL.md §4 names the client ID as the secret to provision"
 else
     bad "SKILL.md §4 does not name PLATFORM_WRITER_APP_CLIENT_ID — the templates and the provisioning instruction disagree"

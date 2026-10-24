@@ -79,13 +79,13 @@ fi
 
 # Mutation proof: the pre-#219 row. Scoped to the ROW, not the file — the
 # historical wording is quoted in the rationale below and must stay quotable.
-if printf '%s' "$p1_row" | grep -qi 'security'; then
+if grep -qi 'security' <<<"$p1_row"; then
     bad "the P1 row promotes on security again — the conjunction is back"
 else
     ok "the P1 row no longer reaches security at all"
 fi
 
-if printf '%s' "$p1_row" | grep -qi 'bug'; then
+if grep -qi 'bug' <<<"$p1_row"; then
     bad "\`bug\` is back in the priority map as a severity multiplier"
 else
     ok "\`bug\` is not a priority-map term"
@@ -93,33 +93,33 @@ fi
 
 # --- 2. It is a LISTING rule, not a promotion --------------------------------
 
-if printf '%s' "$scoring_flat" | grep -qi 'ALWAYS listed by number'; then
+if grep -qi 'ALWAYS listed by number' <<<"$scoring_flat"; then
     ok "scoring.md states security issues are always listed"
 else
     bad "scoring.md lost the always-listed rule"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'always listed by number'; then
+if grep -qi 'always listed by number' <<<"$skill_flat"; then
     ok "SKILL.md carries the always-listed rule"
 else
     bad "SKILL.md lost the always-listed rule"
 fi
 
 # The distinction that keeps this from drifting into the rejected option.
-if printf '%s' "$scoring_flat" | grep -qiE 'tier is not adjusted'; then
+if grep -qiE 'tier is not adjusted' <<<"$scoring_flat"; then
     ok "the rule states the tier is not adjusted"
 else
     bad "the rule no longer says the tier is left alone — promotion has crept back in"
 fi
 
-if printf '%s' "$scoring_flat" | grep -qiE 'rendering. rule|a \*rendering\* rule'; then
+if grep -qiE 'rendering. rule|a \*rendering\* rule' <<<"$scoring_flat"; then
     ok "the rule identifies itself as a rendering rule"
 else
     bad "the rule no longer identifies itself as a rendering rather than ranking change"
 fi
 
 # Its reason, which is what survives a consistency sweep.
-if printf '%s' "$scoring_flat" | grep -qi 're-deriving priority'; then
+if grep -qi 're-deriving priority' <<<"$scoring_flat"; then
     ok "the rule explains why promotion was rejected"
 else
     bad "the rule no longer explains why it is not a promotion"
@@ -127,20 +127,20 @@ fi
 
 # --- 3. unranked is covered, not just P2 -------------------------------------
 
-if printf '%s' "$scoring_flat" | grep -qi 'including .unranked'; then
+if grep -qi 'including .unranked' <<<"$scoring_flat"; then
     ok "scoring.md covers the unranked case"
 else
     bad "scoring.md no longer covers unranked security issues"
 fi
 
-if printf '%s' "$skill_flat" | grep -qi 'unranked. included'; then
+if grep -qi 'unranked. included' <<<"$skill_flat"; then
     ok "SKILL.md covers the unranked case"
 else
     bad "SKILL.md no longer covers unranked security issues"
 fi
 
 heat_row="$(grep -i 'Security-labelled backlog issues' "$SCORING")"
-if [ -n "$heat_row" ] && printf '%s' "$heat_row" | grep -qi 'any tier'; then
+if [ -n "$heat_row" ] && grep -qi 'any tier' <<<"$heat_row"; then
     ok "the P2 heat table routes security issues at any tier"
 else
     bad "the P2 heat table has no any-tier security row"
@@ -148,7 +148,7 @@ fi
 
 # --- 4. The principle the rule works around still stands ---------------------
 
-if printf '%s' "$scoring_flat" | grep -qi 're-derive a priority a maintainer already assigned'; then
+if grep -qi 're-derive a priority a maintainer already assigned' <<<"$scoring_flat"; then
     ok "the 'never re-derive a priority' principle survives"
 else
     bad "the re-derive principle was deleted — the rule now contradicts nothing"
@@ -166,7 +166,7 @@ fi
 
 # security + sev:medium + NO bug is the combination that regressed silently.
 nobug_row="$(printf '%s\n' "$example" | grep '#2186')"
-if [ -n "$nobug_row" ] && printf '%s' "$nobug_row" | grep -qi 'listed'; then
+if [ -n "$nobug_row" ] && grep -qi 'listed' <<<"$nobug_row"; then
     ok "the no-\`bug\` security row is shown as listed"
 else
     bad "the worked example no longer pins the no-\`bug\` case as listed"

@@ -664,16 +664,31 @@ p.write_text(s.replace(sys.argv[2], sys.argv[3], -1 if len(sys.argv) > 4 else 1)
 PY
 }
 
+# Feed the checker's output directly, never through `printf … | grep -q`: bash
+# flushes a builtin's output to a pipe line by line, so `grep -q` can match an
+# early line and exit before the next write, and pipefail turns that SIGPIPE
+# into a false miss. Size is not the trigger — M2's 170-byte, two-line output
+# raced on main CI after PR #570 while the same SHA passed in the merge queue.
+names_reason() { grep -qF -- "$2" <<<"$1"; }
+
 expect_fail() { # expect_fail <name> <copy dir> <substring its failure must contain>
     local name=$1 dst=$2 why=$3 out
     if out=$(python3 "$CHECKER" "$dst" 2>&1); then
         bad "$name: mutant PASSED — that property is vacuous"
-    elif printf '%s' "$out" | grep -qF -- "$why"; then
+    elif names_reason "$out" "$why"; then
         ok "$name: fails, naming its own property"
     else
         bad "$name: fails, but NOT for its own reason (wanted '$why') — the proof measures something else"
     fi
 }
+
+printf -v reason_fixture 'property 2: early\n%1048576s' ''
+if names_reason "$reason_fixture" 'property 2:'; then
+    ok "a reason on a non-final line of a multi-line checker output is still found under pipefail"
+else
+    bad "a reason on a non-final line of a multi-line checker output became a false miss under pipefail"
+fi
+unset reason_fixture
 
 d=$(make_copy control)
 if python3 "$CHECKER" "$d" >/dev/null 2>&1; then

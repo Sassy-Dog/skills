@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Every allowlisted writer shape the tree actually uses. If any of these were
-# flagged the gate would be unusable, and an unusable gate is turned off — the
-# same outcome as never having built it.
+# Every builtin writer shape the tree used while #256's printf/echo allowlist
+# stood — SEVEN pipelines, each of which MUST be flagged (issue #571). A builtin
+# flushes to a pipe line by line, so a match on any line before the last lets
+# `grep -q` exit between writes and pipefail turn the match into a miss, at any
+# size. The self-check counts seven findings, so a scanner that quietly
+# re-allows one shape fails rather than passing on the other six.
 set -o pipefail
 
 # bare printf
@@ -24,9 +27,8 @@ test -n "$X" || echo "$Y" | grep -q z
 # a quoted `|` inside the printf payload
 printf '%s|%s\n' "$A" "$B" | grep -q sep
 
-# the writer on the line ABOVE, across a `\` continuation. Without logical-line
-# joining the scanner sees an orphan `| grep -q` with nothing in front of it and
-# flags a perfectly bounded writer — which is how a usable gate becomes noise.
+# the writer on the line ABOVE, across a `\` continuation — joined into one
+# logical line, so it is reported once with its writer named.
 if printf '%s' "$ROW" \
      | grep -q 'continued'; then
     echo hit

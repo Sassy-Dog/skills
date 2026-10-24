@@ -77,7 +77,7 @@ stop() { printf '{"hook_event_name":"Stop","cwd":"%s","stop_hook_active":%s}' "$
 for key in file_path path filename; do
     : >"$REPO/stray.png"
     fire "$(post "$key" stray.png)"
-    if [ "$STATUS" = 2 ] && printf '%s' "$ERR" | grep -q 'stray.png'; then
+    if [ "$STATUS" = 2 ] && grep -q 'stray.png' <<<"$ERR"; then
         ok "PostToolUse .$key: root artifact -> exit 2, names the file"
     else
         bad "PostToolUse .$key: expected exit 2 naming stray.png (exit $STATUS)"
@@ -88,7 +88,7 @@ done
 # The nudge has to be actionable, not just present.
 : >"$REPO/stray.png"
 fire "$(post file_path stray.png)"
-printf '%s' "$ERR" | grep -q 'tmp/' &&
+grep -q 'tmp/' <<<"$ERR" &&
     ok "the nudge names tmp/ as the destination" ||
     bad "the nudge never mentions tmp/ — it says something is wrong but not what to do"
 rm -f "$REPO/stray.png"

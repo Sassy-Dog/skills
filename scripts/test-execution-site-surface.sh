@@ -187,7 +187,7 @@ want() {
     local row="$1" label="$2" hay="$3"; shift 3
     local pat
     for pat in "$@"; do
-        if ! printf '%s' "$hay" | grep -qiE -- "$pat"; then
+        if ! grep -qiE -- "$pat" <<<"$hay"; then
             row_bad "$row" "$label (missing: $pat)"
             return
         fi
@@ -207,12 +207,12 @@ reject() {
     local row="$1" label="$2" hay="$3" pat="$4"; shift 4
     local proof
     for proof in "$@"; do
-        if ! printf '%s' "$proof" | grep -qiE -- "$pat"; then
+        if ! grep -qiE -- "$pat" <<<"$proof"; then
             row_bad "$row" "$label — the ban does not match its own proof ($proof); it is vacuous"
             return
         fi
     done
-    if printf '%s' "$hay" | grep -qiE -- "$pat"; then
+    if grep -qiE -- "$pat" <<<"$hay"; then
         row_bad "$row" "$label"
     else
         row_ok "$row" "$label"
@@ -354,7 +354,7 @@ TABLE_TOKENS='Darwin|MINGW64|MSYS_NT|CYGWIN_NT|win32'
 # R24 — each token that HAS a home is present in it, individually.
 missing_tok=""
 for tok in Darwin MINGW64 MSYS_NT CYGWIN_NT; do
-    printf '%s' "$contract_flat" | grep -qiE -- "$tok" || missing_tok="$missing_tok $tok"
+    grep -qiE -- "$tok" <<<"$contract_flat" || missing_tok="$missing_tok $tok"
 done
 if [ -z "$missing_tok" ]; then
     row_ok R24 "config-contract.md carries every uname -s token the ban below names"

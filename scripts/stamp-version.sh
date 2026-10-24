@@ -66,7 +66,7 @@ command -v jq >/dev/null 2>&1 || { echo "error: jq is required" >&2; exit 1; }
 candidate=$(bash "$SCRIPT_DIR/get-version-info.sh")
 current=$(jq -r '.version // empty' "$PLUGIN_MANIFEST")
 
-if ! echo "$candidate" | grep -qE "$CALVER_RE"; then
+if ! grep -qE "$CALVER_RE" <<<"$candidate"; then
     echo "error: resolved version '$candidate' is not CalVer (YYYY.M.P)." >&2
     echo "       CalVer adoption is a one-way ratchet — no 0.x/1.x may ever follow (docs/VERSIONING.md)." >&2
     exit 1
@@ -78,7 +78,7 @@ action="stamp"
 if [ "$current" = "$candidate" ]; then
     action="reuse"
     echo "manifest already at $current — reusing (idempotent re-run)" >&2
-elif echo "$current" | grep -qE "$CALVER_RE"; then
+elif grep -qE "$CALVER_RE" <<<"$current"; then
     cur_year="${current%%.*}"
     cur_rest="${current#*.}"
     cur_month="${cur_rest%%.*}"

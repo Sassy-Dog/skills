@@ -328,11 +328,12 @@ run_case() {  # 1: script path  2: MOCK_MODE  -> sets OUT (the repo object) and 
     LOG="$(cat "$CALL_LOG" 2>/dev/null)"
 }
 
-# `printf` is the writer into every grep below: the value is already a shell
-# variable, so it is bounded and fully written (test-pipefail-grep.sh).
+# `field` pipes `printf` into jq, which reads to end of input, so its writer
+# always finishes; `has` matches with a here-string, never a pipe into
+# `grep -q` (test-pipefail-grep.sh, issue #571).
 field() { printf '%s' "$OUT" | jq -r "$1" 2>/dev/null; }
 is()    { [ "$(field "$1")" = "$2" ]; }
-has()   { printf '%s' "$1" | grep -qF -- "$2"; }
+has()   { grep -qF -- "$2" <<<"$1"; }
 hasnt() { if has "$1" "$2"; then return 1; fi; return 0; }
 verdict() { if "$@"; then echo pass; else echo fail; fi; }
 
