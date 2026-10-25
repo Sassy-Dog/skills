@@ -128,7 +128,7 @@
 #      decision 5 rather than inventing a second budget.
 #      #581 adds the coordinator site's NIT ROLL-IN beside it, and it sits
 #      OUTSIDE that budget on purpose: at most one per PR, capped by its own
-#      durable `nit_rollin=1` line, never counted in `recovery_used`, no
+#      author-checked cap record, never counted in `recovery_used`, no
 #      reservation. Read the cap as the thing that stops it becoming a second
 #      retry loop, and do not "tidy" it into the allowance, which would let a
 #      roll-in spend the repair a failed check is owed. Its pins sit at the end
@@ -978,20 +978,30 @@ mutant_forbid() {
     fi
 }
 
-rollin_take="${takeit_flat#*\*\*Nit roll-in (this site only}"
-rollin_take="${rollin_take%%Use the capability skill*}"
-if [ "$rollin_take" = "$takeit_flat" ]; then
-    bad "take-it keeps a Nit roll-in region the pins below can slice"
-else
-    ok "take-it keeps a Nit roll-in region the pins below can slice"
-fi
-rollin_disp="${dispatch_flat#*Reviewed PRs with no Blocking finding and at least one nit}"
-rollin_disp="${rollin_disp%%PRs carrying a Blocking review finding*}"
-if [ "$rollin_disp" = "$dispatch_flat" ]; then
-    bad "dispatch-ready keeps a Nit roll-in region the pins below can slice"
-else
-    ok "dispatch-ready keeps a Nit roll-in region the pins below can slice"
-fi
+# anchor_pin <haystack> <literal anchor> <label>: a slice anchor must be present BEFORE the document is
+# sliced with it, and deleting it must be caught. A drifted start anchor otherwise leaves the slice as
+# the whole rest of the file, and every pin below then matches somewhere and passes.
+anchor_pin() {
+    local hay="$1" lit="$2" label="$3"
+    if [[ "$hay" == *"$lit"* ]]; then ok "$label"; else bad "$label"; fi
+    if [[ "${hay//"$lit"/}" == *"$lit"* || "${hay//"$lit"/}" == "$hay" ]]; then
+        bad "$label — mutant survives, so the anchor check is vacuous"
+    else
+        ok "$label — mutant is caught"
+    fi
+}
+TAKE_START='**Nit roll-in (this site only'
+TAKE_END='Use the capability skill'
+DISP_START='Reviewed PRs with no Blocking finding and at least one nit'
+DISP_END='PRs carrying a Blocking review finding'
+anchor_pin "$takeit_flat" "$TAKE_START" "take-it's Nit roll-in start anchor is present"
+anchor_pin "$takeit_flat" "$TAKE_END" "take-it's Nit roll-in end anchor is present"
+anchor_pin "$dispatch_flat" "$DISP_START" "dispatch-ready's Nit roll-in start anchor is present"
+anchor_pin "$dispatch_flat" "$DISP_END" "dispatch-ready's Nit roll-in end anchor is present"
+rollin_take="${takeit_flat#*"$TAKE_START"}"
+rollin_take="${rollin_take%%"$TAKE_END"*}"
+rollin_disp="${dispatch_flat#*"$DISP_START"}"
+rollin_disp="${rollin_disp%%"$DISP_END"*}"
 
 mutant_pin "$rollin_take" 'at most ONE per PR; outside the recovery budget' \
     's/at most ONE per PR; outside the recovery budget//' \
@@ -1002,9 +1012,9 @@ mutant_pin "$rollin_take" 'It is never counted in `recovery_used` and writes no 
 mutant_pin "$rollin_take" 'The cap is `nit_rollin`, one per PR, spent whatever the delta returns' \
     's/spent whatever the delta returns//' \
     "take-it: the cap is its own nit_rollin line, spent whatever the delta returns"
-mutant_pin "$rollin_take" 'write `nit_rollin=1 reviewed_head=<full commit id of the head you reviewed>`' \
-    's/nit_rollin=1 reviewed_head=//' \
-    "take-it writes the durable cap line before the send"
+mutant_pin "$rollin_take" 'write the \*\*cap record\*\*: an issue comment whose entire body is JSON' \
+    's/write the \*\*cap record\*\*//' \
+    "take-it writes the author-checked cap record before the send"
 mutant_pin "$rollin_take" 'Nits in the delta are reported and never rolled in again' \
     's/never rolled in again//' \
     "take-it never rolls in a second time on the delta's own nits"
@@ -1027,7 +1037,7 @@ mutant_forbid "$rollin_take" 'recovery_used=1|recovery=(pending|started|finished
 mutant_pin "$rollin_disp" 'outside the recovery budget: never counted in `recovery_used`, no reservation' \
     's/never counted in `recovery_used`, no reservation//' \
     "dispatch-ready: the roll-in is outside the recovery budget"
-mutant_pin "$rollin_disp" 'a PR that carries it is never sent a second roll-in' \
+mutant_pin "$rollin_disp" 'a PR that carries one is never sent a second roll-in' \
     's/never sent a second roll-in//' \
     "dispatch-ready caps the roll-in at one per PR across ticks"
 mutant_pin "$rollin_disp" 'means sort into file and accept only' \
@@ -1036,6 +1046,53 @@ mutant_pin "$rollin_disp" 'means sort into file and accept only' \
 mutant_forbid "$rollin_disp" 'recovery_used=1|recovery=(pending|started|finished)' \
     'persist recovery_used=1 recovery=pending' \
     "dispatch-ready's roll-in region writes no recovery record"
+
+# Review of PR #584: the cap blocks a second roll-in, the delta base is bounded, the hold ends.
+mutant_pin "$rollin_take" 'later tick that finds it never sends a second' \
+    's/never sends a second//' \
+    "take-it: an existing cap record blocks a second roll-in"
+mutant_pin "$rollin_take" 'the PR-body line is a mirror and never the source' \
+    's/a mirror and never the source//' \
+    "take-it reads the cap from the author-checked record, not the PR body"
+mutant_pin "$rollin_take" 'rev-list --merges <reviewed_head>\.\.HEAD. prints nothing' \
+    's/rev-list --merges//' \
+    "take-it bounds the delta base: no merge commit in the range"
+mutant_pin "$rollin_take" 'run a normal full review against the derived default branch' \
+    's/run a normal full review against the derived default branch//' \
+    "take-it falls back to a full review in the caller, not the orchestrator"
+mutant_pin "$rollin_take" 'the hold ends once \(a\) the send failed, \(b\) the resumed worker.s return is known, or \(c\) 30 minutes have passed since .sent_at.' \
+    's/30 minutes have passed since/some time has passed since/' \
+    "take-it releases a roll-in hold that produced no commit, with a stated bound"
+mutant_pin "$rollin_disp" 'written and confirmed before the send' \
+    's/written and confirmed before the send//' \
+    "dispatch-ready writes the cap record before the send"
+mutant_pin "$rollin_disp" 'The PR is held from .sassy-dog:pr-shepherd. until that review is done' \
+    's/The PR is held from//' \
+    "dispatch-ready holds the PR until the roll-in review is done"
+mutant_pin "$rollin_disp" 'the hold ends\*\* when .HEAD. still equals .reviewed_head. and the send failed' \
+    's/the hold ends//' \
+    "dispatch-ready releases the hold when the head never moves"
+mutant_pin "$rollin_disp" 'applies .take-it. §6.s \*\*Delta base rule\*\*' \
+    's/Delta base rule//' \
+    "dispatch-ready applies the one Delta base rule"
+mutant_pin "$rollin_disp" 'File. nits go in the §6 tick report' \
+    's/go in the §6 tick report//' \
+    "dispatch-ready sends file-bin nits to its own §6 tick report"
+mutant_pin "$takeit_flat" '`\{issue, pr, worktreePath, worktreeBranch, agent_id\}`' \
+    's/, agent_id//' \
+    "take-it's batch manifest carries agent_id"
+mutant_pin "$dispatch_flat" 'records the worker.s `agent_id`' \
+    's/records the worker.s `agent_id`//' \
+    "dispatch-ready's batch manifest carries agent_id"
+mutant_pin "$orch_flat" 'match `\^\[0-9a-f\]\{40\}\$` or `\^\[0-9a-f\]\{64\}\$`' \
+    's/\{64\}/{99}/' \
+    "the orchestrator checks the override's spelling before any git call"
+mutant_pin "$orch_flat" 'reply is \*\*final\*\*: it goes straight to NO REPORT' \
+    's/it goes straight to NO REPORT//' \
+    "the orchestrator's unusable-input reply is final"
+mutant_pin "$orch_flat" 'Every mode honours the plan.s `changeset.base_override`' \
+    's/Every mode honours//' \
+    "every recovery mode honours the plan's base_override"
 
 # The orchestrator half: the override is validated, identity-bound, named, and optional.
 mutant_pin "$orch_flat" 'merge-base --is-ancestor <base_override> HEAD' \
@@ -1051,7 +1108,7 @@ mutant_pin "$orch_flat" '`base_override` \(the caller-supplied commit id, null w
     's/`base_override` \(the caller-supplied commit id, null when absent//' \
     "the orchestrator carries base_override in the changeset identity"
 mutant_pin "$orch_flat" 'or "override <commit id> \(roll-in delta\)"' \
-    's/or "override <commit id> \(roll-in delta\)"//' \
+    's/or "override <commit id> \(roll-in delta\)"//g' \
     "the orchestrator names the override on the report's Base: line"
 
 # ---------------------------------------------------------------------------

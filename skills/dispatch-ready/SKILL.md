@@ -237,7 +237,9 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   which would re-fire every tick and rebuild the blanket merge freeze the hand-off bullet's
   carve-out exists to prevent. Say once in the tick report that review was opted out.
   Otherwise "Reviewed" means this loop's own recorded outcome for the current head (a head that moved
-  only by a Nit roll-in is the delta case two bullets down, never a fresh full review). A worker's
+  only by a Nit roll-in, meaning the cap record's `reviewed_head` is an ancestor of `HEAD` with no
+  merge commit in `reviewed_head..HEAD`, is the delta case two bullets down, never a fresh full
+  review; any other moved head is reviewed in full). A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
   plugin. A PR opened before the site changed is reviewed once more here, which costs a review but
   never merges on none. Dispatch the agent resolved by `send-it`'s order at tier `sol` (Claude Code:
@@ -291,11 +293,18 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   a delta review through `base_override` at tier `sol` (Claude Code: `model: "opus"` · omp: `model:
   "@default"`), the same cap and the same sort-only fallback. The worker's `agent_id` is read from
   this loop's batch manifest entry (§5). The roll-in is outside the recovery budget: never counted in
-  `recovery_used`, no reservation. A tick does not wait for the resumed worker, so the PR body's
-  `nit_rollin=1 reviewed_head=<commit id>` line, written and confirmed before the send, carries the
-  step across ticks: a later tick that finds it and a head past `reviewed_head` reviews the delta
-  against `reviewed_head` rather than the whole PR again, and a PR that carries it is never sent a
-  second roll-in. The PR is held from `sassy-dog:pr-shepherd` until that delta is reviewed. A missing
+  `recovery_used`, no reservation. A tick does not wait for the resumed worker, so the cap record
+  (an issue comment, written and confirmed before the send, with `sent_at` in it; the PR-body
+  `nit_rollin=1` line is a mirror only) carries the step across ticks. Read it back like
+  `recovery_used`, author-checked and bound to the active `attempt_id`: a PR that carries
+  one is never sent a second roll-in, and a replacement PR inherits it. A later tick that finds it
+  with a head past `reviewed_head` applies `take-it` §6's **Delta base rule**: the delta path only when
+  `reviewed_head` is an ancestor of `HEAD` and no merge commit lies in the range, otherwise a normal
+  full review against the derived default branch. The PR is held from `sassy-dog:pr-shepherd` until
+  that review is done, and **the hold ends** when `HEAD` still equals `reviewed_head` and the send
+  failed, the worker's return is known, or 30 minutes have passed since `sent_at`: record `roll-in
+  skipped: <cause>` in the PR body and hand the PR off on the main review's result (`take-it` §6 step
+  7). "File" nits go in the §6 tick report, not a §7 report. A missing
   or unreachable `agent_id` (a session restart is the usual cause) means sort into file and accept
   only. A roll-in commit that breaks CI takes the failed-check bullet above, and a Blocking finding in
   the delta takes the Blocking bullet below.
