@@ -1447,7 +1447,7 @@ assert_has "$identity" \
     'Record null for an unavailable value and the reason; do not invent a digest.' \
     "unknown identity is reported rather than fabricated"
 assert_has "$identity" \
-    'git diff --binary --no-ext-diff --no-textconv "${BASE}" --' \
+    'git diff --binary --no-ext-diff --no-textconv <base> --' \
     "tracked identity uses binary diff bytes without external transforms"
 assert_has "$identity" \
     'path-sorted manifest of path, file type, executable mode and content SHA-256; for symlinks hash the link target, not the file it points to.' \

@@ -68,6 +68,18 @@
 #      carry the "unconfirmed until you have read the root's file" paragraph
 #      (stoppers included: it is not the Unrun paragraph). Mutants: the old
 #      substitution form, and the paragraph deleted.
+#      (issue #576) Section 6 also pins, per line: the `2>/dev/null || echo
+#      "NO_CONFIG"` ending (the paragraph and all four stoppers depend on that
+#      exact string; preflight gate 18 checks only CONFIG_SOURCE), the file the
+#      cat reads being the OWNING skill's (`take-it` for work-recommendations and
+#      work-fire-watch, which read take-it.md; otherwise the skill's own name),
+#      and the `printf 'CONFIG_CWD: '; pwd -P;` statement that makes a cwd/root
+#      mismatch visible. `pwd -P` (the resolved path, which is what git prints,
+#      so a root reached through a symlink compares equal) and not "$PWD" because a worktree-isolated
+#      session refuses git beside any variable expansion (measured, #576). The
+#      paragraph, read to its own end rather than a fixed window, must name
+#      CONFIG_CWD, state the "differs from" condition, and tell the agent to read
+#      <CONFIG_SOURCE>'s file by absolute path. One mutant for each.
 #
 # config-contract.md ("Where the harness never runs the line") DESCRIBES the
 # paragraph in prose and is deliberately not pinned: it paraphrases rather than
@@ -378,13 +390,21 @@ echo "6. the config line keeps git out of a substitution, and every skill confir
 # cwd-relative, so a miss from below the root is possible and the paragraph that
 # says what to do about it must be present exactly once.
 line_problems() {
-    local f="$1" line inner n_conf
+    local f="$1" want="$2" line inner n_conf para
     line="$(grep "$CFG_RE" "$f" | head -n 1)"
     # strip the injection's own delimiters before looking for a nested substitution
     inner="${line#!\`}"; inner="${inner%\`}"
     case "$inner" in *'$('*|*'`'*) echo "config line holds a command substitution (a worktree-isolated session refuses git inside one)" ;; esac
     case "$inner" in *'$root'*|*'${root'*) echo "config line still joins a captured root into the path" ;; esac
     case "$inner" in *"cat .claude/sassy-dog/"*) : ;; *) echo "config line does not read the cwd-relative .claude/sassy-dog path" ;; esac
+    case "$inner" in *"cat .claude/sassy-dog/${want}.md 2>/dev/null || echo \"NO_CONFIG\"") : ;; *) echo "config line does not read .claude/sassy-dog/${want}.md and end in 2>/dev/null || echo \"NO_CONFIG\"" ;; esac
+    case "$inner" in "printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; "*) : ;; *) echo "config line does not open with the CONFIG_CWD pwd -P statement" ;; esac
+    case "$inner" in *'$PWD'*|*'${PWD'*) echo "config line expands a shell variable (a worktree-isolated session refuses git beside one)" ;; esac
+    # the paragraph, from its opener to the next blank line, whitespace-collapsed
+    para="$(awk '/unconfirmed until you have read the root/ {on=1} on && /^$/ {exit} on {print}' "$f" | tr '\n' ' ' | tr -s ' ')"
+    case "$para" in *CONFIG_CWD*) : ;; *) echo "subdirectory-rule paragraph does not name CONFIG_CWD" ;; esac
+    case "$para" in *"differs from"*) : ;; *) echo "subdirectory-rule paragraph does not state the differs-from condition" ;; esac
+    case "$para" in *"by absolute path"*) : ;; *) echo "subdirectory-rule paragraph does not say to read the root's file by absolute path" ;; esac
     case "$inner" in *"git rev-parse --show-toplevel"*) : ;; *) echo "config line does not print the repo root" ;; esac
     n_conf="$(grep -c 'unconfirmed until you have read the root' "$f" || true)"
     [ "$n_conf" -eq 1 ] || echo "has $n_conf subdirectory-rule paragraphs, not exactly one"
@@ -392,26 +412,47 @@ line_problems() {
 }
 
 six_bad=0
+owner_of() { case "$1" in work-recommendations|work-fire-watch) echo take-it ;; *) echo "$1" ;; esac; }
 for n in $CARRIERS $STOPPERS; do
-    p="$(line_problems "skills/$n/SKILL.md")"
+    p="$(line_problems "skills/$n/SKILL.md" "$(owner_of "$n")")"
     if [ -n "$p" ]; then bad "$n: $p"; six_bad=1; fi
 done
 [ "$six_bad" -eq 0 ] && ok "all eight skills: git is a plain statement and the NO_CONFIG-at-root rule is present once"
 
-p="$(line_problems skills/setup-config/references/config-contract.md | grep -v 'subdirectory-rule' || true)"
+p="$(line_problems skills/setup-config/references/config-contract.md '<skill>' | grep -v 'subdirectory-rule' || true)"
 if [ -z "$p" ]; then ok "config-contract.md: the canonical line has the same form"; else bad "config-contract.md: $p"; fi
 
 # mutants: the old substitution form, and a deleted rule paragraph, are caught.
 old_form="$WORK/old-form.md"
-sed 's|^!`printf .CONFIG_SOURCE: .; git rev-parse --show-toplevel 2>/dev/null .. echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md|!`root="$(git rev-parse --show-toplevel)"; echo "CONFIG_SOURCE: ${root}"; cat "$root/.claude/sassy-dog/send-it.md"|' skills/send-it/SKILL.md > "$old_form"
+sed 's|^!`printf .CONFIG_CWD: .; pwd -P; printf .CONFIG_SOURCE: .; git rev-parse --show-toplevel 2>/dev/null .. echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md|!`root="$(git rev-parse --show-toplevel)"; echo "CONFIG_SOURCE: ${root}"; cat "$root/.claude/sassy-dog/send-it.md"|' skills/send-it/SKILL.md > "$old_form"
 if cmp -s "$old_form" skills/send-it/SKILL.md; then bad "mutant old-form: the mutation matched nothing"
-elif [ -n "$(line_problems "$old_form")" ]; then ok "mutant: the old substitution line is caught"
+elif [ -n "$(line_problems "$old_form" send-it)" ]; then ok "mutant: the old substitution line is caught"
 else bad "mutant: the old substitution line was NOT caught"; fi
 no_rule="$WORK/no-rule.md"
 grep -v 'unconfirmed until you have read the root' skills/send-it/SKILL.md > "$no_rule"
 if cmp -s "$no_rule" skills/send-it/SKILL.md; then bad "mutant no-rule: the mutation matched nothing"
-elif [ -n "$(line_problems "$no_rule")" ]; then ok "mutant: a skill missing the rule paragraph is caught"
+elif [ -n "$(line_problems "$no_rule" send-it)" ]; then ok "mutant: a skill missing the rule paragraph is caught"
 else bad "mutant: a skill missing the rule paragraph was NOT caught"; fi
+
+# issue #576 mutants: each asserts that line_problems fails on a copy of send-it
+# with exactly one property removed, and that the mutation changed the file.
+six_mutant() { # <label> <sed expr> [<want>]
+    local label="$1" expr="$2" want="${3:-send-it}" m="$WORK/m6.md"
+    sed "$expr" skills/send-it/SKILL.md > "$m"
+    if cmp -s "$m" skills/send-it/SKILL.md; then bad "mutant $label: the mutation matched nothing"
+    elif [ -n "$(line_problems "$m" "$want")" ]; then ok "mutant: $label is caught"
+    else bad "mutant: $label was NOT caught"; fi
+}
+six_mutant "a line without the NO_CONFIG ending" '/^!`printf/s/ 2>\/dev\/null || echo "NO_CONFIG"//'
+six_mutant "a line that reads another skill's config" '/^!`printf/s|cat .claude/sassy-dog/send-it.md|cat .claude/sassy-dog/groom-backlog.md|'
+six_mutant "a line without the CONFIG_CWD statement" "/^!\`printf/s|printf 'CONFIG_CWD: '; pwd -P; ||"
+six_mutant "a CONFIG_CWD taken from a variable" "/^!\`printf/s|pwd -P;|\"\$PWD\";|"
+six_mutant "a line using plain pwd instead of pwd -P" "/^!\`printf/s|pwd -P;|pwd;|"
+six_mutant "a paragraph without the differs-from condition" '/unconfirmed until you have read the root/,/stands\./s/differs from/equals/'
+six_mutant "a paragraph without the read-by-absolute-path sentence" '/unconfirmed until you have read the root/,/stands\./{/by absolute path/d;}'
+six_mutant "a paragraph that never names CONFIG_CWD" '/unconfirmed until you have read the root/,/stands\./s/CONFIG_CWD/CONFIG_DIR/g'
+# the ownership table itself: work-recommendations must be held to take-it.md.
+if [ -n "$(line_problems skills/work-recommendations/SKILL.md work-recommendations)" ]; then ok "mutant: work-recommendations held to its own name instead of take-it is caught"; else bad "mutant: work-recommendations held to the wrong basename was NOT caught"; fi
 
 if [ "$fail" -eq 0 ]; then
     echo "config-fallback-paragraph tests: all green" >&2

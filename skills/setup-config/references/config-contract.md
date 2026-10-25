@@ -809,13 +809,16 @@ whole point of keeping it separate from the frontmatter facts.
 Each skill inlines its config at load time with dynamic context injection:
 
 ```text
-!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/<skill>.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/<skill>.md 2>/dev/null || echo "NO_CONFIG"`
 ```
 
 `git rev-parse` rather than `${CLAUDE_PROJECT_DIR}` because the substitution order between
 placeholder expansion and shell execution is not specified, and every one of these skills requires
 a git repo regardless. The command is safe outside a repo — it prints `<not a git repo>` and then
-`NO_CONFIG`, with no stderr.
+`NO_CONFIG`, with no stderr. `CONFIG_CWD` comes from `pwd -P`, not `"$PWD"`: a worktree-isolated session
+refuses a command that names git beside a shell-variable expansion (measured, #576), and `-P` prints
+the resolved path so it compares equal to `git rev-parse --show-toplevel` at a root reached through a
+symlink (on macOS `/tmp` is one).
 
 **`git` is a plain statement, never inside `$(...)`** ([#574](https://github.com/Sassy-Dog/skills/issues/574)).
 A Claude Code session isolated in a git worktree refuses, at skill load, any command that names git in
@@ -823,9 +826,13 @@ a form it cannot verify stays inside the worktree, and a substitution is such a 
 fails the whole load, so no skill text reaches the agent and the "Unrun config line" fallback below
 never runs. The line therefore prints the root with its own `git rev-parse --show-toplevel` and reads
 the config by a path relative to the session's working directory. `CONFIG_SOURCE` still means the repo
-root, so the reconciliation rule in every §1 is unchanged. The cost is that from a directory below the
-root the relative read misses a config that exists and prints `NO_CONFIG`. Every one of the eight
-skills (stoppers included) therefore carries a paragraph making `NO_CONFIG` unconfirmed until
+root, so the reconciliation rule in every §1 is unchanged. The cost is that the relative read and the
+printed root can name different directories: from below the root it misses a config that exists
+(`NO_CONFIG`), or hits a stray nested config and shows it under the root's name
+([#576](https://github.com/Sassy-Dog/skills/issues/576)). The line therefore also prints
+`CONFIG_CWD`, so the two are comparable rather than recalled, and every one of the eight skills
+(stoppers included) carries a paragraph making what the line printed, a config or `NO_CONFIG`,
+unconfirmed whenever `CONFIG_CWD` differs from `CONFIG_SOURCE`, until
 `<CONFIG_SOURCE>/.claude/sassy-dog/<skill>.md` has been read by absolute path. That paragraph is
 distinct from the "Unrun config line" one, so the four stoppers still do not carry the latter.
 `scripts/test-config-fallback-paragraph.sh` pins the line's form and that paragraph's presence.
@@ -874,8 +881,8 @@ each handed `platform`'s Terraform gates (`terraform fmt`, `tflint`,
 skill instructs that config be applied exactly as written, a *compliant* agent would have run the
 wrong gates.
 
-Hence `CONFIG_SOURCE`: the block names the path it read from, so the mismatch is visible rather than
-inferred. Each skill's §1 carries the reconciliation rule inline — discard, re-read the target repo's
+Hence `CONFIG_SOURCE` and `CONFIG_CWD`: the block names the repo root it resolved and the directory
+it read from, so the mismatch is visible rather than inferred. Each skill's §1 carries the reconciliation rule inline — discard, re-read the target repo's
 own file by absolute path, use that. The rule is inline rather than a pointer here on purpose: the
 failure mode is an agent proceeding confidently without reading further, and a pointer is exactly
 what such an agent skips.

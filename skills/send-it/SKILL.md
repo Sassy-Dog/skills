@@ -15,7 +15,7 @@ commit/push → watch + merge (delegated to `sassy-dog:pr-shepherd`).
 
 ## 1. Repo config
 
-!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
 command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
@@ -32,13 +32,15 @@ exactly as written, so the wrong one silently applies another repo's rules: on 2
 shipping in `routines` and `skills` were each handed `platform`'s Terraform gates,
 and caught it only by noticing the mismatch themselves.
 
-**A `NO_CONFIG` above is unconfirmed until you have read the root's file.** The line reads
-`.claude/sassy-dog/send-it.md` relative to the session's working directory, and prints the repo root
-as `CONFIG_SOURCE` without joining the two (a `$(...)` around git is refused in a
-worktree-isolated session), so from a directory below the root it misses a config that exists. When
-`NO_CONFIG` was printed and `CONFIG_SOURCE` names a repo root, read
-`<CONFIG_SOURCE>/.claude/sassy-dog/send-it.md` by absolute path first; the config is `NO_CONFIG` only if
-that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`.
+**What the line printed is unconfirmed until you have read the root's file.** The line reads
+`.claude/sassy-dog/send-it.md` relative to the session's working directory, which it prints as
+`CONFIG_CWD`, and prints the repo root as `CONFIG_SOURCE` without joining the two (a `$(...)` around
+git is refused in a worktree-isolated session). When `CONFIG_CWD` differs from `CONFIG_SOURCE`,
+whatever the line printed, a config or `NO_CONFIG`, came from the wrong directory: a miss hides a
+config that exists, and a hit may be a stray nested config shown under the root's name. Read
+`<CONFIG_SOURCE>/.claude/sassy-dog/send-it.md` by absolute path and use that; the config is `NO_CONFIG`
+only if that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`. When the two are equal the
+line read the root's file and what it printed stands.
 
 Frontmatter supplies `preflight_commands`, `pr_template_path`, `pr_template_sections`,
 `merge_queue`, and the optional `migrations`, `codegen`, and `stacked_prs` blocks. `review_agent:`
@@ -126,10 +128,12 @@ always reports its disposition.
 ### If `migrations:` is set
 
 Schema source of truth changed ⇒ a generated migration must ship alongside it. Collect the changed
-set once, against the derived default branch:
+set once, against the derived default branch, as the union of these two plain statements' output
+(deduplicated; no shell variable and no substitution around `git`):
 
 ```bash
-CHANGED=$( { git diff --name-only "origin/<default_branch>"; git ls-files --others --exclude-standard; } | sort -u )
+git diff --name-only origin/<default_branch>
+git ls-files --others --exclude-standard
 ```
 
 If anything under `migrations.schema_dir` changed, run `migrations.regen_command`, then
@@ -393,7 +397,7 @@ Co-Authored-By: Claude <your model> <noreply@anthropic.com>
 who actually wrote the commit, so a stored value is wrong the moment a different model does the
 work, and wrong in the most confident-looking way: every commit carries it. This is the
 configure-only-what-cannot-be-derived rule applied to the one fact that changes without anyone
-touching the repo. Push with `git push -u origin "$(git branch --show-current)"`, then
+touching the repo. Push with `git push -u origin HEAD`, then
 `gh pr create` with the §5 body.
 
 **Derive the base — never assume the default branch.** `gh pr create` silently defaults to the
@@ -401,7 +405,7 @@ repo's default branch, which is wrong for any branch cut from another feature br
 PR ends up showing a diff full of someone else's commits:
 
 ```bash
-git merge-base --fork-point "$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)" 2>/dev/null
+git merge-base --fork-point '@{upstream}' 2>/dev/null
 git log --oneline --graph --decorate -15   # what does this branch actually sit on?
 ```
 
