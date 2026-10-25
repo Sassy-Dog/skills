@@ -236,7 +236,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   hand-off like any other green PR, known before any dispatch; it is never "not reviewed, withhold",
   which would re-fire every tick and rebuild the blanket merge freeze the hand-off bullet's
   carve-out exists to prevent. Say once in the tick report that review was opted out.
-  Otherwise "Reviewed" means this loop's own recorded outcome for the current head. A worker's
+  Otherwise "Reviewed" means this loop's own recorded outcome for the current head (a head that moved
+  only by a Nit roll-in, meaning the cap record's `reviewed_head` is an ancestor of `HEAD` with no
+  merge commit in `reviewed_head..HEAD`, is the delta case two bullets down, never a fresh full
+  review; any other moved head is reviewed in full). A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
   plugin. A PR opened before the site changed is reviewed once more here, which costs a review but
   never merges on none. Dispatch the agent resolved by `send-it`'s order at tier `sol` (Claude Code:
@@ -284,6 +287,27 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   with every surface cause and any partial degraded report retained in the PR body and tick report.
   It is never clean or SKIPPED: the orchestrator ran. Only failure to start the whole orchestrator
   takes SKIPPED. Apply the existing second-failure blocked path when the shared allowance is spent.
+- **Reviewed PRs with no Blocking finding and at least one nit, when `review_site: coordinator`** →
+  the **Nit roll-in**, defined once in `take-it` §6 (read it there; this bullet only records what is
+  specific to a tick): the same three-bin sort recorded in the PR body, one send to the same worker,
+  a delta review through `base_override` at tier `sol` (Claude Code: `model: "opus"` · omp: `model:
+  "@default"`), the same cap and the same sort-only fallback. The worker's `agent_id` is read from
+  this loop's batch manifest entry (§5). The roll-in is outside the recovery budget: never counted in
+  `recovery_used`, no reservation. A tick does not wait for the resumed worker, so the cap record
+  (an issue comment, written and confirmed before the send, with `sent_at` in it; the PR-body
+  `nit_rollin=1` line is a mirror only) carries the step across ticks. Read it back like
+  `recovery_used`, author-checked and bound to the active `attempt_id`: a PR that carries
+  one is never sent a second roll-in, and a replacement PR inherits it. A later tick that finds it
+  with a head past `reviewed_head` applies `take-it` §6's **Delta base rule**: the delta path only when
+  `reviewed_head` is an ancestor of `HEAD` and no merge commit lies in the range, otherwise a normal
+  full review against the derived default branch. The PR is held from `sassy-dog:pr-shepherd` until
+  that review is done, and **the hold ends** when `HEAD` still equals `reviewed_head` and the send
+  failed, the worker's return is known, or 30 minutes have passed since `sent_at`: record `roll-in
+  skipped: <cause>` in the PR body and hand the PR off on the main review's result (`take-it` §6 step
+  7). "File" nits go in the §6 tick report, not a §7 report. A missing
+  or unreachable `agent_id` (a session restart is the usual cause) means sort into file and accept
+  only. A roll-in commit that breaks CI takes the failed-check bullet above, and a Blocking finding in
+  the delta takes the Blocking bullet below.
 - **PRs carrying a Blocking review finding** → **never merge past one.** This is the existing
   failure path, not new machinery: surface it in the tick report with the finding named, comment
   `dispatch-ready: attempt 1 failed — review: <finding>` on the issue, and allow ONE redispatch
@@ -699,7 +723,9 @@ checks above: claim → fast-forward the local default branch → one sub-agent 
 take-it's self-contained sub-agent prompt. For serial, apply all §4 filters first; if the shared
 one-worker quota remains unused, claim just the selected independent issue and run take-it's
 Serial variant synchronously. If §2 consumed the quota, claim nothing here. Record the serial
-branch/PR and execution outcome in the same manifest without a `worktreePath`.
+branch/PR and execution outcome in the same manifest without a `worktreePath`. Each manifest entry
+also records the worker's `agent_id` (null for a serial worker or a harness that returns none), which
+§2's Nit roll-in resumes the worker by.
 
 A stack chain uses take-it's **stacked variant** instead: one sub-agent, one worktree, layers built
 in order, PRs based on the layer below, linked via `POST /repos/{slug}/stacks`. Claim every member
@@ -1253,6 +1279,8 @@ each re-runs this section and retries.
   carrying the finding, then `blocked`. A review that could not run, or that ran and never came
   back, is reported under its own name and the PR is held — never passed over in silence, and
   never waited out.
+- **One nit roll-in per PR, and it is not a recovery**: never counted in `recovery_used`, never a
+  reservation (`take-it` §6 defines it).
 - If `sassy-dog:pr-shepherd` or take-it is missing, STOP and say so — do not improvise
   dispatch or merge mechanics.
 

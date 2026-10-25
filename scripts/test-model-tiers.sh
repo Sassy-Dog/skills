@@ -53,7 +53,7 @@
 # is flattened (quote markers stripped, whitespace collapsed) before matching,
 # the same treatment the other prose gates give wrapped text.
 #
-# Mutation-proven below against ten mutants, each of which must FAIL:
+# Mutation-proven below against twelve mutants, each of which must FAIL:
 #   M1 a binding's Claude Code alias flipped (terra → opus)   -> property 2
 #   M2 dispatch-ready's bare `model: "opus"` pin restored     -> property 3
 #   M3 an agent given `model: sonnet` frontmatter             -> property 4
@@ -64,6 +64,8 @@
 #   M8 a single-quoted `'model': 'opus'` added                 -> property 3
 #   M9 the isolation probe worker's `terra` binding removed    -> property 5
 #   M10 the supervised serial worker's `terra` binding removed -> property 5
+#   M11 take-it's nit roll-in delta-review `sol` binding removed -> property 5
+#   M12 dispatch-ready's nit roll-in delta-review `sol` binding removed -> property 5
 # A gate that passes a mutant is vacuous for that property. Each mutant must
 # also fail FOR ITS OWN REASON: an unmutated control copy has to pass first,
 # and each mutant's failure output has to name its property. Without both, a
@@ -167,13 +169,14 @@ if n_bindings == 0:
 # --- 5. required dispatch sites keep their tier -------------------------------
 # Minimum bindings per (file, tier). Each count is a set of dispatch sites:
 required = {
-    # §5 worker dispatch (terra); step-6 orchestrator + §6 coordinator gate (sol ×2)
-    "skills/take-it/SKILL.md": {"terra": 1, "sol": 2},
+    # §5 worker dispatch (terra); step-6 orchestrator + §6 coordinator gate + §6 nit roll-in
+    # delta review (sol ×3)
+    "skills/take-it/SKILL.md": {"terra": 1, "sol": 3},
     # the isolation probe worker (#451) and the supervised serial worker (#484): two dispatch
     # sites that live in the reference doc §5 points to
     "skills/take-it/references/isolation-confirmation.md": {"terra": 2},
-    # §5 worker model policy (terra); §2 coordinator review (sol)
-    "skills/dispatch-ready/SKILL.md": {"terra": 1, "sol": 1},
+    # §5 worker model policy (terra); §2 coordinator review + §2 nit roll-in delta review (sol ×2)
+    "skills/dispatch-ready/SKILL.md": {"terra": 1, "sol": 2},
     # §4 review gate
     "skills/send-it/SKILL.md": {"sol": 1},
     # Step 3 fan-out + Parent recovery batch
@@ -309,6 +312,16 @@ d=$(make_copy m10)
 mutate "$d/skills/take-it/references/isolation-confirmation.md" 'serial worker, a dispatch at tier `terra` \(Claude Code:\s*`model: "sonnet"` · omp:\s*`model: "@task"`\)' 'serial worker' ||
     bad "M10: mutation did not apply"
 expect_fail "M10 serial worker's terra site removed" "$d" 'isolation-confirmation.md: required dispatch tier `terra` bound 1x, needs at least 2x'
+
+d=$(make_copy m11)
+mutate "$d/skills/take-it/SKILL.md" 'Dispatch the same agent at tier `sol` \(Claude Code:\s*`model:\s*"opus"` · omp:\s*`model:\s*"@default"`\) with `base_override`' 'Dispatch the same agent with `base_override`' ||
+    bad "M11: mutation did not apply"
+expect_fail "M11 take-it nit roll-in delta review's sol site removed" "$d" 'take-it/SKILL.md: required dispatch tier `sol` bound 2x, needs at least 3x'
+
+d=$(make_copy m12)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'a delta review through `base_override` at tier `sol` \(Claude Code: `model: "opus"` · omp: `model:\s*"@default"`\)' 'a delta review through `base_override`' ||
+    bad "M12: mutation did not apply"
+expect_fail "M12 dispatch-ready nit roll-in delta review's sol site removed" "$d" 'dispatch-ready/SKILL.md: required dispatch tier `sol` bound 1x, needs at least 2x'
 
 if [ "$FAILED" = 0 ]; then
     echo "model-tier tests: all green" >&2

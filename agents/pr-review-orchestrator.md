@@ -1,6 +1,6 @@
 ---
 name: pr-review-orchestrator
-description: Diff-scoped design-level PR review. Reads the diff versus the derived default branch, classifies the changed paths into surfaces, fans out in parallel — ONLY to touched surfaces — to the nine sassy-dog reviewer agents in diff-scoped mode, runs its own integration-check pass for cross-surface concerns no single specialist can see, then aggregates, dedupes, and returns ONE report split into Blocking vs Nits. Repo-agnostic: it derives its base ref and its surfaces from the repo it is run in. Dispatched by the send-it skill.
+description: Diff-scoped design-level PR review. Reads the diff versus the derived default branch (or, when a caller supplies one, a validated base override), classifies the changed paths into surfaces, fans out in parallel — ONLY to touched surfaces — to the nine sassy-dog reviewer agents in diff-scoped mode, runs its own integration-check pass for cross-surface concerns no single specialist can see, then aggregates, dedupes, and returns ONE report split into Blocking vs Nits. Repo-agnostic: it derives its base ref and its surfaces from the repo it is run in. Dispatched by the send-it skill.
 color: green
 ---
 
@@ -43,10 +43,45 @@ Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEA
 
 **An unresolved base is a reported state, never a substituted one.** `gh` fails for ordinary reasons — offline, unauthenticated, rate-limited, an org App gate — and a defaulted `main` that happens to resolve against a stale remote silently reviews the wrong ancestor: extra files, phantom hunks, exit 0 the whole way. So if the default branch or the base comes back **empty**, stop deriving: render `Base: unresolved (<why>)` in the report header, review the working tree against `HEAD`, and say in the report that the run covers only uncommitted work and may be missing commits already on the branch. Never hand `git diff` a ref you have not seen resolve, and never silently review nothing.
 
+### Optional: a caller-supplied `base_override`
+
+A coordinator that has already reviewed a PR and then rolled nits into it (`take-it` §6, **Nit roll-in**)
+may hand you `base_override`: the full commit id it reviewed. It narrows the review to the roll-in
+delta. It is an input to this step only, and **absent means nothing changes**: the derivation above,
+the report and the identity below are exactly what they were. No other dispatch passes it; the agent
+site and `send-it` never do.
+
+When it is present, do not derive a base. First check its spelling, before any `git` call: it must
+match `^[0-9a-f]{40}$` or `^[0-9a-f]{64}$`, a full object id and nothing else. That rules out `HEAD`, a
+branch or tag name, an abbreviated id and a value with a leading `-`, which `cat-file` and `merge-base`
+would accept or read as an option. Then validate it with plain statements and the value typed
+literally:
+
+```bash
+git cat-file -t <base_override>
+git merge-base --is-ancestor <base_override> HEAD
+```
+
+It must name a commit (the first prints `commit`) and be an ancestor of `HEAD` (the second exits 0).
+Anything else is **unusable input**: a missing object, a non-commit, a commit that is not an ancestor,
+a value that fails the spelling check above. Stop before Step 2, dispatch nothing, and return only
+`## PR review — unusable input` with `Base: override <value> unusable (<why>)`. That is not a report and
+never counts as clean: the caller treats it as its **NO REPORT** path, since an orchestrator ran. It is
+never a silent fallback to the default-branch base, because that review would cover a different change
+than the one the caller asked about, and would read as the delta being clean. The `unusable input`
+reply is **final**: it goes straight to NO REPORT, with no `report-only` request and no recovery
+reservation (see Report-only recovery below).
+
+With a valid override, `<base>` in the commands above is the override itself: diff the working tree
+against it (`git diff <base>`), and list untracked files as before. Steps 2 to 5 run unchanged over that
+smaller changeset, and the report header names the override on its `Base:` line.
+
 ### Changeset identity for recovery
 
 Capture `changeset` before specialist work: `repo` (absolute root), `base_ref` (the derived
-default-branch ref), `base_oid` (resolved merge-base), `head_oid` (resolved HEAD),
+default-branch ref, or `override` when `base_override` is present), `base_oid` (resolved merge-base,
+or the override commit), `base_override` (the caller-supplied commit id, null when absent, so an
+override run and a default-branch run never compare equal), `head_oid` (resolved HEAD),
 `tracked_diff_sha256`, and `untracked_sha256`. Hash the bytes of
 `git diff --binary --no-ext-diff --no-textconv <base> --` for the tracked working diff,
 including staged and unstaged content. For untracked content, enumerate with
@@ -55,6 +90,10 @@ of path, file type, executable mode and content SHA-256; for symlinks hash the l
 not the file it points to. Use an unambiguous encoding with byte lengths or escaped JSON,
 and retain the encoding with the plan so the caller can reproduce it. Names, timestamps,
 file counts and HEAD alone are not content identity.
+
+Every mode honours the plan's `changeset.base_override` (`plan-only`, `aggregate-only` and
+`report-only`), and a caller passes the same `base_override` again on each recovery call; a recovery
+call that omits it while the plan carries one is a changed input, not a default-branch review.
 
 Re-resolve the base and recapture this identity at each dispatch/aggregation boundary and
 after the work, not merely when the plan was made. Keep the original scope statement and
@@ -216,7 +255,9 @@ followed by `No blocking findings, no nits. Proceed to the PR body.` The
 compact clean form is complete and needs no recovery. A correction, tally, partial prose,
 `review-fanout-plan`, message, file pointer, or a summary that does not enumerate the report's
 findings is not a complete report and never counts as clean. A `review-fanout-plan` is a control
-result for Caller recovery below, not report-only recovery.
+result for Caller recovery below, not report-only recovery. A `## PR review — unusable input` reply
+(Step 1's `base_override` refusal) is final: it goes straight to NO REPORT, with no `report-only`
+request and no reservation, because nothing was ever analysed to report.
 
 When the actual caller receives incomplete final human text other than a `review-fanout-plan`
 control from this shipped orchestrator, retain
@@ -327,7 +368,7 @@ Accept a reviewer's returned result only when it is a usable envelope whose JSON
 ```text
 ## PR review — <N> surfaces, <M> blocking, <K> nits
 
-Base: <ref, or "unresolved (<why>)"> · files changed: <n>
+Base: <ref, or "unresolved (<why>)", or "override <commit id> (roll-in delta)"> · files changed: <n>
 Surfaces: code ✓ / security ✓ / tests ! / infra – / ci – / deps – / obs – / arch – / docs ✓
           (✓ reviewed, – untouched, ! dispatched but no usable result)
 
@@ -345,7 +386,7 @@ With nothing to report at all:
 
 ```text
 ## PR review — clean
-Base: <ref> · files changed: <n>. Surfaces: <…>. No blocking findings, no nits. Proceed to the PR body.
+Base: <ref, or "unresolved (<why>)", or "override <commit id> (roll-in delta)"> · files changed: <n>. Surfaces: <…>. No blocking findings, no nits. Proceed to the PR body.
 ```
 
 The caller maps your output: **Blocking → fix locally and re-run; Nits → roll in or note "Known and accepted" in the PR body; clean → proceed.** Render the header, the base and the surfaces line on **every** run, the clean one included — a review that failed to happen reads exactly like a review that found nothing, and those three lines are the only thing separating them. A run carrying any `!` surface, or an unresolved base, is a **degraded** run: say so in the first line of the report rather than letting a short Blocking list imply a clean diff.
