@@ -58,7 +58,7 @@ deletion) must wait for the guard. Read it first:
 git rev-parse --show-toplevel
 ```
 
-Pass the path it printed as `--repo`, typed literally. A `git` command is never wrapped in `$(...)` or handed a shell variable here: a worktree-isolated session refuses both forms.
+Pass the path it printed as `--repo`, typed literally. A command that names `git` carries no shell expansion here (no `$(...)`, no `$NAME`, no `${`), and a step that needs one runs it in a separate block: a worktree-isolated session refuses `git` beside any of them.
 
 **Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
@@ -78,8 +78,11 @@ the operator's `abandon` route). This skill never holds a guard, never passes
 
 ```bash
 git fetch --prune
-git switch "$DEFAULT_BRANCH" 2>/dev/null && git pull --ff-only || true
+git switch <default-branch> 2>/dev/null && git pull --ff-only || true
 ```
+
+Type the default branch name literally in place of `<default-branch>`; it is a name you already
+read in step 0, not a shell variable.
 
 After this, `git branch -vv` marks stale locals `[gone]` for every remote branch that was deleted
 (the common case once a PR merges with auto-delete).
@@ -103,8 +106,14 @@ awk positional tokens, which Skill-args substitution corrupts when this skill is
 ```bash
 echo "--- branches ---"; git branch -vv
 echo "--- worktrees ---"; git worktree list
-echo "--- remote branches ---"; gh api "repos/$REPO/branches" --paginate --jq '.[].name' | sort
 ```
+
+```bash
+gh api "repos/$REPO/branches" --paginate --jq '.[].name' | sort
+```
+
+The remote listing is its own block and its own Bash call: it carries a shell expansion, and a
+worktree-isolated session refuses a command that names `git` beside one.
 
 For each non-default branch and each non-root worktree:
 
@@ -113,7 +122,7 @@ For each non-default branch and each non-root worktree:
 | Local branch marked `[gone]` | Stale — remote deleted, safe to delete locally |
 | Local `worktree-agent-*` isolation branch not checked out by any present worktree (worktree gone, switched away or detached; no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree, or the worker moved on. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a PR merged into `$DEFAULT_BRANCH` contains it (`gh api "repos/$REPO/commits/<tip>/pulls"`, keeping entries with `merged_at != null` and `base.ref == $DEFAULT_BRANCH`; a PR merged into another base does not count); neither → STOP and ask (possibly unmerged work) |
 | Local branch tracks a remote that still exists | `gh pr list --repo "$REPO" --state all --search "head:<branch>"` → MERGED / CLOSED-not-merged = stale; OPEN = leave |
-| Worktree SHA where `git merge-base --is-ancestor <sha> origin/$DEFAULT_BRANCH` is true | Stale — work is in the default branch |
+| Worktree SHA where `git merge-base --is-ancestor <sha> origin/<default-branch>` is true | Stale — work is in the default branch |
 | Worktree SHA NOT in the default branch | Investigate — possibly in-flight; do not remove without confirmation |
 | Remote branch + merged PR | Stale — delete |
 | Remote branch + CLOSED-not-merged PR | Stale — abandoned (often superseded). Delete local + remote |
@@ -156,10 +165,14 @@ For each stash, gather signals first:
 ```bash
 git stash show stash@{N} --stat          # files + line counts
 git stash list --format='%gs' stash@{N}  # subject ("WIP on <branch>: <commit>")
+```
 
-# Extract any issue number from the subject / branch name (e.g. "issue-825-…"), then look it up.
-# GitHub issues are OPEN or CLOSED, never "MERGED" — the "work shipped" signal lives on
-# closedByPullRequestsReferences:
+Extract any issue number from the subject / branch name (e.g. "issue-825-…"), then look it up in
+its own block and Bash call (it carries a shell expansion, and a worktree-isolated session refuses
+a command that names `git` beside one). GitHub issues are OPEN or CLOSED, never "MERGED" — the
+"work shipped" signal lives on `closedByPullRequestsReferences`:
+
+```bash
 gh issue view <N> --repo "$REPO" --json number,state,title,closedByPullRequestsReferences 2>/dev/null
 ```
 
@@ -343,6 +356,12 @@ gh pr list --repo "$REPO" --state merged --limit 50 --json headRefName --jq '.[]
 gh api "repos/$REPO/branches" --paginate --jq '.[].name' \
   | grep -v "^${DEFAULT_BRANCH}\$" | sort -u > /tmp/remote-branches.txt
 comm -12 /tmp/remote-branches.txt /tmp/merged-heads.txt   # candidates
+```
+
+Delete the confirmed candidates in a separate block and Bash call (the block above carries shell
+expansions, and a worktree-isolated session refuses a command that names `git` beside one):
+
+```bash
 git push origin --delete <branch1> <branch2> ...
 git fetch --prune
 ```

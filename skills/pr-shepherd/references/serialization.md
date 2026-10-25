@@ -28,12 +28,17 @@ Eject recovery: rebase onto new main → re-run the repo's regeneration command 
 **Merge coupled PRs ONE AT A TIME**, re-checking mergeable after each:
 
 ```bash
-# After merging the first coupled PR:
-git fetch origin "$DEFAULT_BRANCH" --quiet
+# After merging the first coupled PR (the default branch typed literally):
+git fetch origin <default-branch> --quiet
+```
+
+```bash
 gh pr view "$NEXT_PR" --json mergeable --jq .mergeable
 # MERGEABLE → safe to merge next.
 # CONFLICTING / behind → rebase + regenerate before merging (below).
 ```
+
+Two blocks on purpose, each its own Bash call: a worktree-isolated session refuses a command that names `git` beside a shell expansion, even in a separate statement.
 
 Uncoupled PRs can merge in any order, in parallel. Only the PRs touching the same derived-artifact directories need the serial path. Identify them by changed paths:
 
@@ -46,8 +51,8 @@ gh pr view "$PR" --json files --jq '[.files[].path] | map(select(test("migration
 When two branches both added derived artifacts, the rebase conflicts in the derived directory. Never hand-merge a migration journal or a codegen snapshot — take main's version wholesale, then regenerate yours on top so numbering/content is consistent:
 
 ```bash
-git fetch origin "$DEFAULT_BRANCH"
-git rebase "origin/$DEFAULT_BRANCH"
+git fetch origin <default-branch>
+git rebase origin/<default-branch>
 # On conflict in the derived dir:
 git checkout --theirs <derived-dir>
 git add <derived-dir>
