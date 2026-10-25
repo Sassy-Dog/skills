@@ -258,8 +258,9 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `attempt_id`, exactly like `recovery_used`. A record that is absent, or does not match the current
   head, means not reviewed: review it, and never hand it off unbound. **Check the cap first:** a
   `head_moved_hold` equal to the current head means the PR is neither reviewed nor handed off, and
-  it is not re-reviewed; a hold naming any other head is stale (the head moved again, by a human)
-  and is ignored, the carried count unchanged. A record that cannot be read
+  it is not re-reviewed; a hold naming any other head means a human moved the head (the loop
+  stopped acting at the hold), so clear the hold and reset `head_moved_reviews` to `0`, written and
+  confirmed in the verified record before the review of the new head. A record that cannot be read
   holds the PR this tick (a head that moved
   only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
   bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
@@ -908,7 +909,9 @@ Three conjuncts, and each excludes a normal state the loop already handles:
 
 1. **In-flight is non-zero and nothing moved this tick** — no dispatch, no merge, no tracked PR
    changing state. In-flight zero belongs to COMPLETE, DEFERRED and STALLED; this state exists
-   for the case none of them can see, where work EXISTS and cannot progress.
+   for the case none of them can see, where work EXISTS and cannot progress. A cap-held PR
+   (§2's `head_moved_hold`) is not counted as in-flight here and is never the PR the probe runs
+   against: only a human can advance it, so an outage is not what stops it.
 2. **Nothing this loop is permitted to advance** — §2's discriminator, reused and unchanged. A
    **red** check is a failure with its own redispatch path, so the loop still has an action and
    this conjunct is false. A **pending** check that is genuinely queued is the loop waiting, not
@@ -992,7 +995,8 @@ conjunct STALLED tests is satisfied here too — in-flight zero, nothing this lo
 non-empty held set — so this state is STALLED plus one further test, and evaluating STALLED first
 leaves it unreachable. DEGRADED cannot compete for it: that state requires in-flight non-zero and
 this one requires in-flight zero, so the two are disjoint by construction and the order between
-them decides nothing.
+them decides nothing. A cap-held PR keeps that true: DEGRADED does not count it, and it is a PR
+hold, so a held set containing it is never site-holds-only and is STALLED's, not this state's.
 
 Four conjuncts, and the fourth is the one that separates this state from STALLED:
 
@@ -1131,18 +1135,20 @@ held set:
 | Checks red, its issue not `blocked`, and its ONE §2 redispatch unspent | **Yes** — that redispatch is still available | keeps the loop alive |
 | Anything else this loop is not permitted to merge this tick | **No** — held is the default | held: joins the held set |
 
-**Rows 2 to 6 cannot fire at the moment STALLED is decided, and that is by construction rather
-than by accident.** STALLED's first conjunct is in-flight zero, which empties the branch half of
-the union — so every PR still enumerable carries `blocked`, and row 1 matches it first. The
-argument is exhaustive over the union, so it reaches the default row too: at that instant nothing
-falls through to it. This is the same shape as the self-resolving carve-out below, and it is stated
+**Every row below row 1 except the cap-held row cannot fire at the moment STALLED is decided, and
+that is by construction rather than by accident.** STALLED's first conjunct is in-flight zero, which
+empties the branch half of the union — so every PR still enumerable carries `blocked`, and row 1
+matches it first. The one exception is the cap-held row: STALLED waives that item's in-flight, so
+its issue is still `in-progress`, its PR is still enumerable, and it matches the cap-held row.
+The argument is exhaustive over the union, so it reaches the default row too: at that instant
+nothing falls through to it. This is the same shape as the self-resolving carve-out below, and it is stated
 for the same reason: a reader who works it out later will otherwise read the rows below row 1 as
 live guarantees, or delete them as dead prose. They are neither. They classify
 held-versus-advanceable for the two OTHER consumers of this table — §6's `holds:` line, which
 renders on every tick including ticks with work in flight, and the safety rails' "an open PR this
 loop may still advance" — and they are what stops a later widening of §2's enumeration from
 silently answering "alive" for a shape nobody classified. Delete them and that widening becomes a
-silent #282; treat them as reachable at STALLED time and the reasoning above them is wrong.
+silent #282; treat the other rows as reachable at STALLED time and the reasoning above them is wrong.
 
 **The last row is a default, not a catch-all to delete.** §2 holds a PR for more reasons than the
 rows above enumerate and will not stay exhaustive, and a table that silently answers "alive" for a
@@ -1150,7 +1156,7 @@ shape it does not know re-creates #282 one shape at a time. Held is the right de
 because it is the answer §2 already gives: a PR this loop may not merge is a PR it cannot advance.
 The two defaults are not mirror images: held ends the loop and names the PR wherever it fires,
 alive ticks forever and reports nothing. (Which of them fires at STALLED-decision time is a
-separate question, answered by the paragraph above — there, row 1 has already matched.)
+separate question, answered by the paragraph above — there, row 1 or the cap-held row has already matched.)
 
 **`CONFLICTING` needs its own row, above the checks rows, and the ordering is the point.** A
 conflicted PR stops CI firing at all, and `no checks reported` is indistinguishable from
@@ -1158,7 +1164,7 @@ conflicted PR stops CI firing at all, and `no checks reported` is indistinguisha
 PR matches "checks still running" and is answered with something that can never happen: §6's
 `holds:` line would report it as advancing on every tick, and the rails would read it as a PR this
 loop may still advance. It is NOT what lets a stalled queue confirm — at STALLED-decision time the
-paragraph above applies and row 1 has already matched — and saying so here would contradict it.
+paragraph above applies and row 1 or the cap-held row has already matched — and saying so here would contradict it.
 
 **The redispatch budget is the hinge on both failure rows**, so read this before "simplifying" the
 rows into fewer. §2 grants exactly ONE redispatch per issue, taken on a later tick; while it is
@@ -1235,7 +1241,7 @@ DRAIN STALLED — nothing dispatchable, nothing in flight, and nothing this loop
   #103 #104 #105 #106 #108 → chain to #102 (parked in Backlog: awaiting planning session)
   #22 → blocked label (dispatch-ready: 2 failed attempts — CI check needs a human call)
   PR #279 (#273) → open, issue blocked (3 Blocking review findings, redispatch spent)
-  PR #588 (#587) → head kept moving after review (held head <oid>): update or rebase by hand, then re-run
+  PR #588 (#587) → head kept moving after review (held head <oid>): update or rebase by hand, then re-run (a new head clears the hold and resets the re-review budget)
 Loop <id> cancelled — resolve the gate(s), then restart the drain.
 ```
 

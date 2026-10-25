@@ -1122,6 +1122,9 @@ mutant_pin "$rollin_take" 'where that record is durable' \
 mutant_pin "$takeit_flat" 'a PR given.*--expected-head is never given gh pr merge --auto' \
     's/is never given//' \
     "take-it hand-off never gives a bound PR gh pr merge --auto"
+mutant_pin "$rollin_take" 'a head the operator moved restores the budget' \
+    's/a head the operator moved restores the budget//' \
+    "take-it: a head the operator moved restores the re-review budget"
 mutant_pin "$dispatch_flat" 'keeps that count as .head_moved_reviews=<n>. in the same record as .reviewed_head.' \
     's/in the same record as//' \
     "dispatch-ready keeps head_moved_reviews beside reviewed_head in the verified record"
