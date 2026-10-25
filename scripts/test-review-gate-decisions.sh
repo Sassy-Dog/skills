@@ -126,6 +126,16 @@
 #      one same-agent report-only recovery. Both preserve durable
 #      recovery_used accounting across a new head, agent or tick. This extends
 #      decision 5 rather than inventing a second budget.
+#      #581 adds the coordinator site's NIT ROLL-IN beside it, and it sits
+#      OUTSIDE that budget on purpose: at most one per PR, capped by its own
+#      durable `nit_rollin=1` line, never counted in `recovery_used`, no
+#      reservation. Read the cap as the thing that stops it becoming a second
+#      retry loop, and do not "tidy" it into the allowance, which would let a
+#      roll-in spend the repair a failed check is owed. Its pins sit at the end
+#      of decision 5's section, each with an in-script mutant: the pin text is
+#      deleted (or, for the budget, a recovery write is appended) from a copy of
+#      the flattened document and the pin must go red on it, so a pin that
+#      matches nothing cannot sit green.
 #
 #   6. THE REPORT IS RETURNED, AND A LOST ONE IS ITS OWN OUTCOME. A review
 #      report is delivered as the reviewing agent's FINAL TEXT — its return
@@ -938,6 +948,111 @@ assert_in "$takeit_flat" \
 assert_in "$takeit_flat" \
     '\*\*Blocking findings → fix them and re-review before you commit\*\*' \
     "take-it's dispatched prompt fixes Blocking findings before committing"
+
+# --- decision 5, continued: the coordinator-site NIT ROLL-IN is outside the budget (#581)
+# mutant_pin <haystack> <ERE> <sed -E deletion> <label>: the pin must hold on the
+# real text AND go red on a copy with the pinned wording deleted. A mutation that
+# changes nothing is itself a failure, so a stale anchor cannot pass vacuously.
+mutant_pin() {
+    local hay="$1" re="$2" expr="$3" label="$4" m
+    if grep -qE -- "$re" <<<"$hay"; then ok "$label"; else bad "$label"; fi
+    m="$(sed -E "$expr" <<<"$hay")"
+    if [ "$m" = "$hay" ]; then
+        bad "$label — mutant did not apply"
+    elif grep -qE -- "$re" <<<"$m"; then
+        bad "$label — mutant survives, so the pin is vacuous"
+    else
+        ok "$label — mutant is caught"
+    fi
+}
+# mutant_forbid <haystack> <ERE> <text the mutant appends> <label>: a
+# must-not-exist pin that is green on the real text and red once the forbidden
+# wording is added.
+mutant_forbid() {
+    local hay="$1" re="$2" add="$3" label="$4"
+    if grep -qE -- "$re" <<<"$hay"; then bad "$label"; else ok "$label"; fi
+    if grep -qE -- "$re" <<<"$hay $add"; then
+        ok "$label — mutant is caught"
+    else
+        bad "$label — mutant survives, so the pin is vacuous"
+    fi
+}
+
+rollin_take="${takeit_flat#*\*\*Nit roll-in (this site only}"
+rollin_take="${rollin_take%%Use the capability skill*}"
+if [ "$rollin_take" = "$takeit_flat" ]; then
+    bad "take-it keeps a Nit roll-in region the pins below can slice"
+else
+    ok "take-it keeps a Nit roll-in region the pins below can slice"
+fi
+rollin_disp="${dispatch_flat#*Reviewed PRs with no Blocking finding and at least one nit}"
+rollin_disp="${rollin_disp%%PRs carrying a Blocking review finding*}"
+if [ "$rollin_disp" = "$dispatch_flat" ]; then
+    bad "dispatch-ready keeps a Nit roll-in region the pins below can slice"
+else
+    ok "dispatch-ready keeps a Nit roll-in region the pins below can slice"
+fi
+
+mutant_pin "$rollin_take" 'at most ONE per PR; outside the recovery budget' \
+    's/at most ONE per PR; outside the recovery budget//' \
+    "take-it caps the roll-in at one per PR and places it outside the recovery budget"
+mutant_pin "$rollin_take" 'It is never counted in `recovery_used` and writes no reservation' \
+    's/never counted in `recovery_used` and writes no reservation//' \
+    "take-it: the roll-in is never counted in recovery_used and writes no reservation"
+mutant_pin "$rollin_take" 'The cap is `nit_rollin`, one per PR, spent whatever the delta returns' \
+    's/spent whatever the delta returns//' \
+    "take-it: the cap is its own nit_rollin line, spent whatever the delta returns"
+mutant_pin "$rollin_take" 'write `nit_rollin=1 reviewed_head=<full commit id of the head you reviewed>`' \
+    's/nit_rollin=1 reviewed_head=//' \
+    "take-it writes the durable cap line before the send"
+mutant_pin "$rollin_take" 'Nits in the delta are reported and never rolled in again' \
+    's/never rolled in again//' \
+    "take-it never rolls in a second time on the delta's own nits"
+mutant_pin "$rollin_take" 'A roll-in commit that breaks CI takes the existing failed-check path' \
+    's/takes the existing failed-check path//' \
+    "take-it: a roll-in commit that breaks CI takes the failed-check path"
+mutant_pin "$rollin_take" 'Never revert a roll-in commit' \
+    's/Never revert a roll-in commit//' \
+    "take-it never reverts a roll-in commit"
+mutant_pin "$rollin_take" 'sort into file and accept only: never roll in' \
+    's/never roll in//' \
+    "take-it has the sort-only fallback"
+mutant_pin "$rollin_take" 'with `base_override` set to that `reviewed_head`' \
+    's/base_override/override/' \
+    "take-it reviews the delta through base_override"
+mutant_forbid "$rollin_take" 'recovery_used=1|recovery=(pending|started|finished)' \
+    'write recovery_used=1 recovery=pending first' \
+    "take-it's roll-in region writes no recovery record"
+
+mutant_pin "$rollin_disp" 'outside the recovery budget: never counted in `recovery_used`, no reservation' \
+    's/never counted in `recovery_used`, no reservation//' \
+    "dispatch-ready: the roll-in is outside the recovery budget"
+mutant_pin "$rollin_disp" 'a PR that carries it is never sent a second roll-in' \
+    's/never sent a second roll-in//' \
+    "dispatch-ready caps the roll-in at one per PR across ticks"
+mutant_pin "$rollin_disp" 'means sort into file and accept only' \
+    's/sort into file and accept only//' \
+    "dispatch-ready has the sort-only fallback for a missing agent id"
+mutant_forbid "$rollin_disp" 'recovery_used=1|recovery=(pending|started|finished)' \
+    'persist recovery_used=1 recovery=pending' \
+    "dispatch-ready's roll-in region writes no recovery record"
+
+# The orchestrator half: the override is validated, identity-bound, named, and optional.
+mutant_pin "$orch_flat" 'merge-base --is-ancestor <base_override> HEAD' \
+    's/--is-ancestor <base_override> HEAD//' \
+    "the orchestrator validates base_override as an ancestor of HEAD"
+mutant_pin "$orch_flat" 'never a silent fallback to the default-branch base' \
+    's/never a silent fallback to the default-branch base//' \
+    "the orchestrator never falls back silently from an unusable override"
+mutant_pin "$orch_flat" 'absent means nothing changes' \
+    's/absent means nothing changes//' \
+    "the orchestrator's override is optional and its absence changes nothing"
+mutant_pin "$orch_flat" '`base_override` \(the caller-supplied commit id, null when absent' \
+    's/`base_override` \(the caller-supplied commit id, null when absent//' \
+    "the orchestrator carries base_override in the changeset identity"
+mutant_pin "$orch_flat" 'or "override <commit id> \(roll-in delta\)"' \
+    's/or "override <commit id> \(roll-in delta\)"//' \
+    "the orchestrator names the override on the report's Base: line"
 
 # ---------------------------------------------------------------------------
 # 6. The report is RETURNED; a lost one is its own outcome (decision 6, #273)

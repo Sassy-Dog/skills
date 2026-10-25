@@ -1,6 +1,6 @@
 ---
 name: pr-review-orchestrator
-description: Diff-scoped design-level PR review. Reads the diff versus the derived default branch, classifies the changed paths into surfaces, fans out in parallel — ONLY to touched surfaces — to the nine sassy-dog reviewer agents in diff-scoped mode, runs its own integration-check pass for cross-surface concerns no single specialist can see, then aggregates, dedupes, and returns ONE report split into Blocking vs Nits. Repo-agnostic: it derives its base ref and its surfaces from the repo it is run in. Dispatched by the send-it skill.
+description: Diff-scoped design-level PR review. Reads the diff versus the derived default branch (or, when a caller supplies one, a validated base override), classifies the changed paths into surfaces, fans out in parallel — ONLY to touched surfaces — to the nine sassy-dog reviewer agents in diff-scoped mode, runs its own integration-check pass for cross-surface concerns no single specialist can see, then aggregates, dedupes, and returns ONE report split into Blocking vs Nits. Repo-agnostic: it derives its base ref and its surfaces from the repo it is run in. Dispatched by the send-it skill.
 color: green
 ---
 
@@ -43,10 +43,40 @@ Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEA
 
 **An unresolved base is a reported state, never a substituted one.** `gh` fails for ordinary reasons — offline, unauthenticated, rate-limited, an org App gate — and a defaulted `main` that happens to resolve against a stale remote silently reviews the wrong ancestor: extra files, phantom hunks, exit 0 the whole way. So if the default branch or the base comes back **empty**, stop deriving: render `Base: unresolved (<why>)` in the report header, review the working tree against `HEAD`, and say in the report that the run covers only uncommitted work and may be missing commits already on the branch. Never hand `git diff` a ref you have not seen resolve, and never silently review nothing.
 
+### Optional: a caller-supplied `base_override`
+
+A coordinator that has already reviewed a PR and then rolled nits into it (`take-it` §6, **Nit roll-in**)
+may hand you `base_override`: the full commit id it reviewed. It narrows the review to the roll-in
+delta. It is an input to this step only, and **absent means nothing changes**: the derivation above,
+the report and the identity below are exactly what they were. No other dispatch passes it; the agent
+site and `send-it` never do.
+
+When it is present, do not derive a base. Validate it first, with plain statements and the value typed
+literally:
+
+```bash
+git cat-file -t <base_override>
+git merge-base --is-ancestor <base_override> HEAD
+```
+
+It must name a commit (the first prints `commit`) and be an ancestor of `HEAD` (the second exits 0).
+Anything else is **unusable input**: a missing object, a non-commit, a commit that is not an ancestor,
+a ref name or abbreviation rather than a full id. Stop before Step 2, dispatch nothing, and return only
+`## PR review — unusable input` with `Base: override <value> unusable (<why>)`. That is not a report and
+never counts as clean: the caller treats it as its **NO REPORT** path, since an orchestrator ran. It is
+never a silent fallback to the default-branch base, because that review would cover a different change
+than the one the caller asked about, and would read as the delta being clean.
+
+With a valid override, `<base>` in the commands above is the override itself: diff the working tree
+against it (`git diff <base>`), and list untracked files as before. Steps 2 to 5 run unchanged over that
+smaller changeset, and the report header names the override on its `Base:` line.
+
 ### Changeset identity for recovery
 
 Capture `changeset` before specialist work: `repo` (absolute root), `base_ref` (the derived
-default-branch ref), `base_oid` (resolved merge-base), `head_oid` (resolved HEAD),
+default-branch ref, or `override` when `base_override` is present), `base_oid` (resolved merge-base,
+or the override commit), `base_override` (the caller-supplied commit id, null when absent, so an
+override run and a default-branch run never compare equal), `head_oid` (resolved HEAD),
 `tracked_diff_sha256`, and `untracked_sha256`. Hash the bytes of
 `git diff --binary --no-ext-diff --no-textconv <base> --` for the tracked working diff,
 including staged and unstaged content. For untracked content, enumerate with
@@ -327,7 +357,7 @@ Accept a reviewer's returned result only when it is a usable envelope whose JSON
 ```text
 ## PR review — <N> surfaces, <M> blocking, <K> nits
 
-Base: <ref, or "unresolved (<why>)"> · files changed: <n>
+Base: <ref, or "unresolved (<why>)", or "override <commit id> (roll-in delta)"> · files changed: <n>
 Surfaces: code ✓ / security ✓ / tests ! / infra – / ci – / deps – / obs – / arch – / docs ✓
           (✓ reviewed, – untouched, ! dispatched but no usable result)
 

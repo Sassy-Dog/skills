@@ -210,7 +210,8 @@ returns the same findings envelope (`{"findings": [...]}`) and finding schema in
 `assess-it`, and **diff-scoped mode**, one changeset dispatched by `pr-review-orchestrator`.
 
 `pr-review-orchestrator` is the tenth agent and the diff-scoped entry point, dispatched by `send-it`
-before the PR body is drafted. It reads the diff versus the derived default branch, classifies the
+before the PR body is drafted. It reads the diff versus the derived default branch (or, for a
+coordinator's review of a nit roll-in delta, a validated caller-supplied base commit), classifies the
 changed paths into surfaces, fans out in parallel to the touched surfaces' reviewers only, runs its
 own integration-check pass for the cross-surface concerns no single specialist can see, then
 aggregates and dedupes into one report split into Blocking versus Nits. It dispatches **only** these
@@ -243,7 +244,9 @@ reviewing each PR after it opens and before it merges. An absent key selects `co
 `setup-config` seeds it once from repo visibility (public → `agent`, internal/private →
 `coordinator`) and writes the resolved value explicitly rather than re-deriving it, so a later
 visibility change cannot silently rewrite a repo's review architecture. It chooses only the site —
-`review_agent:` still chooses the agent — and a Blocking finding is never merged past. The
+`review_agent:` still chooses the agent — and a Blocking finding is never merged past. On
+`coordinator`, nits from a clean review are sorted (roll in, file, accept) and the roll-in set goes
+back to the same worker once per PR, outside the recovery allowance below (`take-it` §6). The
 unattended paths share one automatic recovery allowance across failed checks, Blocking findings,
 missing/faulty reports and parent fan-out recovery; another failure gets the `blocked` label.
 The durable `recovery_used` value survives new heads, agents and dispatcher ticks.

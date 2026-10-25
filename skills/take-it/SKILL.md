@@ -261,7 +261,9 @@ override in §7**; the config itself is never edited, and the override is never 
 with `isolation: "worktree"`. In serial mode instead, use the reference's supervised foreground
 runner one worker at a time, each to verified process completion before the next, and record
 `{issue, pr, branch}` (no `worktreePath`). **Record the batch
-manifest** as results return — `{issue, pr, worktreePath, worktreeBranch}` — somewhere durable such
+manifest** as results return — `{issue, pr, worktreePath, worktreeBranch, agent_id}` (`agent_id` is
+the id the Agent call returned for that issue's worker, null where the harness returns none and for
+a serial worker; §6's **Nit roll-in** resumes the worker by it) — somewhere durable such
 as `.git/take-it-batch.json`, so a crashed coordinator's worktrees stay reclaimable.
 
 **Dispatch every implementation sub-agent at tier `terra` (Claude Code: `model: "sonnet"` · omp:
@@ -662,7 +664,8 @@ Then:
 - **Blocking finding** → hold the PR; **never merge past it**. Name the finding in the §7 report and
   allow ONE redispatch carrying it as context. A second failure gets the `blocked` label plus a
   comment naming the finding, and a human decides.
-- **Nits** → note them in the report; they never hold a merge.
+- **Nits** → they never hold a merge. With no Blocking finding and at least one nit, run the
+  **Nit roll-in** below before the hand-off; its sort decides what each nit becomes.
 - **Dispatched, but no report came back** → print
   `review: NO REPORT — <agent> dispatched, no report returned (lint/type/test only)`, name the
   agent, and **hold the PR** — never merge it, and never hand it to `sassy-dog:pr-shepherd`. Never
@@ -679,6 +682,43 @@ Then:
 - **No agent resolved, or the dispatch failed** (anything other than that explicit opt-out) → print
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` and name which of the two it
   was (the cause, never the opt-out). Never merge on a review that was never reported.
+
+**Nit roll-in (this site only; at most ONE per PR; outside the recovery budget).** It runs once the
+review of the current head returned no Blocking finding and at least one nit, before the PR goes to
+`sassy-dog:pr-shepherd`. It never runs under `review_agent: skip` or `review_site: agent`, and
+`send-it` is unchanged: on both of those, nits already roll in before the PR opens. `dispatch-ready` §2
+runs this same step and points here for its definition.
+
+1. **Sort every nit into exactly one bin**, and record the sort in the PR body (a `Nit sort:` list).
+   **roll in**: inside the issue's stated scope, small, and adds no new script, guard or test
+   machinery. **file**: has a concrete failure scenario but is out of scope or large; name it in the
+   §7 report for the operator and never file it automatically. **accept**: no failure scenario, or it
+   only extends coverage of behaviour that is already correct; list it under "Known and accepted" in
+   the PR body.
+2. **Send the roll-in set once**, to the same worker by its manifest `agent_id` (SendMessage on Claude
+   Code; a finished worker resumes from its transcript). Before sending, write `nit_rollin=1
+   reviewed_head=<full commit id of the head you reviewed>` to the PR body and an issue comment, and
+   confirm the write: that line is the cap, so a restarted coordinator or a later tick never sends a
+   second. The message carries the coordinator-site step 6 prohibition: fix only the listed nits, run
+   the pre-flight, push to the same branch, run no review, write no recovery record. It resumes at the
+   tier the worker was dispatched at; read its returned final text and never wait on a notification.
+3. **Review only the roll-in delta.** Dispatch the same agent at tier `sol` (Claude Code: `model:
+   "opus"` · omp: `model: "@default"`) with `base_override` set to that `reviewed_head`, an input only
+   the shipped orchestrator defines (Step 1 of `pr-review-orchestrator.md`; it validates the commit as
+   an ancestor of `HEAD` and never falls back to the default branch). Do not forward the main review's
+   changeset identity: the override is part of the delta review's own. A Blocking finding in the delta
+   takes the existing Blocking path above. Nits in the delta are reported and never rolled in again.
+   An unusable override or an unusable delta report is NO REPORT, so the PR is held.
+4. **The roll-in is not a recovery.** It is never counted in `recovery_used` and writes no
+   reservation. The cap is `nit_rollin`, one per PR, spent whatever the delta returns; it is not a
+   retry loop, and a roll-in never reduces or refreshes the one shared allowance.
+5. **A roll-in commit that breaks CI takes the existing failed-check path**: the one recovery if
+   unused, then `blocked`. Never revert a roll-in commit.
+6. **Sort-only fallback.** With no recorded `agent_id`, a worker the harness cannot resume (a session
+   restart, a serial worker, a harness without resume), a failed send, or a review agent other than
+   the shipped orchestrator (no `base_override`, so the delta could not be reviewed), sort into file
+   and accept only: never roll in, dispatch nothing, and say in the PR body that the roll-in was
+   skipped and why.
 
 Use the capability skill for ALL polling, merge, and teardown mechanics — do NOT reimplement them
 inline:
@@ -736,6 +776,8 @@ for unshipped issues) and a next-action one-liner per failure.
 - **Never merge past a Blocking review finding**, on either `review_site`. One redispatch carrying
   the finding, then `blocked` — and a review that could not run, or that ran and never came back,
   is reported under its own name, never passed over and never waited out.
+- **One nit roll-in per PR, and it is not a recovery.** §6 defines it; it is never counted in
+  `recovery_used`.
 - **Never auto-rebase a CONFLICTING PR** — surface it. Expect an upper stack layer to go
   `CONFLICTING` after the layer below squash-merges; that is the normal shape, not a fault.
 - Cap parallelism at 5. Don't dispatch on stubs or `blocked` issues.
