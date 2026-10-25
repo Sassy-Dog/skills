@@ -24,7 +24,8 @@
 #   seconds (keep N under the host's kill window, e.g. 240) then exits cleanly.
 #   --direct: for repos WITHOUT a merge queue — squash-merge + --delete-branch
 #   instead of enqueueing. Default is queue mode (GraphQL enqueuePullRequest;
-#   `gh pr merge --auto` only as a fallback when the mutation errors).
+#   `gh pr merge --auto` only as a fallback when the mutation errors, and never
+#   under --expected-head, #587).
 #   --allow-no-checks: merge even when the PR reports ZERO checks in a repo that
 #   demonstrably runs CI on pull requests (see the empty-rollup trap below).
 #   Repo defaults to the cwd checkout (gh repo view); --repo overrides.
@@ -37,13 +38,12 @@
 #   <id>` on the --direct merge (there is NO `gh pr merge --auto` fallback under a
 #   bound run, #587: its match is checked only when auto-merge is armed, so an
 #   armed fallback could outlive the binding). An
-#   unreadable head is exit 11 (re-run), never a merge. Without the flag
-#   nothing changes. A moved head is not a failure: the caller re-reviews.
+#   unreadable head is exit 11 (re-run), never a merge. A moved head is not a
+#   failure: the caller re-reviews.
 #   A bound write that GitHub refuses is followed by a re-read of the head: a
 #   head that moved is exit 25, an unchanged one is exit 11 and the next pass
 #   retries the bound enqueue (a mutation that keeps failing stalls at 11
-#   rather than merging: fail closed). Without the flag the --auto fallback is
-#   unchanged. The --direct staleness update
+#   rather than merging: fail closed). Without the flag nothing changes. The --direct staleness update
 #   is unbound under `gh pr update-branch`, so a bound run uses REST
 #   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
 #   25 saying the head moved BY DESIGN (the update is a merge commit; the caller
@@ -79,7 +79,8 @@
 # confirm reads false, and every pass exits 11 forever. The mutation sidesteps
 # the flag matrix entirely (schema-verified: EnqueuePullRequestInput's only
 # required field is pullRequestId). `gh pr merge --auto` (NO method flag) is
-# retained only as a fallback when the mutation itself errors. The stateless
+# retained only as a fallback when the mutation itself errors, and never under
+# --expected-head (#587). The stateless
 # eject re-enqueue path (see the queue-ejects note below) reuses the same
 # primitive.
 #
@@ -107,7 +108,8 @@
 # it (the queue rebuilds each entry against the current base), so the gate runs
 # on the direct path only. behind_by() answers it with one compare call — no
 # checkout, stateless. Behind the base -> `gh pr update-branch` + exit 11: the
-# checks re-run against the new base and the next invocation merges. An UNKNOWN
+# checks re-run against the new base and the next invocation merges (under
+# --expected-head the update is the bound REST form and the exit is 25, #587). An UNKNOWN
 # behind-count proceeds rather than stalling a healthy merge — unlike the
 # empty-rollup and stack gates, the failure mode here is a re-run, and the
 # update-branch write is the recovery, so a probe outage must not wedge it.
@@ -211,7 +213,8 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # The enqueue primitive (see ENQUEUE PRIMITIVE in the header): resolve the PR
 # node id, then GraphQL enqueuePullRequest — wrapped in gh-retry.sh exactly
 # like the old CLI enqueue. Falls back to `gh pr merge --auto` (NO method
-# flag) only when the node id cannot be resolved or the mutation errors.
+# flag) only when the node id cannot be resolved or the mutation errors, and
+# never under --expected-head (#587): a bound run returns 1 instead.
 # Success here is advisory either way — the caller confirms via the
 # isInMergeQueue read, never via this function's exit code.
 enqueue() {

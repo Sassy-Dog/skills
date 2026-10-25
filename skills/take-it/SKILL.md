@@ -757,13 +757,16 @@ head that review covered. A moved head that review finds Blocking takes the exis
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
 PR behind forever (each pass updates the branch, the update is a merge commit so the Delta base rule
 sends it to a full `sol`-tier review, and the base moves again). Count each exit `25` that sends a PR
-back to review as `head_moved_reviews`, kept beside that PR's reviewed head and bound to the active
-`attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the
+back to review as `head_moved_reviews`, kept beside that PR's reviewed head; where that record is
+durable (`dispatch-ready`'s verified per-attempt record) it is read back author-checked and bound to
+the active `attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the
 cause: `head kept moving after review`. The hold is not `blocked`, spends no recovery and writes no
 reservation; the operator updates or rebases the branch by hand, or re-runs. This coordinator keeps
-the count in its per-PR state beside the head it reviewed, mirrored as `head_moved_reviews=<n>` in
-the PR body, and an absent count is `0`: the loop runs in one synchronous session, so a fresh
-invocation is a fresh review. The cap record carries no count, since it exists only after a roll-in.
+the count in its in-session per-PR state beside the head it reviewed, mirrored as
+`head_moved_reviews=<n>` in the PR body for the operator only. That mirror is never its source of
+truth: a fresh invocation ignores any `head_moved_reviews=<n>` already in the PR body, starts the
+count at `0` and reviews in full, because a restarted coordinator holds no reviewed head to bind to
+anyway. The cap record carries no count, since it exists only after a roll-in.
 
 Use the capability skill for ALL polling, merge, and teardown mechanics — do NOT reimplement them
 inline:
@@ -771,8 +774,9 @@ inline:
 ```
 Skill: sassy-dog:pr-shepherd
 Args: "Watch PRs <numbers from the RESULT lines> in <repo>. Merge policy:
-       <merge_queue ? 'MERGE QUEUE — enqueue greens with gh pr merge --auto (no method flag, no
-       --delete-branch), confirm isInMergeQueue, handle ejects'
+       <merge_queue ? 'MERGE QUEUE — merge-shepherd.sh in its queue mode (the GraphQL enqueue,
+       no method flag, no --delete-branch), confirm isInMergeQueue, handle ejects; a PR given
+       --expected-head is never given gh pr merge --auto'
                     : 'DIRECT — gh pr merge --squash --delete-branch, serialize coupled PRs'>.
        <for each PR whose review you ran: 'PR <n>: pass --expected-head <reviewed commit id> to
        merge-shepherd.sh; on its exit 25 (head moved) merge nothing and report it back.'>

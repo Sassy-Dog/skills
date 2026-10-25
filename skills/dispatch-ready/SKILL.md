@@ -193,7 +193,13 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   merge to the reviewed head** defines both, with the cap on re-reviews in **Cap on head-moved
   re-reviews** beside it. A tick keeps that count as `head_moved_reviews=<n>` in the same
   record as `reviewed_head`, mirrored in the PR body and read back author-checked and
-  bound to the active `attempt_id`; an unreadable count is a hold. Where this loop reviewed (not under `review_agent:
+  bound to the active `attempt_id`; an absent count is `0`, and an unreadable or unverifiable one
+  is a hold. **On the tick that sees exit `25`, write the incremented count to that record and
+  confirm the write BEFORE dispatching the re-review**, so a tick that dies in between leaves the
+  spent re-review counted. When that exit `25` is the one the cap refuses (take-it §6: the count is
+  already two), dispatch no review and write `head_moved_hold=<full oid of the new head>` instead,
+  leaving the count unchanged: the hold is its own explicit state, never readable as "re-review
+  owed", and §7 treats it as a human-action hold. Where this loop reviewed (not under `review_agent:
   skip` or `review_site: agent`, which pass no head), never hand a PR off unbound: no matching
   record means the PR is not reviewed. A moved head is not a failure and spends no recovery; this section's
   "Reviewed" rule re-reviews it next tick, up to that cap. **Keep the issue → open-PR mapping this step produces** — §4's Collision
@@ -250,7 +256,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `reviewed_head`, which stays the delta base; a delta review rewrites this one to the head it
   covered), mirrored in the PR body and read back author-checked and bound to the active
   `attempt_id`, exactly like `recovery_used`. A record that is absent, or does not match the current
-  head, means not reviewed: review it, and never hand it off unbound. A record that cannot be read
+  head, means not reviewed: review it, and never hand it off unbound. **Check the cap first:** a
+  `head_moved_hold` equal to the current head means the PR is neither reviewed nor handed off, and
+  it is not re-reviewed; a hold naming any other head is stale (the head moved again, by a human)
+  and is ignored, the carried count unchanged. A record that cannot be read
   holds the PR this tick (a head that moved
   only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
   bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
@@ -272,8 +281,9 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   resetting the budget. Refresh a stale plan before the batch within the same reserved round;
   an aggregate-only response cannot authorize a second batch. Custom agents retain their existing
   contract. Never change `review_site` or escalate through ancestors. Persist the outcome,
-  `reviewed_head=<full oid of the head it covered>` and `recovery_used` in the PR body and issue
-  comment, and hand only reviewed PRs to
+  `reviewed_head=<full oid of the head it covered>`, `head_moved_reviews` (and `head_moved_hold`
+  when set) and `recovery_used` in the PR body and issue comment; a delta-review rewrite carries
+  the count and the hold forward unchanged, never resetting the cap. Hand only reviewed PRs to
   `sassy-dog:pr-shepherd` this tick. A PR whose review
   could not run at all — no agent resolved, or the dispatch failed — reports
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause (the dispatch
@@ -1041,7 +1051,9 @@ over a **non-empty** held set — every Ready item held by a §4 filter or a ver
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
 reason COMPLETE's condition now states all of its own. One waiver, also stated here: an ownership
 hold or a refused acquisition (§7's opening) waives in-flight zero, because no in-flight item can
-advance without the checkout ownership the tick lacks. Nothing
+advance without the checkout ownership the tick lacks; a cap-held PR (§2's `head_moved_hold`) waives
+it for that item only, because only a human can advance it, so it cannot keep the loop alive by
+itself. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents
 working, and dependency holds only resolve when a dep closes — with nothing in flight, only
 external or human action closes one. The loop is stalled, not idle; "Ready isn't empty" alone must
@@ -1114,6 +1126,7 @@ held set:
 | Its issue carries `blocked` | **No** — §2 already routed it to a human | held: joins the held set |
 | `CONFLICTING` | **No** — §2 never auto-rebases; a human resolves the conflict | held: joins the held set |
 | Held by a §2 review outcome — a Blocking finding, a `NO REPORT`, a held `SKIPPED`, or a `deferred` no review has replaced — with its ONE §2 redispatch spent | **No** — never merged past, and nothing left to redispatch | held: joins the held set |
+| Cap-held: its `head_moved_hold` equals its current head (§2: `take-it` §6's cap on head-moved re-reviews was reached) | **No** — only a human can update or rebase it; its issue stays `in-progress`, not `blocked`, and its in-flight is waived | held: joins the held set |
 | Checks still running, and not `CONFLICTING` | **Yes** — a later tick merges it once it goes green | keeps the loop alive |
 | Checks red, its issue not `blocked`, and its ONE §2 redispatch unspent | **Yes** — that redispatch is still available | keeps the loop alive |
 | Anything else this loop is not permitted to merge this tick | **No** — held is the default | held: joins the held set |
@@ -1196,7 +1209,7 @@ tick as a whole.
 another session that is about to close a dependency, unblock an issue, or merge a PR. Ticks share
 no memory, so persist the observation next to the §5 batch manifest, in
 `.git/dispatch-ready-stall.json`: the held set — held issue numbers AND held PR numbers — with each
-one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the specific execution-safety prerequisite, an ownership hold's guard path and `created_at`, a refused acquisition's exit code and branch, the Blocking finding a held PR carries).
+one's hold root (the open `Depends on #N` it chains to, the `blocked` label, the decision gate, the specific execution-safety prerequisite, an ownership hold's guard path and `created_at`, a refused acquisition's exit code and branch, the Blocking finding a held PR carries, a cap-held PR's number and held head: `head moved <PR> <head oid>`).
 
 **"Matches exactly" compares the identifiers and each one's hold ROOT, never the rendered
 sentence.** Two honest ticks word the same hold differently, and a comparison over free text never
@@ -1222,6 +1235,7 @@ DRAIN STALLED — nothing dispatchable, nothing in flight, and nothing this loop
   #103 #104 #105 #106 #108 → chain to #102 (parked in Backlog: awaiting planning session)
   #22 → blocked label (dispatch-ready: 2 failed attempts — CI check needs a human call)
   PR #279 (#273) → open, issue blocked (3 Blocking review findings, redispatch spent)
+  PR #588 (#587) → head kept moving after review (held head <oid>): update or rebase by hand, then re-run
 Loop <id> cancelled — resolve the gate(s), then restart the drain.
 ```
 

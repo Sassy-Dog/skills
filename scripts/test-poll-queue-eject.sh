@@ -396,6 +396,14 @@ ms_suite() {
     MS_NOID=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound, node id unresolved: exit 11" 11
     ms_expect "bound, node id unresolved: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
+    # node id unresolved AND the head moves after the gate's read: no bound write was attempted, so this pass
+    # does not re-read the head and answers 11; the NEXT pass's head gate (the PR now reports H2) answers 25.
+    MS_NOID=1 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound, node id unresolved, head moved after the gate: exit 11 (no write was attempted)" 11
+    ms_expect "bound, node id unresolved, head moved: no auto-merge armed" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
+    MS_NOID=1 ms_run "$sc" "$H2" --expected-head "$H1"
+    ms_rc "bound, node id unresolved, next pass sees the moved head: exit 25" 25
+    ms_expect "bound, next pass: nothing written" "$(! ms_wrote; echo $?)"
     MS_NOID=1 ms_run "$sc" "$H1"
     ms_rc "no flag, node id unresolved: the --auto fallback still enqueues (exit 10)" 10
     MS_MERGE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
@@ -471,6 +479,10 @@ ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shi
 ms_mutant no-moved-check-after-bound-enqueue '      head_moved && return 25
     elif' '    elif'
 ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
+ms_mutant noid-path-rereads-head 'under --expected-head; re-run" >&2
+    return 1' 'under --expected-head; re-run" >&2
+    head_moved && return 25
+    return 1'
 ms_mutant bound-update-exits-11 'then re-run with the new head"
             return 25' 'then re-run with the new head"
             return 11'

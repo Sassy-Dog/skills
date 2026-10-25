@@ -1113,11 +1113,20 @@ mutant_pin "$rollin_take" 'head kept moving after review.. The hold is not .bloc
 mutant_pin "$rollin_take" 'bound to the active.`attempt_id`' \
     's/bound to the active//' \
     "take-it binds head_moved_reviews to the active attempt_id"
+mutant_pin "$rollin_take" 'a fresh invocation ignores any .head_moved_reviews=<n>. already in the PR body' \
+    's/a fresh invocation ignores any//' \
+    "take-it never takes its head-moved count from the PR-body mirror"
+mutant_pin "$rollin_take" 'where that record is durable' \
+    's/where that record is durable//' \
+    "take-it binds the count to attempt_id only where the record is durable"
+mutant_pin "$takeit_flat" 'a PR given.*--expected-head is never given gh pr merge --auto' \
+    's/is never given//' \
+    "take-it hand-off never gives a bound PR gh pr merge --auto"
 mutant_pin "$dispatch_flat" 'keeps that count as .head_moved_reviews=<n>. in the same record as .reviewed_head.' \
     's/in the same record as//' \
     "dispatch-ready keeps head_moved_reviews beside reviewed_head in the verified record"
-mutant_pin "$dispatch_flat" 'an unreadable count is a hold' \
-    's/an unreadable count is a hold//' \
+mutant_pin "$dispatch_flat" 'an unreadable or unverifiable one is a hold' \
+    's/an unreadable or unverifiable one is a hold//' \
     "dispatch-ready holds the PR when the head_moved_reviews count is unreadable"
 mutant_pin "$dispatch_flat" 'treat exit .25. \(the head moved\) as .take-it. §6.s \*\*Bind the merge to the reviewed head\*\* defines both' \
     's/Bind the merge to the reviewed head//' \
