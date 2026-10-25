@@ -295,7 +295,7 @@ case "$1" in
             *headRefOid*)         [ "${MS_HEAD_RC:-0}" = 0 ] || exit 1
                                   n=$(( $(cat "$MS_HEADCNT") + 1 )); echo "$n" >"$MS_HEADCNT"
                                   if [ -n "${MS_MOVE_AT:-}" ] && [ "$n" -ge "$MS_MOVE_AT" ]; then echo "$MS_HEAD_LATER"; else echo "$MS_HEAD"; fi ;;
-            *"pullRequest(number:\$pr){ id }"*) echo "PR_node_1" ;;
+            *"pullRequest(number:\$pr){ id }"*) [ -n "${MS_NOID:-}" ] || echo "PR_node_1" ;;
             */stacks*)            echo "HTTP/2.0 404 Not Found"; exit 1 ;;
             */compare/*)          echo "${MS_BEHIND:-0}" ;;
             *) echo "mock gh: unhandled api: $all" >&2; exit 1 ;;
@@ -358,10 +358,6 @@ ms_suite() {
     ms_expect "match: the mutation is given the reviewed id" "$(grep -q "eho=$H1" "$MS_CALLS"; echo $?)"
     ms_run "$sc" "$H64" --expected-head "$H64"
     ms_rc "match: a 64-hex id is accepted" 10
-    # match: fallback when the mutation errors
-    MS_ENQUEUE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
-    ms_expect "match: fallback gh pr merge --auto carries --match-head-commit" \
-        "$(grep -qE "pr merge 585 .*--auto --match-head-commit $H1" "$MS_CALLS"; echo $?)"
     # match: direct
     ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "match: direct merges (exit 0)" 0
@@ -391,17 +387,24 @@ ms_suite() {
     MS_ENQUEUE_RC=1 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound enqueue refused, head moved: exit 25" 25
     ms_expect "bound enqueue refused, head moved: the --auto fallback is not tried" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
-    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --expected-head "$H1"
-    ms_rc "bound fallback refused, head moved: exit 25" 25
-    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
-    ms_rc "bound enqueue and fallback refused, head unchanged: exit 11 as before" 11
+    # #587: no armed state outlives a bound run. --match-head-commit is checked only when
+    # auto-merge is ARMED, so a bound run never arms the --auto fallback: the mutation failing
+    # (or the node id unresolved) is exit 11, with no `pr merge` call at all.
+    MS_ENQUEUE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound enqueue refused, head unchanged: exit 11, retried next pass" 11
+    ms_expect "bound enqueue refused, head unchanged: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
+    MS_NOID=1 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound, node id unresolved: exit 11" 11
+    ms_expect "bound, node id unresolved: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
+    MS_NOID=1 ms_run "$sc" "$H1"
+    ms_rc "no flag, node id unresolved: the --auto fallback still enqueues (exit 10)" 10
     MS_MERGE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "bound direct merge refused, head moved: exit 25" 25
     MS_MERGE_RC=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "bound direct merge refused, head unchanged: exit 11 as before" 11
     # the bound --direct staleness update
     MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1"
-    ms_rc "stale + bound: update succeeds, exit 11" 11
+    ms_rc "stale + bound: update succeeds, exit 25 (re-review the update; not 11, a re-run would only reach 25)" 25
     ms_expect "stale + bound: says the head moved by design" "$(grep -q 'moved by design' <<<"$MS_OUT"; echo $?)"
     ms_expect "stale + bound: REST update carries expected_head_sha" "$(grep -q "update-branch -f expected_head_sha=$H1" "$MS_CALLS"; echo $?)"
     ms_expect "stale + bound: no unbound gh pr update-branch and no merge" "$(! grep -qE '^pr (update-branch|merge)' "$MS_CALLS"; echo $?)"
@@ -456,7 +459,10 @@ ms_mutant no-mismatch-gate '[ "$live_head" != "$EXPECTED_HEAD" ]' 'false'
 ms_mutant no-unreadable-gate 'if [ -z "$live_head" ]; then' 'if false; then'
 ms_mutant no-expectedHeadOid-field 'enqueuePullRequest(input:{pullRequestId:$prid,expectedHeadOid:$eho})' 'enqueuePullRequest(input:{pullRequestId:$prid})'
 ms_mutant empty-expectedHeadOid-value '-f eho="$EXPECTED_HEAD"' '-f eho=""'
-ms_mutant no-match-on-fallback '--auto --match-head-commit "$EXPECTED_HEAD"' '--auto'
+ms_mutant bound-run-arms-auto-fallback 'under --expected-head; re-run" >&2
+    return 1' 'under --expected-head; re-run" >&2
+    bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto --match-head-commit "$EXPECTED_HEAD" >/dev/null && return 0
+    return 1'
 ms_mutant no-match-on-direct '          --match-head-commit "$EXPECTED_HEAD" >/dev/null \' '          >/dev/null \'
 ms_mutant no-charset-check '*[!0-9a-f]*) echo' 'NEVER) echo'
 ms_mutant no-length-check '40|64) : ;;' '*) : ;;'
@@ -464,9 +470,10 @@ ms_mutant 25-not-terminal '0|1|20|22|24|25) exit' '0|1|20|22|24) exit'
 ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shift 2' '[ -n "$2" ] && EXPECTED_HEAD_SET=1; EXPECTED_HEAD="$2"; shift 2'
 ms_mutant no-moved-check-after-bound-enqueue '      head_moved && return 25
     elif' '    elif'
-ms_mutant no-moved-check-after-bound-fallback '    head_moved && return 25
-    return 1' '    return 1'
 ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
+ms_mutant bound-update-exits-11 'then re-run with the new head"
+            return 25' 'then re-run with the new head"
+            return 11'
 ms_mutant no-expected-sha-on-update '-f expected_head_sha="$EXPECTED_HEAD"' '-f expected_head_sha=""'
 ms_mutant no-moved-check-after-refused-update 'elif head_moved; then
             echo "HEAD MOVED — reviewed' 'elif false; then

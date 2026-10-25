@@ -1093,9 +1093,32 @@ mutant_pin "$rollin_take" 'Bind the merge to the reviewed head \(the one definit
 mutant_pin "$rollin_take" 'on a step 7 release with no new commit, the cap record.s .reviewed_head.' \
     's/no new commit, the cap record.s .reviewed_head.//' \
     "take-it binds a no-commit roll-in release to reviewed_head"
-mutant_pin "$rollin_take" 'Exit .25. means the head moved: it is not a failure, spends no recovery' \
+mutant_pin "$rollin_take" 'Exit .25. means the head moved: it is not a failure and spends.no recovery' \
     's/spends no recovery//' \
     "take-it: exit 25 re-reviews and spends no recovery"
+# #587: the exit-25 re-review cycle is capped, once, in take-it §6; dispatch-ready points at it and keeps
+# the count in the per-attempt record beside reviewed_head.
+mutant_pin "$rollin_take" 'Cap on head-moved re-reviews \(the one definition' \
+    's/Cap on head-moved re-reviews//' \
+    "take-it defines the cap on head-moved re-reviews once"
+mutant_pin "$rollin_take" 'At most .*two.* re-reviews per attempt are spent on exit' \
+    's/re-reviews per attempt are spent//' \
+    "take-it caps exit-25 re-reviews at two per attempt"
+mutant_pin "$rollin_take" 'A third exit .25. holds the PR with .*no further review' \
+    's/A third exit .25. holds the PR//' \
+    "take-it: a third exit 25 holds the PR without another review"
+mutant_pin "$rollin_take" 'head kept moving after review.. The hold is not .blocked., spends no recovery' \
+    's/head kept moving after review//' \
+    "take-it names the cause and the hold is not blocked and spends no recovery"
+mutant_pin "$rollin_take" 'bound to the active.`attempt_id`' \
+    's/bound to the active//' \
+    "take-it binds head_moved_reviews to the active attempt_id"
+mutant_pin "$dispatch_flat" 'keeps that count as .head_moved_reviews=<n>. in the same record as .reviewed_head.' \
+    's/in the same record as//' \
+    "dispatch-ready keeps head_moved_reviews beside reviewed_head in the verified record"
+mutant_pin "$dispatch_flat" 'an unreadable count is a hold' \
+    's/an unreadable count is a hold//' \
+    "dispatch-ready holds the PR when the head_moved_reviews count is unreadable"
 mutant_pin "$dispatch_flat" 'treat exit .25. \(the head moved\) as .take-it. §6.s \*\*Bind the merge to the reviewed head\*\* defines both' \
     's/Bind the merge to the reviewed head//' \
     "dispatch-ready passes the reviewed head and points at take-it for exit 25"

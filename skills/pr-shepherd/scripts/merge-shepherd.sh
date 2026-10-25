@@ -34,17 +34,23 @@
 #   exits 25 with no enqueue or merge call; a match is then carried INTO the
 #   write itself, because a push can land between the read and the call:
 #   `expectedHeadOid` in the enqueuePullRequest input, and `--match-head-commit
-#   <id>` on the `gh pr merge --auto` fallback and on the --direct merge. An
+#   <id>` on the --direct merge (there is NO `gh pr merge --auto` fallback under a
+#   bound run, #587: its match is checked only when auto-merge is armed, so an
+#   armed fallback could outlive the binding). An
 #   unreadable head is exit 11 (re-run), never a merge. Without the flag
 #   nothing changes. A moved head is not a failure: the caller re-reviews.
 #   A bound write that GitHub refuses is followed by a re-read of the head: a
-#   head that moved is exit 25 (and the --auto fallback is NOT tried), an
-#   unchanged one keeps the existing behaviour. The --direct staleness update
+#   head that moved is exit 25, an unchanged one is exit 11 and the next pass
+#   retries the bound enqueue (a mutation that keeps failing stalls at 11
+#   rather than merging: fail closed). Without the flag the --auto fallback is
+#   unchanged. The --direct staleness update
 #   is unbound under `gh pr update-branch`, so a bound run uses REST
 #   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
-#   11 saying the head moved BY DESIGN (the update is a merge commit; the caller
-#   re-reviews it and re-runs with the new head), a refusal that finds a moved
-#   head is 25, any other refusal keeps "update it by hand" and exit 11.
+#   25 saying the head moved BY DESIGN (the update is a merge commit; the caller
+#   re-reviews it and re-runs with the new head; #587: not 11, since a re-run
+#   with the same --expected-head would only reach 25 one pass later), a
+#   refusal that finds a moved head is 25, any other refusal keeps "update it
+#   by hand" and exit 11.
 #   The gate runs AFTER the MERGED and IN_QUEUE early returns, deliberately and
 #   not to be reordered: MERGED is past binding, and a push to a queued PR
 #   ejects it, so the next run sees the new head and this gate.
@@ -55,8 +61,8 @@
 #   ISOLATION_BRANCH_PREFIX   prefix of the Agent runtime's isolation branches
 #                    (default "worktree-agent-") — same contract as teardown.sh
 #
-# Exit codes: 0 merged(+teardown) · 10 enqueued · 11 waiting/in-flight, or a
-#             stale branch that was just updated (re-run)
+# Exit codes: 0 merged(+teardown) · 10 enqueued · 11 waiting/in-flight, or an
+#             unbound stale branch that was just updated (re-run)
 #             · 20 red checks · 21 no checks reported where CI is expected
 #             (re-run) · 22 conflicting · 23 blocked by a lower stack layer
 #             (re-run) · 24 stacked under a merge queue (needs a human)
@@ -233,17 +239,19 @@ enqueue() {
          -f prid="$prid" >/dev/null; then
       return 0
     fi
-    echo "  enqueue mutation failed — falling back to gh pr merge --auto" >&2
+    [ "$EXPECTED_HEAD_SET" = 1 ] || echo "  enqueue mutation failed — falling back to gh pr merge --auto" >&2
   else
-    echo "  PR node id unresolved — falling back to gh pr merge --auto" >&2
+    [ "$EXPECTED_HEAD_SET" = 1 ] || echo "  PR node id unresolved — falling back to gh pr merge --auto" >&2
   fi
   if [ "$EXPECTED_HEAD_SET" = 1 ]; then
-    bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto --match-head-commit "$EXPECTED_HEAD" >/dev/null && return 0
-    head_moved && return 25
+    # No --auto fallback under a bound run (#587): --match-head-commit is checked
+    # only when auto-merge is ARMED, so an armed fallback could outlive the binding
+    # and merge a later push unreviewed. Fail closed: the caller sees 11 and the
+    # next pass retries the bound enqueue; nothing armed outlives a run.
+    echo "  bound enqueue not done — no --auto fallback under --expected-head; re-run" >&2
     return 1
-  else
-    bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto >/dev/null
   fi
+  bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto >/dev/null
 }
 
 # After a FAILED bound write: did the head move? Succeeds only on a positive
@@ -466,6 +474,7 @@ advance() { # one idempotent step against live state
           if bash "$GH_RETRY" -- api -X PUT "repos/$OWNER/$NAME/pulls/$PR/update-branch" \
                -f expected_head_sha="$EXPECTED_HEAD" >/dev/null 2>&1; then
             echo "  branch updated — the head moved by design: re-review the update (a merge commit, so a full review under take-it §6's Delta base rule), then re-run with the new head"
+            return 25
           elif head_moved; then
             echo "HEAD MOVED — reviewed $EXPECTED_HEAD, the update was refused because the PR head changed (re-review, then re-run with the new head)"
             return 25

@@ -190,10 +190,13 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   **Bind each hand-off to the head its review covered**: pass this loop's recorded `reviewed_head`
   (see the not-yet-reviewed bullet below) as `--expected-head` on every hand-off, including a later
   tick's re-run after exit `11`, and treat exit `25` (the head moved) as `take-it` §6's **Bind the
-  merge to the reviewed head** defines both. Where this loop reviewed (not under `review_agent:
+  merge to the reviewed head** defines both, with the cap on re-reviews in **Cap on head-moved
+  re-reviews** beside it. A tick keeps that count as `head_moved_reviews=<n>` in the same
+  record as `reviewed_head`, mirrored in the PR body and read back author-checked and
+  bound to the active `attempt_id`; an unreadable count is a hold. Where this loop reviewed (not under `review_agent:
   skip` or `review_site: agent`, which pass no head), never hand a PR off unbound: no matching
   record means the PR is not reviewed. A moved head is not a failure and spends no recovery; this section's
-  "Reviewed" rule re-reviews it next tick. **Keep the issue → open-PR mapping this step produces** — §4's Collision
+  "Reviewed" rule re-reviews it next tick, up to that cap. **Keep the issue → open-PR mapping this step produces** — §4's Collision
   filter reads those PRs' actual changed files, and re-deriving the mapping there costs a second
   round of lookups.
 - **Open PRs on blocked issues** → resolve these too, and hand them to nobody. **With `board:`**

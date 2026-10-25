@@ -748,11 +748,22 @@ review actually ran on this site, pass the commit it covered to `merge-shepherd.
 merged unreviewed. That commit is the head the main review covered; after a roll-in, the head the
 delta review covered; and on a step 7 release with no new commit, the cap record's `reviewed_head`.
 Pass nothing when no review ran (`review_agent: skip`) or under `review_site: agent`, where the
-coordinator holds no reviewed head. Exit `25` means the head moved: it is not a failure, spends no
-recovery and counts toward no budget. Re-review the new head (the **Delta base rule** above when a
-cap record exists, otherwise a full review against the derived default branch), then hand the PR off
-again with the head that review covered. A moved head that review finds Blocking takes the existing
-Blocking path.
+coordinator holds no reviewed head. Exit `25` means the head moved: it is not a failure and spends
+no recovery. Re-review the new head (the **Delta base rule** above when a cap record exists,
+otherwise a full review against the derived default branch), then hand the PR off again with the
+head that review covered. A moved head that review finds Blocking takes the existing Blocking path.
+
+**Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
+re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
+PR behind forever (each pass updates the branch, the update is a merge commit so the Delta base rule
+sends it to a full `sol`-tier review, and the base moves again). Count each exit `25` that sends a PR
+back to review as `head_moved_reviews`, kept beside that PR's reviewed head and bound to the active
+`attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the
+cause: `head kept moving after review`. The hold is not `blocked`, spends no recovery and writes no
+reservation; the operator updates or rebases the branch by hand, or re-runs. This coordinator keeps
+the count in its per-PR state beside the head it reviewed, mirrored as `head_moved_reviews=<n>` in
+the PR body, and an absent count is `0`: the loop runs in one synchronous session, so a fresh
+invocation is a fresh review. The cap record carries no count, since it exists only after a roll-in.
 
 Use the capability skill for ALL polling, merge, and teardown mechanics — do NOT reimplement them
 inline:
