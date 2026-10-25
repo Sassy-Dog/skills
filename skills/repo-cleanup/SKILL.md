@@ -54,10 +54,16 @@ A serial worker may own this checkout under the durable checkout guard that `tak
 switch and fast-forward, stash drops, untracked-file discards, worktree removal, local-branch
 deletion) must wait for the guard. Read it first:
 
+```bash
+git rev-parse --show-toplevel
+```
+
+Pass the path it printed as `--repo`, typed literally. A `git` command is never wrapped in `$(...)` or handed a shell variable here: a worktree-isolated session refuses both forms.
+
 **Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
 ```bash
-bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/checkout-guard.sh status --repo "$(git rev-parse --show-toplevel)"
+bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/checkout-guard.sh status --repo <the path it printed>
 ```
 
 `ownership=free` proceeds. Any other `ownership` (`held`, `active`, `unresolved`) stops all local

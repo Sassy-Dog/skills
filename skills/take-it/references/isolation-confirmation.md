@@ -163,7 +163,7 @@ Compare. **The same `pwd -P` or the same top-level path as the coordinator's mea
 
 ## 3. Record the outcome
 
-Write it to the batch manifest `$(git rev-parse --git-path take-it-batch.json)` (`.git/take-it-batch.json` in an ordinary checkout), beside the §5 `{issue, pr, worktreePath, worktreeBranch}` records, so a resumed coordinator does not start from nothing:
+Write it to the batch manifest at the path `git rev-parse --git-path take-it-batch.json` prints (`.git/take-it-batch.json` in an ordinary checkout), beside the §5 `{issue, pr, worktreePath, worktreeBranch}` records, so a resumed coordinator does not start from nothing:
 
 ```json
 {"isolation": {"harness": "omp", "outcome": "confirmed|serial|stop", "enabled": "true", "apply": "false", "merge": "patch", "probe": "isolated|shared|no-reply", "reason": "<what failed, or empty>"}}

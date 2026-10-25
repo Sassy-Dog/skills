@@ -54,7 +54,7 @@ git add <derived-dir>
 <repo's regeneration command>     # re-emits this branch's delta on top of main's state
 git add <derived-dir>
 git rebase --continue
-git push --force-with-lease origin "$(git branch --show-current)"
+git push --force-with-lease origin HEAD
 ```
 
 The regeneration command is repo-specific (e.g. `./dev db-generate` for Drizzle, a `codegen-all` script for GraphQL) — the calling project skill supplies it. If it didn't, ask rather than guessing.

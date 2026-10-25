@@ -28,19 +28,21 @@ what this skill does.
 
 ## 1. Repo config
 
-!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Check `CONFIG_SOURCE` before using any of this.** If it names a repo other than the one you are
 working in, discard the block above and read that repo's own `.claude/sassy-dog/take-it.md` by
 absolute path.
 
-**A `NO_CONFIG` above is unconfirmed until you have read the root's file.** The line reads
-`.claude/sassy-dog/take-it.md` relative to the session's working directory, and prints the repo root
-as `CONFIG_SOURCE` without joining the two (a `$(...)` around git is refused in a
-worktree-isolated session), so from a directory below the root it misses a config that exists. When
-`NO_CONFIG` was printed and `CONFIG_SOURCE` names a repo root, read
-`<CONFIG_SOURCE>/.claude/sassy-dog/take-it.md` by absolute path first; the config is `NO_CONFIG` only if
-that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`.
+**What the line printed is unconfirmed until you have read the root's file.** The line reads
+`.claude/sassy-dog/take-it.md` relative to the session's working directory, which it prints as
+`CONFIG_CWD`, and prints the repo root as `CONFIG_SOURCE` without joining the two (a `$(...)` around
+git is refused in a worktree-isolated session). When `CONFIG_CWD` differs from `CONFIG_SOURCE`,
+whatever the line printed, a config or `NO_CONFIG`, came from the wrong directory: a miss hides a
+config that exists, and a hit may be a stray nested config shown under the root's name. Read
+`<CONFIG_SOURCE>/.claude/sassy-dog/take-it.md` by absolute path and use that; the config is `NO_CONFIG`
+only if that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`. When the two are equal the
+line read the root's file and what it printed stands.
 
 This skill has **no config file of its own**. `take-it.md` reading `NO_CONFIG` → **stop here**,
 before reading Slack: nothing found could be shipped. Tell the user to run

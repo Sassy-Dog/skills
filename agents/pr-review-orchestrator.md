@@ -23,27 +23,32 @@ Derive the base ref; never assume `main`. The default branch is a runtime fact, 
 
 ```bash
 # Each step must SUCCEED to be used. Nothing here falls through to a literal branch name.
-DEFAULT_BRANCH=$(gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true)
-[ -n "${DEFAULT_BRANCH}" ] || DEFAULT_BRANCH=$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')
+gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || true
+# Only if that printed nothing (strip a leading "origin/" from the answer):
+git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null
 
-git fetch origin "${DEFAULT_BRANCH}" --quiet 2>/dev/null || true
-BASE=$(git merge-base "origin/${DEFAULT_BRANCH}" HEAD 2>/dev/null || true)
+# <default-branch> below is the name you just read, typed literally.
+git fetch origin <default-branch> --quiet 2>/dev/null || true
+git merge-base origin/<default-branch> HEAD 2>/dev/null || true
 
-git diff --name-only "${BASE}"              # changed paths, committed or not
-git diff "${BASE}"                          # the full diff — read the +lines, not just the file list
+# <base> below is the commit id that merge-base printed, typed literally.
+git diff --name-only <base>                 # changed paths, committed or not
+git diff <base>                             # the full diff — read the +lines, not just the file list
 git ls-files --others --exclude-standard    # new untracked files — open these too
 ```
 
-Diff the **working tree** against the base (`git diff "${BASE}"`, not `"${BASE}"...HEAD`). `send-it` dispatches this review *before* the commit, so uncommitted and staged work is exactly what needs reviewing. `git diff` cannot see an untracked file at all, so the changeset is the union of the two lists — a brand-new file is the highest-risk member of it, not an optional extra.
+Every `git` command here is a plain statement with its values typed literally: never `git` inside a command substitution, and never a shell variable as a `git` argument. A worktree-isolated session (a `review_site: agent` worker runs in one) refuses `git` in either form, and a refused Step 1 leaves the review with no base and no report.
 
-**An unresolved base is a reported state, never a substituted one.** `gh` fails for ordinary reasons — offline, unauthenticated, rate-limited, an org App gate — and a defaulted `main` that happens to resolve against a stale remote silently reviews the wrong ancestor: extra files, phantom hunks, exit 0 the whole way. So if `DEFAULT_BRANCH` or `BASE` comes back **empty**, stop deriving: render `Base: unresolved (<why>)` in the report header, review the working tree against `HEAD`, and say in the report that the run covers only uncommitted work and may be missing commits already on the branch. Never hand `git diff` a ref you have not seen resolve, and never silently review nothing.
+Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEAD`). `send-it` dispatches this review *before* the commit, so uncommitted and staged work is exactly what needs reviewing. `git diff` cannot see an untracked file at all, so the changeset is the union of the two lists — a brand-new file is the highest-risk member of it, not an optional extra.
+
+**An unresolved base is a reported state, never a substituted one.** `gh` fails for ordinary reasons — offline, unauthenticated, rate-limited, an org App gate — and a defaulted `main` that happens to resolve against a stale remote silently reviews the wrong ancestor: extra files, phantom hunks, exit 0 the whole way. So if the default branch or the base comes back **empty**, stop deriving: render `Base: unresolved (<why>)` in the report header, review the working tree against `HEAD`, and say in the report that the run covers only uncommitted work and may be missing commits already on the branch. Never hand `git diff` a ref you have not seen resolve, and never silently review nothing.
 
 ### Changeset identity for recovery
 
 Capture `changeset` before specialist work: `repo` (absolute root), `base_ref` (the derived
 default-branch ref), `base_oid` (resolved merge-base), `head_oid` (resolved HEAD),
 `tracked_diff_sha256`, and `untracked_sha256`. Hash the bytes of
-`git diff --binary --no-ext-diff --no-textconv "${BASE}" --` for the tracked working diff,
+`git diff --binary --no-ext-diff --no-textconv <base> --` for the tracked working diff,
 including staged and unstaged content. For untracked content, enumerate with
 `git ls-files -z --others --exclude-standard` and hash a deterministic, path-sorted manifest
 of path, file type, executable mode and content SHA-256; for symlinks hash the link target,

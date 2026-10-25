@@ -62,6 +62,8 @@
 #      `agents/*.md` are deliberately exempt from the spec layer — an agent is
 #      not a skill and legitimately carries `color:`.
 #   3. no bare positional tokens in Skill-args substitution surfaces (issue #39)
+#   3b. no `$(git ` in agent-run text: skills' SKILL.md, references/ and agents
+#      (issue #576; a worktree-isolated session refuses it)
 #   4. no legacy name residue outside the per-name sanctioned back-compat
 #      files, in three groups (all enforced under this one gate): the renamed
 #      generator family — 'create-dev-workflows', 'refresh-sassydog-',
@@ -1812,6 +1814,35 @@ else
         pass "positional-token guard"
     fi
 fi
+
+# --- 3b. no git inside a command substitution in agent-run text -------------
+# A Claude Code session isolated in a git worktree refuses any command that
+# names git in a form it cannot verify stays inside the worktree, and a
+# substitution is such a form (measured in #574 and again in #576: it also
+# refuses git beside ANY shell-variable expansion, which this guard does not
+# yet cover). SKILL.md bodies, skills' references/ docs and the agents are text
+# an agent types verbatim, so `$(git ` there is refused at the step that runs
+# it, after earlier steps may already have committed. No exceptions: spell the
+# command as a plain statement and use its printed value literally. Scripts under
+# skills/*/scripts/ are exempt by construction: they run as `bash <script>`, not
+# as text an agent types (#576 item 4 measured the guard not seeing inside one).
+# The pathspec is asserted non-empty first, and the matcher is proved on a
+# scratch file (the mutant: a reintroduced `$(git ` must be reported) so a
+# regex that stopped matching cannot read as green.
+GIT_SUBST_PATHS=('skills/*/SKILL.md' 'skills/*/references/*.md' 'agents/*.md')
+GIT_SUBST_RE='\$\(git '
+git_subst_selfcheck="$(mktemp)"
+printf 'x "$(git rev-parse HEAD)"\n' > "$git_subst_selfcheck"
+if [ -z "$(git ls-files "${GIT_SUBST_PATHS[@]}")" ]; then
+    failed "git-in-substitution guard — pathspecs matched no tracked files (renamed or moved? the guard would silently cover nothing)"
+elif ! grep -qE "$GIT_SUBST_RE" "$git_subst_selfcheck"; then
+    failed "git-in-substitution guard — the matcher no longer catches a reintroduced substitution"
+elif git ls-files "${GIT_SUBST_PATHS[@]}" | xargs grep -nE "$GIT_SUBST_RE"; then
+    failed "git-in-substitution guard — write git as a plain statement and use its printed value literally; a worktree-isolated session refuses \$(git ...) (issue #576)"
+else
+    pass "git-in-substitution guard"
+fi
+rm -f "$git_subst_selfcheck"
 
 # --- 4. no legacy skill-name residue -----------------------------------------
 # The whole generator family was renamed to setup-* in issue #120:
