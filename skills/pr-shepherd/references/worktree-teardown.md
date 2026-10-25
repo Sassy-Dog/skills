@@ -51,8 +51,13 @@ Single ordered recovery that handles both — `cd` back to the main repo root fi
 ```bash
 cd <main-repo-root>                         # snap cwd back (Drift B)
 bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/teardown.sh" --reconcile-only
-git branch -D "<feature-branch>" 2>/dev/null || true
 ```
+
+```bash
+git branch -D <feature-branch>
+```
+
+The branch delete is its own block and its own Bash call: the script line carries a shell expansion, and a worktree-isolated session refuses a command that names `git` beside one. Type the feature branch literally; a failed delete (branch already gone) is not an error to chase.
 
 `--reconcile-only` is the script's reconcile tail with nothing else: `git switch <default-branch>` (snaps HEAD back, Drift A), `fetch --prune`, clears origin-identical untracked stragglers that would block the ff (see below), then `pull --ff-only` — and exits `1` when the ff still fails, because in this mode the ff *is* the job. Equivalent by hand, if the script is unavailable:
 

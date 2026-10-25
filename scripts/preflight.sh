@@ -62,8 +62,12 @@
 #      `agents/*.md` are deliberately exempt from the spec layer — an agent is
 #      not a skill and legitimately carries `color:`.
 #   3. no bare positional tokens in Skill-args substitution surfaces (issue #39)
-#   3b. no `$(git ` in agent-run text: skills' SKILL.md, references/ and agents
-#      (issue #576; a worktree-isolated session refuses it)
+#      Guards 3 and 3b decide from captured output with NUL-delimited paths, and
+#      self-check their pass/fail decision over scratch repos (issue #578).
+#   3b. no unit that runs git also carries a shell expansion, in agent-run text:
+#      every tracked skills/**/*.md and agents/*.md (issues #576, #578; a
+#      worktree-isolated session refuses git beside any expansion). The rule and
+#      its measured basis are in scripts/check-git-expansion.sh's header.
 #   4. no legacy name residue outside the per-name sanctioned back-compat
 #      files, in three groups (all enforced under this one gate): the renamed
 #      generator family — 'create-dev-workflows', 'refresh-sassydog-',
@@ -1705,7 +1709,8 @@ skip() { echo "SKIP  $1" >&2; }
 # prose gates read the same Markdown the fixer rewrites.
 # shellcheck source=scripts/lib-parallel-gates.sh
 . "$ROOT/scripts/lib-parallel-gates.sh"
-trap pg_stop EXIT
+GUARD_SCRATCH=""   # the guard self-checks' scratch dir (gates 3 and 3b); removed on any exit
+trap 'pg_stop; if [ -n "${GUARD_SCRATCH:-}" ]; then rm -rf "$GUARD_SCRATCH"; fi' EXIT
 trap 'pg_stop; exit 130' INT TERM
 
 if [ "$FIX" = "1" ] && command -v npx >/dev/null 2>&1; then
@@ -1792,6 +1797,83 @@ else
     failed "frontmatter sanity"
 fi
 
+# --- scan helpers shared by guards 3 and 3b ---------------------------------
+# Both guards decide from CAPTURED OUTPUT, never from the exit status of a
+# `ls-files | xargs grep` pipeline (issue #578). That status cannot carry the
+# decision: grep exits 1 for "no match", so xargs reports 123 for a clean batch
+# and for a failed one alike, and a guard that read "non-zero" as clean passed
+# when grep itself errored (a tracked file deleted from the working tree, a
+# C-quoted non-ASCII path, GNU grep's exit 2, a hit split across batches).
+# The rule is: non-empty output is a hit; empty output with the scanner's clean
+# status is clean; EVERYTHING else is an error and fails the gate as one. Paths
+# arrive NUL-delimited (`ls-files -z`) into an array and the scanner runs once,
+# so there are no batches and no quoting.
+#
+# Each guard's self-check runs the SAME scan function over scratch repos, one per
+# case: a planted hit fails, a clean tree passes, and an error condition fails as
+# an error. The scratch space comes from ONE checked `mktemp -d` (an empty result
+# fails the gates: `cd ""` succeeds and would leave a scan, or a `git add -A`,
+# in the real checkout), every scratch git call runs with GIT_DIR, GIT_INDEX_FILE
+# and GIT_WORK_TREE unset and global/system config ignored, and `add -A -f`
+# stages even what a contributor's global excludes would hide. The directory is
+# removed explicitly below and by the EXIT trap near the top of the gate section,
+# which chains into pg_stop. Precedent: scripts/test-tech-debt-excludes.sh.
+GUARD_SCRATCH_OK=1
+GUARD_SCRATCH="$(mktemp -d 2>/dev/null)"
+if [ -z "$GUARD_SCRATCH" ] || [ ! -d "$GUARD_SCRATCH" ]; then
+    GUARD_SCRATCH=""
+    GUARD_SCRATCH_OK=0
+fi
+scan_classify() { # <captured output> <exit status> <clean status> -> hit|clean|error
+    if [ -n "$1" ]; then echo hit
+    elif [ "$2" = "$3" ]; then echo clean
+    else echo error
+    fi
+}
+scan_in() { # <dir> <function> — run it from <dir>; a scratch dir gets git isolated
+    local dir="$1"
+    shift
+    (
+        if [ -z "$dir" ] || [ ! -d "$dir" ]; then exit 99; fi
+        cd "$dir" || exit 99
+        if [ "$dir" != . ]; then
+            unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+            export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+        fi
+        "$@"
+    )
+}
+scratch_git() { # <dir> <git args...> — isolated git over a scratch repo, never the checkout
+    local dir="$1"
+    shift
+    env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$dir" "$@"
+}
+scratch_repo() { # <name> — fresh scratch repo; prints its path, returns 1 when it cannot be made
+    local d="$GUARD_SCRATCH/$1"
+    [ "$GUARD_SCRATCH_OK" = 1 ] || return 1
+    mkdir -p "$d" || return 1
+    scratch_git "$d" init -q >/dev/null 2>&1 || return 1
+    printf '%s\n' "$d"
+}
+scratch_plant() { # <dir> <relpath> <line...> — write a tracked file (staged) into a scratch repo
+    local d="$1" rel="$2"
+    shift 2
+    mkdir -p "$d/$(dirname "$rel")" || return 1
+    printf '%s\n' "$@" > "$d/$rel" || return 1
+    scratch_git "$d" add -A -f >/dev/null 2>&1
+}
+GUARD_CASE_FAILS=""
+guard_case() { # <label> <expected hit|clean|error> <dir> <scan function> <clean status>
+    local out rc got
+    out="$(scan_in "$3" "$4" 2>/dev/null)"
+    rc=$?
+    got="$(scan_classify "$out" "$rc" "$5")"
+    if [ "$got" != "$2" ]; then
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - $1: expected $2, got $got (exit $rc)"
+    fi
+}
+
 # --- 3. no bare positional tokens in Skill-args substitution surfaces -------
 # SKILL.md bodies (and the config templates that render into consumer repos)
 # get $1-$9/$ARGUMENTS substituted when the skill is invoked with args — a
@@ -1802,61 +1884,181 @@ fi
 # nothing makes `git ls-files` emit no paths, so the guard would still pass
 # while silently covering nothing — which is exactly what a rename of the
 # generator directory used to cause. Fail loudly instead.
+#
+# What it matches and where it looks are unchanged; only the pass/fail mechanics
+# moved to the shared scan helpers above (issue #578): it decides on captured
+# output, takes its paths NUL-delimited, and proves the decision with a
+# self-check over scratch repos (a planted hit, a non-ASCII path, a template hit,
+# a clean tree, a hit beside a deleted file, and the error cases).
 POSITIONAL_TEMPLATE_GLOB='skills/setup-config/references/templates/*'
+# shellcheck disable=SC2016  # the regex is a literal, not a missed expansion
+POSITIONAL_RE='\$([0-9]|@|\*)'
+positional_scan() { # runs in the directory to scan; 0 hit / 1 clean / else error
+    local files=() f
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(git ls-files -z -- 'skills/*/SKILL.md' '.claude/skills/*/SKILL.md' "$POSITIONAL_TEMPLATE_GLOB")
+    [ "${#files[@]}" -gt 0 ] || return 98
+    grep -nE "$POSITIONAL_RE" -- "${files[@]}"
+}
+GUARD_CASE_FAILS=""
+if [ "$GUARD_SCRATCH_OK" = 1 ]; then
+    d="$(scratch_repo pos-hit)" && scratch_plant "$d" skills/a/SKILL.md 'run $1 here' && guard_case "planted hit" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - planted hit: scratch repo could not be built"
+    d="$(scratch_repo pos-utf8)" && scratch_plant "$d" $'skills/caf\xc3\xa9/SKILL.md' 'run $@ here' && guard_case "hit in a non-ASCII path" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - non-ASCII path: scratch repo could not be built"
+    d="$(scratch_repo pos-tmpl)" && scratch_plant "$d" skills/setup-config/references/templates/t.md 'run $* here' && guard_case "hit in a template" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - template hit: scratch repo could not be built"
+    d="$(scratch_repo pos-claude)" && scratch_plant "$d" .claude/skills/b/SKILL.md 'run $9 here' && guard_case "hit under .claude/skills" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - .claude/skills hit: scratch repo could not be built"
+    d="$(scratch_repo pos-clean)" && scratch_plant "$d" skills/a/SKILL.md 'run nothing here' && guard_case "clean tree" clean "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - clean tree: scratch repo could not be built"
+    d="$(scratch_repo pos-hit-deleted)" && scratch_plant "$d" skills/a/SKILL.md 'run $1 here' && scratch_plant "$d" skills/b/SKILL.md 'fine' && rm "$d/skills/b/SKILL.md" && guard_case "hit beside a tracked file deleted from the working tree" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - hit beside a deleted file: scratch repo could not be built"
+    d="$(scratch_repo pos-deleted)" && scratch_plant "$d" skills/a/SKILL.md 'fine' && rm "$d/skills/a/SKILL.md" && guard_case "only tracked file deleted (grep errors)" error "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - deleted file: scratch repo could not be built"
+    d="$(scratch_repo pos-empty)" && scratch_plant "$d" README.md 'fine' && guard_case "no tracked file in the pathspecs" error "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - empty pathspec: scratch repo could not be built"
+    d="$(scratch_repo pos-poison)" && scratch_plant "$d" skills/a/SKILL.md 'run $1 here' && GIT_DIR=/nonexistent/gitdir GIT_INDEX_FILE=/nonexistent/index guard_case "inherited GIT_DIR and GIT_INDEX_FILE" hit "$d" positional_scan 1 || GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - inherited GIT_*: scratch repo could not be built"
+fi
 if [ -z "$(git ls-files "$POSITIONAL_TEMPLATE_GLOB")" ]; then
     failed "positional-token guard — template pathspec '$POSITIONAL_TEMPLATE_GLOB' matched no tracked files (renamed or moved? the guard would silently cover nothing)"
+elif [ "$GUARD_SCRATCH_OK" != 1 ]; then
+    failed "positional-token guard — could not create the self-check scratch directory (mktemp -d failed), so the guard is unproven"
+elif [ -n "$GUARD_CASE_FAILS" ]; then
+    failed "positional-token guard — self-check failed (the scan's pass/fail decision is broken):$GUARD_CASE_FAILS"
 else
-    # shellcheck disable=SC2016  # the regex is a literal, not a missed expansion
-    if git ls-files 'skills/*/SKILL.md' '.claude/skills/*/SKILL.md' "$POSITIONAL_TEMPLATE_GLOB" \
-        | xargs grep -nE '\$([0-9]|@|\*)'; then
-        failed "positional-token guard — use cut -f1/%(format) idioms or move the snippet to references/ or scripts/ (issue #39)"
-    else
-        pass "positional-token guard"
-    fi
+    pos_out="$(scan_in . positional_scan 2>/dev/null)"
+    pos_rc=$?
+    case "$(scan_classify "$pos_out" "$pos_rc" 1)" in
+        hit)
+            printf '%s\n' "$pos_out"
+            failed "positional-token guard — use cut -f1/%(format) idioms or move the snippet to references/ or scripts/ (issue #39)" ;;
+        clean) pass "positional-token guard" ;;
+        *) failed "positional-token guard — the scan itself failed (exit $pos_rc), which is an error and never a pass" ;;
+    esac
 fi
 
-# --- 3b. no git inside a command substitution in agent-run text -------------
-# A Claude Code session isolated in a git worktree refuses any command that
-# names git in a form it cannot verify stays inside the worktree, and a
-# substitution is such a form (measured in #574 and #576). SKILL.md bodies,
-# skills' references/ docs and the agents are text an agent types verbatim, so
-# git anywhere inside a same-line `$(...)` there, including `$( { git` and
-# `"$(foo | git` shapes, is refused at the step that runs it, after earlier
-# steps may already have committed. No exceptions: spell the command as a plain
-# statement and use its printed value literally. Scripts under skills/*/scripts/
-# are exempt by construction: they run as `bash <script>`, not as text an agent
-# types (measured in #576: the guard does not see inside one).
-# Measured in PR #577 and NOT covered by this guard: git beside a shell-variable
-# expansion (`git fetch origin "$X"`) is refused too.
-# The regex is portable ERE (BSD grep locally, GNU grep in CI): `$(`, then no
-# `)`, then git preceded by `(` or a character that cannot continue a word or
-# path, then a space. A `$(...)` that merely precedes the word git in prose
-# closes before it and does not match.
-# The self-check runs the SAME scan over a scratch git repo with planted hits
-# (one per scanned path, one in the `$( { git` shape) and a decoy, so a narrowed
-# pathspec, a regex that stopped matching or an inverted condition fails here.
-GIT_SUBST_PATHS=('skills/*/SKILL.md' 'skills/*/references/*.md' 'agents/*.md')
-GIT_SUBST_RE='\$\(([^)]*[^[:alnum:]_./-])?git[[:space:]]'
-git_subst_scan() { # <dir> — grep hits over the tracked scanned paths of <dir>
-    (cd "$1" && git ls-files "${GIT_SUBST_PATHS[@]}" | xargs grep -nE "$GIT_SUBST_RE")
+# --- 3b. no git beside a shell expansion in agent-run text -------------------
+# A Claude Code session isolated in a git worktree refuses a Bash command that
+# names git in a form it cannot verify stays inside the worktree. Measured in a
+# worktree-isolated session (#574, #576, #577, #578), the guard judges the WHOLE
+# command string: `git` beside `${B}`, beside `"$PWD"` in a SEPARATE statement,
+# or beside an unset `$NAME` on another line of a two-line command, in either
+# order, is refused, as is any `$(...)`; a plain `$NAME` it can resolve (an
+# environment variable such as $HOME, or one assigned earlier in the same string)
+# is allowed, which an agent cannot predict. So the rule is one per UNIT: a fenced
+# shell block (bash, sh, shell, zsh or a bare fence) or an inline code span that
+# runs `git` as a command word (including <path>/git) carries no shell expansion
+# at all: no $NAME, ${, $(, backtick substitution or <(. Comment lines count for
+# neither half. The full rule, its measured table and the shapes it does NOT cover
+# (a span that wraps lines, indented code blocks, git handed to another program as
+# a quoted string) live in the header of scripts/check-git-expansion.sh.
+# This replaces the same-line `$(` regex of #576, which missed `$(cd … && git …)`,
+# `$(/usr/bin/git …)`, backticks, `<(git …)` and a multi-line `$(`; every one of
+# those is a planted case below, as is each beside-an-expansion shape.
+# Scanned: every tracked skills/**/*.md (SKILL.md, references/, and
+# skills/assess-it/*.md) and agents/*.md. Scripts under skills/*/scripts/ are
+# exempt by construction: they run as `bash <script>`, not as text an agent types
+# (measured in #576: the guard does not see inside one).
+GIT_EXP_PATHS=('skills/*.md' 'agents/*.md')
+GIT_EXP_CHECKER="$ROOT/scripts/check-git-expansion.sh"
+git_exp_scan() { # runs in the directory to scan; 0 with empty output is clean
+    local files=() f
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(git ls-files -z -- "${GIT_EXP_PATHS[@]}")
+    [ "${#files[@]}" -gt 0 ] || return 98
+    bash "$GIT_EXP_CHECKER" "${files[@]}"
 }
-git_subst_selfcheck="$(mktemp -d)"
-mkdir -p "$git_subst_selfcheck/skills/a/references" "$git_subst_selfcheck/agents"
-printf 'x "$(git rev-parse HEAD)"\n' > "$git_subst_selfcheck/skills/a/SKILL.md"
-printf 'C=$( { git diff --name-only o; git ls-files; } | sort -u )\n' > "$git_subst_selfcheck/skills/a/references/r.md"
-printf 'y=$(echo a | git hash-object --stdin)\nprose: a $(...) around git is refused, and mygit stays\n' > "$git_subst_selfcheck/agents/b.md"
-(cd "$git_subst_selfcheck" && git init -q && git add -A) >/dev/null 2>&1
-selfcheck_hits="$(git_subst_scan "$git_subst_selfcheck" 2>/dev/null | grep -c . || true)"
-if [ -z "$(git ls-files "${GIT_SUBST_PATHS[@]}")" ]; then
-    failed "git-in-substitution guard — pathspecs matched no tracked files (renamed or moved? the guard would silently cover nothing)"
-elif [ "$selfcheck_hits" -ne 3 ]; then
-    failed "git-in-substitution guard — self-check over a scratch repo found $selfcheck_hits planted hits, expected 3 (matcher, pathspec or condition is broken)"
-elif git_subst_scan .; then
-    failed "git-in-substitution guard — write git as a plain statement and use its printed value literally; a worktree-isolated session refuses git inside a command substitution (issue #576)"
-else
-    pass "git-in-substitution guard"
+git_exp_shape() { # <name> <expected hit|clean> <relpath> <line...> — one scratch repo, one planted file
+    local name="$1" want="$2" rel="$3" d
+    shift 3
+    if d="$(scratch_repo "exp-$name")" && scratch_plant "$d" "$rel" "$@"; then
+        guard_case "$name" "$want" "$d" git_exp_scan 0
+    else
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - $name: scratch repo could not be built"
+    fi
+}
+GUARD_CASE_FAILS=""
+if [ "$GUARD_SCRATCH_OK" = 1 ]; then
+    F='```'
+    R=skills/a/references/r.md
+    # Planted hits: one per shape. Each must be reported.
+    git_exp_shape same-line-subst hit "$R" "${F}bash" 'x="$(git rev-parse HEAD)"' "$F"
+    git_exp_shape subst-pipe hit "$R" "${F}bash" 'C=$( { git diff --name-only o; git ls-files; } | sort -u )' "$F"
+    git_exp_shape subst-cd-then-git hit "$R" "${F}bash" 'x=$(cd /tmp && git log)' "$F"
+    git_exp_shape subst-absolute-git hit "$R" "${F}bash" 'x=$(/usr/bin/git log)' "$F"
+    git_exp_shape backticks hit "$R" "${F}bash" 'x=`git log`' "$F"
+    git_exp_shape process-subst hit "$R" "${F}bash" 'diff <(git show a) b' "$F"
+    git_exp_shape multi-line-subst hit "$R" "${F}bash" 'x=$(' '  git log' ')' "$F"
+    git_exp_shape variable-argument hit "$R" "${F}bash" 'git fetch origin "$BRANCH"' "$F"
+    git_exp_shape braced-variable hit "$R" "${F}bash" 'B=main; git merge-base "origin/${B}" HEAD' "$F"
+    git_exp_shape pwd-in-other-statement hit "$R" "${F}bash" "printf 'x %s' \"\$PWD\"; git status" "$F"
+    git_exp_shape expansion-on-another-line hit "$R" "${F}bash" 'git status' 'gh issue view 1 --repo "$REPO"' "$F"
+    git_exp_shape expansion-before-git hit "$R" "${F}bash" 'bash "$PLUGIN_ROOT/x.sh"' 'git branch -D b' "$F"
+    git_exp_shape git-in-while-loop hit "$R" "${F}bash" 'git for-each-ref refs/heads | while read -r b; do gh pr list --head "$b"; done' "$F"
+    git_exp_shape absolute-path-git hit "$R" "${F}bash" '/usr/bin/git fetch origin "$X"' "$F"
+    git_exp_shape env-assignment-git hit "$R" "${F}bash" 'GIT_PAGER=cat git log "$X"' "$F"
+    git_exp_shape bare-fence hit "$R" "$F" 'git fetch "$X"' "$F"
+    git_exp_shape sh-fence hit "$R" "${F}sh" 'git fetch "$X"' "$F"
+    git_exp_shape zsh-fence hit "$R" "${F}zsh" 'git fetch "$X"' "$F"
+    git_exp_shape tilde-fence hit "$R" '~~~bash' 'git fetch "$X"' '~~~'
+    git_exp_shape inline-span hit "$R" 'Run `git fetch origin "$X"` now.'
+    git_exp_shape inline-subst-span hit "$R" 'Run `x=$(git log)` now.'
+    git_exp_shape inline-double-backtick-span hit "$R" 'Run ``git log `date` `` now.'
+    git_exp_shape assess-it-path hit skills/assess-it/o.md "${F}bash" 'git fetch "$X"' "$F"
+    git_exp_shape agents-path hit agents/b.md "${F}bash" 'git fetch "$X"' "$F"
+    git_exp_shape skill-md-path hit skills/a/SKILL.md "${F}bash" 'git fetch "$X"' "$F"
+    # Decoys: none may be reported (they are the cost of a rule that is too wide).
+    git_exp_shape decoy-literal-values clean "$R" "${F}bash" 'cd /tmp' 'git fetch origin main' 'git rebase origin/main' "$F"
+    git_exp_shape decoy-placeholder clean "$R" "${F}bash" 'git switch <default-branch>' "$F"
+    git_exp_shape decoy-git-free-expansion clean "$R" "${F}bash" 'gh api "repos/$REPO/branches"' 'echo "${X}"' "$F"
+    git_exp_shape decoy-comment-lines clean "$R" "${F}bash" '# git fetch origin "$X"' 'git status' "$F"
+    git_exp_shape decoy-escaped-dollar clean "$R" "${F}bash" 'git log --grep "\$1"' "$F"
+    git_exp_shape decoy-non-shell-fence clean "$R" "${F}yaml" 'run: git fetch origin "$X"' "$F"
+    git_exp_shape decoy-gh-not-git clean "$R" "${F}bash" 'gh repo view "$X"' 'mygit "$X"' "$F"
+    git_exp_shape decoy-prose-around-git clean "$R" 'A $(...) around git is refused, and `git` stays plain; so does `$DEFAULT_BRANCH`.'
+    git_exp_shape decoy-git-in-quoted-prose clean "$R" "${F}bash" 'echo "run git later"' 'echo "$X"' "$F"
+    # Error cases: a scan that cannot run fails as an error, never as clean.
+    if d="$(scratch_repo exp-deleted)" && scratch_plant "$d" "$R" 'fine' && rm "$d/$R"; then
+        guard_case "only tracked file deleted from the working tree" error "$d" git_exp_scan 0
+    else
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - deleted file: scratch repo could not be built"
+    fi
+    if d="$(scratch_repo exp-empty)" && scratch_plant "$d" README.md 'fine'; then
+        guard_case "no tracked file in the pathspecs" error "$d" git_exp_scan 0
+    else
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - empty pathspec: scratch repo could not be built"
+    fi
+    if d="$(scratch_repo exp-poison)" && scratch_plant "$d" "$R" "${F}bash" 'git fetch "$X"' "$F"; then
+        GIT_DIR=/nonexistent/gitdir GIT_INDEX_FILE=/nonexistent/index guard_case "inherited GIT_DIR and GIT_INDEX_FILE" hit "$d" git_exp_scan 0
+    else
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - inherited GIT_*: scratch repo could not be built"
+    fi
 fi
-rm -rf "$git_subst_selfcheck"
+if [ -z "$(git ls-files "${GIT_EXP_PATHS[@]}")" ]; then
+    failed "git-beside-expansion guard — pathspecs matched no tracked files (renamed or moved? the guard would silently cover nothing)"
+elif [ "$GUARD_SCRATCH_OK" != 1 ]; then
+    failed "git-beside-expansion guard — could not create the self-check scratch directory (mktemp -d failed), so the guard is unproven"
+elif [ -n "$GUARD_CASE_FAILS" ]; then
+    failed "git-beside-expansion guard — self-check failed (the scan's pass/fail decision is broken):$GUARD_CASE_FAILS"
+else
+    exp_out="$(scan_in . git_exp_scan 2>/dev/null)"
+    exp_rc=$?
+    case "$(scan_classify "$exp_out" "$exp_rc" 0)" in
+        hit)
+            printf '%s\n' "$exp_out"
+            failed "git-beside-expansion guard — a unit that runs git must contain no shell expansion: type values literally (<default-branch>, <repo>) or put the git statement in its own block; a worktree-isolated session refuses git beside any expansion (issues #576, #578)" ;;
+        clean) pass "git-beside-expansion guard" ;;
+        *) failed "git-beside-expansion guard — the scan itself failed (exit $exp_rc), which is an error and never a pass" ;;
+    esac
+fi
+if [ -n "$GUARD_SCRATCH" ]; then
+    rm -rf "$GUARD_SCRATCH"
+    GUARD_SCRATCH=""
+fi
 
 # --- 4. no legacy skill-name residue -----------------------------------------
 # The whole generator family was renamed to setup-* in issue #120:

@@ -112,7 +112,19 @@ give it a row in §6's `## ⚠️ Blind spots` section** — a probe that failed
 bit as dark as one that was never configured. Continue either way: **never abort the whole plate on
 one missing precondition.**
 
+Anchor at the repo root first. A main session's cwd persists between Bash calls (only a sub-agent's
+resets), and §3's tech-debt scan resolves its configured `scan_paths` against the working
+directory: run from a subdirectory they match nothing, and the plate reports clean debt. Print the
+root as a plain statement:
+
 ```bash
+git rev-parse --show-toplevel
+```
+
+Then `cd` to the path it printed, typed literally, as its own command, and run the probe:
+
+```bash
+cd <the path it printed>
 gh auth status
 ```
 
@@ -287,13 +299,25 @@ remote-tracking refs only; it touches no working tree and no local branch).
 ```bash
 # The genuinely in-flight set: open PRs with check status
 gh pr list --state open --json number,title,headRefName,isDraft,statusCheckRollup
+```
 
-# Refresh the remote view BEFORE classifying local branches — a stale
-# origin/<default> feeds the same trap the guardrail below describes
+Refresh the remote view BEFORE classifying local branches — a stale `origin/<default>` feeds the
+same trap the guardrail below describes — then list every local branch (including the checked-out
+one). Both are plain `git` statements in their own Bash call, with no shell expansion anywhere in
+it:
+
+```bash
 git fetch origin --quiet
+git for-each-ref refs/heads --format='%(refname:short)'
+```
 
-# Classify every local branch (including the checked-out one) by PR STATE
-git for-each-ref refs/heads --format='%(refname:short)' | while read -r branch; do
+Classify each printed branch by PR STATE. This block runs `gh` only, never `git`, and carries the
+shell expansion: a worktree-isolated session refuses a command that names `git` beside one, so the
+branch names the previous block printed are typed into the loop literally, and the loop is not
+merged back into that block:
+
+```bash
+for branch in <the branch names it printed, space-separated>; do
   gh pr list --state all --head "$branch" --json number,state,mergedAt
 done
 ```
