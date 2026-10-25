@@ -737,8 +737,22 @@ runs this same step and points here for its definition.
 7. **Release when the roll-in produced no commit.** If the cap record exists and `HEAD` still equals
    its `reviewed_head`, the hold ends once (a) the send failed, (b) the resumed worker's return is
    known, or (c) 30 minutes have passed since `sent_at`. Record `roll-in skipped: <cause>` in the PR
-   body and hand the PR off on the main review's result. The cap stays spent. This coordinator reads
-   the worker's return, so (a) or (b) fires at once; (c) is the bound a `dispatch-ready` tick uses.
+   body and hand the PR off on the main review's result, bound to `reviewed_head` as the next
+   paragraph says. The cap stays spent. This coordinator reads the worker's return, so (a) or (b)
+   fires at once; (c) is the bound a `dispatch-ready` tick uses. The resumed worker is not stopped by
+   this release, which is why the hand-off is bound to the commit.
+
+**Bind the merge to the reviewed head (the one definition; `dispatch-ready` points here).** When a
+review actually ran on this site, pass the commit it covered to `merge-shepherd.sh` as
+`--expected-head <full commit id>`, so a push that lands after the review is refused instead of
+merged unreviewed. That commit is the head the main review covered; after a roll-in, the head the
+delta review covered; and on a step 7 release with no new commit, the cap record's `reviewed_head`.
+Pass nothing when no review ran (`review_agent: skip`) or under `review_site: agent`, where the
+coordinator holds no reviewed head. Exit `25` means the head moved: it is not a failure, spends no
+recovery and counts toward no budget. Re-review the new head (the **Delta base rule** above when a
+cap record exists, otherwise a full review against the derived default branch), then hand the PR off
+again with the head that review covered. A moved head that review finds Blocking takes the existing
+Blocking path.
 
 Use the capability skill for ALL polling, merge, and teardown mechanics — do NOT reimplement them
 inline:
@@ -749,6 +763,8 @@ Args: "Watch PRs <numbers from the RESULT lines> in <repo>. Merge policy:
        <merge_queue ? 'MERGE QUEUE — enqueue greens with gh pr merge --auto (no method flag, no
        --delete-branch), confirm isInMergeQueue, handle ejects'
                     : 'DIRECT — gh pr merge --squash --delete-branch, serialize coupled PRs'>.
+       <for each PR whose review you ran: 'PR <n>: pass --expected-head <reviewed commit id> to
+       merge-shepherd.sh; on its exit 25 (head moved) merge nothing and report it back.'>
        <if migrations: 'Coupled-PR concern: migrations in <migrations.dirs> (regenerate with
        <migrations.regen_command>).'>
        <if codegen: 'Coupled-PR concern: codegen (<codegen.hint>).'>

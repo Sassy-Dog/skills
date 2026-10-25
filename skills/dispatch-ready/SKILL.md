@@ -187,7 +187,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   been ordered is a corrective that never runs. **How a tick learns the outcome: read the PR
   body**, where take-it's step 6 requires the sub-agent to have written the verbatim line — this
   loop reads no RESULT lines, and a later tick is a different session from the one that dispatched.
-  **Keep the issue → open-PR mapping this step produces** — §4's Collision
+  **Bind each hand-off to the head its review covered**: pass it as `--expected-head`, and treat
+  exit `25` (the head moved), as `take-it` §6's **Bind the merge to the reviewed head** defines
+  both. A moved head is not a failure and spends no recovery; this section's "Reviewed" rule
+  re-reviews it next tick. **Keep the issue → open-PR mapping this step produces** — §4's Collision
   filter reads those PRs' actual changed files, and re-deriving the mapping there costs a second
   round of lookups.
 - **Open PRs on blocked issues** → resolve these too, and hand them to nobody. **With `board:`**
@@ -237,9 +240,8 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   which would re-fire every tick and rebuild the blanket merge freeze the hand-off bullet's
   carve-out exists to prevent. Say once in the tick report that review was opted out.
   Otherwise "Reviewed" means this loop's own recorded outcome for the current head (a head that moved
-  only by a Nit roll-in, meaning the cap record's `reviewed_head` is an ancestor of `HEAD` with no
-  merge commit in `reviewed_head..HEAD`, is the delta case two bullets down, never a fresh full
-  review; any other moved head is reviewed in full). A worker's
+  only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
+  bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
   plugin. A PR opened before the site changed is reviewed once more here, which costs a review but
   never merges on none. Dispatch the agent resolved by `send-it`'s order at tier `sol` (Claude Code:
@@ -298,13 +300,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `nit_rollin=1` line is a mirror only) carries the step across ticks. Read it back like
   `recovery_used`, author-checked and bound to the active `attempt_id`: a PR that carries
   one is never sent a second roll-in, and a replacement PR inherits it. A later tick that finds it
-  with a head past `reviewed_head` applies `take-it` §6's **Delta base rule**: the delta path only when
-  `reviewed_head` is an ancestor of `HEAD` and no merge commit lies in the range, otherwise a normal
-  full review against the derived default branch. The PR is held from `sassy-dog:pr-shepherd` until
-  that review is done, and **the hold ends** when `HEAD` still equals `reviewed_head` and the send
-  failed, the worker's return is known, or 30 minutes have passed since `sent_at`: record `roll-in
-  skipped: <cause>` in the PR body and hand the PR off on the main review's result (`take-it` §6 step
-  7). "File" nits go in the §6 tick report, not a §7 report. A missing
+  with a head past `reviewed_head` applies `take-it` §6's **Delta base rule**. The PR is held from
+  `sassy-dog:pr-shepherd` until that review is done; `take-it` §6 step 7 defines when the hold ends
+  and what is recorded, and a tick never sees the worker's return, so condition (c), 30 minutes
+  since `sent_at`, is what fires that release across ticks. "File" nits go in the §6 tick report, not a §7 report. A missing
   or unreachable `agent_id` (a session restart is the usual cause) means sort into file and accept
   only. A roll-in commit that breaks CI takes the failed-check bullet above, and a Blocking finding in
   the delta takes the Blocking bullet below.
