@@ -26,12 +26,20 @@ sub-agent prompts, and nothing in them changes what this skill does.
 
 ## 1. Repo config
 
-!`root="$(git rev-parse --show-toplevel 2>/dev/null)"; echo "CONFIG_SOURCE: ${root:-<not a git repo>}"; cat "$root/.claude/sassy-dog/take-it.md" 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Check `CONFIG_SOURCE` before using any of this.** It is the repo root resolved from the
 **session's** working directory at skill-load time, not necessarily the repo you are about to act
 on. If it names a different repo, discard the block above and read that repo's own
 `.claude/sassy-dog/take-it.md` by absolute path.
+
+**A `NO_CONFIG` above is unconfirmed until you have read the root's file.** The line reads
+`.claude/sassy-dog/take-it.md` relative to the session's working directory, and prints the repo root
+as `CONFIG_SOURCE` without joining the two (a `$(...)` around git is refused in a
+worktree-isolated session), so from a directory below the root it misses a config that exists. When
+`NO_CONFIG` was printed and `CONFIG_SOURCE` names a repo root, read
+`<CONFIG_SOURCE>/.claude/sassy-dog/take-it.md` by absolute path first; the config is `NO_CONFIG` only if
+that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`.
 
 This skill has **no config file of its own**. It reads one that already exists:
 

@@ -1214,6 +1214,7 @@ designs below are an edit to skill text, which options B and D already allow. Th
 - **Rules kept.** The paragraph must not start a line with `` !` ``, since the row 6 grep counts such lines. It must not use a bare `$1` to `$9`, `$@` or `$*` in a `SKILL.md` body. It must not spell
   the plugin-root token. `config-contract.md`'s description of the injected line is updated in the same change, and the gates that read it (`test-doc-reconciliation.sh`,
   `test-gotcha-claims.sh`, per the table in `CLAUDE.md`) must stay green.
+- **Line form changed (#574).** The `` !`root="$(git rev-parse ...` `` line quoted in the measurement sections above is the pre-#574 form and is kept as the record of what ran. A Claude Code session isolated in a git worktree refuses that form at load (git inside `$(...)`), so no skill text arrives. The shipped line now runs `git rev-parse --show-toplevel` as its own statement and reads `.claude/sassy-dog/<skill>.md` relative to the cwd; all eight skills carry a paragraph making a `NO_CONFIG` unconfirmed until the printed root's file is read by absolute path. The #455/#463 runs above were not repeated on the new line.
 
 ## Options for the shape
 
