@@ -21,7 +21,8 @@ does not re-prioritize.
 
 **Check `CONFIG_SOURCE` before using any of this.** It is the repo root resolved from the
 **session's** working directory at skill-load time — not necessarily the repo you are about to act
-on — and cwd resets between Bash calls, so you cannot influence it. If it names a repo other than
+on — and it was printed before any command of yours ran, so nothing you do now
+changes it. If it names a repo other than
 the one you are working in, **discard the block above**, read that repo's own
 `.claude/sassy-dog/take-it.md` by absolute path, and use that instead. Config is meant to be applied
 exactly as written, so the wrong one silently applies another repo's rules: on 2026-08-18 two agents

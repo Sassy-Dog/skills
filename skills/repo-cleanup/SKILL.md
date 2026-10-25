@@ -58,7 +58,7 @@ deletion) must wait for the guard. Read it first:
 git rev-parse --show-toplevel
 ```
 
-Pass the path it printed as `--repo`, typed literally. A command that names `git` carries no shell expansion here (no `$(...)`, no `$NAME`, no `${`), and a step that needs one runs it in a separate block: a worktree-isolated session refuses `git` beside any of them.
+Pass the path it printed as `--repo`, typed literally. A command that names `git` carries no shell expansion here (the list is in `scripts/check-git-expansion.sh`), and a step that needs one runs it in a separate block: a worktree-isolated session refuses `git` beside the ones it cannot resolve.
 
 **Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/repo-cleanup`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
@@ -120,7 +120,7 @@ For each non-default branch and each non-root worktree:
 | Signal | Verdict |
 |---|---|
 | Local branch marked `[gone]` | Stale — remote deleted, safe to delete locally |
-| Local `worktree-agent-*` isolation branch not checked out by any present worktree (worktree gone, switched away or detached; no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree, or the worker moved on. `-D` if its tip is an ancestor of `origin/$DEFAULT_BRANCH` **or** a PR merged into `$DEFAULT_BRANCH` contains it (`gh api "repos/$REPO/commits/<tip>/pulls"`, keeping entries with `merged_at != null` and `base.ref == $DEFAULT_BRANCH`; a PR merged into another base does not count); neither → STOP and ask (possibly unmerged work) |
+| Local `worktree-agent-*` isolation branch not checked out by any present worktree (worktree gone, switched away or detached; no upstream, so never `[gone]`) | Orphan — a per-merge teardown removed only the worktree, or the worker moved on. `-D` if its tip is an ancestor of `origin/<default-branch>` **or** a PR merged into `<default-branch>` contains it (`gh api "repos/$REPO/commits/<tip>/pulls"`, keeping entries with `merged_at != null` and `base.ref == <default-branch>`; a PR merged into another base does not count); neither → STOP and ask (possibly unmerged work) |
 | Local branch tracks a remote that still exists | `gh pr list --repo "$REPO" --state all --search "head:<branch>"` → MERGED / CLOSED-not-merged = stale; OPEN = leave |
 | Worktree SHA where `git merge-base --is-ancestor <sha> origin/<default-branch>` is true | Stale — work is in the default branch |
 | Worktree SHA NOT in the default branch | Investigate — possibly in-flight; do not remove without confirmation |
@@ -146,7 +146,7 @@ marked `[gone]` (no upstream to lose), and one orphan accumulates per merge (a 3
 'refs/heads/worktree-agent-*'` — and classify each per the table row above. The ancestry check
 alone is NOT enough: a tip at the pre-squash feature commit, or an orphan salvage commit superseded
 by the PR that actually merged, is shipped yet not an ancestor — confirm via the lookup of PRs merged
-into `$DEFAULT_BRANCH` (the row above) before `-D`, exactly like the squash-merge gotcha. Never delete one a present worktree has
+into `<default-branch>` (the row above) before `-D`, exactly like the squash-merge gotcha. Never delete one a present worktree has
 checked out: that is a live agent, and "no upstream" is its normal state, not a merged signal. One
 whose worktree is present but on another branch, or detached, is judged like any orphan.
 
