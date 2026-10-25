@@ -395,6 +395,11 @@
 #      terminal (a real eject, a PR that never enqueued) so the fix cannot
 #      swallow them. Its prose checks are flattened, both call sites being
 #      hard-wrapped. Mock gh serving recorded payloads: no repo, no network.
+#      The same suite also EXECUTES merge-shepherd.sh's `--expected-head`
+#      reviewed-head binding (#585: exit 25, expectedHeadOid and
+#      --match-head-commit, the re-read after a refused bound write, the
+#      bound --direct staleness update) against a second stubbed gh, each
+#      case with a mutant.
 #  26. template-actionlint tests (scripts/test-template-actionlint.sh) — the
 #      three setup-deps WORKFLOW templates are linted by actionlint, in a
 #      RENDER (issue #245). Bare actionlint lints real `.github/workflows/*`,

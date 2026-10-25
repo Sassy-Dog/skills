@@ -19,7 +19,8 @@
 # has not materialised yet" — and the script already holds the disproof in
 # QSTATES, which it was printing in the very line that got it wrong.
 #
-# Six properties are asserted:
+# Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
+# --expected-head cases, #585, against a second stubbed `gh` beside this one):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
 #      isInMergeQueue:false with an empty timeline, re-reads instead of
@@ -260,6 +261,219 @@ expect_flat "operator guidance names the re-read case it no longer covers" \
     'stays non-terminal and re-reads (#234)'
 expect_flat "the eject guidance still warns against blind re-enqueue" \
     'Do NOT blindly'
+
+# --- 7. merge-shepherd.sh --expected-head (issue #585) -----------------------
+# The merge half of the same queue family. test-teardown-args.sh already pins
+# merge-shepherd.sh's post-merge teardown() at source level; these cases are the
+# first to EXECUTE the script, against a stubbed gh, and are scoped to
+# --expected-head (the parse and validation, the head gate and exit 25, the
+# bound writes and the re-read after a refused one, the bound --direct
+# staleness update, --watch). They prove nothing about its other gates.
+echo "7. merge-shepherd.sh --expected-head binds the merge to the reviewed commit (#585)" >&2
+MS_SRC="$REPO_ROOT/skills/pr-shepherd/scripts"
+H1="$(printf 'a%.0s' $(seq 1 40))"
+H2="$(printf 'b%.0s' $(seq 1 40))"
+H64="$(printf 'c%.0s' $(seq 1 64))"
+
+MSBIN="$WORK/msbin"; mkdir -p "$MSBIN"
+# A second mock gh, for the write path. It logs every argv to $MS_CALLS and
+# answers by query text; `--jq` outputs are served already filtered. State
+# transitions (enqueue -> in queue, squash merge -> MERGED) go through $MS_STATE
+# so the script's own confirmation read agrees with what the mock was asked to do.
+cat >"$MSBIN/gh" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MS_CALLS"
+all="$*"
+case "$1" in
+    api)
+        case "$all" in
+            *update-branch*)      [ "${MS_UPDATE_RC:-0}" = 0 ] && { echo '{}'; exit 0; }; echo "update refused" >&2; exit 1 ;;
+            *enqueuePullRequest*)
+                if [ "${MS_ENQUEUE_RC:-0}" = 0 ]; then echo "OPEN CLEAN true" >"$MS_STATE"; echo '{}'; exit 0; fi
+                echo "enqueue refused" >&2; exit 1 ;;
+            *isInMergeQueue*)     cat "$MS_STATE" ;;
+            *headRefOid*)         [ "${MS_HEAD_RC:-0}" = 0 ] || exit 1
+                                  n=$(( $(cat "$MS_HEADCNT") + 1 )); echo "$n" >"$MS_HEADCNT"
+                                  if [ -n "${MS_MOVE_AT:-}" ] && [ "$n" -ge "$MS_MOVE_AT" ]; then echo "$MS_HEAD_LATER"; else echo "$MS_HEAD"; fi ;;
+            *"pullRequest(number:\$pr){ id }"*) echo "PR_node_1" ;;
+            */stacks*)            echo "HTTP/2.0 404 Not Found"; exit 1 ;;
+            */compare/*)          echo "${MS_BEHIND:-0}" ;;
+            *) echo "mock gh: unhandled api: $all" >&2; exit 1 ;;
+        esac ;;
+    pr)
+        case "$2" in
+            view)  echo "0 0 1" ;;
+            update-branch) exit 0 ;;
+            merge) if [ "${MS_MERGE_RC:-0}" = 0 ]; then
+                       case "$all" in
+                           *--squash*) echo "MERGED CLEAN false" >"$MS_STATE" ;;
+                           *--auto*)   echo "OPEN CLEAN true" >"$MS_STATE" ;;
+                       esac
+                   fi
+                   exit "${MS_MERGE_RC:-0}" ;;
+            *) echo "mock gh: unhandled pr: $all" >&2; exit 1 ;;
+        esac ;;
+    *) echo "mock gh: unhandled: $all" >&2; exit 1 ;;
+esac
+MOCK
+printf '#!/bin/sh\nexit 0\n' >"$MSBIN/sleep"
+chmod +x "$MSBIN/gh" "$MSBIN/sleep"
+
+MS_CALLS="$WORK/ms-calls"; MS_STATE="$WORK/ms-state"; MS_HEADCNT="$WORK/ms-headcnt"
+MS_OUT=""; MS_RC=0
+ms_run() { # <script> <head the PR reports> <args…>   (env MS_* passes through)
+    local script="$1" head="$2"; shift 2
+    : >"$MS_CALLS"; echo "OPEN CLEAN false" >"$MS_STATE"; echo 0 >"$MS_HEADCNT"
+    # GIT_DIR points nowhere, so the script finds no local checkout and skips
+    # its teardown instead of touching this repo's.
+    MS_OUT="$(cd "$WORK" && PATH="$MSBIN:$PATH" MS_CALLS="$MS_CALLS" MS_STATE="$MS_STATE" MS_HEADCNT="$MS_HEADCNT" MS_HEAD="$head" \
+        GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@" 2>&1)"
+    MS_RC=$?
+}
+ms_wrote() { grep -qE 'enqueuePullRequest|pr merge' "$MS_CALLS"; }
+ms_any_call() { [ -s "$MS_CALLS" ]; }
+
+# ms_suite <script> — appends a label to MS_FAILED for each case that does not hold.
+MS_FAILED=""
+ms_expect() { # <label> <condition rc: 0 holds>
+    [ "$2" = 0 ] || MS_FAILED="$MS_FAILED|$1"
+}
+ms_rc() { # <label> <expected exit status of the last ms_run>
+    [ "$MS_RC" = "$2" ] || MS_FAILED="$MS_FAILED|$1 (exit $MS_RC)"
+}
+ms_suite() {
+    local sc="$1" r
+    MS_FAILED=""
+    # no flag: unchanged — no head read, no expectedHeadOid, no --match-head-commit
+    ms_run "$sc" "$H1"
+    ms_rc "no flag: queue enqueues (exit 10)" 10
+    ms_expect "no flag: no expectedHeadOid and no head read" "$(! grep -qE 'expectedHeadOid|headRefOid' "$MS_CALLS"; echo $?)"
+    ms_run "$sc" "$H1" --direct
+    ms_rc "no flag: direct merges (exit 0)" 0
+    ms_expect "no flag: direct merge carries no --match-head-commit" "$(! grep -q -- '--match-head-commit' "$MS_CALLS"; echo $?)"
+    # match: queue
+    ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "match: queue enqueues (exit 10)" 10
+    ms_expect "match: the mutation input carries expectedHeadOid" "$(grep -q 'expectedHeadOid:\$eho' "$MS_CALLS"; echo $?)"
+    ms_expect "match: the mutation is given the reviewed id" "$(grep -q "eho=$H1" "$MS_CALLS"; echo $?)"
+    ms_run "$sc" "$H64" --expected-head "$H64"
+    ms_rc "match: a 64-hex id is accepted" 10
+    # match: fallback when the mutation errors
+    MS_ENQUEUE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_expect "match: fallback gh pr merge --auto carries --match-head-commit" \
+        "$(grep -qE "pr merge 585 .*--auto --match-head-commit $H1" "$MS_CALLS"; echo $?)"
+    # match: direct
+    ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "match: direct merges (exit 0)" 0
+    ms_expect "match: direct merge carries --match-head-commit" \
+        "$(grep -qE "pr merge 585 .*--squash --delete-branch --match-head-commit $H1" "$MS_CALLS"; echo $?)"
+    # mismatch: queue and direct — exit 25, nothing written
+    ms_run "$sc" "$H2" --expected-head "$H1"
+    ms_rc "mismatch queue: exit 25" 25
+    ms_expect "mismatch queue: no enqueue or merge call" "$(! ms_wrote; echo $?)"
+    ms_expect "mismatch queue: says the head moved" "$(grep -q 'HEAD MOVED' <<<"$MS_OUT"; echo $?)"
+    ms_run "$sc" "$H2" --direct --expected-head "$H1"
+    ms_rc "mismatch direct: exit 25" 25
+    ms_expect "mismatch direct: no enqueue or merge call" "$(! ms_wrote; echo $?)"
+    # an unreadable head is a wait, never a merge
+    MS_HEAD_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "unreadable head: exit 11" 11
+    ms_expect "unreadable head: no enqueue or merge call" "$(! ms_wrote; echo $?)"
+    # no flag, the --auto fallback: unbound, exactly as before
+    MS_ENQUEUE_RC=1 ms_run "$sc" "$H1"
+    ms_rc "no flag: fallback enqueues (exit 10)" 10
+    ms_expect "no flag: fallback is a bare gh pr merge --auto" \
+        "$(grep -qE 'pr merge 585 .*--auto( |$)' "$MS_CALLS" && ! grep -q -- '--match-head-commit' "$MS_CALLS"; echo $?)"
+    # a failing merge call is not confirmed (also keeps MS_MERGE_RC honest)
+    MS_MERGE_RC=1 ms_run "$sc" "$H1" --direct
+    ms_rc "no flag: a failed direct merge is not confirmed (exit 11)" 11
+    # a refused BOUND write: a moved head is 25 and the fallback is not tried
+    MS_ENQUEUE_RC=1 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound enqueue refused, head moved: exit 25" 25
+    ms_expect "bound enqueue refused, head moved: the --auto fallback is not tried" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
+    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound fallback refused, head moved: exit 25" 25
+    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound enqueue and fallback refused, head unchanged: exit 11 as before" 11
+    MS_MERGE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "bound direct merge refused, head moved: exit 25" 25
+    MS_MERGE_RC=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "bound direct merge refused, head unchanged: exit 11 as before" 11
+    # the bound --direct staleness update
+    MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: update succeeds, exit 11" 11
+    ms_expect "stale + bound: says the head moved by design" "$(grep -q 'moved by design' <<<"$MS_OUT"; echo $?)"
+    ms_expect "stale + bound: REST update carries expected_head_sha" "$(grep -q "update-branch -f expected_head_sha=$H1" "$MS_CALLS"; echo $?)"
+    ms_expect "stale + bound: no unbound gh pr update-branch and no merge" "$(! grep -qE '^pr (update-branch|merge)' "$MS_CALLS"; echo $?)"
+    MS_BEHIND=3 MS_UPDATE_RC=1 MS_MOVE_AT=3 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: update refused, head moved: exit 25" 25
+    MS_BEHIND=3 MS_UPDATE_RC=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: update refused, head unchanged: exit 11" 11
+    ms_expect "stale + bound: update refused, head unchanged: update it by hand" "$(grep -q 'update it by hand' <<<"$MS_OUT"; echo $?)"
+    MS_BEHIND=3 ms_run "$sc" "$H1" --direct
+    ms_rc "stale + no flag: unchanged, exit 11" 11
+    ms_expect "stale + no flag: uses gh pr update-branch, not the REST form" \
+        "$(grep -q '^pr update-branch' "$MS_CALLS" && ! grep -q 'expected_head_sha' "$MS_CALLS"; echo $?)"
+    # 25 is terminal under --watch (not re-polled)
+    ms_run "$sc" "$H2" --expected-head "$H1" --watch 1 --poll 0
+    ms_expect "watch: exit 25 ends the loop" "$([ "$MS_RC" = 25 ] && ! grep -q 'bounded-exit' <<<"$MS_OUT"; echo $?)"
+    # malformed ids: exit 1 before ANY gh call
+    for r in "" HEAD main abc123 "${H1}0" "${H1:0:39}" "$(printf 'A%.0s' $(seq 1 40))" "-x" "${H1:0:39}g"; do
+        ms_run "$sc" "$H1" --expected-head "$r"
+        ms_rc "malformed '$r': exit 1" 1
+        ms_expect "malformed '$r': refused before any gh call" "$(! ms_any_call; echo $?)"
+    done
+    ms_run "$sc" "$H1" --expected-head
+    ms_expect "missing value: exit 1 before any gh call" "$([ "$MS_RC" = 1 ] && ! ms_any_call; echo $?)"
+}
+
+ms_suite "$MS_SRC/merge-shepherd.sh"
+if [ -z "$MS_FAILED" ]; then ok "merge-shepherd --expected-head: every committed case holds"
+else bad "merge-shepherd --expected-head cases failed:$MS_FAILED"; fi
+
+# Mutants: each changes one construct in a COPY (with its siblings) and the same
+# suite must then fail. A mutant that does not apply, or that leaves the suite
+# green, is a vacuous case.
+MUT="$WORK/ms-mut"; mkdir -p "$MUT"
+ms_mutant() { # <label> <old text, must occur once> <new text>
+    local label="$1" d="$MUT/$1"
+    rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
+    if ! python3 -I -c '
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+' "$d/merge-shepherd.sh" "$2" "$3"; then
+        bad "merge-shepherd mutant '$label' did not apply (its anchor moved)"; return
+    fi
+    ms_suite "$d/merge-shepherd.sh"
+    if [ -n "$MS_FAILED" ]; then ok "merge-shepherd mutant '$label' fails the suite"
+    else bad "merge-shepherd mutant '$label' passes the suite — its case is vacuous"; fi
+}
+ms_mutant no-mismatch-gate '[ "$live_head" != "$EXPECTED_HEAD" ]' 'false'
+ms_mutant no-unreadable-gate 'if [ -z "$live_head" ]; then' 'if false; then'
+ms_mutant no-expectedHeadOid-field 'enqueuePullRequest(input:{pullRequestId:$prid,expectedHeadOid:$eho})' 'enqueuePullRequest(input:{pullRequestId:$prid})'
+ms_mutant empty-expectedHeadOid-value '-f eho="$EXPECTED_HEAD"' '-f eho=""'
+ms_mutant no-match-on-fallback '--auto --match-head-commit "$EXPECTED_HEAD"' '--auto'
+ms_mutant no-match-on-direct '          --match-head-commit "$EXPECTED_HEAD" >/dev/null \' '          >/dev/null \'
+ms_mutant no-charset-check '*[!0-9a-f]*) echo' 'NEVER) echo'
+ms_mutant no-length-check '40|64) : ;;' '*) : ;;'
+ms_mutant 25-not-terminal '0|1|20|22|24|25) exit' '0|1|20|22|24) exit'
+ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shift 2' '[ -n "$2" ] && EXPECTED_HEAD_SET=1; EXPECTED_HEAD="$2"; shift 2'
+ms_mutant no-moved-check-after-bound-enqueue '      head_moved && return 25
+    elif' '    elif'
+ms_mutant no-moved-check-after-bound-fallback '    head_moved && return 25
+    return 1' '    return 1'
+ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
+ms_mutant no-expected-sha-on-update '-f expected_head_sha="$EXPECTED_HEAD"' '-f expected_head_sha=""'
+ms_mutant no-moved-check-after-refused-update 'elif head_moved; then
+            echo "HEAD MOVED — reviewed' 'elif false; then
+            echo "HEAD MOVED — reviewed'
+ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+    live_head' 'if true; then
+    live_head'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

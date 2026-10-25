@@ -19,6 +19,7 @@
 # Usage:
 #   merge-shepherd.sh <pr> [--repo owner/name] [--worktree <path>] [--direct]
 #                     [--watch <secs>] [--poll <secs>] [--allow-no-checks]
+#                     [--expected-head <commit id>]
 #   Single-shot by default (advances one step, exits). --watch N polls up to N
 #   seconds (keep N under the host's kill window, e.g. 240) then exits cleanly.
 #   --direct: for repos WITHOUT a merge queue — squash-merge + --delete-branch
@@ -27,6 +28,26 @@
 #   --allow-no-checks: merge even when the PR reports ZERO checks in a repo that
 #   demonstrably runs CI on pull requests (see the empty-rollup trap below).
 #   Repo defaults to the cwd checkout (gh repo view); --repo overrides.
+#   --expected-head <commit id>: bind the merge to the head a caller REVIEWED
+#   (#585). The id must be a full 40- or 64-hex object id (lowercase), checked
+#   before any call. The PR's live headRefOid is read first and a mismatch
+#   exits 25 with no enqueue or merge call; a match is then carried INTO the
+#   write itself, because a push can land between the read and the call:
+#   `expectedHeadOid` in the enqueuePullRequest input, and `--match-head-commit
+#   <id>` on the `gh pr merge --auto` fallback and on the --direct merge. An
+#   unreadable head is exit 11 (re-run), never a merge. Without the flag
+#   nothing changes. A moved head is not a failure: the caller re-reviews.
+#   A bound write that GitHub refuses is followed by a re-read of the head: a
+#   head that moved is exit 25 (and the --auto fallback is NOT tried), an
+#   unchanged one keeps the existing behaviour. The --direct staleness update
+#   is unbound under `gh pr update-branch`, so a bound run uses REST
+#   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
+#   11 saying the head moved BY DESIGN (the update is a merge commit; the caller
+#   re-reviews it and re-runs with the new head), a refusal that finds a moved
+#   head is 25, any other refusal keeps "update it by hand" and exit 11.
+#   The gate runs AFTER the MERGED and IN_QUEUE early returns, deliberately and
+#   not to be reordered: MERGED is past binding, and a push to a queued PR
+#   ejects it, so the next run sees the new head and this gate.
 #
 # Env:
 #   DEFAULT_BRANCH   reconcile target (default: origin/HEAD, fallback "main")
@@ -39,6 +60,8 @@
 #             · 20 red checks · 21 no checks reported where CI is expected
 #             (re-run) · 22 conflicting · 23 blocked by a lower stack layer
 #             (re-run) · 24 stacked under a merge queue (needs a human)
+#             · 25 head moved since the reviewed commit (--expected-head only;
+#             re-review, then re-run with the new head)
 #             · 1 usage/error/closed
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
@@ -108,7 +131,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GH_RETRY="$SCRIPT_DIR/gh-retry.sh"
 STACK_PROBE="$SCRIPT_DIR/stack-probe.sh"
 
-REPO=""; PR=""; WT=""; WATCH=0; POLL=30; DIRECT=0; ALLOW_NO_CHECKS=0
+REPO=""; PR=""; WT=""; WATCH=0; POLL=30; DIRECT=0; ALLOW_NO_CHECKS=0; EXPECTED_HEAD=""; EXPECTED_HEAD_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
@@ -117,14 +140,29 @@ while [ $# -gt 0 ]; do
     --poll) POLL="$2"; shift 2 ;;
     --direct) DIRECT=1; shift ;;
     --allow-no-checks) ALLOW_NO_CHECKS=1; shift ;;
+    --expected-head) [ $# -ge 2 ] || { echo "--expected-head needs a commit id" >&2; exit 1; }
+                     EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shift 2 ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) if [ -z "$PR" ]; then PR="$1"; shift; else echo "unexpected arg: $1" >&2; exit 1; fi ;;
   esac
 done
-[ -n "$PR" ] || { echo "usage: merge-shepherd.sh <pr> [--repo o/n] [--worktree p] [--direct] [--watch s] [--poll s] [--allow-no-checks]" >&2; exit 1; }
+[ -n "$PR" ] || { echo "usage: merge-shepherd.sh <pr> [--repo o/n] [--worktree p] [--direct] [--watch s] [--poll s] [--allow-no-checks] [--expected-head <commit id>]" >&2; exit 1; }
 case "$PR" in *[!0-9]*|'') echo "PR must be numeric, got: $PR" >&2; exit 1 ;; esac
 case "$WATCH" in *[!0-9]*|'') echo "--watch must be numeric, got: $WATCH" >&2; exit 1 ;; esac
 case "$POLL" in *[!0-9]*|'') echo "--poll must be numeric, got: $POLL" >&2; exit 1 ;; esac
+if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+  # Keyed on the flag having been GIVEN, never on a non-empty value: `--expected-head ""`
+  # must be refused here, not run an unbound merge.
+  # A full object id and nothing else (the orchestrator's base_override rule): a
+  # branch name, an abbreviation or a leading '-' must never reach gh as a value.
+  case "$EXPECTED_HEAD" in
+    *[!0-9a-f]*) echo "--expected-head must be a full 40- or 64-hex commit id, got: $EXPECTED_HEAD" >&2; exit 1 ;;
+  esac
+  case "${#EXPECTED_HEAD}" in
+    40|64) : ;;
+    *) echo "--expected-head must be a full 40- or 64-hex commit id, got: $EXPECTED_HEAD" >&2; exit 1 ;;
+  esac
+fi
 
 if [ -z "$REPO" ]; then
   REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
@@ -178,7 +216,17 @@ enqueue() {
     -f owner="$OWNER" -f name="$NAME" -F pr="$PR" \
     --jq '.data.repository.pullRequest.id' 2>/dev/null)"
   if [ -n "$prid" ]; then
-    if bash "$GH_RETRY" -- api graphql \
+    if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+      # expectedHeadOid makes GitHub itself refuse the enqueue if the head moved
+      # after the read in advance() (#585).
+      bash "$GH_RETRY" -- api graphql \
+        -f query='mutation($prid:ID!,$eho:GitObjectID!){
+            enqueuePullRequest(input:{pullRequestId:$prid,expectedHeadOid:$eho}){
+                mergeQueueEntry{ position state }}}' \
+        -f prid="$prid" -f eho="$EXPECTED_HEAD" >/dev/null && return 0
+      # A refusal because the head moved is exit 25, and no fallback is tried.
+      head_moved && return 25
+    elif bash "$GH_RETRY" -- api graphql \
          -f query='mutation($prid:ID!){
              enqueuePullRequest(input:{pullRequestId:$prid}){
                  mergeQueueEntry{ position state }}}' \
@@ -189,7 +237,32 @@ enqueue() {
   else
     echo "  PR node id unresolved — falling back to gh pr merge --auto" >&2
   fi
-  bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto >/dev/null
+  if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+    bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto --match-head-commit "$EXPECTED_HEAD" >/dev/null && return 0
+    head_moved && return 25
+    return 1
+  else
+    bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto >/dev/null
+  fi
+}
+
+# After a FAILED bound write: did the head move? Succeeds only on a positive
+# read that differs from the reviewed id. An unreadable head is "not known to
+# have moved", so the caller keeps its existing behaviour (#585).
+head_moved() {
+  local h
+  h="$(pr_head)"
+  [ -n "$h" ] && [ "$h" != "$EXPECTED_HEAD" ]
+}
+
+# The live head, for the --expected-head gate. Prints the id, or NOTHING when
+# the read failed (the caller treats that as "unknown -> re-run", never a merge).
+pr_head() {
+  gh api graphql \
+    -f query='query($owner:String!,$name:String!,$pr:Int!){
+        repository(owner:$owner,name:$name){pullRequest(number:$pr){headRefOid}}}' \
+    -f owner="$OWNER" -f name="$NAME" -F pr="$PR" \
+    --jq '.data.repository.pullRequest.headRefOid' 2>/dev/null
 }
 
 checks() { # -> "FAILS PENDING TOTAL"
@@ -333,7 +406,7 @@ stack_gate() {
 }
 
 advance() { # one idempotent step against live state
-  local st ms inq fails pend total grc bb
+  local st ms inq fails pend total grc bb live_head erc
   read -r st ms inq <<<"$(pr_state)"
   [ -z "$st" ] && { echo "state unavailable (transient) — retry later"; return 11; }
   case "$st" in
@@ -344,6 +417,18 @@ advance() { # one idempotent step against live state
   read -r fails pend total <<<"$(checks)"
   [ "$ms" = CONFLICTING ] && { echo "CONFLICTING — needs human/rebase (do NOT auto-rebase)"; return 22; }
   if [ "$inq" = "true" ]; then echo "IN_QUEUE (waiting)"; return 11; fi
+  # Reviewed-head gate (#585): before any gate that could lead to a write. A
+  # moved head means whatever was reviewed is not what would merge.
+  if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+    live_head="$(pr_head)"
+    if [ -z "$live_head" ]; then
+      echo "head unreadable (transient) — not merging this pass"; return 11
+    fi
+    if [ "$live_head" != "$EXPECTED_HEAD" ]; then
+      echo "HEAD MOVED — reviewed $EXPECTED_HEAD, PR head is now $live_head (re-review, then re-run with the new head)"
+      return 25
+    fi
+  fi
   # Stack gate BEFORE the red gate: on a blocked upper layer, "merge the layer
   # below first" is the actionable report, and its checks re-run on the
   # retargeted ref anyway once the lower layer lands.
@@ -375,7 +460,19 @@ advance() { # one idempotent step against live state
       bb="$(behind_by)"
       if [ -n "$bb" ] && [ "$bb" -gt 0 ] 2>/dev/null; then
         echo "STALE — $bb commit(s) behind $BRANCH (CLEAN only means no textual conflict)"
-        if bash "$GH_RETRY" -- pr update-branch "$PR" --repo "$REPO" >/dev/null 2>&1; then
+        if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+          # `gh pr update-branch` has no head guard, so a bound run uses the REST
+          # form, which refuses when the head is no longer the reviewed one (#585).
+          if bash "$GH_RETRY" -- api -X PUT "repos/$OWNER/$NAME/pulls/$PR/update-branch" \
+               -f expected_head_sha="$EXPECTED_HEAD" >/dev/null 2>&1; then
+            echo "  branch updated — the head moved by design: re-review the update (a merge commit, so a full review under take-it §6's Delta base rule), then re-run with the new head"
+          elif head_moved; then
+            echo "HEAD MOVED — reviewed $EXPECTED_HEAD, the update was refused because the PR head changed (re-review, then re-run with the new head)"
+            return 25
+          else
+            echo "  update-branch failed — update it by hand, then re-run" >&2
+          fi
+        elif bash "$GH_RETRY" -- pr update-branch "$PR" --repo "$REPO" >/dev/null 2>&1; then
           echo "  branch updated — checks re-run against $BRANCH; re-run to merge"
         else
           echo "  update-branch failed — update it by hand, then re-run" >&2
@@ -383,16 +480,27 @@ advance() { # one idempotent step against live state
         return 11
       fi
       echo "CLEAN — direct merge (--squash --delete-branch)"
-      bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --squash --delete-branch >/dev/null \
-        || echo "  merge call failed (checking whether it took anyway)" >&2
+      if [ "$EXPECTED_HEAD_SET" = 1 ]; then
+        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --squash --delete-branch \
+          --match-head-commit "$EXPECTED_HEAD" >/dev/null \
+          || { head_moved && { echo "HEAD MOVED — the bound merge was refused because the PR head changed (re-review, then re-run with the new head)"; return 25; }
+               echo "  merge call failed (checking whether it took anyway)" >&2; }
+      else
+        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --squash --delete-branch >/dev/null \
+          || echo "  merge call failed (checking whether it took anyway)" >&2
+      fi
       sleep 5
       read -r st _ _ <<<"$(pr_state)"
       if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi
       echo "  merge not confirmed — re-run"; return 11
     fi
     echo "CLEAN — enqueuing (GraphQL enqueuePullRequest)"
-    enqueue \
-      || echo "  enqueue call failed (checking whether it took anyway)" >&2
+    enqueue; erc=$?
+    if [ "$erc" -eq 25 ]; then
+      echo "HEAD MOVED — the bound enqueue was refused because the PR head changed (re-review, then re-run with the new head)"
+      return 25
+    fi
+    [ "$erc" -eq 0 ] || echo "  enqueue call failed (checking whether it took anyway)" >&2
     sleep 8
     read -r _ _ inq <<<"$(pr_state)"
     if [ "$inq" = "true" ]; then
@@ -411,7 +519,8 @@ while :; do
   printf '[%ds] %s\n' "$SECONDS" "$out"
   # 23 (blocked by a lower stack layer) is deliberately NOT terminal — it
   # clears on its own once the layer below merges. 24 needs a human, so it stops.
-  case "$rc" in 0|1|20|22|24) exit "$rc" ;; esac    # terminal — stop
+  # 25 (head moved) is terminal for THIS run: the caller must re-review first.
+  case "$rc" in 0|1|20|22|24|25) exit "$rc" ;; esac    # terminal — stop
   [ "$WATCH" -le 0 ] && exit "$rc"               # single-shot
   [ "$SECONDS" -ge "$deadline" ] && { echo "[bounded-exit] still in-flight — re-run to resume"; exit "$rc"; }
   sleep "$POLL"
