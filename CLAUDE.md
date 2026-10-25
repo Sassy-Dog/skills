@@ -34,6 +34,7 @@ Which header to read, keyed by what you are touching:
 | `whats-on-fire`'s ranking and reporting — a security-labelled issue is never collapsed into a bare count | `test-security-listing.sh` |
 | `pull-repo-signals.sh`'s `default_branch_ci` — the recovery re-query's shape, and what a surviving null may mean | `test-repo-signals-recovery.sh` |
 | `pr-shepherd`'s `teardown.sh` arguments, `--sweep`'s live-worker guards (#546), and its refusal to mutate under a held checkout guard (exit 7; `merge-shepherd.sh`'s post-merge teardown makes the same `check`) | `test-teardown-args.sh` |
+| `merge-shepherd.sh`'s reviewed-head binding (`--expected-head`, exit 25, the bound writes and the bound `--direct` staleness update) | `test-poll-queue-eject.sh` (part 7 executes the script against a stubbed `gh`, a mutant per construct; the header of that part says what it does not cover) |
 | `scripts/preflight.sh`'s parallel runner (`scripts/lib-parallel-gates.sh`), `PREFLIGHT_JOBS`, or adding any `scripts/test-*.sh` (it must be wired exactly once, through `pg_gate`) | `test-preflight-wiring.sh` (the wiring mutants, the runner against stubs, preflight end to end over a stub tree), `test-doc-reconciliation.sh` §6 (the stated gate count) |
 | doc reconciliation, versioning/CalVer, the stale-cache diagnostic | `test-doc-reconciliation.sh`, `test-versioning.sh`, `test-stale-cache-diagnostic.sh` |
 | the release-lag checker, normalized runtime inventory, first-parent release baseline or pending-age clocks | `test-release-lag.sh` |

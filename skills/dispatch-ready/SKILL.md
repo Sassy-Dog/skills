@@ -187,10 +187,13 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   been ordered is a corrective that never runs. **How a tick learns the outcome: read the PR
   body**, where take-it's step 6 requires the sub-agent to have written the verbatim line — this
   loop reads no RESULT lines, and a later tick is a different session from the one that dispatched.
-  **Bind each hand-off to the head its review covered**: pass it as `--expected-head`, and treat
-  exit `25` (the head moved), as `take-it` §6's **Bind the merge to the reviewed head** defines
-  both. A moved head is not a failure and spends no recovery; this section's "Reviewed" rule
-  re-reviews it next tick. **Keep the issue → open-PR mapping this step produces** — §4's Collision
+  **Bind each hand-off to the head its review covered**: pass this loop's recorded `reviewed_head`
+  (see the not-yet-reviewed bullet below) as `--expected-head` on every hand-off, including a later
+  tick's re-run after exit `11`, and treat exit `25` (the head moved) as `take-it` §6's **Bind the
+  merge to the reviewed head** defines both. Where this loop reviewed (not under `review_agent:
+  skip` or `review_site: agent`, which pass no head), never hand a PR off unbound: no matching
+  record means the PR is not reviewed. A moved head is not a failure and spends no recovery; this section's
+  "Reviewed" rule re-reviews it next tick. **Keep the issue → open-PR mapping this step produces** — §4's Collision
   filter reads those PRs' actual changed files, and re-deriving the mapping there costs a second
   round of lookups.
 - **Open PRs on blocked issues** → resolve these too, and hand them to nobody. **With `board:`**
@@ -239,7 +242,13 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   hand-off like any other green PR, known before any dispatch; it is never "not reviewed, withhold",
   which would re-fire every tick and rebuild the blanket merge freeze the hand-off bullet's
   carve-out exists to prevent. Say once in the tick report that review was opted out.
-  Otherwise "Reviewed" means this loop's own recorded outcome for the current head (a head that moved
+  Otherwise "Reviewed" means this loop's own recorded outcome for the current head, which carries
+  `reviewed_head=<full oid>` in the verified per-attempt record (distinct from the cap record's
+  `reviewed_head`, which stays the delta base; a delta review rewrites this one to the head it
+  covered), mirrored in the PR body and read back author-checked and bound to the active
+  `attempt_id`, exactly like `recovery_used`. A record that is absent, or does not match the current
+  head, means not reviewed: review it, and never hand it off unbound. A record that cannot be read
+  holds the PR this tick (a head that moved
   only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
   bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
@@ -259,8 +268,9 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   successful surface or invent empty results; identity/context changes invalidate all reuse without
   resetting the budget. Refresh a stale plan before the batch within the same reserved round;
   an aggregate-only response cannot authorize a second batch. Custom agents retain their existing
-  contract. Never change `review_site` or escalate through ancestors. Persist the outcome and
-  `recovery_used` in the PR body and issue comment, and hand only reviewed PRs to
+  contract. Never change `review_site` or escalate through ancestors. Persist the outcome,
+  `reviewed_head=<full oid of the head it covered>` and `recovery_used` in the PR body and issue
+  comment, and hand only reviewed PRs to
   `sassy-dog:pr-shepherd` this tick. A PR whose review
   could not run at all — no agent resolved, or the dispatch failed — reports
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause (the dispatch

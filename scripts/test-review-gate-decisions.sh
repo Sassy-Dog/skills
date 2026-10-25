@@ -1096,9 +1096,26 @@ mutant_pin "$rollin_take" 'on a step 7 release with no new commit, the cap recor
 mutant_pin "$rollin_take" 'Exit .25. means the head moved: it is not a failure, spends no recovery' \
     's/spends no recovery//' \
     "take-it: exit 25 re-reviews and spends no recovery"
-mutant_pin "$dispatch_flat" 'treat exit .25. \(the head moved\), as .take-it. §6.s \*\*Bind the merge to the reviewed head\*\* defines both' \
+mutant_pin "$dispatch_flat" 'treat exit .25. \(the head moved\) as .take-it. §6.s \*\*Bind the merge to the reviewed head\*\* defines both' \
     's/Bind the merge to the reviewed head//' \
     "dispatch-ready passes the reviewed head and points at take-it for exit 25"
+# N4: a tick has no worker RESULT to remember the reviewed head by, so the head rides the verified
+# per-attempt record, and an unbound hand-off of a PR this loop reviewed is never an option.
+mutant_pin "$dispatch_flat" 'carries .reviewed_head=<full oid>. in the verified per-attempt record' \
+    's/verified per-attempt record//' \
+    "dispatch-ready records the reviewed head in the verified per-attempt record"
+mutant_pin "$dispatch_flat" 'read back author-checked and bound to the active .attempt_id., exactly like .recovery_used.. A record that is absent, or does not match the current head, means not reviewed' \
+    's/does not match the current head, means not reviewed//' \
+    "dispatch-ready: an absent or non-matching reviewed_head means not reviewed"
+mutant_pin "$dispatch_flat" 'A record that cannot be read holds the PR this tick' \
+    's/cannot be read holds the PR this tick//' \
+    "dispatch-ready holds the PR when the reviewed_head record is unreadable"
+mutant_pin "$dispatch_flat" 'never hand a PR off unbound: no matching record means the PR is not reviewed' \
+    's/never hand a PR off unbound//' \
+    "dispatch-ready never hands a reviewed-here PR off unbound"
+mutant_pin "$dispatch_flat" 'including a later tick.s re-run after exit .11.' \
+    's/including a later tick.s re-run after exit .11.//' \
+    "dispatch-ready re-passes the reviewed head on a later tick's re-run"
 mutant_pin "$rollin_disp" 'applies .take-it. §6.s \*\*Delta base rule\*\*' \
     's/Delta base rule//' \
     "dispatch-ready applies the one Delta base rule"
