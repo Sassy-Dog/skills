@@ -17,7 +17,7 @@ does not re-prioritize.
 
 ## 1. Repo config
 
-!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Check `CONFIG_SOURCE` before using any of this.** It is the repo root resolved from the
 **session's** working directory at skill-load time — not necessarily the repo you are about to act

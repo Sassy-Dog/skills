@@ -809,14 +809,16 @@ whole point of keeping it separate from the frontmatter facts.
 Each skill inlines its config at load time with dynamic context injection:
 
 ```text
-!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/<skill>.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/<skill>.md 2>/dev/null || echo "NO_CONFIG"`
 ```
 
 `git rev-parse` rather than `${CLAUDE_PROJECT_DIR}` because the substitution order between
 placeholder expansion and shell execution is not specified, and every one of these skills requires
 a git repo regardless. The command is safe outside a repo — it prints `<not a git repo>` and then
-`NO_CONFIG`, with no stderr. `CONFIG_CWD` comes from `pwd`, not `"$PWD"`: a worktree-isolated session
-refuses a command that names git beside a shell-variable expansion (measured, #576).
+`NO_CONFIG`, with no stderr. `CONFIG_CWD` comes from `pwd -P`, not `"$PWD"`: a worktree-isolated session
+refuses a command that names git beside a shell-variable expansion (measured, #576), and `-P` prints
+the resolved path so it compares equal to `git rev-parse --show-toplevel` at a root reached through a
+symlink (on macOS `/tmp` is one).
 
 **`git` is a plain statement, never inside `$(...)`** ([#574](https://github.com/Sassy-Dog/skills/issues/574)).
 A Claude Code session isolated in a git worktree refuses, at skill load, any command that names git in

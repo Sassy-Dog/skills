@@ -15,7 +15,7 @@ commit/push → watch + merge (delegated to `sassy-dog:pr-shepherd`).
 
 ## 1. Repo config
 
-!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
 command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
@@ -128,10 +128,12 @@ always reports its disposition.
 ### If `migrations:` is set
 
 Schema source of truth changed ⇒ a generated migration must ship alongside it. Collect the changed
-set once, against the derived default branch:
+set once, against the derived default branch, as the union of these two plain statements' output
+(deduplicated; no shell variable and no substitution around `git`):
 
 ```bash
-CHANGED=$( { git diff --name-only "origin/<default_branch>"; git ls-files --others --exclude-standard; } | sort -u )
+git diff --name-only origin/<default_branch>
+git ls-files --others --exclude-standard
 ```
 
 If anything under `migrations.schema_dir` changed, run `migrations.regen_command`, then

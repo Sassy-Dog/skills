@@ -28,7 +28,7 @@ what this skill does.
 
 ## 1. Repo config
 
-!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/take-it.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Check `CONFIG_SOURCE` before using any of this.** If it names a repo other than the one you are
 working in, discard the block above and read that repo's own `.claude/sassy-dog/take-it.md` by

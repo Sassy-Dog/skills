@@ -73,10 +73,13 @@
 #      exact string; preflight gate 18 checks only CONFIG_SOURCE), the file the
 #      cat reads being the OWNING skill's (`take-it` for work-recommendations and
 #      work-fire-watch, which read take-it.md; otherwise the skill's own name),
-#      and the `printf 'CONFIG_CWD: '; pwd;` statement that makes a cwd/root
-#      mismatch visible. `pwd` and not "$PWD" because a worktree-isolated
+#      and the `printf 'CONFIG_CWD: '; pwd -P;` statement that makes a cwd/root
+#      mismatch visible. `pwd -P` (the resolved path, which is what git prints,
+#      so a root reached through a symlink compares equal) and not "$PWD" because a worktree-isolated
 #      session refuses git beside any variable expansion (measured, #576). The
-#      paragraph must name CONFIG_CWD. One mutant for each.
+#      paragraph, read to its own end rather than a fixed window, must name
+#      CONFIG_CWD, state the "differs from" condition, and tell the agent to read
+#      <CONFIG_SOURCE>'s file by absolute path. One mutant for each.
 #
 # config-contract.md ("Where the harness never runs the line") DESCRIBES the
 # paragraph in prose and is deliberately not pinned: it paraphrases rather than
@@ -387,7 +390,7 @@ echo "6. the config line keeps git out of a substitution, and every skill confir
 # cwd-relative, so a miss from below the root is possible and the paragraph that
 # says what to do about it must be present exactly once.
 line_problems() {
-    local f="$1" want="$2" line inner n_conf
+    local f="$1" want="$2" line inner n_conf para
     line="$(grep "$CFG_RE" "$f" | head -n 1)"
     # strip the injection's own delimiters before looking for a nested substitution
     inner="${line#!\`}"; inner="${inner%\`}"
@@ -395,9 +398,13 @@ line_problems() {
     case "$inner" in *'$root'*|*'${root'*) echo "config line still joins a captured root into the path" ;; esac
     case "$inner" in *"cat .claude/sassy-dog/"*) : ;; *) echo "config line does not read the cwd-relative .claude/sassy-dog path" ;; esac
     case "$inner" in *"cat .claude/sassy-dog/${want}.md 2>/dev/null || echo \"NO_CONFIG\"") : ;; *) echo "config line does not read .claude/sassy-dog/${want}.md and end in 2>/dev/null || echo \"NO_CONFIG\"" ;; esac
-    case "$inner" in "printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; "*) : ;; *) echo "config line does not open with the CONFIG_CWD pwd statement" ;; esac
+    case "$inner" in "printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; "*) : ;; *) echo "config line does not open with the CONFIG_CWD pwd -P statement" ;; esac
     case "$inner" in *'$PWD'*|*'${PWD'*) echo "config line expands a shell variable (a worktree-isolated session refuses git beside one)" ;; esac
-    grep -q 'CONFIG_CWD' <(grep -A8 'unconfirmed until you have read the root' "$f") || echo "subdirectory-rule paragraph does not name CONFIG_CWD"
+    # the paragraph, from its opener to the next blank line, whitespace-collapsed
+    para="$(awk '/unconfirmed until you have read the root/ {on=1} on && /^$/ {exit} on {print}' "$f" | tr '\n' ' ' | tr -s ' ')"
+    case "$para" in *CONFIG_CWD*) : ;; *) echo "subdirectory-rule paragraph does not name CONFIG_CWD" ;; esac
+    case "$para" in *"differs from"*) : ;; *) echo "subdirectory-rule paragraph does not state the differs-from condition" ;; esac
+    case "$para" in *"by absolute path"*) : ;; *) echo "subdirectory-rule paragraph does not say to read the root's file by absolute path" ;; esac
     case "$inner" in *"git rev-parse --show-toplevel"*) : ;; *) echo "config line does not print the repo root" ;; esac
     n_conf="$(grep -c 'unconfirmed until you have read the root' "$f" || true)"
     [ "$n_conf" -eq 1 ] || echo "has $n_conf subdirectory-rule paragraphs, not exactly one"
@@ -417,7 +424,7 @@ if [ -z "$p" ]; then ok "config-contract.md: the canonical line has the same for
 
 # mutants: the old substitution form, and a deleted rule paragraph, are caught.
 old_form="$WORK/old-form.md"
-sed 's|^!`printf .CONFIG_CWD: .; pwd; printf .CONFIG_SOURCE: .; git rev-parse --show-toplevel 2>/dev/null .. echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md|!`root="$(git rev-parse --show-toplevel)"; echo "CONFIG_SOURCE: ${root}"; cat "$root/.claude/sassy-dog/send-it.md"|' skills/send-it/SKILL.md > "$old_form"
+sed 's|^!`printf .CONFIG_CWD: .; pwd -P; printf .CONFIG_SOURCE: .; git rev-parse --show-toplevel 2>/dev/null .. echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md|!`root="$(git rev-parse --show-toplevel)"; echo "CONFIG_SOURCE: ${root}"; cat "$root/.claude/sassy-dog/send-it.md"|' skills/send-it/SKILL.md > "$old_form"
 if cmp -s "$old_form" skills/send-it/SKILL.md; then bad "mutant old-form: the mutation matched nothing"
 elif [ -n "$(line_problems "$old_form" send-it)" ]; then ok "mutant: the old substitution line is caught"
 else bad "mutant: the old substitution line was NOT caught"; fi
@@ -438,8 +445,11 @@ six_mutant() { # <label> <sed expr> [<want>]
 }
 six_mutant "a line without the NO_CONFIG ending" '/^!`printf/s/ 2>\/dev\/null || echo "NO_CONFIG"//'
 six_mutant "a line that reads another skill's config" '/^!`printf/s|cat .claude/sassy-dog/send-it.md|cat .claude/sassy-dog/groom-backlog.md|'
-six_mutant "a line without the CONFIG_CWD statement" "/^!\`printf/s|printf 'CONFIG_CWD: '; pwd; ||"
-six_mutant "a CONFIG_CWD taken from a variable" "/^!\`printf/s|pwd;|\"\$PWD\";|"
+six_mutant "a line without the CONFIG_CWD statement" "/^!\`printf/s|printf 'CONFIG_CWD: '; pwd -P; ||"
+six_mutant "a CONFIG_CWD taken from a variable" "/^!\`printf/s|pwd -P;|\"\$PWD\";|"
+six_mutant "a line using plain pwd instead of pwd -P" "/^!\`printf/s|pwd -P;|pwd;|"
+six_mutant "a paragraph without the differs-from condition" '/unconfirmed until you have read the root/,/stands\./s/differs from/equals/'
+six_mutant "a paragraph without the read-by-absolute-path sentence" '/unconfirmed until you have read the root/,/stands\./{/by absolute path/d;}'
 six_mutant "a paragraph that never names CONFIG_CWD" '/unconfirmed until you have read the root/,/stands\./s/CONFIG_CWD/CONFIG_DIR/g'
 # the ownership table itself: work-recommendations must be held to take-it.md.
 if [ -n "$(line_problems skills/work-recommendations/SKILL.md work-recommendations)" ]; then ok "mutant: work-recommendations held to its own name instead of take-it is caught"; else bad "mutant: work-recommendations held to the wrong basename was NOT caught"; fi

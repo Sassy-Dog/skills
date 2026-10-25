@@ -24,7 +24,7 @@ agent with zero conversation context.
 
 ## 1. Repo config
 
-!`printf 'CONFIG_CWD: '; pwd; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/groom-backlog.md 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_CWD: '; pwd -P; printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/groom-backlog.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
 command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
