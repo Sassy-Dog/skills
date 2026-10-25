@@ -61,6 +61,13 @@
 #      checker for a defect in the tree. Every mutant must
 #      differ from its source, so a mutation that matched nothing cannot read as
 #      caught.
+#   6. (issue #574) The config line keeps `git` out of any `$(...)` or backtick
+#      substitution, because a worktree-isolated Claude Code session's guard
+#      refuses that form at load, before the line or the fallback paragraph can
+#      reach the agent. The cat is cwd-relative as a result, so all eight skills
+#      carry the "unconfirmed until you have read the root's file" paragraph
+#      (stoppers included: it is not the Unrun paragraph). Mutants: the old
+#      substitution form, and the paragraph deleted.
 #
 # config-contract.md ("Where the harness never runs the line") DESCRIBES the
 # paragraph in prose and is deliberately not pinned: it paraphrases rather than
@@ -354,13 +361,57 @@ else
     bad "derived set: a clean scratch mirror did not pass"
 fi
 mkdir -p "$fx/skills/ninth-skill"
-printf -- '---\nname: ninth-skill\ndescription: x\n---\n\n!`root="$(git rev-parse --show-toplevel 2>/dev/null)"; echo "CONFIG_SOURCE: ${root}"`\n' > "$fx/skills/ninth-skill/SKILL.md"
+printf -- '---\nname: ninth-skill\ndescription: x\n---\n\n!`printf '"'"'CONFIG_SOURCE: '"'"'; git rev-parse --show-toplevel`\n' > "$fx/skills/ninth-skill/SKILL.md"
 extra_out="$(cd "$fx" && find skills -name SKILL.md | sort | scan_tree)"
 if [ -n "$(derived_set_problem "$(sed -n 's/^DERIVED//p' <<<"$extra_out")")" ]; then
     ok "derived set: a ninth skill with a config line in neither list is caught"
 else
     bad "derived set: a ninth skill with a config line in neither list was NOT caught"
 fi
+
+# --- 6. the line's form, and the subdirectory rule (issue #574) ----------------
+echo "6. the config line keeps git out of a substitution, and every skill confirms NO_CONFIG at the root" >&2
+
+# line_problems <file> — one problem per line, nothing when clean. The form is
+# what a worktree-isolated Claude Code session's guard accepts: `git` as its own
+# statement, never inside $(...) or backticks (measured, #574). The cat is
+# cwd-relative, so a miss from below the root is possible and the paragraph that
+# says what to do about it must be present exactly once.
+line_problems() {
+    local f="$1" line inner n_conf
+    line="$(grep "$CFG_RE" "$f" | head -n 1)"
+    # strip the injection's own delimiters before looking for a nested substitution
+    inner="${line#!\`}"; inner="${inner%\`}"
+    case "$inner" in *'$('*|*'`'*) echo "config line holds a command substitution (a worktree-isolated session refuses git inside one)" ;; esac
+    case "$inner" in *'$root'*|*'${root'*) echo "config line still joins a captured root into the path" ;; esac
+    case "$inner" in *"cat .claude/sassy-dog/"*) : ;; *) echo "config line does not read the cwd-relative .claude/sassy-dog path" ;; esac
+    case "$inner" in *"git rev-parse --show-toplevel"*) : ;; *) echo "config line does not print the repo root" ;; esac
+    n_conf="$(grep -c 'unconfirmed until you have read the root' "$f" || true)"
+    [ "$n_conf" -eq 1 ] || echo "has $n_conf subdirectory-rule paragraphs, not exactly one"
+    return 0
+}
+
+six_bad=0
+for n in $CARRIERS $STOPPERS; do
+    p="$(line_problems "skills/$n/SKILL.md")"
+    if [ -n "$p" ]; then bad "$n: $p"; six_bad=1; fi
+done
+[ "$six_bad" -eq 0 ] && ok "all eight skills: git is a plain statement and the NO_CONFIG-at-root rule is present once"
+
+p="$(line_problems skills/setup-config/references/config-contract.md | grep -v 'subdirectory-rule' || true)"
+if [ -z "$p" ]; then ok "config-contract.md: the canonical line has the same form"; else bad "config-contract.md: $p"; fi
+
+# mutants: the old substitution form, and a deleted rule paragraph, are caught.
+old_form="$WORK/old-form.md"
+sed 's|^!`printf .CONFIG_SOURCE: .; git rev-parse --show-toplevel 2>/dev/null .. echo "<not a git repo>"; cat .claude/sassy-dog/send-it.md|!`root="$(git rev-parse --show-toplevel)"; echo "CONFIG_SOURCE: ${root}"; cat "$root/.claude/sassy-dog/send-it.md"|' skills/send-it/SKILL.md > "$old_form"
+if cmp -s "$old_form" skills/send-it/SKILL.md; then bad "mutant old-form: the mutation matched nothing"
+elif [ -n "$(line_problems "$old_form")" ]; then ok "mutant: the old substitution line is caught"
+else bad "mutant: the old substitution line was NOT caught"; fi
+no_rule="$WORK/no-rule.md"
+grep -v 'unconfirmed until you have read the root' skills/send-it/SKILL.md > "$no_rule"
+if cmp -s "$no_rule" skills/send-it/SKILL.md; then bad "mutant no-rule: the mutation matched nothing"
+elif [ -n "$(line_problems "$no_rule")" ]; then ok "mutant: a skill missing the rule paragraph is caught"
+else bad "mutant: a skill missing the rule paragraph was NOT caught"; fi
 
 if [ "$fail" -eq 0 ]; then
     echo "config-fallback-paragraph tests: all green" >&2

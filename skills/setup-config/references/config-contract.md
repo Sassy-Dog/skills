@@ -809,12 +809,26 @@ whole point of keeping it separate from the frontmatter facts.
 Each skill inlines its config at load time with dynamic context injection:
 
 ```text
-!`root="$(git rev-parse --show-toplevel 2>/dev/null)"; echo "CONFIG_SOURCE: ${root:-<not a git repo>}"; cat "$root/.claude/sassy-dog/<skill>.md" 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/<skill>.md 2>/dev/null || echo "NO_CONFIG"`
 ```
 
 `git rev-parse` rather than `${CLAUDE_PROJECT_DIR}` because the substitution order between
 placeholder expansion and shell execution is not specified, and every one of these skills requires
-a git repo regardless. The command is safe outside a repo — it yields `NO_CONFIG` with no stderr.
+a git repo regardless. The command is safe outside a repo — it prints `<not a git repo>` and then
+`NO_CONFIG`, with no stderr.
+
+**`git` is a plain statement, never inside `$(...)`** ([#574](https://github.com/Sassy-Dog/skills/issues/574)).
+A Claude Code session isolated in a git worktree refuses, at skill load, any command that names git in
+a form it cannot verify stays inside the worktree, and a substitution is such a form. The refusal
+fails the whole load, so no skill text reaches the agent and the "Unrun config line" fallback below
+never runs. The line therefore prints the root with its own `git rev-parse --show-toplevel` and reads
+the config by a path relative to the session's working directory. `CONFIG_SOURCE` still means the repo
+root, so the reconciliation rule in every §1 is unchanged. The cost is that from a directory below the
+root the relative read misses a config that exists and prints `NO_CONFIG`. Every one of the eight
+skills (stoppers included) therefore carries a paragraph making `NO_CONFIG` unconfirmed until
+`<CONFIG_SOURCE>/.claude/sassy-dog/<skill>.md` has been read by absolute path. That paragraph is
+distinct from the "Unrun config line" one, so the four stoppers still do not carry the latter.
+`scripts/test-config-fallback-paragraph.sh` pins the line's form and that paragraph's presence.
 
 **Where the harness never runs the line.** Claude Code runs it at load time; omp renders it as
 text. The four skills that degrade silently on a missed config — `send-it`, `survey-work`,

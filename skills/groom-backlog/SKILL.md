@@ -24,7 +24,7 @@ agent with zero conversation context.
 
 ## 1. Repo config
 
-!`root="$(git rev-parse --show-toplevel 2>/dev/null)"; echo "CONFIG_SOURCE: ${root:-<not a git repo>}"; cat "$root/.claude/sassy-dog/groom-backlog.md" 2>/dev/null || echo "NO_CONFIG"`
+!`printf 'CONFIG_SOURCE: '; git rev-parse --show-toplevel 2>/dev/null || echo "<not a git repo>"; cat .claude/sassy-dog/groom-backlog.md 2>/dev/null || echo "NO_CONFIG"`
 
 **Unrun config line.** If the line above reached you as text (it starts with `!` and shows a
 command, with no `CONFIG_SOURCE:` output beneath it), nothing ran it. Take the repo root from
@@ -40,6 +40,14 @@ the one you are working in, **discard the block above**, read that repo's own
 exactly as written, so the wrong one silently applies another repo's rules: on 2026-08-18 two agents
 shipping in `routines` and `skills` were each handed `platform`'s Terraform gates,
 and caught it only by noticing the mismatch themselves.
+
+**A `NO_CONFIG` above is unconfirmed until you have read the root's file.** The line reads
+`.claude/sassy-dog/groom-backlog.md` relative to the session's working directory, and prints the repo root
+as `CONFIG_SOURCE` without joining the two (a `$(...)` around git is refused in a
+worktree-isolated session), so from a directory below the root it misses a config that exists. When
+`NO_CONFIG` was printed and `CONFIG_SOURCE` names a repo root, read
+`<CONFIG_SOURCE>/.claude/sassy-dog/groom-backlog.md` by absolute path first; the config is `NO_CONFIG` only if
+that file is also absent, or `CONFIG_SOURCE` is `<not a git repo>`.
 
 Frontmatter supplies `gotcha_summary`, the optional `board` and `stacked_prs` blocks, and the
 optional `execution_site` — the name this checkout answers to, used by rubric #9 to propose a site
