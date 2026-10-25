@@ -23,7 +23,7 @@
 #   allowed   cd <literal worktree path>, then git status
 # The guard resolves some plain `$NAME` expansions and refuses the rest, and an
 # agent cannot know which kind its text will be, because a variable a skill
-# prints in one Bash call is unset in the next (cwd and shell state reset between
+# prints in one Bash call is unset in the next (shell state resets between
 # calls). So the rule is the conservative one: a UNIT that runs `git` contains no
 # shell expansion at all. That is stricter than the guard on the allowed rows
 # above, on purpose: those pass by coincidence of the environment.

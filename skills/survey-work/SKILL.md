@@ -31,7 +31,8 @@ an unrun line as "no config exists".
 
 **Check `CONFIG_SOURCE` before using any of this.** It is the repo root resolved from the
 **session's** working directory at skill-load time — not necessarily the repo you are about to act
-on — it ran at skill load, against the session's working directory at that moment, before any command of yours. If it names a repo other than
+on — and it was printed before any command of yours ran, so nothing you do now
+changes it. If it names a repo other than
 the one you are working in, **discard the block above**, read that repo's own
 `.claude/sassy-dog/survey-work.md` by absolute path, and use that instead. Config is meant to be applied
 exactly as written, so the wrong one silently applies another repo's rules: on 2026-08-18 two agents

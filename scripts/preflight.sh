@@ -1949,10 +1949,8 @@ fi
 # is allowed, which an agent cannot predict. So the rule is one per UNIT: a fenced
 # shell block (bash, sh, shell, zsh or a bare fence) or an inline code span that
 # runs `git` as a command word (including <path>/git) carries no shell expansion
-# at all: no $NAME, ${, $(, backtick substitution or <(. Comment lines count for
-# neither half. The full rule, its measured table and the shapes it does NOT cover
-# (a span that wraps lines, indented code blocks, git handed to another program as
-# a quoted string) live in the header of scripts/check-git-expansion.sh.
+# at all. The list of expansions, the measured table and what it does NOT cover
+# are in the header of scripts/check-git-expansion.sh.
 # This replaces the same-line `$(` regex of #576, which missed `$(cd … && git …)`,
 # `$(/usr/bin/git …)`, backticks, `<(git …)` and a multi-line `$(`; every one of
 # those is a planted case below, as is each beside-an-expansion shape.
