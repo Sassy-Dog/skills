@@ -39,7 +39,10 @@
 # whose first non-space character is `#` are comments and count for neither half.
 #
 # NOT covered, named so nothing claims more than it checks: an inline span that
-# wraps across two lines; indented (four-space) code blocks; a `git` that only
+# wraps across two lines; indented (four-space) code blocks; a fence inside a
+# blockquote (a "> ```bash" line is not recognised as an opener); the special
+# parameters $$ $# $! $- and the quoting forms $'...' and $"..." (none is counted
+# as an expansion); a `git` that only
 # appears as a quoted string handed to another program (`bash -c '...'`, `ssh
 # host git ...`); `git` reached through an alias or a variable holding its name;
 # and a `git` whose command position the splitter misreads because a separator
@@ -83,9 +86,9 @@ function runs_git(s,   t, n, parts, i, w, k, words, nw) {
     return 0
 }
 function excerpt(s) { s = trim(s); if (length(s) > 110) s = substr(s, 1, 107) "..."; return s }
-function emit_fence() {
+function emit_fence(name) {
     if (f_git && f_exp)
-        printf "%s:%d: fenced block (opens line %d): git at line %d, shell expansion at line %d: %s\n", FILENAME, f_git, f_open, f_git, f_exp, excerpt(f_gitline)
+        printf "%s:%d: fenced block (opens line %d): git at line %d, shell expansion at line %d: %s\n", name, f_git, f_open, f_git, f_exp, excerpt(f_gitline)
 }
 function run_len(s, from, ch,   r) { r = 0; while (substr(s, from + r, 1) == ch) r++; return r }
 function inline_spans(line, lineno,   i, n, run, j, rl, body, close_at) {
@@ -109,14 +112,17 @@ function inline_spans(line, lineno,   i, n, run, j, rl, body, close_at) {
         i = close_at + run
     }
 }
-FNR == 1 { if (in_fence && f_shell) emit_fence(); in_fence = 0 }
+# A fence still open when the previous file ended is reported under THAT file:
+# awk has already advanced FILENAME here, and BSD awk has no ENDFILE.
+FNR == 1 { if (in_fence && f_shell) emit_fence(prev_file); in_fence = 0 }
+{ prev_file = FILENAME }
 {
     line = $0
     t = trim(line)
     if (in_fence) {
         r = run_len(t, 1, f_char)
         if (r >= f_len && r == length(t)) {
-            if (f_shell) emit_fence()
+            if (f_shell) emit_fence(FILENAME)
             in_fence = 0
             next
         }
@@ -138,5 +144,5 @@ FNR == 1 { if (in_fence && f_shell) emit_fence(); in_fence = 0 }
     }
     inline_spans(line, FNR)
 }
-END { if (in_fence && f_shell) emit_fence() }
+END { if (in_fence && f_shell) emit_fence(FILENAME) }
 ' "$@"

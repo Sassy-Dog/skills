@@ -66,7 +66,7 @@
 #      self-check their pass/fail decision over scratch repos (issue #578).
 #   3b. no unit that runs git also carries a shell expansion, in agent-run text:
 #      every tracked skills/**/*.md and agents/*.md (issues #576, #578; a
-#      worktree-isolated session refuses git beside any expansion). The rule and
+#      worktree-isolated session refuses git beside expansions it cannot resolve, and the repo bans them all). The rule and
 #      its measured basis are in scripts/check-git-expansion.sh's header.
 #   4. no legacy name residue outside the per-name sanctioned back-compat
 #      files, in three groups (all enforced under this one gate): the renamed
@@ -2031,6 +2031,20 @@ if [ "$GUARD_SCRATCH_OK" = 1 ]; then
         GUARD_CASE_FAILS="$GUARD_CASE_FAILS
     - empty pathspec: scratch repo could not be built"
     fi
+    # Two files in ONE call, the first ending inside an open shell fence with a
+    # hit: the row must name the first file, not the one awk had moved on to (#580).
+    if d="$(scratch_repo exp-two-files)" && scratch_plant "$d" skills/a/references/a.md "${F}bash" 'git fetch "$X"' &&
+        scratch_plant "$d" skills/b/references/b.md 'prose only'; then
+        two_out="$(scan_in "$d" git_exp_scan 2>/dev/null)"
+        case "$two_out" in
+            skills/a/references/a.md:*) ;;
+            *) GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - unclosed fence in the first of two files: row must name skills/a/references/a.md, got: ${two_out:-<nothing>}" ;;
+        esac
+    else
+        GUARD_CASE_FAILS="$GUARD_CASE_FAILS
+    - unclosed fence in the first of two files: scratch repo could not be built"
+    fi
     if d="$(scratch_repo exp-poison)" && scratch_plant "$d" "$R" "${F}bash" 'git fetch "$X"' "$F"; then
         GIT_DIR=/nonexistent/gitdir GIT_INDEX_FILE=/nonexistent/index guard_case "inherited GIT_DIR and GIT_INDEX_FILE" hit "$d" git_exp_scan 0
     else
@@ -2050,7 +2064,7 @@ else
     case "$(scan_classify "$exp_out" "$exp_rc" 0)" in
         hit)
             printf '%s\n' "$exp_out"
-            failed "git-beside-expansion guard — a unit that runs git must contain no shell expansion: type values literally (<default-branch>, <repo>) or put the git statement in its own block; a worktree-isolated session refuses git beside any expansion (issues #576, #578)" ;;
+            failed "git-beside-expansion guard — a unit that runs git must contain no shell expansion: type values literally (<default-branch>, <repo>) or put the git statement in its own block; a worktree-isolated session refuses git beside the expansions it cannot resolve and the repo bans them all (issues #576, #578)" ;;
         clean) pass "git-beside-expansion guard" ;;
         *) failed "git-beside-expansion guard — the scan itself failed (exit $exp_rc), which is an error and never a pass" ;;
     esac

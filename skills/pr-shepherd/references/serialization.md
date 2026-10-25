@@ -38,7 +38,7 @@ gh pr view "$NEXT_PR" --json mergeable --jq .mergeable
 # CONFLICTING / behind → rebase + regenerate before merging (below).
 ```
 
-Two blocks on purpose, each its own Bash call: a worktree-isolated session refuses a command that names `git` beside a shell expansion, even in a separate statement.
+Two blocks on purpose, each its own Bash call: a worktree-isolated session refuses a command that names `git` beside a shell expansion it cannot resolve, even in a separate statement; the repo bans every one, because an agent cannot predict which resolve (see the header of `scripts/check-git-expansion.sh`).
 
 Uncoupled PRs can merge in any order, in parallel. Only the PRs touching the same derived-artifact directories need the serial path. Identify them by changed paths:
 

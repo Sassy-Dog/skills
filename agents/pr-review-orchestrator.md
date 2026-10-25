@@ -37,7 +37,7 @@ git diff <base>                             # the full diff — read the +lines,
 git ls-files --others --exclude-standard    # new untracked files — open these too
 ```
 
-Every `git` command here is a plain statement with its values typed literally: never `git` inside a command substitution, and no shell expansion (`$NAME`, `${`, backticks) in any command that names `git`. A worktree-isolated session (a `review_site: agent` worker runs in one) refuses `git` beside any of them, and a refused Step 1 leaves the review with no base and no report.
+Every `git` command here is a plain statement with its values typed literally: never `git` inside a command substitution, and no shell expansion (the list is in `scripts/check-git-expansion.sh`) in any command that names `git`. A worktree-isolated session (a `review_site: agent` worker runs in one) refuses `git` beside the ones it cannot resolve, and a refused Step 1 leaves the review with no base and no report.
 
 Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEAD`). `send-it` dispatches this review *before* the commit, so uncommitted and staged work is exactly what needs reviewing. `git diff` cannot see an untracked file at all, so the changeset is the union of the two lists — a brand-new file is the highest-risk member of it, not an optional extra.
 

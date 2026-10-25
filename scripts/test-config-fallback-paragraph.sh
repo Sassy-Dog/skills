@@ -76,7 +76,7 @@
 #      and the `printf 'CONFIG_CWD: '; pwd -P;` statement that makes a cwd/root
 #      mismatch visible. `pwd -P` (the resolved path, which is what git prints,
 #      so a root reached through a symlink compares equal) and not "$PWD" because a worktree-isolated
-#      session refuses git beside any variable expansion (measured, #576). The
+#      session refuses git beside expansions it cannot resolve (measured, #576; the repo bans all of them, see scripts/check-git-expansion.sh). The
 #      paragraph, read to its own end rather than a fixed window, must name
 #      CONFIG_CWD, state the "differs from" condition, and tell the agent to read
 #      <CONFIG_SOURCE>'s file by absolute path. One mutant for each.
