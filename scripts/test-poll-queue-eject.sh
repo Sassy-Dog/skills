@@ -327,6 +327,7 @@ ms_run() { # <script> <head the PR reports> <args…>   (env MS_* passes through
     # GIT_DIR points nowhere, so the script finds no local checkout and skips
     # its teardown instead of touching this repo's.
     MS_OUT="$(cd "$WORK" && PATH="$MSBIN:$PATH" MS_CALLS="$MS_CALLS" MS_STATE="$MS_STATE" MS_HEADCNT="$MS_HEADCNT" MS_HEAD="$head" \
+        MERGE_SHEPHERD_UPDATE_WAIT="${MS_UPDATE_WAIT:-0}" MERGE_SHEPHERD_UPDATE_POLL=0 \
         GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@" 2>&1)"
     MS_RC=$?
 }
@@ -354,6 +355,7 @@ ms_suite() {
     # match: queue
     ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "match: queue enqueues (exit 10)" 10
+    ms_expect "match: a successful bound enqueue prints no BOUND ENQUEUE FAILED" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
     ms_expect "match: the mutation input carries expectedHeadOid" "$(grep -q 'expectedHeadOid:\$eho' "$MS_CALLS"; echo $?)"
     ms_expect "match: the mutation is given the reviewed id" "$(grep -q "eho=$H1" "$MS_CALLS"; echo $?)"
     ms_run "$sc" "$H64" --expected-head "$H64"
@@ -378,6 +380,10 @@ ms_suite() {
     # no flag, the --auto fallback: unbound, exactly as before
     MS_ENQUEUE_RC=1 ms_run "$sc" "$H1"
     ms_rc "no flag: fallback enqueues (exit 10)" 10
+    ms_expect "no flag: the unbound fallback prints no BOUND ENQUEUE FAILED" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
+    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 ms_run "$sc" "$H1"
+    ms_rc "no flag: mutation and fallback both fail: exit 11" 11
+    ms_expect "no flag: a failing unbound enqueue prints no BOUND ENQUEUE FAILED (the fallback owns it)" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
     ms_expect "no flag: fallback is a bare gh pr merge --auto" \
         "$(grep -qE 'pr merge 585 .*--auto( |$)' "$MS_CALLS" && ! grep -q -- '--match-head-commit' "$MS_CALLS"; echo $?)"
     # a failing merge call is not confirmed (also keeps MS_MERGE_RC honest)
@@ -392,9 +398,14 @@ ms_suite() {
     # (or the node id unresolved) is exit 11, with no `pr merge` call at all.
     MS_ENQUEUE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound enqueue refused, head unchanged: exit 11, retried next pass" 11
+    # #590: that 11 is indistinguishable from "checks pending" without a stable stdout reason line
+    ms_expect "bound enqueue refused, head unchanged: stdout names BOUND ENQUEUE FAILED and the cause" \
+        "$(grep -q '^BOUND ENQUEUE FAILED — the enqueue mutation was refused' <<<"$MS_OUT"; echo $?)"
     ms_expect "bound enqueue refused, head unchanged: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
     MS_NOID=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound, node id unresolved: exit 11" 11
+    ms_expect "bound, node id unresolved: stdout names BOUND ENQUEUE FAILED and the cause" \
+        "$(grep -q '^BOUND ENQUEUE FAILED — the PR node id did not resolve' <<<"$MS_OUT"; echo $?)"
     ms_expect "bound, node id unresolved: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
     # node id unresolved AND the head moves after the gate's read: no bound write was attempted, so this pass
     # does not re-read the head and answers 11; the NEXT pass's head gate (the PR now reports H2) answers 25.
@@ -411,8 +422,18 @@ ms_suite() {
     MS_MERGE_RC=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "bound direct merge refused, head unchanged: exit 11 as before" 11
     # the bound --direct staleness update
+    # #590: the REST update is asynchronous (202), so 25 only once the head has actually moved.
+    MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: update succeeds and the head moved, exit 25 (re-review the update; not 11, a re-run would only reach 25)" 25
+    ms_expect "stale + bound: the 25 names the new head" "$(grep -q "to $H2" <<<"$MS_OUT"; echo $?)"
     MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1"
-    ms_rc "stale + bound: update succeeds, exit 25 (re-review the update; not 11, a re-run would only reach 25)" 25
+    ms_rc "stale + bound: update accepted but the head never moves within the bound, exit 11" 11
+    ms_expect "stale + bound: never moved: says update requested, head not yet moved" \
+        "$(grep -q 'update requested, head not yet moved — re-run' <<<"$MS_OUT"; echo $?)"
+    ms_expect "stale + bound: never moved: no merge call" "$(! grep -qE '^pr merge' "$MS_CALLS"; echo $?)"
+    MS_UPDATE_WAIT=2 MS_BEHIND=3 MS_MOVE_AT=4 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: the head moves on a later read within the bound: exit 25" 25
+    MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_expect "stale + bound: says the head moved by design" "$(grep -q 'moved by design' <<<"$MS_OUT"; echo $?)"
     ms_expect "stale + bound: REST update carries expected_head_sha" "$(grep -q "update-branch -f expected_head_sha=$H1" "$MS_CALLS"; echo $?)"
     ms_expect "stale + bound: no unbound gh pr update-branch and no merge" "$(! grep -qE '^pr (update-branch|merge)' "$MS_CALLS"; echo $?)"
@@ -477,19 +498,25 @@ ms_mutant no-length-check '40|64) : ;;' '*) : ;;'
 ms_mutant 25-not-terminal '0|1|20|22|24|25) exit' '0|1|20|22|24) exit'
 ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shift 2' '[ -n "$2" ] && EXPECTED_HEAD_SET=1; EXPECTED_HEAD="$2"; shift 2'
 ms_mutant no-moved-check-after-bound-enqueue '      head_moved && return 25
-    elif' '    elif'
+      ENQ_CAUSE=' '      ENQ_CAUSE='
 ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
 ms_mutant noid-path-rereads-head 'under --expected-head; re-run" >&2
     return 1' 'under --expected-head; re-run" >&2
     head_moved && return 25
     return 1'
 ms_mutant bound-update-exits-11 'then re-run with the new head"
-            return 25' 'then re-run with the new head"
-            return 11'
+              return 25' 'then re-run with the new head"
+              return 11'
 ms_mutant no-expected-sha-on-update '-f expected_head_sha="$EXPECTED_HEAD"' '-f expected_head_sha=""'
 ms_mutant no-moved-check-after-refused-update 'elif head_moved; then
             echo "HEAD MOVED — reviewed' 'elif false; then
             echo "HEAD MOVED — reviewed'
+ms_mutant update-25-without-waiting-for-the-head 'if [ -n "$new_head" ]; then' 'if true; then'
+ms_mutant update-never-moved-exits-25 'echo "  update requested, head not yet moved — re-run"
+            return 11' 'echo "  update requested, head not yet moved — re-run"
+            return 25'
+ms_mutant no-bound-enqueue-failed-line '      [ -n "$bound_cause" ] && echo "BOUND ENQUEUE FAILED' '      false && echo "BOUND ENQUEUE FAILED'
+ms_mutant bound-failed-line-on-unbound-run '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"' '[ "$erc" -ne 0 ] && bound_cause="${ENQ_CAUSE:-x}"'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'

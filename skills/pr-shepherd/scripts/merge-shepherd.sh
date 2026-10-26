@@ -43,12 +43,18 @@
 #   A bound write that GitHub refuses is followed by a re-read of the head: a
 #   head that moved is exit 25, an unchanged one is exit 11 and the next pass
 #   retries the bound enqueue (a mutation that keeps failing stalls at 11
-#   rather than merging: fail closed). Without the flag nothing changes. The --direct staleness update
+#   rather than merging: fail closed). That stall prints the stable stdout line
+#   `BOUND ENQUEUE FAILED — <cause>` (exit 11 unchanged), so it is not
+#   indistinguishable from "checks pending" (#590). Without the flag nothing changes. The --direct staleness update
 #   is unbound under `gh pr update-branch`, so a bound run uses REST
 #   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
 #   25 saying the head moved BY DESIGN (the update is a merge commit; the caller
 #   re-reviews it and re-runs with the new head; #587: not 11, since a re-run
-#   with the same --expected-head would only reach 25 one pass later), a
+#   with the same --expected-head would only reach 25 one pass later) ONLY once
+#   the head has actually moved: the REST update is asynchronous (202), so the
+#   script polls the head up to MERGE_SHEPHERD_UPDATE_WAIT and, if it never
+#   moves, answers 11 "update requested, head not yet moved — re-run" and the
+#   next pass's head gate gives 25 (#590). A
 #   refusal that finds a moved head is 25, any other refusal keeps "update it
 #   by hand" and exit 11.
 #   The gate runs AFTER the MERGED and IN_QUEUE early returns, deliberately and
@@ -56,6 +62,10 @@
 #   ejects it, so the next run sees the new head and this gate.
 #
 # Env:
+#   MERGE_SHEPHERD_UPDATE_WAIT  seconds a bound --direct staleness update waits for the
+#                    PR head to move after the REST update returns (default 60; the update
+#                    is asynchronous, #590). MERGE_SHEPHERD_UPDATE_POLL is the interval
+#                    between head reads (default 5). Tests set them to 0.
 #   DEFAULT_BRANCH   reconcile target (default: origin/HEAD, fallback "main")
 #                    — same contract as teardown.sh
 #   ISOLATION_BRANCH_PREFIX   prefix of the Agent runtime's isolation branches
@@ -140,6 +150,8 @@ GH_RETRY="$SCRIPT_DIR/gh-retry.sh"
 STACK_PROBE="$SCRIPT_DIR/stack-probe.sh"
 
 REPO=""; PR=""; WT=""; WATCH=0; POLL=30; DIRECT=0; ALLOW_NO_CHECKS=0; EXPECTED_HEAD=""; EXPECTED_HEAD_SET=0
+UPDATE_WAIT="${MERGE_SHEPHERD_UPDATE_WAIT:-60}"; UPDATE_POLL="${MERGE_SHEPHERD_UPDATE_POLL:-5}"
+case "$UPDATE_WAIT$UPDATE_POLL" in *[!0-9]*|"") echo "MERGE_SHEPHERD_UPDATE_WAIT/POLL must be whole seconds" >&2; exit 1 ;; esac
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
@@ -217,8 +229,12 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # never under --expected-head (#587): a bound run returns 1 instead.
 # Success here is advisory either way — the caller confirms via the
 # isInMergeQueue read, never via this function's exit code.
+# Why the last bound enqueue did not happen, for the stable BOUND ENQUEUE FAILED
+# line the caller prints (#590). Set by enqueue(), read by advance().
+ENQ_CAUSE=""
 enqueue() {
   local prid
+  ENQ_CAUSE=""
   prid="$(gh api graphql \
     -f query='query($owner:String!,$name:String!,$pr:Int!){
         repository(owner:$owner,name:$name){ pullRequest(number:$pr){ id }}}' \
@@ -235,6 +251,7 @@ enqueue() {
         -f prid="$prid" -f eho="$EXPECTED_HEAD" >/dev/null && return 0
       # A refusal because the head moved is exit 25, and no fallback is tried.
       head_moved && return 25
+      ENQ_CAUSE="the enqueue mutation was refused or errored and the head is unchanged"
     elif bash "$GH_RETRY" -- api graphql \
          -f query='mutation($prid:ID!){
              enqueuePullRequest(input:{pullRequestId:$prid}){
@@ -245,6 +262,7 @@ enqueue() {
     [ "$EXPECTED_HEAD_SET" = 1 ] || echo "  enqueue mutation failed — falling back to gh pr merge --auto" >&2
   else
     [ "$EXPECTED_HEAD_SET" = 1 ] || echo "  PR node id unresolved — falling back to gh pr merge --auto" >&2
+    ENQ_CAUSE="the PR node id did not resolve"
   fi
   if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     # No --auto fallback under a bound run (#587): --match-head-commit is checked
@@ -476,8 +494,23 @@ advance() { # one idempotent step against live state
           # form, which refuses when the head is no longer the reviewed one (#585).
           if bash "$GH_RETRY" -- api -X PUT "repos/$OWNER/$NAME/pulls/$PR/update-branch" \
                -f expected_head_sha="$EXPECTED_HEAD" >/dev/null 2>&1; then
-            echo "  branch updated — the head moved by design: re-review the update (a merge commit, so a full review under take-it §6's Delta base rule), then re-run with the new head"
-            return 25
+            # The REST update returns 202 and creates the merge commit asynchronously (#590):
+            # exit 25 only once the head has actually moved, or the re-review would cover the
+            # old head and the next hand-off would get a second 25.
+            upd_until=$((SECONDS + UPDATE_WAIT)); new_head=""
+            while :; do
+              new_head="$(pr_head)"
+              [ -n "$new_head" ] && [ "$new_head" != "$EXPECTED_HEAD" ] && break
+              new_head=""
+              [ "$SECONDS" -ge "$upd_until" ] && break
+              sleep "$UPDATE_POLL"
+            done
+            if [ -n "$new_head" ]; then
+              echo "  branch updated — the head moved by design to $new_head: re-review the update (a merge commit, so a full review under take-it §6's Delta base rule), then re-run with the new head"
+              return 25
+            fi
+            echo "  update requested, head not yet moved — re-run"
+            return 11
           elif head_moved; then
             echo "HEAD MOVED — reviewed $EXPECTED_HEAD, the update was refused because the PR head changed (re-review, then re-run with the new head)"
             return 25
@@ -513,11 +546,16 @@ advance() { # one idempotent step against live state
       return 25
     fi
     [ "$erc" -eq 0 ] || echo "  enqueue call failed (checking whether it took anyway)" >&2
+    bound_cause=""
+    [ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"
     sleep 8
     read -r _ _ inq <<<"$(pr_state)"
     if [ "$inq" = "true" ]; then
       echo "  enqueued (isInMergeQueue=true)"; return 10
     else
+      # A bound enqueue that keeps failing with the head unchanged returns the same 11 as
+      # "checks pending"; this stable stdout line is what names it (#590).
+      [ -n "$bound_cause" ] && echo "BOUND ENQUEUE FAILED — $bound_cause (no --auto fallback under --expected-head; a human must enqueue or merge it)"
       echo "  enqueue not confirmed — re-run"; return 11
     fi
   fi

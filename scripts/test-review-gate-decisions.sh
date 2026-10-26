@@ -1122,9 +1122,23 @@ mutant_pin "$rollin_take" 'where that record is durable' \
 mutant_pin "$takeit_flat" 'a PR given.*--expected-head is never given gh pr merge --auto' \
     's/is never given//' \
     "take-it hand-off never gives a bound PR gh pr merge --auto"
-mutant_pin "$rollin_take" 'dispatch-ready.\s*demotes the issue once to .blocked.' \
-    's/demotes the issue once to//' \
-    "take-it: dispatch-ready demotes once to blocked, take-it only holds"
+mutant_pin "$rollin_take" 'dispatch-ready.\s*demotes the issue and later resumes it as its .*Open PRs from those branches.* bullet and not-yet-reviewed bullet define' \
+    's/demotes the issue and later resumes it as its//' \
+    "take-it: dispatch-ready owns the demotion and resume mechanics (pointed at, not described), take-it only holds (#590)"
+# #590: the cap number has ONE home. take-it §6 carries it; dispatch-ready says 'the cap take-it §6 defines'.
+mutant_forbid "$dispatch_flat" 'already two|at most two|At most .{0,4}two' \
+    "the count is already two" \
+    "dispatch-ready never states the head-moved cap number (take-it §6 is its only home)"
+mutant_pin "$dispatch_flat" 'the count is already at the cap .take-it. §6 defines' \
+    's/already at the cap//' \
+    "dispatch-ready points at the cap take-it §6 defines"
+# #590: a bound enqueue that keeps failing is named, and take-it routes it to a human without a demotion.
+mutant_pin "$rollin_take" 'exit .11. whose stdout carries .BOUND ENQUEUE FAILED — <cause>. is not .checks.pending.' \
+    's/BOUND ENQUEUE FAILED//' \
+    "take-it: BOUND ENQUEUE FAILED on a bound PR needs a human and is not checks pending"
+mutant_pin "$rollin_take" 'report it by name and hold the PR; do not demote and do not count it as a re-review' \
+    's/do not demote//' \
+    "take-it: BOUND ENQUEUE FAILED is held and reported, never demoted nor counted as a re-review"
 mutant_pin "$rollin_take" 'the hold ends with the batch' \
     's/the hold ends with the batch//' \
     "take-it: its own hold ends with the batch"
