@@ -1107,8 +1107,8 @@ mutant_pin "$rollin_take" 'At most .*two.* re-reviews per attempt are spent on e
 mutant_pin "$rollin_take" 'A third exit .25. holds the PR with .*no further review' \
     's/A third exit .25. holds the PR//' \
     "take-it: a third exit 25 holds the PR without another review"
-mutant_pin "$rollin_take" 'head kept moving after review.. The hold is not .blocked., spends no recovery' \
-    's/head kept moving after review//' \
+mutant_pin "$rollin_take" 'head kept moving after review.. The hold spends no recovery and writes no reservation. It.splits by coordinator' \
+    's/splits by coordinator//' \
     "take-it names the cause and the hold is not blocked and spends no recovery"
 mutant_pin "$rollin_take" 'bound to the active.`attempt_id`' \
     's/bound to the active//' \
@@ -1122,6 +1122,12 @@ mutant_pin "$rollin_take" 'where that record is durable' \
 mutant_pin "$takeit_flat" 'a PR given.*--expected-head is never given gh pr merge --auto' \
     's/is never given//' \
     "take-it hand-off never gives a bound PR gh pr merge --auto"
+mutant_pin "$rollin_take" 'dispatch-ready.\s*demotes the issue once to .blocked.' \
+    's/demotes the issue once to//' \
+    "take-it: dispatch-ready demotes once to blocked, take-it only holds"
+mutant_pin "$rollin_take" 'the hold ends with the batch' \
+    's/the hold ends with the batch//' \
+    "take-it: its own hold ends with the batch"
 mutant_pin "$rollin_take" 'a head the operator moved restores the budget' \
     's/a head the operator moved restores the budget//' \
     "take-it: a head the operator moved restores the re-review budget"

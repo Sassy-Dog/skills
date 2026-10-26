@@ -760,10 +760,13 @@ sends it to a full `sol`-tier review, and the base moves again). Count each exit
 back to review as `head_moved_reviews`, kept beside that PR's reviewed head; where that record is
 durable (`dispatch-ready`'s verified per-attempt record) it is read back author-checked and bound to
 the active `attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the
-cause: `head kept moving after review`. The hold is not `blocked`, spends no recovery and writes no
-reservation; the operator updates or rebases the branch by hand, or re-runs, and a head the operator
-moved restores the budget (a fresh `take-it` run starts at `0`; `dispatch-ready` resets its durable
-count when it sees the new head). This coordinator keeps
+cause: `head kept moving after review`. The hold spends no recovery and writes no reservation. It
+splits by coordinator: `take-it` only holds the PR, and the hold ends with the batch; `dispatch-ready`
+demotes the issue once to `blocked` (its **Open PRs from those branches** bullet, after the
+`CONFLICTING` precedent), because a loop with a §7 cannot carry a not-blocked human-only hold. The
+operator updates or rebases the branch by hand and re-runs (clearing `blocked` under
+`dispatch-ready`), and a head the operator moved restores the budget (a fresh `take-it` run starts at
+`0`; `dispatch-ready` resets its durable count on resume). This coordinator keeps
 the count in its in-session per-PR state beside the head it reviewed, mirrored as
 `head_moved_reviews=<n>` in the PR body for the operator only. That mirror is never its source of
 truth: a fresh invocation ignores any `head_moved_reviews=<n>` already in the PR body, starts the
