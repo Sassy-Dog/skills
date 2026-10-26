@@ -68,6 +68,17 @@
 # Each must fail for its named path or roster mismatch, not an unrelated error.
 # No gh or network; all subjects are tracked and no specimen writes to the tree.
 #
+# Section 8 pins CLAUDE.md as the exact two-line @AGENTS.md import (#601). It
+# lives here, not in a new gate, because it is a doc-reconciliation property of
+# the guide pair: every gate that reads the guide reads AGENTS.md, so content
+# added to CLAUDE.md (a /memory edit, a hand edit) is loaded by Claude Code,
+# never seen by Codex, and invisible to all of them. The whole file is compared
+# byte for byte, trailing newline included. Mutants (append, prepend, dropped
+# import, changed target, trailing newline removed, missing file) are built from
+# the expected file, never the checkout's CLAUDE.md, so a wrong CLAUDE.md cannot
+# skew them. They run on scratch copies in this suite's own mktemp -d, each
+# asserted to have applied before it must turn red.
+#
 # Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-doc-reconciliation.sh
 set -uo pipefail
@@ -443,6 +454,71 @@ then
     ok "template applicability and negative specimens"
 else
     bad "template applicability or its negative specimens failed"
+fi
+
+# --- 8. CLAUDE.md stays the exact two-line @AGENTS.md import (#601) -----------
+#
+# See the header: byte-for-byte compare, committed mutants, missing-file case.
+claude_scratch="$(mktemp -d)"
+trap 'rm -rf "$claude_scratch"' EXIT
+claude_expected_file="$claude_scratch/expected"
+printf '%s\n%s\n' \
+    '<!-- Agent instructions live in AGENTS.md; edit that file. Claude Code expands the import below. -->' \
+    '@AGENTS.md' >"$claude_expected_file"
+
+# claude_import_check FILE: prints a reason and returns 1 unless FILE is exactly the import.
+claude_import_check() {
+    if [ ! -f "$1" ]; then
+        echo "CLAUDE.md is missing"
+        return 1
+    fi
+    if ! cmp -s "$1" "$claude_expected_file"; then
+        echo "CLAUDE.md differs from the exact two-line @AGENTS.md import"
+        return 1
+    fi
+    return 0
+}
+
+if reason="$(claude_import_check CLAUDE.md)"; then
+    ok "CLAUDE.md is exactly the two-line @AGENTS.md import"
+else
+    bad "$reason"
+fi
+
+claude_mutant() { # label, expected-reason-substring, mutation applied to a copy at $m
+    local label="$1" want="$2" m="$claude_scratch/mutant"
+    cp "$claude_expected_file" "$m"
+    "$3" "$m"
+    if cmp -s "$m" "$claude_expected_file"; then
+        bad "CLAUDE.md mutant '$label' did not apply"
+        return
+    fi
+    if reason="$(claude_import_check "$m")"; then
+        bad "CLAUDE.md mutant '$label' stayed green"
+    elif [ "$reason" = "$want" ]; then
+        ok "CLAUDE.md mutant '$label' turns the section red"
+    else
+        bad "CLAUDE.md mutant '$label' failed with the wrong message: $reason"
+    fi
+}
+mut_append()  { printf 'extra rule\n' >>"$1"; }
+mut_prepend() { { printf 'extra rule\n'; cat "$claude_expected_file"; } >"$1.t" && mv "$1.t" "$1"; }
+mut_drop()    { sed '$d' "$claude_expected_file" >"$1.t" && mv "$1.t" "$1"; }
+mut_target()  { sed 's/^@AGENTS\.md$/@CLAUDE.md/' "$claude_expected_file" >"$1.t" && mv "$1.t" "$1"; }
+mut_nonl()    { printf '%s' "$(cat "$claude_expected_file")" >"$1"; }
+differs="CLAUDE.md differs from the exact two-line @AGENTS.md import"
+claude_mutant "appended line" "$differs" mut_append
+claude_mutant "prepended line" "$differs" mut_prepend
+claude_mutant "dropped import line" "$differs" mut_drop
+claude_mutant "changed import target" "$differs" mut_target
+claude_mutant "trailing newline removed" "$differs" mut_nonl
+
+if reason="$(claude_import_check "$claude_scratch/absent")"; then
+    bad "a missing CLAUDE.md passed"
+elif [ "$reason" = "CLAUDE.md is missing" ]; then
+    ok "a missing CLAUDE.md fails with its own message"
+else
+    bad "a missing CLAUDE.md failed with the wrong message: $reason"
 fi
 
 if [ "$fails" -ne 0 ]; then
