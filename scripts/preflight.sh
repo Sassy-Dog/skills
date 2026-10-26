@@ -1199,7 +1199,7 @@
 #      21:05:44Z searched, got `[]`, and filed the duplicate #338 — seven
 #      seconds — while the identical search four minutes later returned both.
 #      Nothing covered this script before: `grep -l file-or-link-issue
-#      scripts/test-*.sh` returned nothing, so the property AGENTS.md calls the
+#      scripts/test-*.sh` returned nothing, so the property docs/ARCHITECTURE.md calls the
 #      script's defining one was enforced by prose alone. The fix is TWO stages
 #      and the gate refuses to let either be simplified away: the search is
 #      unbounded in AGE but not fresh (M6 deletes it and loses every marker
@@ -2110,7 +2110,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
             allow=(
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-config/references/update-mode.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
@@ -2121,7 +2121,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
             # of them would defeat their entire purpose).
             allow=(
                 ':!skills/setup-hooks/SKILL.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2142,7 +2142,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2174,7 +2174,7 @@ done
 #   - this script (the guard itself)
 if git grep -l 'ai-agent-skills' -- \
     ':!README.md' \
-    ':!AGENTS.md' \
+    ':!docs/ARCHITECTURE.md' \
     ':!skills/setup-deps/SKILL.md' \
     ':!skills/setup-hooks/SKILL.md' \
     ':!scripts/preflight.sh' \
