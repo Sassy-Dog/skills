@@ -17,7 +17,7 @@
 # `take-it` and `dispatch-ready` all delegate merge mechanics to.
 #
 # Why a gate rather than a memo: NOTHING fails when a reference doc writes the
-# token raw. CLAUDE.md already documented the rule in prose and the tree
+# token raw. AGENTS.md already documented the rule in prose and the tree
 # drifted to thirteen violations anyway — the repo's own convention ("a rule
 # stated in prose with no gate rots silently") applied to itself.
 #

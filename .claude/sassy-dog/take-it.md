@@ -19,7 +19,7 @@ usually a blockquoted numbered list. By convention the first rule is numbered `4
 
 Why: take-it hands each sub-agent one self-contained prompt whose step 4 directs it to read this
 section (`skills/take-it/SKILL.md`, "Sub-agent prompt template"). The prompt spends its first three
-steps before that — stay inside your worktree · read the issue · implement per `CLAUDE.md` — so
+steps before that — stay inside your worktree · read the issue · implement per `AGENTS.md` — so
 rules written here continue its numbering from 4 rather than restarting at 1 and reading as a
 competing list.
 
@@ -67,7 +67,7 @@ Two things that keep the above true rather than merely tidy:
 >    directory that cannot be created) gets a case in the gate that covers it, committed in this
 >    PR. A manual run does not count, because nothing re-runs it. Every shape its header says it
 >    catches gets a case, and every shape it misses is named in the header. A header must not claim
->    more than its committed cases prove. `CLAUDE.md` says how a new gate is wired and kept safe to
+>    more than its committed cases prove. `AGENTS.md` says how a new gate is wired and kept safe to
 >    run in parallel.
 
 ## extra-guardrails

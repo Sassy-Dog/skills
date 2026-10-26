@@ -402,7 +402,7 @@ behind in coordinator-only context.
 >    inside YOUR worktree before trusting a green run.
 > 2. Read the issue carefully. If scope is genuinely unclear after the body and linked issues/PRs,
 >    STOP and report back — do not guess.
-> 3. Implement the change following the repo's `CLAUDE.md`.
+> 3. Implement the change following the repo's `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`).
 > 4. Follow the repo-specific implementation rules from the config's `## subagent-rules` section.
 > 5. Run the pre-flight locally and fix anything red: {preflight_commands from config}
 > 6. **Run the review gate before you commit** — lint, type and test cannot catch a design
@@ -475,7 +475,7 @@ behind in coordinator-only context.
 >    RESULT line.
 >
 > 7. **Reconcile the docs against the repo before you commit.** Re-read the docs describing what
-> you touched — `CLAUDE.md`, the relevant `README.md`, anything in `docs/` — and fix every claim
+> you touched — `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`), or a `CLAUDE.md` carrying guidance of its own, the relevant `README.md`, anything in `docs/` — and fix every claim
 > your change just made untrue, in this same PR. A stale doc is a defect in your change, not
 > tidying for later; no other gate reads docs, so a wrong sentence ships silently and stays
 > confident. Scope it to the area you touched plus any claim you happened to disprove — not every
@@ -533,7 +533,7 @@ parallel agents is the failure this shape exists to prevent: they would each bra
 branch and rediscover the dependency as a conflict.
 
 Substitute steps 7–9 of the prompt above with the following; steps 1–6 (worktree confinement, never
-`git stash`, no shared-interpreter installs, read the issue, follow `CLAUDE.md` and
+`git stash`, no shared-interpreter installs, read the issue, follow `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`) and
 `## subagent-rules`, run the pre-flight, then step 6 as sited — the review gate on `agent`, the
 coordinator-site step 6 on `coordinator`, neither under `review_agent: skip`) apply unchanged
 **per layer** — a

@@ -104,7 +104,7 @@
 #      its own resolver or skips the filter — and skipping it is a SILENT
 #      FAIL-OPEN in a repo that explicitly opted in, which is #322's bug under
 #      prose that reads as protected. `--sites-of` is the answer, and it is the
-#      `taxonomy`-emitter shape CLAUDE.md already requires of a consumer applied
+#      `taxonomy`-emitter shape AGENTS.md already requires of a consumer applied
 #      to a resolver: rows here run it rather than describing it, because the
 #      paraphrase that preceded it dropped `.strip()` and answered `" vdi"` for
 #      a label the header calls legal.
@@ -201,13 +201,13 @@ REL_TAKE="skills/take-it/SKILL.md"
 REL_SNAP="skills/github-issues/scripts/queue-snapshot.sh"
 REL_GHISSUES="skills/github-issues/SKILL.md"
 REL_CONTRACT="skills/setup-config/references/config-contract.md"
-# CLAUDE.md and preflight.sh carry the match form in their gate descriptions, so
+# AGENTS.md and preflight.sh carry the match form in their gate descriptions, so
 # they are subjects of the VETO rows even though no must-exist row reads them: a
 # whole-text veto costs nothing to widen, and "every subject spells one form" is
 # only true if the places that describe the rule are subjects too.
-REL_CLAUDEMD="CLAUDE.md"
+REL_AGENTSMD="AGENTS.md"
 REL_PREFLIGHT="scripts/preflight.sh"
-SUBJECTS="$REL_DISPATCH $REL_TAKE $REL_SNAP $REL_GHISSUES $REL_CONTRACT $REL_CLAUDEMD $REL_PREFLIGHT"
+SUBJECTS="$REL_DISPATCH $REL_TAKE $REL_SNAP $REL_GHISSUES $REL_CONTRACT $REL_AGENTSMD $REL_PREFLIGHT"
 
 D="$SRC/$REL_DISPATCH"
 T="$SRC/$REL_TAKE"

@@ -564,7 +564,7 @@ called the two independent; the collision was caught only because a human was re
 contents. Two mandatory repo rules widen almost every PR past what grooming can predict, and
 neither is knowable when the touch-set is written:
 
-- **doc reconciliation** (`CLAUDE.md`, `README.md`, `docs/`) — which claims a change falsifies is
+- **doc reconciliation** (`AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`), `README.md`, `docs/`) — which claims a change falsifies is
   visible only once the change exists;
 - **CI wiring** (`scripts/preflight.sh` and the tests it gates) — grooming often does not yet know
   a test will be needed.
@@ -606,13 +606,13 @@ empty diff.
 
 **Known limitation: this narrows the gap, it does not close it.** An issue with no PR yet offers
 nothing but its declaration, and that is precisely the window in which a sub-agent is writing the
-undeclared `CLAUDE.md` edit. `sassy-dog:pr-shepherd`'s coupled-PR serialization stays the fallback
+undeclared `AGENTS.md` edit. `sassy-dog:pr-shepherd`'s coupled-PR serialization stays the fallback
 for that window.
 
 **Do not "simplify" this back into a declared-set-only filter**, and do not close the remaining gap
-by having `groom-backlog` over-declare (appending `CLAUDE.md` / `README.md` / `preflight.sh` to
+by having `groom-backlog` over-declare (appending `AGENTS.md` / `README.md` / `preflight.sh` to
 every touch-set). Over-declaration was considered and rejected in #257: near-universal overlap on
-`CLAUDE.md` would plausibly serialize the whole queue to one issue at a time.
+`AGENTS.md` would plausibly serialize the whole queue to one issue at a time.
 
 ### Stacks (ONLY if `stacked_prs:` is configured)
 

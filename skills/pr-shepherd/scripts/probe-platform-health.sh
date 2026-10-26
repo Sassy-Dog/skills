@@ -535,7 +535,7 @@ fp_details() { # — the first-party details, joined, prefixed `; `; nothing whe
 # shape the emitter fallback's stderr line uses, and the reason no sanitiser is
 # needed at this site at all.
 #
-# THE FAILURE SHAPES ARE ENUMERATED RATHER THAN COUNTED, which is CLAUDE.md's
+# THE FAILURE SHAPES ARE ENUMERATED RATHER THAN COUNTED, which is AGENTS.md's
 # own rule about a number in prose: (a) no `git` on PATH, (b) `git rev-parse`
 # exiting non-zero — no repository here, OR one git refused to read, which that
 # command does not separate except in locale-dependent stderr — (c) a bare

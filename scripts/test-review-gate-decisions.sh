@@ -238,7 +238,7 @@
 #
 # THE TWO SUMMARY COUNTS IN THIS HEADER ARE RE-DERIVED, NEVER TRANSCRIBED
 # (issue #276). The decision count and the tracked-file count are restated in
-# this header, in scripts/preflight.sh's gate list and in CLAUDE.md, and until
+# this header, in scripts/preflight.sh's gate list and in AGENTS.md, and until
 # section 9 existed nothing recomputed either of them — while the recent edits
 # to this gate have each moved one. Section 9 derives both from this file and
 # fails when any of those sites disagrees, so a new decision reddens CI until
@@ -277,7 +277,7 @@
 #
 # No gh, no network, no repo mutation. It reads the documents the decisions
 # live in, plus the three files that restate this gate's two summary counts —
-# its own source, scripts/preflight.sh and CLAUDE.md — which section 9 checks
+# its own source, scripts/preflight.sh and AGENTS.md — which section 9 checks
 # against the numbers it re-derives: twenty-one tracked files, and separately a sweep
 # of every tracked Markdown and shell file asking which of them carry the
 # summary phrase. The twenty-one are the ASSERTED read set; the sweep opens far more
@@ -353,11 +353,11 @@ REVIEWERS=(
 DOCS=("$SKILL" "$CONTRACT" "$TEMPLATE" "$SETUP" "$TAKEIT" "$DISPATCH" "$ORCH" "$ASSESS_ORCH" "$READMEMD"
       "${REVIEWERS[@]}")
 # Read for their restated counts alone, never for a decision's prose: this
-# file's own header, preflight's gate list, and CLAUDE.md's gate description.
+# file's own header, preflight's gate list, and AGENTS.md's gate description.
 SELF="scripts/test-review-gate-decisions.sh"
 PREFLIGHT="scripts/preflight.sh"
-CLAUDEMD="CLAUDE.md"
-COUNT_SITES=("$SELF" "$PREFLIGHT" "$CLAUDEMD")
+AGENTSMD="AGENTS.md"
+COUNT_SITES=("$SELF" "$PREFLIGHT" "$AGENTSMD")
 READS=("${DOCS[@]}" "${COUNT_SITES[@]}")
 
 fails=0
@@ -1591,7 +1591,7 @@ assert_in "$dispatch_outside" \
 # list. Files are found rather than enumerated, and the floor refuses a sweep
 # that found nothing, which is how this check would otherwise pass vacuously.
 # A COPY is distinguished from a mere REFERENCE by the em-dash continuation:
-# CLAUDE.md names the line twice without reproducing it, which is a
+# AGENTS.md names the line twice without reproducing it, which is a
 # cross-reference and must not be held to byte-identity. Comparison runs
 # FLATTENED, because a copy routinely wraps mid-line — the config contract's
 # does, and a line-scoped compare reported that correct copy as drifted.
@@ -2879,7 +2879,7 @@ n_files="${#READS[@]}"
 # comment citing a path it does not read is a cross-reference, not a read, and
 # failing on one would push the next editor to "fix" it by inflating the count.
 code_lines="$(grep -vE '^[[:space:]]*#' "$SELF")"
-lits="$(grep -oE '(skills|agents|docs|scripts|references)/[A-Za-z0-9_./-]+\.(md|sh)|(CLAUDE|README)\.md' <<<"$code_lines" | sort -u)"
+lits="$(grep -oE '(skills|agents|docs|scripts|references)/[A-Za-z0-9_./-]+\.(md|sh)|(AGENTS|README)\.md' <<<"$code_lines" | sort -u)"
 n_lits="$(grep -c . <<<"$lits")"
 if [ "$n_lits" -ge "$n_files" ]; then
     ok "the path scan is live: $n_lits distinct tracked paths in this source, for $n_files reads"
@@ -2973,7 +2973,7 @@ pf_region="$(normalize_region "$(awk '
     f { print }' "$PREFLIGHT")")"
 # Every entry in that list introduces its gate as an open paren before the
 # script path, so a window holding more than one has overrun — the same guard
-# the CLAUDE.md window carries, and an asymmetry that would otherwise read as
+# the AGENTS.md window carries, and an asymmetry that would otherwise read as
 # deliberate. It fires if preflight's next banner ever stops matching.
 n_pf_intro="$(grep -oF -- '(scripts/test-' <<<"$pf_region" | grep -c .)"
 if [ "$n_pf_intro" -eq 1 ]; then
@@ -2982,38 +2982,38 @@ else
     bad "preflight window holds $n_pf_intro gate introductions — it has overrun its entry"
 fi
 
-# CLAUDE.md's gate description. One enormous line, so the window is cut in awk
+# AGENTS.md's gate description. One enormous line, so the window is cut in awk
 # rather than by prefix-stripping a 96KB string, which costs seconds. It is
 # anchored on the INTRODUCTION form — an open paren before the backticked path
 # — so a later cross-reference to this gate elsewhere in the file cannot
 # relocate the window, and the anchor must be unique. The window ends at this
 # gate's own no-network terminator; losing that runs it into the next gate,
 # which the overrun guard below catches.
-claude_anchor='(`scripts/test-review-gate-decisions.sh'
-n_claude_anchor="$(grep -oF -- "$claude_anchor" "$CLAUDEMD" | grep -c .)"
-if [ "$n_claude_anchor" -eq 1 ]; then
-    ok "CLAUDE.md introduces this gate exactly once"
+agents_anchor='(`scripts/test-review-gate-decisions.sh'
+n_agents_anchor="$(grep -oF -- "$agents_anchor" "$AGENTSMD" | grep -c .)"
+if [ "$n_agents_anchor" -eq 1 ]; then
+    ok "AGENTS.md introduces this gate exactly once"
 else
-    bad "CLAUDE.md introduces this gate $n_claude_anchor times — the window cannot be anchored"
+    bad "AGENTS.md introduces this gate $n_agents_anchor times — the window cannot be anchored"
 fi
-claude_region="$(normalize_region "$(awk -v a="$claude_anchor" -v t="no network)" '
+agents_region="$(normalize_region "$(awk -v a="$agents_anchor" -v t="no network)" '
     { i = index($0, a)
       if (i > 0) {
           rest = substr($0, i + length(a))
           j = index(rest, t)
           if (j > 0) print substr(rest, 1, j - 1)
           exit
-      } }' "$CLAUDEMD")")"
-if [ -n "$claude_region" ]; then
-    ok "located CLAUDE.md's gate description, bounded at its own terminator"
+      } }' "$AGENTSMD")")"
+if [ -n "$agents_region" ]; then
+    ok "located AGENTS.md's gate description, bounded at its own terminator"
     # A terminator that merely MOVED is the mis-scoping boundedness cannot see:
     # the window then runs to the next gate's terminator and measures that
     # gate's counts. Every gate in that sentence is introduced as an open paren
     # before its script path, so a window holding one has overrun.
-    assert_not_in "$claude_region" '\(`scripts/' \
-        "CLAUDE.md window stops before the next gate is introduced"
+    assert_not_in "$agents_region" '\(`scripts/' \
+        "AGENTS.md window stops before the next gate is introduced"
 else
-    bad "CLAUDE.md's gate description did not resolve: either its no-network terminator is gone, or the description now spans more than one line and the cut is line-scoped"
+    bad "AGENTS.md's gate description did not resolve: either its no-network terminator is gone, or the description now spans more than one line and the cut is line-scoped"
 fi
 
 if [ -z "$dec_word" ] || [ -z "$file_word" ]; then
@@ -3023,8 +3023,8 @@ else
     check_count "this file's header" "$self_head" "tracked files" "$file_word"
     check_count "preflight's gate entry" "$pf_region" "decisions" "$dec_word"
     check_count "preflight's gate entry" "$pf_region" "tracked files" "$file_word"
-    check_count "CLAUDE.md's gate description" "$claude_region" "decisions" "$dec_word"
-    check_count "CLAUDE.md's gate description" "$claude_region" "tracked files" "$file_word"
+    check_count "AGENTS.md's gate description" "$agents_region" "decisions" "$dec_word"
+    check_count "AGENTS.md's gate description" "$agents_region" "tracked files" "$file_word"
 fi
 
 if [ "$fails" -ne 0 ]; then
