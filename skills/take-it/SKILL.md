@@ -754,13 +754,13 @@ otherwise a full review against the derived default branch), then hand the PR of
 head that review covered. A moved head that review finds Blocking takes the existing Blocking path.
 
 An exit `11` whose stdout carries `BOUND ENQUEUE FAILED — <cause>` is not "checks pending": the
-bound enqueue was refused *this pass*, after `gh-retry`, with no `--auto` fallback. The script is
-stateless and prints the line on every failed pass, including after a mutation that succeeded while
-`isInMergeQueue` lagged past its confirm sleep, so one line is not yet a stall. Re-run the bound
-hand-off once (exit `11` already means re-run); only when the line appears on **two consecutive
-passes** does it need a human (check the cause, confirm the head is still the reviewed one, enqueue
-or merge by hand). Then report it by name and hold the PR; do not demote and do not count it as a
-re-review.
+bound enqueue call failed *this pass*, after `gh-retry`, with no `--auto` fallback (or the PR node
+id did not resolve); a mutation that succeeded but is not yet confirmed in the queue does not print
+it. The script is stateless, so one line is not yet a stall: a refusal can be transient. Re-run the
+bound hand-off once (exit `11` already means re-run); only when the line appears on **two
+consecutive passes** does it need a human (`pr-shepherd`'s `--expected-head` paragraph is the one
+home of that rule and of what to check). Then report it by name and hold the PR; do not demote and
+do not count it as a re-review.
 
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`

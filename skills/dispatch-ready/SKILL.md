@@ -275,10 +275,16 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   record carrying `head_moved_hold` on an issue that still carries `blocked` is held, neither
   reviewed nor handed off (if that record lacks `demoted=1`, the live read has just shown `blocked`,
   so write `demoted=1` and confirm it). A record carrying `head_moved_hold` but not `demoted=1` on an
-  issue that does not carry `blocked` means the demotion is still owed, never a resume: retry the
-  block with the cap demotion's comment (**Demote ONCE** keeps it idempotent), confirm it from a live
-  label read, write `demoted=1`, and do no reset and no review. Only a record carrying `demoted=1` on
-  an issue that no longer carries `blocked` means a human resumed it: clear the marker and reset
+  issue that does not carry `blocked` is decided from the issue's own label history, not from the
+  record alone (#592): read `gh api repos/<o>/<r>/issues/<N>/events` (all pages). A `labeled` event
+  for `blocked` by the authenticated loop principal, created after the record comment was created,
+  means the demotion landed and a human has since resumed the issue: write `demoted=1`, confirm it,
+  and treat it as the resume in the next sentence. With no such event the demotion is still owed,
+  never a resume: retry the block with the cap demotion's comment (**Demote ONCE** keeps it
+  idempotent), confirm it from a live label read, write `demoted=1`, and do no reset and no review. A
+  failed or unreadable events read is unknown: hold the issue this tick and neither re-block nor reset
+  it. Only a record carrying `demoted=1` on an issue that no longer carries `blocked` means a human
+  resumed it: clear the marker and reset
   `head_moved_reviews` to `0`, written and confirmed in the verified record before anything else,
   then follow this rule as normal (a head that does not
   match `reviewed_head` is reviewed in full). A record that cannot be read
@@ -863,7 +869,7 @@ Plus one line per failure with its next action. Drop the `unannotated` line on t
 nothing unannotated, the `stacks:` line on ticks that dispatch no chain, and the `review:` line on
 ticks with no review outcome to report — but never drop a Blocking finding or a
 `review: SKIPPED` from it, nor a `review: NO REPORT`, which are outcomes, not noise. The
-`holds:` line also names, on every tick it appears, a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>` (exit `11`, see `take-it` §6): `PR #<pr> (BOUND ENQUEUE FAILED — <cause>, needs a human)`. That is visibility only: no demotion, no recovery spent, because a platform outage prints the same line and DRAIN DEGRADED owns outages; the issue stays in-flight. The
+`holds:` line also names, on every tick it appears, a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>` (exit `11`, see `take-it` §6): `PR #<pr> (BOUND ENQUEUE FAILED — <cause>; a human acts if it repeats)`. That is visibility only: no demotion, no recovery spent, because a platform outage prints the same line and DRAIN DEGRADED owns outages; the issue stays in-flight. The
 `holds:` line carries **held PRs alongside held issues**, in the same reason-per-item shape, drawn
 from §2's enumeration and classified by §7's table — from §2 rather than from §7 because §2 is
 where the PRs are resolved and §6 renders before any terminal state is decided, and a held PR is

@@ -45,10 +45,16 @@
 #   retries the bound enqueue (a mutation that keeps failing stalls at 11
 #   rather than merging: fail closed). That stall prints the stable stdout line
 #   `BOUND ENQUEUE FAILED — <cause>` (exit 11 unchanged), so it is not
-#   indistinguishable from "checks pending" (#590). The line is PER PASS: this
-#   script is stateless, so a mutation that succeeded but whose queue entry lagged
-#   past the confirm sleep prints it too; a caller treats one as re-run and two
-#   consecutive ones as a stall. Without the flag nothing changes. The --direct staleness update
+#   indistinguishable from "checks pending" (#590). It prints only when the bound
+#   enqueue call failed after gh-retry, or when the PR node id did not resolve;
+#   a mutation that SUCCEEDED but is not yet isInMergeQueue prints only
+#   `enqueue not confirmed — re-run`, which is ordinary waiting (#592). The cause
+#   names the gh-retry outcome: `retries ran out on transient errors (gh-retry
+#   124)`, or `refused (gh exit <n>): <first stderr line>` (one line, at most 200
+#   characters, token-shaped strings masked). The line is PER PASS: this script
+#   is stateless, and what a caller does with one line or a repeat is
+#   pr-shepherd's SKILL.md `--expected-head` paragraph, the rule's one home.
+#   Without the flag nothing changes. The --direct staleness update
 #   is unbound under `gh pr update-branch`, so a bound run uses REST
 #   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
 #   25 saying the head moved BY DESIGN (the update is a merge commit; the caller
@@ -243,7 +249,7 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # line the caller prints (#590). Set by enqueue(), read by advance().
 ENQ_CAUSE=""
 enqueue() {
-  local prid
+  local prid enq_err enq_rc enq_why enq_line
   ENQ_CAUSE=""
   prid="$(gh api graphql \
     -f query='query($owner:String!,$name:String!,$pr:Int!){
@@ -254,20 +260,29 @@ enqueue() {
     if [ "$EXPECTED_HEAD_SET" = 1 ]; then
       # expectedHeadOid makes GitHub itself refuse the enqueue if the head moved
       # after the read in advance() (#585).
-      bash "$GH_RETRY" -- api graphql \
+      # stdout is discarded and stderr kept (not /dev/null) so the cause can say refusal vs outage (#592).
+      enq_err="$(bash "$GH_RETRY" -- api graphql \
         -f query='mutation($prid:ID!,$eho:GitObjectID!){
             enqueuePullRequest(input:{pullRequestId:$prid,expectedHeadOid:$eho}){
                 mergeQueueEntry{ position state }}}' \
-        -f prid="$prid" -f eho="$EXPECTED_HEAD" >/dev/null && return 0
+        -f prid="$prid" -f eho="$EXPECTED_HEAD" 2>&1 >/dev/null)"; enq_rc=$?
+      [ "$enq_rc" -eq 0 ] && return 0
+      if [ "$enq_rc" -eq 124 ]; then
+        enq_why="retries ran out on transient errors (gh-retry 124)"
+      else
+        enq_line="$(sed -n '/./{p;q;}' <<<"$enq_err" | LC_ALL=C tr -d '\000-\037\177' \
+          | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; s/([Bb]earer|[Tt]oken) +[^ ]+/\1 ***/g' | cut -c1-200)"
+        enq_why="refused (gh exit $enq_rc): $enq_line"
+      fi
       # A refusal because the head moved is exit 25, and no fallback is tried.
       # Read the head ONCE: "unchanged" is claimed only on a successful read that matched.
       refused_head="$(pr_head)"
       if [ -z "$refused_head" ]; then
-        ENQ_CAUSE="the enqueue mutation was refused or errored and the head could not be re-read"
+        ENQ_CAUSE="the enqueue mutation failed: $enq_why; the head could not be re-read"
       elif [ "$refused_head" != "$EXPECTED_HEAD" ]; then
         return 25
       else
-        ENQ_CAUSE="the enqueue mutation was refused or errored and the head is unchanged"
+        ENQ_CAUSE="the enqueue mutation failed: $enq_why; the head is unchanged"
       fi
     elif bash "$GH_RETRY" -- api graphql \
          -f query='mutation($prid:ID!){
@@ -517,6 +532,8 @@ advance() { # one idempotent step against live state
             upd_until=$((SECONDS + UPDATE_WAIT)); new_head=""
             # Under --watch the wait never outlives the watch budget (the loop below owns it).
             [ "$WATCH" -gt 0 ] && [ "$upd_until" -gt "$deadline" ] && upd_until="$deadline"
+            # The effective bound is printed so a test can assert the clamp without timing it (#592).
+            echo "  waiting up to $((upd_until - SECONDS))s for the head to move" >&2
             while :; do
               new_head="$(pr_head)"
               [ -n "$new_head" ] && [ "$new_head" != "$EXPECTED_HEAD" ] && break
@@ -574,7 +591,7 @@ advance() { # one idempotent step against live state
     else
       # A bound enqueue that keeps failing with the head unchanged returns the same 11 as
       # "checks pending"; this stable stdout line is what names it (#590).
-      [ -n "$bound_cause" ] && echo "BOUND ENQUEUE FAILED — $bound_cause (no --auto fallback under --expected-head; a human must enqueue or merge it)"
+      [ -n "$bound_cause" ] && echo "BOUND ENQUEUE FAILED — $bound_cause (no --auto fallback under --expected-head; re-run, and if the next pass prints this again a human enqueues or merges it)"
       echo "  enqueue not confirmed — re-run"; return 11
     fi
   fi
