@@ -1793,18 +1793,28 @@ cap_clause reviewed "$cap_reviewed" 'is decided from the loop'"'"'s own cap-demo
 swap_pin reviewed "$cap_reviewed" 'is decided from the loop'"'"'s own cap-demotion comment, not from the record alone and not from label events or timestamps (#592)' 'is decided from the issue'"'"'s label events, created after the record (#592)' \
     "a swap back to an event/time-based check is caught (#592)"
 # #594: the text the demotion POSTS and the text the resume predicate MATCHES are one string. The posting side is
-# the command in the hand-off bullet (one source line, so no newline can land inside the span); the matching side is
-# the span in the Reviewed rule. Extract both and require equality, so rewording either alone reddens.
-posted_cap="$(grep -o 'head kept moving after review (held head <oid>)' <<<"$cap_handoff" | sort -u)"
+# read from the RAW (unflattened) hand-off region and ONLY from the command's own physical line: `flat` joins wrapped
+# lines, so a flattened read passes a command re-wrapped across two lines, and the prose sentence beside the command
+# quotes the same span, so a whole-bullet grep passes on the prose alone. A command split over two source lines has no
+# physical line carrying the `--comment "dispatch-ready: ... (held head <oid>) — ` prefix, so it yields nothing.
+raw_handoff="$(raw_region "$SKILL" '- **Open PRs from those branches**' '- **Open PRs on blocked issues**')"
+posted_from() { sed -n 's/.*--comment "dispatch-ready: PR #<pr> \(head kept moving after review (held head [^)]*)\) — .*/\1/p' <<<"$1" | sort -u; }
+posted_cap="$(posted_from "$raw_handoff")"
 matched_cap="$(grep -o 'head kept moving after review (held head <oid>)' <<<"$cap_reviewed" | sort -u)"
 assert_eq "$posted_cap" "$matched_cap" \
-    "the cap-demotion comment's posted text equals the substring the resume predicate matches (#594)"
+    "the cap-demotion comment's posted text (the command's own line) equals the substring the resume predicate matches (#594)"
 assert_eq "$posted_cap" 'head kept moving after review (held head <oid>)' \
-    "the posted cap-demotion text is present in the hand-off bullet, single-spaced on one line (#594)"
+    "the posted cap-demotion text is read off the command's single physical line (#594)"
 assert_has "$cap_handoff" 'the full 40- or 64-hex oid written to `head_moved_hold`, never a short one' \
     "the posting side names the full oid (#594)"
-mutant_posted="$(sed 's/head kept moving after review (held head <oid>)/head kept moving after review (held <oid>)/' <<<"$cap_handoff" | grep -o 'head kept moving after review (held[^)]*)' | sort -u)"
-if [ "$mutant_posted" != "$matched_cap" ]; then ok "a swap that changes the posted side alone breaks the equality (#594)"; else bad "posted/matched equality mutant survives (#594)"; fi
+# Mutant: re-wrap ONLY the command across two lines, prose untouched. The flattened bullet is unchanged, so only the raw read can see it.
+rewrapped="$(sed 's/review (held head <oid>) — update/review\
+  (held head <oid>) — update/' <<<"$raw_handoff")"
+if [ "$rewrapped" = "$raw_handoff" ]; then bad "the re-wrap mutant did not apply (#594)"
+elif [ "$(flat "$rewrapped")" != "$(flat "$raw_handoff")" ] || [ -n "$(posted_from "$rewrapped")" ]; then bad "a command re-wrapped across two lines survives the posting read (#594)"
+else ok "a command re-wrapped across two source lines (prose untouched) yields no posted text (#594)"; fi
+mutant_posted="$(posted_from "$(sed 's/after review (held head <oid>) — update/after review (held head <short>) — update/' <<<"$raw_handoff")")"
+if [ -n "$mutant_posted" ] && [ "$mutant_posted" != "$matched_cap" ]; then ok "a swap that changes the command's posted text alone breaks the equality (#594)"; else bad "posted/matched equality mutant survives (#594)"; fi
 mutant_matched="$(sed 's/head kept moving after review (held head <oid>)/head kept moving after review (held head)/' <<<"$cap_reviewed" | grep -o 'head kept moving after review (held head[^)]*)' | sort -u)"
 if [ "$posted_cap" != "$mutant_matched" ]; then ok "a swap that changes the matching side alone breaks the equality (#594)"; else bad "matched/posted equality mutant survives (#594)"; fi
 cap_clause reviewed "$cap_reviewed" 'If one has the authenticated loop principal as its API author and a body containing `head kept moving after review (held head <oid>)` with the record'"'"'s own `head_moved_hold` oid, the demotion landed and a human has since resumed the issue: write `demoted=1`, confirm it, and treat it as the resume' \

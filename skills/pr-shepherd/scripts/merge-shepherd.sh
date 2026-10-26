@@ -250,7 +250,7 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # line the caller prints (#590). Set by enqueue(), read by advance().
 ENQ_CAUSE=""
 enqueue() {
-  local prid enq_err enq_rc enq_why enq_line
+  local prid enq_err enq_rc enq_why enq_body enq_line
   ENQ_CAUSE=""
   prid="$(gh api graphql \
     -f query='query($owner:String!,$name:String!,$pr:Int!){
