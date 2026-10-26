@@ -33,9 +33,10 @@
 #      '<name>'`) whether it is added LAST (where it would inherit the previous
 #      branch's list) or FIRST (where the list would be unset), reports no false
 #      residue on a clean tree, and the later names are still checked.
-#   7. (7c: a scan failure followed by residue on a later name still exits 2.)
-#      a `git grep` that cannot run exits 2 with its own message, and a directory
+#   7. A `git grep` that cannot run exits 2 with its own message, and a directory
 #      that is not a repo exits 2 with its own message; neither reads as clean.
+#   7c. A scan failure followed by residue on a later name still exits 2: the
+#      highest status wins, and the residue is still reported.
 #
 # MUTANTS. Each enforcing construct in the checker has one mutant: a copy of the
 # real checker with that construct neutered but its message text left in the
@@ -56,9 +57,8 @@
 #
 # NOT CHECKED HERE, so nothing claims more than it proves: the checker's
 # `cd "$root" || fatal` (a repo root that cannot be entered; no case reaches it),
-# that a name was not
-# DELETED from the checker's list (this file reads that list, so it cannot see a
-# name that is gone), that an allow list is minimal (a widened list passes; the
+# that a name was not DELETED from the checker's list (this file reads that list,
+# so it cannot see a name that is gone), that an allow list is minimal (a widened list passes; the
 # diff of check-legacy-names.sh is where that is reviewed), untracked files, and
 # the checker's matching of a name written in a different case or split across a
 # line. The checker's header says the same.

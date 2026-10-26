@@ -57,11 +57,13 @@
 # cannot run, and a directory that is not a repo, exit 2 and never read as clean.
 #
 # NOT COVERED, named so nothing claims more than it checks: a name deleted from
-# GUARDED_NAMES (the gate reads this file's own list, so it cannot tell); an
-# allow list WIDENED to make CI green (the gate proves the lists are enforced
-# and per name, not that each is minimal; review the diff of this file); a hit
-# in an untracked file (`git grep` reads tracked files only); and a legacy name
-# written in a form the literal -F match misses (a case change, a split word).
+# GUARDED_NAMES (the gate reads this file's own list, so it cannot tell); the
+# `cd "$root" || fatal` path (a repo root that cannot be entered; no case reaches
+# it); an allow list WIDENED to make CI green (the gate proves the lists are
+# enforced and per name, not that each is minimal; review the diff of this
+# file); a hit in an untracked file (`git grep` reads tracked files only); and a
+# legacy name written in a form the literal -F match misses (a case change, a
+# split word).
 #
 # Portable bash 3.2 (macOS) through current: no associative arrays, no mapfile.
 set -uo pipefail
