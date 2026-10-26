@@ -138,7 +138,10 @@ treating any per-repo plugin behaviour as evidence.
 measured on 2026-09-06: after a full restart this repo's pin was still `2026.8.94`, and
 `claude plugin update sassy-dog@skills` answered *"Checking for updates … **at user
 scope** … already at the latest version (2026.9.4)"* — a success message that changed nothing for
-the checkout it was run in. The scope flag is what moves it, from inside the target repo:
+the checkout it was run in. The scope flag is what moves it, from inside the target repo (a
+normal checkout: run inside a *linked* worktree it resolves to the main checkout's entry and moves
+nothing, so a linked worktree's pin is cleared instead, as README's "Updating / Troubleshooting"
+section explains):
 
 ```bash
 claude plugin update <plugin>@<marketplace> --scope project   # then restart
@@ -153,7 +156,7 @@ created when a session first opens a checkout whose `.claude/settings.json` decl
 and it is created **at whatever version is current then** — so a deleted pin does not come back
 stale, it comes back fresh. Measured 2026-09-06: entries removed from
 `~/.claude/plugins/installed_plugins.json` were re-created at `2026.9.4` on the next open, with no
-per-repo update at all. That is also the only way to clear the entries left by torn-down agent
+per-repo update at all. That is also the way to clear the entries left by torn-down agent
 worktrees, which cannot be `cd`-ed into — 94 of them on this machine, every one a snapshot of a
 directory that no longer exists.
 

@@ -1675,6 +1675,12 @@
 #      script over a stub tree: a non-zero exit, BOTH failing gates named,
 #      contiguous output, and PREFLIGHT_JOBS=1 and a parallel run printing the same
 #      PASS/FAIL/SKIP lines. No gh, no network.
+#  63. update-plugin-everywhere tests (scripts/test-update-plugin-everywhere.sh) —
+#      the script executed against a stubbed `claude` and a scratch HOME holding a
+#      fixture registry: a dead path, a normal checkout, a submodule and a LINKED
+#      WORKTREE (whose pin `claude plugin update` cannot move, #590), the dry run
+#      and its separate worktree count, `--apply` with its backup and prune, and a
+#      surviving stale copy; a mutant per construct. No gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh) and the summary lists each failed one. Exit 0 = all pass,
@@ -2976,6 +2982,15 @@ if pg_gate scripts/test-preflight-wiring.sh; then
     pass "preflight-wiring tests (scripts/test-preflight-wiring.sh)"
 else
     failed "preflight-wiring tests (scripts/test-preflight-wiring.sh)"
+fi
+
+# --- 63. update-plugin-everywhere tests ----------------------------------------
+# The per-machine plugin updater, executed over a fixture registry and a stubbed
+# `claude`; prunes linked-worktree pins (#590). Scratch HOME, no network.
+if pg_gate scripts/test-update-plugin-everywhere.sh; then
+    pass "update-plugin-everywhere tests (scripts/test-update-plugin-everywhere.sh)"
+else
+    failed "update-plugin-everywhere tests (scripts/test-update-plugin-everywhere.sh)"
 fi
 
 # ------------------------------------------------------------------------------

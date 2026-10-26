@@ -294,6 +294,8 @@ case "$1" in
             *isInMergeQueue*)     cat "$MS_STATE" ;;
             *headRefOid*)         [ "${MS_HEAD_RC:-0}" = 0 ] || exit 1
                                   n=$(( $(cat "$MS_HEADCNT") + 1 )); echo "$n" >"$MS_HEADCNT"
+                                  # a read that fails from the Nth on (the gate's own read still works)
+                                  if [ -n "${MS_HEAD_FAIL_AT:-}" ] && [ "$n" -ge "$MS_HEAD_FAIL_AT" ]; then exit 1; fi
                                   if [ -n "${MS_MOVE_AT:-}" ] && [ "$n" -ge "$MS_MOVE_AT" ]; then echo "$MS_HEAD_LATER"; else echo "$MS_HEAD"; fi ;;
             *"pullRequest(number:\$pr){ id }"*) [ -n "${MS_NOID:-}" ] || echo "PR_node_1" ;;
             */stacks*)            echo "HTTP/2.0 404 Not Found"; exit 1 ;;
@@ -327,6 +329,7 @@ ms_run() { # <script> <head the PR reports> <args…>   (env MS_* passes through
     # GIT_DIR points nowhere, so the script finds no local checkout and skips
     # its teardown instead of touching this repo's.
     MS_OUT="$(cd "$WORK" && PATH="$MSBIN:$PATH" MS_CALLS="$MS_CALLS" MS_STATE="$MS_STATE" MS_HEADCNT="$MS_HEADCNT" MS_HEAD="$head" \
+        MERGE_SHEPHERD_UPDATE_WAIT="${MS_UPDATE_WAIT:-0}" MERGE_SHEPHERD_UPDATE_POLL="${MS_UPDATE_POLL:-0}" \
         GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@" 2>&1)"
     MS_RC=$?
 }
@@ -354,6 +357,7 @@ ms_suite() {
     # match: queue
     ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "match: queue enqueues (exit 10)" 10
+    ms_expect "match: a successful bound enqueue prints no BOUND ENQUEUE FAILED" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
     ms_expect "match: the mutation input carries expectedHeadOid" "$(grep -q 'expectedHeadOid:\$eho' "$MS_CALLS"; echo $?)"
     ms_expect "match: the mutation is given the reviewed id" "$(grep -q "eho=$H1" "$MS_CALLS"; echo $?)"
     ms_run "$sc" "$H64" --expected-head "$H64"
@@ -378,6 +382,10 @@ ms_suite() {
     # no flag, the --auto fallback: unbound, exactly as before
     MS_ENQUEUE_RC=1 ms_run "$sc" "$H1"
     ms_rc "no flag: fallback enqueues (exit 10)" 10
+    ms_expect "no flag: the unbound fallback prints no BOUND ENQUEUE FAILED" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
+    MS_ENQUEUE_RC=1 MS_MERGE_RC=1 ms_run "$sc" "$H1"
+    ms_rc "no flag: mutation and fallback both fail: exit 11" 11
+    ms_expect "no flag: a failing unbound enqueue prints no BOUND ENQUEUE FAILED (the fallback owns it)" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
     ms_expect "no flag: fallback is a bare gh pr merge --auto" \
         "$(grep -qE 'pr merge 585 .*--auto( |$)' "$MS_CALLS" && ! grep -q -- '--match-head-commit' "$MS_CALLS"; echo $?)"
     # a failing merge call is not confirmed (also keeps MS_MERGE_RC honest)
@@ -392,9 +400,21 @@ ms_suite() {
     # (or the node id unresolved) is exit 11, with no `pr merge` call at all.
     MS_ENQUEUE_RC=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound enqueue refused, head unchanged: exit 11, retried next pass" 11
+    # #590: that 11 is indistinguishable from "checks pending" without a stable stdout reason line
+    ms_expect "bound enqueue refused, head unchanged: stdout names BOUND ENQUEUE FAILED and the cause" \
+        "$(grep -q '^BOUND ENQUEUE FAILED — the enqueue mutation was refused' <<<"$MS_OUT"; echo $?)"
     ms_expect "bound enqueue refused, head unchanged: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
     MS_NOID=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound, node id unresolved: exit 11" 11
+    ms_expect "bound, node id unresolved: stdout names BOUND ENQUEUE FAILED and the cause" \
+        "$(grep -q '^BOUND ENQUEUE FAILED — the PR node id did not resolve' <<<"$MS_OUT"; echo $?)"
+    # a refused enqueue whose head re-read ALSO fails must not claim "unchanged" (#590 review)
+    MS_ENQUEUE_RC=1 MS_HEAD_FAIL_AT=2 ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_rc "bound enqueue refused, head re-read fails: exit 11" 11
+    ms_expect "bound enqueue refused, head re-read fails: says the head could not be re-read" \
+        "$(grep -q '^BOUND ENQUEUE FAILED — .*the head could not be re-read' <<<"$MS_OUT"; echo $?)"
+    ms_expect "bound enqueue refused, head re-read fails: never claims the head is unchanged" \
+        "$(! grep -q 'head is unchanged' <<<"$MS_OUT"; echo $?)"
     ms_expect "bound, node id unresolved: no auto-merge armed (no pr merge call)" "$(! grep -q 'pr merge' "$MS_CALLS"; echo $?)"
     # node id unresolved AND the head moves after the gate's read: no bound write was attempted, so this pass
     # does not re-read the head and answers 11; the NEXT pass's head gate (the PR now reports H2) answers 25.
@@ -411,8 +431,35 @@ ms_suite() {
     MS_MERGE_RC=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "bound direct merge refused, head unchanged: exit 11 as before" 11
     # the bound --direct staleness update
+    # #590: the REST update is asynchronous (202), so 25 only once the head has actually moved.
+    MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: update succeeds and the head moved, exit 25 (re-review the update; not 11, a re-run would only reach 25)" 25
+    ms_expect "stale + bound: the 25 names the new head" "$(grep -q "to $H2" <<<"$MS_OUT"; echo $?)"
     MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1"
-    ms_rc "stale + bound: update succeeds, exit 25 (re-review the update; not 11, a re-run would only reach 25)" 25
+    ms_rc "stale + bound: update accepted but the head never moves within the bound, exit 11" 11
+    ms_expect "stale + bound: never moved: says update requested, head not yet moved" \
+        "$(grep -q 'update requested, head not yet moved — re-run' <<<"$MS_OUT"; echo $?)"
+    ms_expect "stale + bound: never moved: no merge call" "$(! grep -qE '^pr merge' "$MS_CALLS"; echo $?)"
+    # the wait env is validated before any PUT: a poll below 1 with a wait above 0 would spin
+    MS_UPDATE_WAIT=5 MS_UPDATE_POLL=0 MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "update wait above 0 with poll 0: refused, exit 1" 1
+    ms_expect "update wait above 0 with poll 0: refused before ANY gh call (so before the PUT)" "$(! ms_any_call; echo $?)"
+    MS_UPDATE_WAIT=0 MS_UPDATE_POLL=0 MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "update wait 0 with poll 0 is allowed" 25
+    MS_UPDATE_WAIT=x MS_UPDATE_POLL=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "a non-numeric update wait: refused, exit 1" 1
+    # "08" is invalid octal to bash arithmetic: it must read as 8
+    MS_UPDATE_WAIT=08 MS_UPDATE_POLL=01 MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "update wait 08 and poll 01 are read as decimal (accepted, head moved: exit 25)" 25
+    # under --watch the wait is clamped to the watch budget: a 3 s wait inside a 1 s watch ends in ~1 s
+    t0=$SECONDS
+    MS_UPDATE_WAIT=3 MS_UPDATE_POLL=1 MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1" --watch 1 --poll 0
+    ms_expect "watch: the update wait is clamped to the watch budget (finished in under 3 s)" "$(if [ $((SECONDS - t0)) -lt 3 ]; then echo 0; else echo 1; fi)"
+    ms_expect "watch: an unmoved head under the clamp still exits through the bounded watch (11)" \
+        "$([ "$MS_RC" = 11 ] && grep -q 'bounded-exit' <<<"$MS_OUT"; echo $?)"
+    MS_UPDATE_WAIT=2 MS_UPDATE_POLL=1 MS_BEHIND=3 MS_MOVE_AT=4 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    ms_rc "stale + bound: the head moves on a later read within the bound: exit 25" 25
+    MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_expect "stale + bound: says the head moved by design" "$(grep -q 'moved by design' <<<"$MS_OUT"; echo $?)"
     ms_expect "stale + bound: REST update carries expected_head_sha" "$(grep -q "update-branch -f expected_head_sha=$H1" "$MS_CALLS"; echo $?)"
     ms_expect "stale + bound: no unbound gh pr update-branch and no merge" "$(! grep -qE '^pr (update-branch|merge)' "$MS_CALLS"; echo $?)"
@@ -476,20 +523,32 @@ ms_mutant no-charset-check '*[!0-9a-f]*) echo' 'NEVER) echo'
 ms_mutant no-length-check '40|64) : ;;' '*) : ;;'
 ms_mutant 25-not-terminal '0|1|20|22|24|25) exit' '0|1|20|22|24) exit'
 ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shift 2' '[ -n "$2" ] && EXPECTED_HEAD_SET=1; EXPECTED_HEAD="$2"; shift 2'
-ms_mutant no-moved-check-after-bound-enqueue '      head_moved && return 25
-    elif' '    elif'
+ms_mutant no-moved-check-after-bound-enqueue '      elif [ "$refused_head" != "$EXPECTED_HEAD" ]; then
+        return 25' '      elif false; then
+        return 25'
 ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
 ms_mutant noid-path-rereads-head 'under --expected-head; re-run" >&2
     return 1' 'under --expected-head; re-run" >&2
     head_moved && return 25
     return 1'
 ms_mutant bound-update-exits-11 'then re-run with the new head"
-            return 25' 'then re-run with the new head"
-            return 11'
+              return 25' 'then re-run with the new head"
+              return 11'
 ms_mutant no-expected-sha-on-update '-f expected_head_sha="$EXPECTED_HEAD"' '-f expected_head_sha=""'
 ms_mutant no-moved-check-after-refused-update 'elif head_moved; then
             echo "HEAD MOVED — reviewed' 'elif false; then
             echo "HEAD MOVED — reviewed'
+ms_mutant update-wait-loop-removed '              [ -n "$new_head" ] && [ "$new_head" != "$EXPECTED_HEAD" ] && break' '              break'
+ms_mutant bound-failed-line-claims-unchanged-on-failed-read 'if [ -z "$refused_head" ]; then' 'if false; then'
+ms_mutant no-poll-floor 'if [ "$UPDATE_WAIT" -gt 0 ] && [ "$UPDATE_POLL" -lt 1 ]; then' 'if false; then'
+ms_mutant no-octal-normalisation 'UPDATE_WAIT=$((10#$UPDATE_WAIT)); UPDATE_POLL=$((10#$UPDATE_POLL))' 'UPDATE_WAIT=$((UPDATE_WAIT)); UPDATE_POLL=$((UPDATE_POLL))'
+ms_mutant no-watch-clamp '[ "$WATCH" -gt 0 ] && [ "$upd_until" -gt "$deadline" ] && upd_until="$deadline"' ':'
+ms_mutant update-25-without-waiting-for-the-head 'if [ -n "$new_head" ]; then' 'if true; then'
+ms_mutant update-never-moved-exits-25 'echo "  update requested, head not yet moved — re-run"
+            return 11' 'echo "  update requested, head not yet moved — re-run"
+            return 25'
+ms_mutant no-bound-enqueue-failed-line '      [ -n "$bound_cause" ] && echo "BOUND ENQUEUE FAILED' '      false && echo "BOUND ENQUEUE FAILED'
+ms_mutant bound-failed-line-on-unbound-run '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"' '[ "$erc" -ne 0 ] && bound_cause="${ENQ_CAUSE:-x}"'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'

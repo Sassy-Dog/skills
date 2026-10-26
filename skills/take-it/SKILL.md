@@ -753,6 +753,15 @@ no recovery. Re-review the new head (the **Delta base rule** above when a cap re
 otherwise a full review against the derived default branch), then hand the PR off again with the
 head that review covered. A moved head that review finds Blocking takes the existing Blocking path.
 
+An exit `11` whose stdout carries `BOUND ENQUEUE FAILED — <cause>` is not "checks pending": the
+bound enqueue was refused *this pass*, after `gh-retry`, with no `--auto` fallback. The script is
+stateless and prints the line on every failed pass, including after a mutation that succeeded while
+`isInMergeQueue` lagged past its confirm sleep, so one line is not yet a stall. Re-run the bound
+hand-off once (exit `11` already means re-run); only when the line appears on **two consecutive
+passes** does it need a human (check the cause, confirm the head is still the reviewed one, enqueue
+or merge by hand). Then report it by name and hold the PR; do not demote and do not count it as a
+re-review.
+
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
 PR behind forever (each pass updates the branch, the update is a merge commit so the Delta base rule
@@ -762,11 +771,10 @@ durable (`dispatch-ready`'s verified per-attempt record) it is read back author-
 the active `attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the
 cause: `head kept moving after review`. The hold spends no recovery and writes no reservation. It
 splits by coordinator: `take-it` only holds the PR, and the hold ends with the batch; `dispatch-ready`
-demotes the issue once to `blocked` (its **Open PRs from those branches** bullet, after the
-`CONFLICTING` precedent), because a loop with a §7 cannot carry a not-blocked human-only hold. The
-operator updates or rebases the branch by hand and re-runs (clearing `blocked` under
-`dispatch-ready`), and a head the operator moved restores the budget (a fresh `take-it` run starts at
-`0`; `dispatch-ready` resets its durable count on resume). This coordinator keeps
+demotes the issue and later resumes it as its **Open PRs from those branches** bullet and
+not-yet-reviewed bullet define (demotion, confirmation, resume and the durable count's reset all
+live there). The operator updates or rebases the branch by hand and re-runs, and a head the operator
+moved restores the budget (a fresh `take-it` run starts at `0`). This coordinator keeps
 the count in its in-session per-PR state beside the head it reviewed, mirrored as
 `head_moved_reviews=<n>` in the PR body for the operator only. That mirror is never its source of
 truth: a fresh invocation ignores any `head_moved_reviews=<n>` already in the PR body, starts the

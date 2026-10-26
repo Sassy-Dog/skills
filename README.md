@@ -353,12 +353,14 @@ claude plugin update sassy-dog@skills --scope user   # or: project, local, manag
 
 `--scope` defaults to `user`. If this machine has a *project*-scope install of the plugin, that is the copy your sessions in that project run, and the bare command will not touch it — see step 1 below for how to tell.
 
-**To do all of it for every copy on this machine at once**, run the bundled script from a checkout of this repo — it refreshes the clone, updates the `user` copy and every live `project` copy from inside its own path, prunes registry entries left by torn-down worktrees, and verifies each survivor **by content** rather than version string. Dry run by default:
+**To do all of it for every copy on this machine at once**, run the bundled script from a checkout of this repo — it refreshes the clone, updates the `user` copy and every live `project` copy from inside its own path, prunes registry entries left by torn-down worktrees, prunes the pin of any *live* linked worktree too (see below), and verifies each survivor **by content** rather than version string. Dry run by default:
 
 ```bash
 bash scripts/update-plugin-everywhere.sh          # report only
 bash scripts/update-plugin-everywhere.sh --apply  # update, prune, verify; then restart sessions
 ```
+
+**A linked worktree's pin cannot be moved by `plugin update`.** Run inside a linked worktree, `claude plugin update --scope project` resolves to the *main* checkout's entry, prints "already at the latest version" and leaves the worktree's own entry stale (measured 2026-10-25: two worktree pins at `2026.10.52` and `2026.10.64` beside a current `2026.10.101`; [#590](https://github.com/Sassy-Dog/skills/issues/590)). So the script never tries: the dry run counts such pins separately (`linked-worktree pin(s)`), and `--apply` removes them after the registry backup, exactly as it removes a dead path. Nothing is lost, because a pin is re-created at whatever is current the next time a session opens in that worktree. A submodule is not a linked worktree and is updated normally. `scripts/test-update-plugin-everywhere.sh` runs the script against a stubbed `claude` and a fixture registry.
 
 It also names the one stale state the installer cannot fix: every copy already at the latest *stamped* version while `main` has merged newer content. `claude plugin update` is version-keyed and copies nothing there; the remedy is a release stamp (`docs/VERSIONING.md`), after which the next run installs a fresh version directory.
 
@@ -382,7 +384,7 @@ jq -r --arg p "$PWD" '
 ' ~/.claude/plugins/installed_plugins.json
 ```
 
-A `project` row wins for sessions in that project; the `user` row is the answer when there is no project row. Do not assume a worktree has no project row — most do, written when a session first runs there, which is where `take-it` and `dispatch-ready` do nearly all of this repo's work. Read the filter's output rather than predicting it. **Keep both the `installPath` and the `scope`** — the path is what you compare in step 3, and the scope is what you must pass when you fix it. The two are routinely at *different* versions — `2026.8.100` user against `2026.8.94` project on the machine measured — so picking the wrong one silently checks a copy you are not running. Ignore `gitCommitSha` in that file: it records the commit the *marketplace* was added at, is not refreshed by a plugin update, and was 101 commits behind on the machine measured.
+A `project` row wins for sessions in that project; the `user` row is the answer when there is no project row. Do not assume a worktree has no project row — most do, written when a session first runs there, which is where `take-it` and `dispatch-ready` do nearly all of this repo's work. That row cannot be fixed with `plugin update` (run inside a linked worktree it resolves to the main checkout's row): delete it, or let `update-plugin-everywhere.sh --apply` prune it, and the next open re-takes a current snapshot. Read the filter's output rather than predicting it. **Keep both the `installPath` and the `scope`** — the path is what you compare in step 3, and the scope is what you must pass when you fix it. The two are routinely at *different* versions — `2026.8.100` user against `2026.8.94` project on the machine measured — so picking the wrong one silently checks a copy you are not running. Ignore `gitCommitSha` in that file: it records the commit the *marketplace* was added at, is not refreshed by a plugin update, and was 101 commits behind on the machine measured.
 
 **2. Refresh the marketplace clone**, so that what you compare against is current:
 

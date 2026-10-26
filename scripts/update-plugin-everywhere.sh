@@ -18,12 +18,22 @@
 #      reports "current" (README measured 0 diffs before the refresh, 28 after)
 #   2. back up installed_plugins.json (timestamped, beside it)
 #   3. `plugin update --scope user`, then `--scope project` from INSIDE each
-#      live project path (the scope flag from the target cwd is the only thing
-#      that moves a project pin)
-#   4. delete registry entries whose projectPath no longer exists — a pin is
-#      re-created at whatever is current the next time a session opens there,
-#      and this is the ONLY safe way to clear them: `claude plugin uninstall
-#      --scope project` rewrites the repo's COMMITTED settings.json
+#      live NON-worktree project path (the scope flag from the target cwd is
+#      the only thing that moves a project pin)
+#   4. delete registry entries whose projectPath no longer exists, and entries
+#      whose projectPath is a LINKED GIT WORKTREE — a pin is re-created at
+#      whatever is current the next time a session opens there, and this is the
+#      ONLY safe way to clear them: `claude plugin uninstall --scope project`
+#      rewrites the repo's COMMITTED settings.json. A linked worktree cannot be
+#      updated at all (#590): `claude plugin update --scope project` run inside
+#      one resolves to the MAIN checkout's entry, prints "already at the latest
+#      version" and leaves the worktree's own entry stale forever (measured
+#      2026-10-25: a brewslate agent worktree and `routines-runner-image-queue`,
+#      at 2026.10.52 and 2026.10.64 beside a 2026.10.101 current). Detected by
+#      the worktree's git dir differing from its common dir (`rev-parse
+#      --absolute-git-dir` vs `--git-common-dir`); a submodule, whose `.git` is
+#      also a file, has the same dir for both and is NOT a worktree. The dry run
+#      reports them under their own count. Gate: scripts/test-update-plugin-everywhere.sh.
 #   5. verify every surviving entry BY CONTENT — `diff -rq` of skills/, agents/
 #      and scripts/ against the clone — never by version string: the manifest
 #      is stamped only on release PRs while content lands on every merge, so
@@ -75,7 +85,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-for tool in jq claude diff; do
+for tool in jq claude diff git; do
     command -v "$tool" >/dev/null 2>&1 || { echo "missing tool: $tool" >&2; exit 2; }
 done
 [ -r "$REGISTRY" ] || { echo "no registry at $REGISTRY" >&2; exit 2; }
@@ -87,6 +97,28 @@ entries() {  # scope \t version \t projectPath \t installPath, one per line
       .plugins[$p] // [] | .[]
       | [.scope, (.version // "?"), (.projectPath // "-"), (.installPath // "-")] | @tsv
     ' "$REGISTRY"
+}
+
+# The probe must not inherit the caller's repository selection: an exported GIT_DIR
+# (a hook, a wrapper) would make every path report the same git dir, so no pin would
+# look like a worktree, or, with GIT_COMMON_DIR set, every one would, and --apply
+# would prune them all.
+probe_git() { env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+
+is_linked_worktree() {  # $1 = project path -> 0 when it is a linked git worktree
+    local p="$1" gd cd_
+    gd="$(probe_git -C "$p" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    cd_="$(probe_git -C "$p" rev-parse --git-common-dir 2>/dev/null)" || return 1
+    case "$cd_" in /*) ;; *) cd_="$p/$cd_" ;; esac
+    gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
+    cd_="$(cd "$cd_" 2>/dev/null && pwd -P)" || return 1
+    [ "$gd" != "$cd_" ]
+}
+
+project_kind() {  # $1 = project path -> dead | worktree | live
+    if [ ! -d "$1" ]; then echo dead
+    elif is_linked_worktree "$1"; then echo worktree
+    else echo live; fi
 }
 
 content_state() {  # $1 = installPath → prints current | stale | not-compared
@@ -104,10 +136,12 @@ print_table() {  # $1 = heading
     printf '%-8s %-12s %-13s %s\n' scope version content projectPath
     while IFS=$'\t' read -r scope version ppath ipath; do
         local st
-        if [ "$scope" = "project" ] && [ ! -d "$ppath" ]; then
-            st="DEAD"
-        else
-            st="$(content_state "$ipath")"
+        st="$(content_state "$ipath")"
+        if [ "$scope" = "project" ]; then
+            case "$(project_kind "$ppath")" in
+                dead) st="DEAD" ;;
+                worktree) st="WORKTREE" ;;
+            esac
         fi
         printf '%-8s %-12s %-13s %s\n' "$scope" "$version" "$st" "$ppath"
     done < <(entries)
@@ -120,10 +154,12 @@ echo
 print_table "before"
 
 if [ "$APPLY" -eq 0 ]; then
-    dead="$(entries | awk -F'\t' '$1=="project"{print $3}' | while read -r p; do [ -d "$p" ] || echo "$p"; done | wc -l | tr -d ' ')"
-    live="$(entries | awk -F'\t' '$1=="project"{print $3}' | while read -r p; do [ -d "$p" ] && echo "$p"; done | wc -l | tr -d ' ')"
+    dead=0; wt=0; live=0
+    while read -r p; do
+        case "$(project_kind "$p")" in dead) dead=$((dead + 1)) ;; worktree) wt=$((wt + 1)) ;; *) live=$((live + 1)) ;; esac
+    done < <(entries | awk -F'\t' '$1=="project"{print $3}')
     echo
-    echo "dry run: would update user scope + $live live project scope(s), prune $dead dead entr(y|ies)."
+    echo "dry run: would update user scope + $live live project scope(s), prune $dead dead entr(y|ies) and $wt linked-worktree pin(s) (re-created on the next open)."
     echo "re-run with --apply."
     exit 0
 fi
@@ -140,20 +176,25 @@ claude plugin update "$PLUGIN" --scope user 2>&1 | sed 's/^/  /'
 
 while IFS=$'\t' read -r scope version ppath ipath; do
     [ "$scope" = "project" ] || continue
-    [ -d "$ppath" ] || continue
+    [ "$(project_kind "$ppath")" = live ] || continue
     echo "== update project scope: $ppath (was $version) =="
     ( cd "$ppath" && claude plugin update "$PLUGIN" --scope project 2>&1 | sed 's/^/  /' )
 done < <(entries)
 
 # --- 4. prune dead project entries ---------------------------------------------
-echo "== prune dead project entries =="
+echo "== prune dead project entries and linked-worktree pins =="
 tmp="$(mktemp)" || { echo "mktemp failed" >&2; exit 2; }
 trap 'rm -f "$tmp"' EXIT
 pruned=0
 keep='[]'
 while IFS=$'\t' read -r scope version ppath ipath; do
-    if [ "$scope" = "project" ] && [ ! -d "$ppath" ]; then
+    kind=live
+    [ "$scope" = "project" ] && kind="$(project_kind "$ppath")"
+    if [ "$kind" = dead ]; then
         echo "  removed: $ppath ($version)"
+        pruned=$((pruned + 1))
+    elif [ "$kind" = worktree ]; then
+        echo "  removed worktree pin: $ppath ($version) — re-created on the next open there"
         pruned=$((pruned + 1))
     else
         keep="$(jq -c --arg s "$scope" --arg p "$ppath" '. + [{scope:$s, projectPath:$p}]' <<<"$keep")"
@@ -176,7 +217,7 @@ echo "  pruned $pruned"
 echo
 print_table "after"
 stale="$(entries | while IFS=$'\t' read -r scope version ppath ipath; do
-    if [ "$scope" = "project" ] && [ ! -d "$ppath" ]; then continue; fi
+    if [ "$scope" = "project" ] && [ "$(project_kind "$ppath")" != live ]; then continue; fi
     st="$(content_state "$ipath")"; [ "$st" = "current" ] || echo "$ppath"
 done | wc -l | tr -d ' ')"
 echo
@@ -187,7 +228,7 @@ if [ "$stale" -eq 0 ]; then
 fi
 clone_version="$(jq -r '.version // "?"' "$CLONE/.claude-plugin/plugin.json" 2>/dev/null)"
 behind_stamp="$(entries | while IFS=$'\t' read -r scope version ppath ipath; do
-    if [ "$scope" = "project" ] && [ ! -d "$ppath" ]; then continue; fi
+    if [ "$scope" = "project" ] && [ "$(project_kind "$ppath")" != live ]; then continue; fi
     [ "$version" = "$clone_version" ] || echo "$ppath"
 done | wc -l | tr -d ' ')"
 if [ "$behind_stamp" -eq 0 ]; then

@@ -191,19 +191,24 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   (see the not-yet-reviewed bullet below) as `--expected-head` on every hand-off, including a later
   tick's re-run after exit `11`, and treat exit `25` (the head moved) as `take-it` §6's **Bind the
   merge to the reviewed head** defines both, with the cap on re-reviews in **Cap on head-moved
-  re-reviews** beside it. A tick keeps that count as `head_moved_reviews=<n>` in the same
+  re-reviews** beside it. A hand-off that exits `11` with `BOUND ENQUEUE FAILED — <cause>` on stdout is
+  named in §6's `holds:` line on every tick it appears and nothing else. A tick keeps that count as `head_moved_reviews=<n>` in the same
   record as `reviewed_head`, mirrored in the PR body and read back author-checked and
   bound to the active `attempt_id`; an absent count is `0`, and an unreadable or unverifiable one
   is a hold. **On the tick that sees exit `25`, write the incremented count to that record and
   confirm the write BEFORE dispatching the re-review**, so a tick that dies in between leaves the
-  spent re-review counted. When that exit `25` is the one the cap refuses (take-it §6: the count is
-  already two), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
+  spent re-review counted. When that exit `25` is the one the cap refuses (the count is already at
+  the cap `take-it` §6 defines), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
   record, confirm the write, then demote the issue ONCE, exactly as the `CONFLICTING` bullet below
   does: `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review
-  (held head <oid>) — update or rebase by hand, then clear the blocked label to resume the drain"`.
-  **Demote ONCE**: an issue already carrying `blocked` gets nothing written (an idempotency
-  predicate, not an attempt counter). **If the demotion write fails**, say so in the tick report and
-  treat the issue as still in-flight this tick. The marker is its own explicit state, never readable
+  (held head <oid>) — update or rebase by hand, then resume: gh issue edit N --remove-label
+  blocked --add-label in-progress"`. **Mark the demotion confirmed only from a live label read:** after the
+  block, re-read the issue's labels, and only when that read shows `blocked` write `demoted=1` into
+  the same record (`head_moved_hold=<oid> demoted=1`) and confirm it. **Demote ONCE**: an issue
+  already carrying `blocked` gets nothing written (an idempotency predicate, not an attempt
+  counter). **If the demotion write fails**, say so in the tick report, leave the record without
+  `demoted=1` (the demotion is still owed, and the not-yet-reviewed bullet retries it) and treat the
+  issue as still in-flight this tick. The marker is its own explicit state, never readable
   as "re-review owed"; once `blocked`, the blocked-PR bullet and §7's row 1 already hold the PR. Where this loop reviewed (not under `review_agent:
   skip` or `review_site: agent`, which pass no head), never hand a PR off unbound: no matching
   record means the PR is not reviewed. A moved head is not a failure and spends no recovery; this section's
@@ -236,7 +241,12 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   these PRs, so they are never handed to `sassy-dog:pr-shepherd` — they are read so **§7 can see
   them**. A human-gated PR that nobody enumerated is not a smaller version of the §7 gap, it is a
   worse one: it leaves §7's held set empty, and an empty held set admits DRAIN COMPLETE, so the
-  loop self-cancels with the PR still open (#282).
+  loop self-cancels with the PR still open (#282). **This bullet also repairs a missing `demoted=1`,
+  every tick it lists the PR:** a `head_moved_hold` record without `demoted=1` on an issue that
+  still carries `blocked` gets `demoted=1` written and confirmed in that record. Only the demotion
+  tick could otherwise write it, and a tick that confirmed `blocked` and then died leaves a record
+  the not-yet-reviewed bullet (in-flight issues only) never sees again, so a later real resume would
+  read as a demotion still owed and be re-blocked.
 - **Failed or red PRs** → surface in the tick report with the failing check named, and comment
   `dispatch-ready: attempt 1 failed — <check>: <one-line cause>` on the issue. ONE redispatch with the
   failure context appended is allowed on a later tick. A second failure demotes to blocked — via
@@ -263,9 +273,14 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `attempt_id`, exactly like `recovery_used`. A record that is absent, or does not match the current
   head, means not reviewed: review it, and never hand it off unbound. **Check the cap first:** a
   record carrying `head_moved_hold` on an issue that still carries `blocked` is held, neither
-  reviewed nor handed off. The same record on an issue that no longer carries `blocked` means a
-  human resumed it: clear the marker and reset `head_moved_reviews` to `0`, written and confirmed in
-  the verified record before anything else, then follow this rule as normal (a head that does not
+  reviewed nor handed off (if that record lacks `demoted=1`, the live read has just shown `blocked`,
+  so write `demoted=1` and confirm it). A record carrying `head_moved_hold` but not `demoted=1` on an
+  issue that does not carry `blocked` means the demotion is still owed, never a resume: retry the
+  block with the cap demotion's comment (**Demote ONCE** keeps it idempotent), confirm it from a live
+  label read, write `demoted=1`, and do no reset and no review. Only a record carrying `demoted=1` on
+  an issue that no longer carries `blocked` means a human resumed it: clear the marker and reset
+  `head_moved_reviews` to `0`, written and confirmed in the verified record before anything else,
+  then follow this rule as normal (a head that does not
   match `reviewed_head` is reviewed in full). A record that cannot be read
   holds the PR this tick (a head that moved
   only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
@@ -365,10 +380,18 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   1 (`blocked`) once this bullet has written, so the word `CONFLICTING` reaches the operator only
   if this bullet puts it there. Demote the issue in the same tick — via the board plus a `blocked`
   label, or `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> is CONFLICTING — needs a
-  rebase this loop may not perform, then clear the blocked label to resume the drain"`, that
+  rebase this loop may not perform, then resume: gh issue edit N --remove-label blocked
+  --add-label in-progress"`, that
   subcommand requiring a comment — so a human resolves the conflict. Name the label in it:
   `promote` never strips `blocked`, so a rebase alone no longer returns the issue to the queue.
-  **Demote ONCE**: skip an issue that already carries `blocked` and write nothing, leaving it to
+  **The resume really returns the issue to in-flight, on a board repo and a boardless one:** `block`
+  stripped `in-progress` and left the assignee and any card, and in-flight is `in-progress` (or the
+  card) with assignee @me and not `blocked` (§3, `queue-snapshot.sh`'s `in_flight`), so clearing
+  `blocked` alone orphans the open PR. The resume is the one command `gh issue edit N --remove-label blocked --add-label in-progress`
+  (re-adds `in-progress`, the label a boardless repo reads and a board repo's card already
+  carries). Not `issue-claim.sh claim N`: that script lives in the plugin cache, not on an
+  operator's PATH, and `claim`'s double-pick guard skips an issue assigned to a login other than the
+  operator's, while `block` keeps the assignee. Say exactly that command in both demotion comments. **Demote ONCE**: skip an issue that already carries `blocked` and write nothing, leaving it to
   the blocked-PR bullet above. That is an idempotency predicate, not an attempt
   counter — it asks whether the demotion has been *written*, never how many times the PR has
   failed — and without it this bullet re-fires every tick against a PR that stays `CONFLICTING`
@@ -840,6 +863,7 @@ Plus one line per failure with its next action. Drop the `unannotated` line on t
 nothing unannotated, the `stacks:` line on ticks that dispatch no chain, and the `review:` line on
 ticks with no review outcome to report — but never drop a Blocking finding or a
 `review: SKIPPED` from it, nor a `review: NO REPORT`, which are outcomes, not noise. The
+`holds:` line also names, on every tick it appears, a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>` (exit `11`, see `take-it` §6): `PR #<pr> (BOUND ENQUEUE FAILED — <cause>, needs a human)`. That is visibility only: no demotion, no recovery spent, because a platform outage prints the same line and DRAIN DEGRADED owns outages; the issue stays in-flight. The
 `holds:` line carries **held PRs alongside held issues**, in the same reason-per-item shape, drawn
 from §2's enumeration and classified by §7's table — from §2 rather than from §7 because §2 is
 where the PRs are resolved and §6 renders before any terminal state is decided, and a held PR is
