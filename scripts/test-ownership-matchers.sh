@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # test-ownership-matchers.sh — proves the setup-hooks / setup-deps ownership
 # matchers against REAL pre-rename artifacts, not synthetic patterns (issue
-# #133, epic #120).
+# #133, epic #120), and that setup-config's two producer-name lists (SKILL.md's
+# marker-recognition paragraph and update-mode.md's "Recognising prior
+# producers" list) each still name every producer once (issue #612; see the
+# last section below).
 #
 # Why this exists: the ownership contract is report-and-skip, not error. A
 # marker the matcher fails to recognise makes the file "hand-written", so a
@@ -159,8 +162,9 @@ done <<< "$fixtures"
 
 # --- corpus coverage ---------------------------------------------------------
 # Count DISTINCT marker strings the shipped patterns match across the fixture
-# bodies. Derived from the fixtures rather than listed here, so this stays
-# honest without transcribing any superseded producer name into the test.
+# bodies. Derived from the fixtures rather than listed here, so this count stays
+# honest without a transcription (the setup-config section below is the one place
+# that carries a producer set, because that set is the contract it tests).
 distinct=$(git ls-files "$FIXTURE_DIR/*.fixture" \
     | xargs grep -hoE "$HOOKS_PAT|$DEPS_PAT" \
     | sort -u | grep -c .)
@@ -181,6 +185,94 @@ if [ "$control_count" -ge 1 ]; then
 else
     bad "negative controls — none; at least one real unmarked artifact is required"
 fi
+
+# --- setup-config's recognizer lists (issue #612) ------------------------------
+# setup-config names the producers it still recognises in TWO places, and the
+# recognition is report-and-skip like the matchers above: a repo stamped by a
+# producer the lists no longer name falls through to adopt or create mode and its
+# config is silently lost. #414's mechanical rename turned one producer name into
+# another in BOTH lists, so each then named the same producer twice and the
+# original not at all, and CI stayed green for months.
+#
+# Each list is EXTRACTED from the shipped file at run time by its SHAPE, so
+# reordering or rewording it needs no change here:
+#   - SKILL.md: the paragraph headed "Marker recognition accepts every producer
+#     name." (a name is a backticked token followed by " ("), and
+#   - update-mode.md: the bullet list under "## Recognising prior producers"
+#     (a name is the backticked token opening a "- " bullet).
+# What this file DOES carry is the producer set itself (REQUIRED_PRODUCERS): that
+# is the contract under test, a fixed history that `generated-by:` markers
+# committed in consumer repos already depend on, and the producer names are
+# sanctioned in this file by scripts/check-legacy-names.sh for that reason. Each
+# list must name each required producer EXACTLY once. A name missing, a name
+# twice and a list that extracts empty are three separate failures in the code;
+# the mutants below prove each list goes red on a rewrite (a name both lost and
+# doubled), on a drop, and on an empty extraction, by red/green and not by message.
+# NOT checked: that the surrounding prose is accurate, or that setup-config
+# stays absent from the lists (its own paragraph states that; no gate pins it).
+REQUIRED_PRODUCERS="refresh-skills refresh-sassydog-skills create-dev-workflows"
+CONFIG_SKILL="skills/setup-config/SKILL.md"
+CONFIG_UPDATE="skills/setup-config/references/update-mode.md"
+
+skill_producers() { # skill_producers <SKILL.md> -> one producer name per line
+    awk '
+        /^\*\*Marker recognition accepts every producer name\.\*\*/ { inp = 1 }
+        inp && /^[[:space:]]*$/ { exit }
+        inp { print }
+    ' "$1" | grep -oE '`[a-z][a-z0-9-]*` \(' | tr -d '` ('
+}
+update_producers() { # update_producers <update-mode.md> -> one producer name per line
+    awk '
+        /^## Recognising prior producers[[:space:]]*$/ { ins = 1; next }
+        ins && /^## / { exit }
+        ins { print }
+    ' "$1" | sed -n 's/^- `\([a-z][a-z0-9-]*\)`.*/\1/p'
+}
+
+check_producer_list() { # check_producer_list <label> <names, one per line>  -> 0 when each required producer appears once
+    local label="$1" names="$2" p n good=0
+    if [ -z "$names" ]; then
+        bad "$label — no producer list extracted (the section moved or changed shape; the check would otherwise cover nothing)"
+        return 1
+    fi
+    for p in $REQUIRED_PRODUCERS; do
+        n=$(printf '%s\n' "$names" | grep -cxF "$p")
+        if [ "$n" -eq 0 ]; then
+            bad "$label — does not name '$p' (a repo stamped by that producer would fall through to adopt/create and lose its config)"
+            good=1
+        elif [ "$n" -gt 1 ]; then
+            bad "$label — names '$p' $n times (a mechanical rename collapsed two producers onto one name)"
+            good=1
+        fi
+    done
+    [ "$good" -eq 0 ] && ok "$label — names each required producer exactly once"
+    return "$good"
+}
+
+check_producer_list "setup-config SKILL.md recognizer" "$(skill_producers "$CONFIG_SKILL")"
+check_producer_list "setup-config update-mode.md list" "$(update_producers "$CONFIG_UPDATE")"
+
+# Mutants: the gate must go red on each. Scratch copies of the shipped files with
+# #414's exact rewrite (the middle producer rewritten onto the first), and a pure
+# drop. A mutant that does not change its copy is itself a failure.
+RENAMED_FROM="refresh-sassydog-skills"
+RENAMED_TO="refresh-skills"
+mutant_expect_red() { # mutant_expect_red <label> <extractor> <original> <sed script>
+    local label="$1" extract="$2" orig="$3" script="$4" copy="$WORK/mutant-${5:-m}"
+    sed "$script" "$orig" >"$copy"
+    if cmp -s "$orig" "$copy"; then
+        bad "mutant: $label — did not apply (the list's wording changed; update the mutant)"
+    elif (check_producer_list "mutant $label" "$("$extract" "$copy")") >/dev/null 2>&1; then
+        bad "mutant: $label — the gate stayed green on it"
+    else
+        ok "mutant: $label — caught"
+    fi
+}
+mutant_expect_red "SKILL.md rewrite $RENAMED_FROM -> $RENAMED_TO (issue #414)" skill_producers "$CONFIG_SKILL" "s/\`$RENAMED_FROM\`/\`$RENAMED_TO\`/" skill-rewrite
+mutant_expect_red "update-mode.md rewrite $RENAMED_FROM -> $RENAMED_TO (issue #414)" update_producers "$CONFIG_UPDATE" "s/^- \`$RENAMED_FROM\`/- \`$RENAMED_TO\`/" update-rewrite
+mutant_expect_red "SKILL.md paragraph heading changes (empty extraction)" skill_producers "$CONFIG_SKILL" 's/^\*\*Marker recognition accepts/**Marker recognition takes/' skill-empty
+mutant_expect_red "update-mode.md heading changes (empty extraction)" update_producers "$CONFIG_UPDATE" 's/^## Recognising prior producers/## Prior producers/' update-empty
+mutant_expect_red "update-mode.md drops a producer" update_producers "$CONFIG_UPDATE" '/^- `create-dev-workflows`/d' update-drop
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
