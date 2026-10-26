@@ -2085,8 +2085,8 @@ fi
 
 # --- 4. no legacy skill-name residue -----------------------------------------
 # The whole generator family was renamed to setup-* in issue #120:
-#   create-dev-workflows -> refresh-skills (0.9.0)
-#   refresh-skills -> refresh-skills (2026.7.22)
+#   create-dev-workflows -> refresh-sassydog-skills (0.9.0)
+#   refresh-sassydog-skills -> refresh-skills (2026.7.22)
 #   refresh-skills -> setup-config (issue #121)
 #   refresh-hooks -> setup-hooks (issue #122)
 #   refresh-deps  -> setup-deps  (issue #123)
@@ -2112,8 +2112,9 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
-            # setup-hooks' generated-by ownership matcher, plus the committed consumer artifacts that
-            # PROVE the matcher still accepts this producer name (issue #133 —
+            # setup-hooks' generated-by ownership matcher, plus the committed
+            # consumer artifacts that PROVE the matcher still accepts this
+            # producer name (issue #133 —
             # the fixtures are verbatim upstream bytes; sanitising the name out
             # of them would defeat their entire purpose).
             allow=(
@@ -2129,18 +2130,31 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
-        *)
-            # 'refresh-sassydog-' also appears verbatim inside the committed
-            # consumer hook fixtures (issue #133).
+        create-dev-workflows)
+            # setup-config's marker recognizer and the adopt/update walkthrough
+            # that names the original producer.
             allow=(
-                ':!skills/setup-config/references/update-mode.md'
-                ':!skills/setup-config/references/migrate-mode.md'
                 ':!skills/setup-config/SKILL.md'
+                ':!skills/setup-config/references/update-mode.md'
+                ':!scripts/preflight.sh'
+            ) ;;
+        refresh-sassydog-)
+            # setup-deps' and setup-hooks' ownership matchers, plus the
+            # committed consumer hook fixtures that carry it verbatim
+            # (issue #133).
+            allow=(
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
-                ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
+                ':!scripts/preflight.sh'
             ) ;;
+        *)
+            # Unreachable by construction: every name in the loop list has
+            # its own branch above. Fail loudly rather than guard with an
+            # empty allow list that would flag every file.
+            failed "legacy-name guard — no allow list for '$legacy'"
+            legacy_residue=1
+            continue ;;
     esac
     if git grep -l "$legacy" -- "${allow[@]}"; then
         failed "legacy-name guard — '$legacy' outside the sanctioned back-compat files"
