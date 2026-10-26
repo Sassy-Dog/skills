@@ -1827,7 +1827,7 @@ elif [ "$(flat "$rewrapped")" != "$(flat "$raw_handoff")" ] || [ -n "$(posted_fr
 else ok "a command re-wrapped across two source lines (prose untouched) yields no posted text (#594)"; fi
 # #596: the WHOLE command sits on one physical line, so a re-wrap in the tail or before `--comment` is caught too.
 # Each mutant re-wraps ONLY the command, and each proves it applied before the gate is asserted.
-assert_eq "$(wc -l <<<"$cap_cmd" | tr -d ' ')" '1' "the hand-off bullet carries exactly one whole demotion command on one physical line (#596)"
+assert_eq "$(grep -c . <<<"$cap_cmd" || true)" '1' "the hand-off bullet carries exactly one whole demotion command on one physical line (#596)"
 for m in tail pre; do
     case "$m" in
         tail) rw="$(sed 's/--remove-label blocked --add-label in-progress"/--remove-label\
