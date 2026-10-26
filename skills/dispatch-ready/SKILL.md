@@ -200,9 +200,8 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   spent re-review counted. When that exit `25` is the one the cap refuses (the count is already at
   the cap `take-it` §6 defines), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
   record, confirm the write, then demote the issue ONCE, exactly as the `CONFLICTING` bullet below
-  does: `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review
-  (held head <oid>) — update or rebase by hand, then resume: gh issue edit N --remove-label
-  blocked --add-label in-progress"`. **Mark the demotion confirmed only from a live label read:** after the
+  does, with the command on ONE source line so the posted comment contains exactly `head kept moving after review (held head <oid>)` (single spaces, no newline), the string the resume predicate below matches, and `<oid>` the full 40- or 64-hex oid written to `head_moved_hold`, never a short one:
+  `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review (held head <oid>) — update or rebase by hand, then resume: gh issue edit N --remove-label blocked --add-label in-progress"`. **Mark the demotion confirmed only from a live label read:** after the
   block, re-read the issue's labels, and only when that read shows `blocked` write `demoted=1` into
   the same record (`head_moved_hold=<oid> demoted=1`) and confirm it. **Demote ONCE**: an issue
   already carrying `blocked` gets nothing written (an idempotency predicate, not an attempt
