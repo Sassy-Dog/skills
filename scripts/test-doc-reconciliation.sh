@@ -22,7 +22,7 @@
 #
 # Why all three skills, and why take-it/dispatch-ready are the important half:
 # those dispatch SUB-AGENTS that open their own PRs from a cold worktree. They
-# never see an interactive session's AGENTS.md, so a rule that lives only in
+# never see an interactive session's CLAUDE.md, so a rule that lives only in
 # send-it never runs for them. #220 calls this "the half most likely to be
 # missed" — so the gate treats the three as equals and fails if any one lacks
 # it.

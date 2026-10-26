@@ -3237,14 +3237,14 @@ fi
 
 # --- site 4: AGENTS.md's gate paragraph --------------------------------------
 # Bounded by the NEXT gate's opener, since AGENTS.md's gate list is one line.
-cm_desc="$(awk -v RS='\n' '
+am_desc="$(awk -v RS='\n' '
     { i = index($0, "scripts/test-sentry-verification.sh")
       if (i > 0) { rest = substr($0, i)
                    j = index(rest, "the sentry-counts tests")
                    print (j > 0 ? substr(rest, 1, j) : rest) } }' AGENTS.md)"
-if [ -n "$cm_desc" ]; then
+if [ -n "$am_desc" ]; then
     ok "AGENTS.md's paragraph for this gate resolves"
-    check_files "AGENTS.md's gate paragraph" "$(normalize_278 "$cm_desc")" "tracked files" "$want_278"
+    check_files "AGENTS.md's gate paragraph" "$(normalize_278 "$am_desc")" "tracked files" "$want_278"
 else
     bad "AGENTS.md's paragraph for this gate did not resolve — the check over it would be vacuous"
 fi

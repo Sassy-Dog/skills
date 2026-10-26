@@ -44,7 +44,7 @@ Return ONLY a JSON object `{"findings": [...]}` (no Markdown fences or surroundi
 - Most repos ship a `./run.sh` (interactive menu: `dev`/`test`/`build`) or `./dev` script — flag its absence or a README that doesn't point to it.
 - Package manager/runtime is **Bun** for web; flag npm/pnpm/yarn lockfiles or instructions that contradict Bun.
 - Local web/api ports auto-derive from the shared `3000-3999` worktree range — flag hardcoded port reservations.
-- Expect a root **AGENTS.md** holding the repo's agent guidance, and a **CLAUDE.md** holding only an `@AGENTS.md` import (the org agent-guidance spec). Flag a missing or stale `AGENTS.md`; a `CLAUDE.md` with content of its own; an `AGENTS.md` that only points at `CLAUDE.md`; a second converted copy of the guide (e.g. `claude`→`Codex` text replacement); and a symlink standing in for the import. Commits follow Conventional Commits (`feat:`/`fix:`/`chore:`/`docs:`).
+- Expect a root **AGENTS.md** holding the repo's agent guidance, and a **CLAUDE.md** holding only an `@AGENTS.md` import (the org agent-guidance spec). Flag a missing or stale `AGENTS.md`; a `CLAUDE.md` with content of its own (except that, in diff-scoped mode, editing an unmigrated repo's `CLAUDE.md`, one with no `AGENTS.md`, is the sanctioned fallback and not a regression; the migration itself is out-of-scope debt for a diff review); an `AGENTS.md` that only points at `CLAUDE.md`; a second converted copy of the guide (e.g. `claude`→`Codex` text replacement); and a symlink standing in for the import. Commits follow Conventional Commits (`feat:`/`fix:`/`chore:`/`docs:`).
 
 ## Final instruction: the bare envelope
 

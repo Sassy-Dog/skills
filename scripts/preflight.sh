@@ -371,7 +371,7 @@
 #      a script pretending otherwise reproduces the skimmed-past output of
 #      #199. take-it and dispatch-ready matter most — they dispatch sub-agents
 #      that open PRs from a cold worktree and never see an interactive
-#      session's AGENTS.md, so a rule living only in send-it never runs for
+#      session's CLAUDE.md, so a rule living only in send-it never runs for
 #      them. Pins both traps in both directions (a closed issue does not prove
 #      the behaviour landed; an OPEN one does not prove it did not) and the
 #      scope limiter, since an unbounded doc step is one nobody runs.

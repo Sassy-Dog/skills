@@ -475,7 +475,7 @@ behind in coordinator-only context.
 >    RESULT line.
 >
 > 7. **Reconcile the docs against the repo before you commit.** Re-read the docs describing what
-> you touched — `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`), the relevant `README.md`, anything in `docs/` — and fix every claim
+> you touched — `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`), or a `CLAUDE.md` carrying guidance of its own, the relevant `README.md`, anything in `docs/` — and fix every claim
 > your change just made untrue, in this same PR. A stale doc is a defect in your change, not
 > tidying for later; no other gate reads docs, so a wrong sentence ships silently and stays
 > confident. Scope it to the area you touched plus any claim you happened to disprove — not every

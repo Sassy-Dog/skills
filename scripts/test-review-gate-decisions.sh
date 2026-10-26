@@ -2989,14 +2989,14 @@ fi
 # relocate the window, and the anchor must be unique. The window ends at this
 # gate's own no-network terminator; losing that runs it into the next gate,
 # which the overrun guard below catches.
-claude_anchor='(`scripts/test-review-gate-decisions.sh'
-n_claude_anchor="$(grep -oF -- "$claude_anchor" "$AGENTSMD" | grep -c .)"
-if [ "$n_claude_anchor" -eq 1 ]; then
+agents_anchor='(`scripts/test-review-gate-decisions.sh'
+n_agents_anchor="$(grep -oF -- "$agents_anchor" "$AGENTSMD" | grep -c .)"
+if [ "$n_agents_anchor" -eq 1 ]; then
     ok "AGENTS.md introduces this gate exactly once"
 else
-    bad "AGENTS.md introduces this gate $n_claude_anchor times — the window cannot be anchored"
+    bad "AGENTS.md introduces this gate $n_agents_anchor times — the window cannot be anchored"
 fi
-claude_region="$(normalize_region "$(awk -v a="$claude_anchor" -v t="no network)" '
+agents_region="$(normalize_region "$(awk -v a="$agents_anchor" -v t="no network)" '
     { i = index($0, a)
       if (i > 0) {
           rest = substr($0, i + length(a))
@@ -3004,13 +3004,13 @@ claude_region="$(normalize_region "$(awk -v a="$claude_anchor" -v t="no network)
           if (j > 0) print substr(rest, 1, j - 1)
           exit
       } }' "$AGENTSMD")")"
-if [ -n "$claude_region" ]; then
+if [ -n "$agents_region" ]; then
     ok "located AGENTS.md's gate description, bounded at its own terminator"
     # A terminator that merely MOVED is the mis-scoping boundedness cannot see:
     # the window then runs to the next gate's terminator and measures that
     # gate's counts. Every gate in that sentence is introduced as an open paren
     # before its script path, so a window holding one has overrun.
-    assert_not_in "$claude_region" '\(`scripts/' \
+    assert_not_in "$agents_region" '\(`scripts/' \
         "AGENTS.md window stops before the next gate is introduced"
 else
     bad "AGENTS.md's gate description did not resolve: either its no-network terminator is gone, or the description now spans more than one line and the cut is line-scoped"
@@ -3023,8 +3023,8 @@ else
     check_count "this file's header" "$self_head" "tracked files" "$file_word"
     check_count "preflight's gate entry" "$pf_region" "decisions" "$dec_word"
     check_count "preflight's gate entry" "$pf_region" "tracked files" "$file_word"
-    check_count "AGENTS.md's gate description" "$claude_region" "decisions" "$dec_word"
-    check_count "AGENTS.md's gate description" "$claude_region" "tracked files" "$file_word"
+    check_count "AGENTS.md's gate description" "$agents_region" "decisions" "$dec_word"
+    check_count "AGENTS.md's gate description" "$agents_region" "tracked files" "$file_word"
 fi
 
 if [ "$fails" -ne 0 ]; then
