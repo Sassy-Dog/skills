@@ -200,7 +200,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   spent re-review counted. When that exit `25` is the one the cap refuses (the count is already at
   the cap `take-it` §6 defines), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
   record, confirm the write, then demote the issue ONCE, exactly as the `CONFLICTING` bullet below
-  does, with the command on ONE source line so the posted comment contains exactly `head kept moving after review (held head <oid>)` (single spaces, no newline), the string the resume predicate below matches, and `<oid>` the full 40- or 64-hex oid written to `head_moved_hold`, never a short one:
+  does, with the WHOLE command, from `issue-claim.sh block N --comment "` through the closing `--add-label in-progress"`, written on ONE source line (a wrap anywhere in it breaks the resume a human pastes) so the posted comment contains exactly `head kept moving after review (held head <oid>)` (single spaces, no newline), the string the resume predicate below matches, and `<oid>` the full 40- or 64-hex oid written to `head_moved_hold`, never a short one:
   `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review (held head <oid>) — update or rebase by hand, then resume: gh issue edit N --remove-label blocked --add-label in-progress"`. **Mark the demotion confirmed only from a live label read:** after the
   block, re-read the issue's labels, and only when that read shows `blocked` write `demoted=1` into
   the same record (`head_moved_hold=<oid> demoted=1`) and confirm it. **Demote ONCE**: an issue
@@ -387,9 +387,8 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   naming the PR *and the conflict*: §6's `holds:` line classifies by §7's table, which answers row
   1 (`blocked`) once this bullet has written, so the word `CONFLICTING` reaches the operator only
   if this bullet puts it there. Demote the issue in the same tick — via the board plus a `blocked`
-  label, or `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> is CONFLICTING — needs a
-  rebase this loop may not perform, then resume: gh issue edit N --remove-label blocked
-  --add-label in-progress"`, that
+  label, or the command below, written whole on ONE source line by the hand-off bullet's rule:
+  `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> is CONFLICTING — needs a rebase this loop may not perform, then resume: gh issue edit N --remove-label blocked --add-label in-progress"`, that
   subcommand requiring a comment — so a human resolves the conflict. Name the label in it:
   `promote` never strips `blocked`, so a rebase alone no longer returns the issue to the queue.
   **The resume really returns the issue to in-flight, on a board repo and a boardless one:** `block`
