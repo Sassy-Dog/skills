@@ -33,7 +33,8 @@
 #      '<name>'`) whether it is added LAST (where it would inherit the previous
 #      branch's list) or FIRST (where the list would be unset), reports no false
 #      residue on a clean tree, and the later names are still checked.
-#   7. a `git grep` that cannot run exits 2 with its own message, and a directory
+#   7. (7c: a scan failure followed by residue on a later name still exits 2.)
+#      a `git grep` that cannot run exits 2 with its own message, and a directory
 #      that is not a repo exits 2 with its own message; neither reads as clean.
 #
 # MUTANTS. Each enforcing construct in the checker has one mutant: a copy of the
@@ -48,11 +49,14 @@
 #   a hit does not fail the run .................. scenario 3
 #   note_status is a no-op, and exit is forced 0 . scenario 3
 #   git grep errors read as "no residue" ......... scenario 7
+#   status is last-write-wins, not highest ....... scenario 7c (a failure, then residue)
 #   a non-repo directory is not fatal ............ scenario 7
 #   allow lists collapse (specs ignore them) ..... scenario 5
 #   one name's list gains another name's file .... scenario 4
 #
-# NOT CHECKED HERE, so nothing claims more than it proves: that a name was not
+# NOT CHECKED HERE, so nothing claims more than it proves: the checker's
+# `cd "$root" || fatal` (a repo root that cannot be entered; no case reaches it),
+# that a name was not
 # DELETED from the checker's list (this file reads that list, so it cannot see a
 # name that is gone), that an allow list is minimal (a widened list passes; the
 # diff of check-legacy-names.sh is where that is reviewed), untracked files, and
@@ -82,7 +86,8 @@ bad() { fail=$((fail + 1)); echo "  FAIL $*" >&2; }
 # ---------------------------------------------------------------------------
 SCR="$WORK/tree"
 mkdir "$SCR" || exit 1
-if ! { git -C "$REPO_ROOT" ls-files -z | tar --null -T - -cf - -C "$REPO_ROOT" | tar -xf - -C "$SCR"; }; then
+# No -C on the creating tar: GNU tar rejects -C after the -T operand, BSD tar does not. cd instead.
+if ! { (cd "$REPO_ROOT" && git ls-files -z | tar --null -T - -cf -) | tar -xf - -C "$SCR"; }; then
     bad "scratch tree — copying the tracked files failed; every case below would run on nothing"
     echo "legacy-name tests: FAILURES above" >&2
     exit 1
@@ -294,7 +299,8 @@ scn_unbranched_first() { scn_unbranched "$1" first; }
 
 REAL_GIT="$(command -v git)"
 mkdir "$WORK/stub"
-printf '#!/bin/sh\n[ "$1" = grep ] && { echo "stub git: grep refused" >&2; exit 2; }\nexec "%s" "$@"\n' "$REAL_GIT" >"$WORK/stub/git"
+# STUB_FAIL_NAME, when set, restricts the refusal to a grep for that name.
+printf '#!/bin/sh\nif [ "$1" = grep ]; then case "$*" in *"${STUB_FAIL_NAME:-}"*) echo "stub git: grep refused" >&2; exit 2;; esac; fi\nexec "%s" "$@"\n' "$REAL_GIT" >"$WORK/stub/git"
 chmod +x "$WORK/stub/git"
 
 scn_gitfail() { # 7a. git grep cannot run
@@ -303,6 +309,19 @@ scn_gitfail() { # 7a. git grep cannot run
     RC=$?
     [ "$RC" = 2 ] || why "exit $RC when git grep fails, wanted 2"
     out_has "git grep failed" || why "no 'git grep failed' message"
+    [ -z "$REASON" ]
+}
+
+scn_failthenhit() { # 7c. a scan failure followed by residue on a later name: the failure wins
+    REASON=""
+    local failing="${NAMES[0]}" later="${NAMES[$((${#NAMES[@]} - 1))]}"
+    append "$PROBE" "$later"
+    OUT=$(cd "$SCR" && STUB_FAIL_NAME="$failing" PATH="$WORK/stub:$PATH" bash "$1" 2>&1)
+    RC=$?
+    restore
+    [ "$RC" = 2 ] || why "exit $RC for a scan failure followed by residue, wanted 2 (the highest status wins)"
+    out_has "git grep failed" || why "no 'git grep failed' message"
+    out_has "'$later' outside the sanctioned back-compat files" || why "'$later' residue after the failure was not reported"
     [ -z "$REASON" ]
 }
 
@@ -326,6 +345,7 @@ check_scn "5. every name in its own sanctioned files stays green" scn_sanctioned
 check_scn "6a. an unbranched name added last hits the default arm; earlier names still checked" scn_unbranched_last
 check_scn "6b. an unbranched name added first hits the default arm; later names still checked" scn_unbranched_first
 check_scn "7a. a git grep that cannot run exits 2, never clean" scn_gitfail
+check_scn "7c. a scan failure then later residue exits 2 (highest status wins)" scn_failthenhit
 check_scn "7b. a directory that is not a repo exits 2, never clean" scn_nonrepo
 
 # ---------------------------------------------------------------------------
@@ -365,6 +385,8 @@ mutant "exit status forced to 0" scn_hit \
     's|^exit "\$status"|exit 0|'
 mutant "git grep errors read as no residue" scn_gitfail \
     's|^        1) : ;;|        [1-9]*) : ;;|'
+mutant "status is last-write-wins, not highest" scn_failthenhit \
+    's|^note_status() {.*|note_status() { status="$1"; return 0; }|'
 mutant "a non-repo directory is not fatal" scn_nonrepo \
     's/|| fatal "not inside/|| : "not inside/'
 mutant "allow lists collapse to the checker" scn_sanctioned \

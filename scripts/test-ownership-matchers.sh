@@ -12,7 +12,8 @@
 # it silently stops reconciling generated files in every consumer repo, and
 # the first symptom is a repo that quietly stopped receiving updates.
 #
-# Two properties are asserted, and both are load-bearing:
+# Three properties are asserted, and all are load-bearing (the third, setup-config's
+# producer lists, is described in the last section below):
 #
 #   1. The regexes are EXTRACTED from the shipped SKILL.md files at run time.
 #      A test carrying its own transcription would prove only that the copy
@@ -207,7 +208,9 @@ fi
 # list must name each required producer EXACTLY once. A name missing, a name
 # twice and a list that extracts empty are three separate failures in the code;
 # the mutants below prove each list goes red on a rewrite (a name both lost and
-# doubled), on a drop, and on an empty extraction, by red/green and not by message.
+# doubled), on a pure drop, on a pure duplicate and on an empty extraction, by
+# red/green and not by message; the pure drop and pure duplicate mutants each reach
+# only their own branch (checked once by neutering that branch, not committed).
 # NOT checked: that the surrounding prose is accurate, or that setup-config
 # stays absent from the lists (its own paragraph states that; no gate pins it).
 REQUIRED_PRODUCERS="refresh-skills refresh-sassydog-skills create-dev-workflows"
@@ -272,6 +275,9 @@ mutant_expect_red "SKILL.md rewrite $RENAMED_FROM -> $RENAMED_TO (issue #414)" s
 mutant_expect_red "update-mode.md rewrite $RENAMED_FROM -> $RENAMED_TO (issue #414)" update_producers "$CONFIG_UPDATE" "s/^- \`$RENAMED_FROM\`/- \`$RENAMED_TO\`/" update-rewrite
 mutant_expect_red "SKILL.md paragraph heading changes (empty extraction)" skill_producers "$CONFIG_SKILL" 's/^\*\*Marker recognition accepts/**Marker recognition takes/' skill-empty
 mutant_expect_red "update-mode.md heading changes (empty extraction)" update_producers "$CONFIG_UPDATE" 's/^## Recognising prior producers/## Prior producers/' update-empty
+mutant_expect_red "SKILL.md drops a producer (renamed to a non-producer, nothing doubled)" skill_producers "$CONFIG_SKILL" 's/`create-dev-workflows` (/`not-a-producer` (/' skill-drop
+mutant_expect_red "SKILL.md names a producer twice (nothing dropped)" skill_producers "$CONFIG_SKILL" 's/`create-dev-workflows` (/`refresh-skills` (x), `create-dev-workflows` (/' skill-dup
+mutant_expect_red "update-mode.md names a producer twice (nothing dropped)" update_producers "$CONFIG_UPDATE" '/^- `create-dev-workflows`/p' update-dup
 mutant_expect_red "update-mode.md drops a producer" update_producers "$CONFIG_UPDATE" '/^- `create-dev-workflows`/d' update-drop
 
 # ------------------------------------------------------------------------------

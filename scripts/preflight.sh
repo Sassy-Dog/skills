@@ -1680,6 +1680,10 @@
 #      WORKTREE (whose pin `claude plugin update` cannot move, #590), the dry run
 #      and its separate worktree count, `--apply` with its backup and prune, and a
 #      surviving stale copy; a mutant per construct. No gh, no network.
+#  64. legacy-name tests (scripts/test-legacy-names.sh) — scripts/check-legacy-names.sh
+#      executed over scratch copies of the tracked tree: per-name allow lists, the
+#      unbranched-name default arm, fail-closed scans; a mutant per construct.
+#      No gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh) and the summary lists each failed one. Exit 0 = all pass,
