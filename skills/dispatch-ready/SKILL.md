@@ -201,8 +201,8 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   the cap `take-it` §6 defines), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
   record, confirm the write, then demote the issue ONCE, exactly as the `CONFLICTING` bullet below
   does: `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review
-  (held head <oid>) — update or rebase by hand, then resume: remove the blocked label and run
-  issue-claim.sh claim N"`. **Mark the demotion confirmed only from a live label read:** after the
+  (held head <oid>) — update or rebase by hand, then resume: gh issue edit N --remove-label
+  blocked --add-label in-progress"`. **Mark the demotion confirmed only from a live label read:** after the
   block, re-read the issue's labels, and only when that read shows `blocked` write `demoted=1` into
   the same record (`head_moved_hold=<oid> demoted=1`) and confirm it. **Demote ONCE**: an issue
   already carrying `blocked` gets nothing written (an idempotency predicate, not an attempt
@@ -241,7 +241,12 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   these PRs, so they are never handed to `sassy-dog:pr-shepherd` — they are read so **§7 can see
   them**. A human-gated PR that nobody enumerated is not a smaller version of the §7 gap, it is a
   worse one: it leaves §7's held set empty, and an empty held set admits DRAIN COMPLETE, so the
-  loop self-cancels with the PR still open (#282).
+  loop self-cancels with the PR still open (#282). **This bullet also repairs a missing `demoted=1`,
+  every tick it lists the PR:** a `head_moved_hold` record without `demoted=1` on an issue that
+  still carries `blocked` gets `demoted=1` written and confirmed in that record. Only the demotion
+  tick could otherwise write it, and a tick that confirmed `blocked` and then died leaves a record
+  the not-yet-reviewed bullet (in-flight issues only) never sees again, so a later real resume would
+  read as a demotion still owed and be re-blocked.
 - **Failed or red PRs** → surface in the tick report with the failing check named, and comment
   `dispatch-ready: attempt 1 failed — <check>: <one-line cause>` on the issue. ONE redispatch with the
   failure context appended is allowed on a later tick. A second failure demotes to blocked — via
@@ -375,16 +380,18 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   1 (`blocked`) once this bullet has written, so the word `CONFLICTING` reaches the operator only
   if this bullet puts it there. Demote the issue in the same tick — via the board plus a `blocked`
   label, or `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> is CONFLICTING — needs a
-  rebase this loop may not perform, then resume: remove the blocked label and run issue-claim.sh
-  claim N"`, that
+  rebase this loop may not perform, then resume: gh issue edit N --remove-label blocked
+  --add-label in-progress"`, that
   subcommand requiring a comment — so a human resolves the conflict. Name the label in it:
   `promote` never strips `blocked`, so a rebase alone no longer returns the issue to the queue.
   **The resume really returns the issue to in-flight, on a board repo and a boardless one:** `block`
   stripped `in-progress` and left the assignee and any card, and in-flight is `in-progress` (or the
   card) with assignee @me and not `blocked` (§3, `queue-snapshot.sh`'s `in_flight`), so clearing
-  `blocked` alone orphans the open PR. The resume is `gh issue edit N --remove-label blocked`, then
-  `issue-claim.sh claim N` (re-adds `in-progress`, the label a boardless repo reads and a board
-  repo's card already carries); say exactly that in both demotion comments. **Demote ONCE**: skip an issue that already carries `blocked` and write nothing, leaving it to
+  `blocked` alone orphans the open PR. The resume is the one command `gh issue edit N --remove-label blocked --add-label in-progress`
+  (re-adds `in-progress`, the label a boardless repo reads and a board repo's card already
+  carries). Not `issue-claim.sh claim N`: that script lives in the plugin cache, not on an
+  operator's PATH, and `claim`'s double-pick guard skips an issue assigned to a login other than the
+  operator's, while `block` keeps the assignee. Say exactly that command in both demotion comments. **Demote ONCE**: skip an issue that already carries `blocked` and write nothing, leaving it to
   the blocked-PR bullet above. That is an idempotency predicate, not an attempt
   counter — it asks whether the demotion has been *written*, never how many times the PR has
   failed — and without it this bullet re-fires every tick against a PR that stays `CONFLICTING`

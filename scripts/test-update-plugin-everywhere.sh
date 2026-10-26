@@ -21,7 +21,9 @@
 # the user entry. `claude` is a PATH stub that logs "<cwd> <args>" and prints
 # the sort of line the real one does; nothing here reaches the network, the real
 # ~/.claude, or this checkout (every git call targets a scratch directory, and
-# GIT_* environment is cleared).
+# the script's own probe and this test's scratch git both run with GIT_DIR,
+# GIT_COMMON_DIR, GIT_WORK_TREE and GIT_INDEX_FILE removed; only `run`'s deliberate GIT_DIR case
+# below exports one).
 #
 # Mutants: each changes one construct in a COPY of the script and the same suite
 # must then fail, so a case that cannot see its construct is reported as vacuous.
@@ -79,6 +81,8 @@ build() { # <home dir>
     sgit -C "$repos/sub-src" init -q
     sgit -C "$repos/sub-src" commit -q --allow-empty -m init
     sgit -C "$repos/main" -c protocol.file.allow=always submodule add -q "$repos/sub-src" sub >/dev/null 2>&1
+    # a failed fixture build would silently turn the submodule cases into "no such path"
+    [ -e "$repos/main/sub/.git" ] || { echo "test-update-plugin-everywhere: fixture submodule was not created" >&2; exit 1; }
     jq -n --arg p "$PLUGIN" --arg r "$repos" --arg c "$cache" '
       {version:2, plugins:{($p):[
         {scope:"user", version:"2026.10.101", installPath:($c+"/cur")},
@@ -103,12 +107,13 @@ STUB
 OUT=""; RC=0
 run() { # <script> <home> [args…]
     local sc="$1" h="$2"; shift 2
-    OUT="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE HOME="$h" PATH="$h/bin:$PATH" STUB_CALLS="$h/calls" \
+    OUT="$(env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE ${RUN_ENV:-} HOME="$h" PATH="$h/bin:$PATH" STUB_CALLS="$h/calls" \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null bash "$sc" "$@" 2>&1)"
     RC=$?
 }
 
 FAILED=""
+rc_is() { if [ "$RC" = "$1" ]; then echo 0; else echo 1; fi; }  # status of the last run, as expect's 0/1
 expect() { # <label> <condition rc: 0 holds>
     [ "$2" = 0 ] || FAILED="$FAILED|$1"
 }
@@ -123,11 +128,12 @@ suite() { # <script>
     # --- dry run: reports, counts the worktree pin on its own, changes nothing --
     cp "$h/.claude/plugins/installed_plugins.json" "$h/orig.json"
     run "$sc" "$h"
-    expect "dry run: exit 0" "$([ "$RC" = 0 ]; echo $?)"
+    expect "dry run: exit 0" "$(rc_is 0)"
     expect "dry run: the table marks the linked worktree WORKTREE" "$(grep -qE "^project +2026.10.52 +WORKTREE +$repos/wt\$" <<<"$OUT"; echo $?)"
     expect "dry run: the table marks the missing path DEAD" "$(grep -qE "^project +2026.9.4 +DEAD +$repos/gone\$" <<<"$OUT"; echo $?)"
+    rows="$(grep -E "^project .*($repos/main|$repos/main/sub)\$" <<<"$OUT")"
     expect "dry run: the normal checkout and the submodule are compared by content, not marked" \
-        "$(grep -E "^project .*($repos/main|$repos/main/sub)\$" <<<"$OUT" | grep -qE 'current' && ! grep -E "^project .*($repos/main|$repos/main/sub)\$" <<<"$OUT" | grep -qE 'WORKTREE|DEAD'; echo $?)"
+        "$(if grep -qE 'current' <<<"$rows" && ! grep -qE 'WORKTREE|DEAD' <<<"$rows"; then echo 0; else echo 1; fi)"
     expect "dry run: reports 2 live (main, submodule), 1 dead, 1 linked-worktree pin separately" \
         "$(has "would update user scope + 2 live project scope(s), prune 1 dead entr(y|ies) and 1 linked-worktree pin(s)"; echo $?)"
     expect "dry run: the registry is untouched" "$(cmp -s "$h/orig.json" "$h/.claude/plugins/installed_plugins.json"; echo $?)"
@@ -137,16 +143,16 @@ suite() { # <script>
     # --- apply ---------------------------------------------------------------
     : >"$h/calls"
     run "$sc" "$h" --apply
-    expect "apply: exit 0, every surviving copy current" "$([ "$RC" = 0 ]; echo $?)"
+    expect "apply: exit 0, every surviving copy current" "$(rc_is 0)"
     expect "apply: a timestamped backup equal to the original exists" \
         "$(b="$(ls "$h"/.claude/plugins/installed_plugins.json.bak-* 2>/dev/null | head -1)"; [ -n "$b" ] && cmp -s "$b" "$h/orig.json"; echo $?)"
     expect "apply: the linked-worktree pin is pruned and reported as a worktree pin" \
         "$(has "removed worktree pin: $repos/wt (2026.10.52)"; echo $?)"
     expect "apply: the dead entry is pruned and reported" "$(has "removed: $repos/gone (2026.9.4)"; echo $?)"
     expect "apply: the registry keeps exactly the normal checkout and the submodule" \
-        "$([ "$(registry_paths "$h")" = "$(printf '%s\n%s' "$repos/main" "$repos/main/sub" | sort)" ]; echo $?)"
+        "$(if [ "$(registry_paths "$h")" = "$(printf '%s\n%s' "$repos/main" "$repos/main/sub" | sort)" ]; then echo 0; else echo 1; fi)"
     expect "apply: the user entry survives" \
-        "$([ "$(jq -r --arg p "$PLUGIN" '[.plugins[$p][] | select(.scope=="user")] | length' "$h/.claude/plugins/installed_plugins.json")" = 1 ]; echo $?)"
+        "$(if [ "$(jq -r --arg p "$PLUGIN" '[.plugins[$p][] | select(.scope=="user")] | length' "$h/.claude/plugins/installed_plugins.json")" = 1 ]; then echo 0; else echo 1; fi)"
     expect "apply: user scope was updated" "$(grep -q 'plugin update sassy-dog@skills --scope user' "$h/calls"; echo $?)"
     expect "apply: the normal checkout was updated from inside it" \
         "$(grep -qF "$repos/main plugin update sassy-dog@skills --scope project" "$h/calls"; echo $?)"
@@ -156,11 +162,29 @@ suite() { # <script>
     expect "apply: no update ran at the dead path" "$(! grep -qF "$repos/gone plugin update" "$h/calls"; echo $?)"
     expect "apply: the closing restart notice is printed" "$(has "RESTART REQUIRED"; echo $?)"
 
+    # --- an exported GIT_DIR / GIT_COMMON_DIR must not change which pins are worktrees ---------
+    # (the script's probe runs with them removed; otherwise every path would share one git dir)
+    hx="$WORK/hx-$RANDOM"
+    for kind in gitdir-wt gitdir-main commondir-main; do
+        build "$hx"
+        case "$kind" in
+            gitdir-wt) RUN_ENV="GIT_DIR=$hx/repos/wt/.git" ;;
+            gitdir-main) RUN_ENV="GIT_DIR=$hx/repos/main/.git" ;;
+            commondir-main) RUN_ENV="GIT_COMMON_DIR=$hx/repos/main/.git" ;;
+        esac
+        RUN_ENV="$RUN_ENV" run "$sc" "$hx" --apply
+        unset RUN_ENV
+        kept="$(registry_paths "$hx")"
+        expect "exported $kind: apply still keeps the normal checkout"             "$(if grep -qxF "$hx/repos/main" <<<"$kept"; then echo 0; else echo 1; fi)"
+        expect "exported $kind: apply still prunes the worktree pin"             "$(if grep -qxF "$hx/repos/wt" <<<"$kept"; then echo 1; else echo 0; fi)"
+        rm -rf "$hx"
+    done
+
     # --- a stale surviving copy still fails the run, by content ----------------
     jq --arg p "$PLUGIN" --arg c "$h/cache" '.plugins[$p] += [{scope:"project", projectPath:"'"$repos"'/main", version:"2026.10.101", installPath:($c+"/old")}]' \
         "$h/.claude/plugins/installed_plugins.json" >"$h/stale.json" && cp "$h/stale.json" "$h/.claude/plugins/installed_plugins.json"
     run "$sc" "$h" --apply
-    expect "a surviving stale copy still exits 1" "$([ "$RC" = 1 ]; echo $?)"
+    expect "a surviving stale copy still exits 1" "$(rc_is 1)"
 }
 
 suite "$SCRIPT"
@@ -186,6 +210,7 @@ open(p, "w").write(s.replace(old, new))
     if [ -n "$FAILED" ]; then ok "mutant '$label' fails the suite"
     else bad "mutant '$label' passes the suite — its case is vacuous"; fi
 }
+mutant probe-inherits-git-env 'probe_git() { env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }' 'probe_git() { git "$@"; }'
 mutant worktree-never-detected '    [ "$gd" != "$cd_" ]' '    false'
 mutant submodule-counted-as-worktree '    [ "$gd" != "$cd_" ]' '    [ -f "$p/.git" ]'
 mutant worktree-still-updated '[ "$(project_kind "$ppath")" = live ] || continue' '[ -d "$ppath" ] || continue'

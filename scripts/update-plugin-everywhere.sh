@@ -99,10 +99,16 @@ entries() {  # scope \t version \t projectPath \t installPath, one per line
     ' "$REGISTRY"
 }
 
+# The probe must not inherit the caller's repository selection: an exported GIT_DIR
+# (a hook, a wrapper) would make every path report the same git dir, so no pin would
+# look like a worktree, or, with GIT_COMMON_DIR set, every one would, and --apply
+# would prune them all.
+probe_git() { env -u GIT_DIR -u GIT_COMMON_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+
 is_linked_worktree() {  # $1 = project path -> 0 when it is a linked git worktree
     local p="$1" gd cd_
-    gd="$(git -C "$p" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
-    cd_="$(git -C "$p" rev-parse --git-common-dir 2>/dev/null)" || return 1
+    gd="$(probe_git -C "$p" rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+    cd_="$(probe_git -C "$p" rev-parse --git-common-dir 2>/dev/null)" || return 1
     case "$cd_" in /*) ;; *) cd_="$p/$cd_" ;; esac
     gd="$(cd "$gd" 2>/dev/null && pwd -P)" || return 1
     cd_="$(cd "$cd_" 2>/dev/null && pwd -P)" || return 1

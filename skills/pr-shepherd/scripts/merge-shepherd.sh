@@ -45,7 +45,10 @@
 #   retries the bound enqueue (a mutation that keeps failing stalls at 11
 #   rather than merging: fail closed). That stall prints the stable stdout line
 #   `BOUND ENQUEUE FAILED — <cause>` (exit 11 unchanged), so it is not
-#   indistinguishable from "checks pending" (#590). Without the flag nothing changes. The --direct staleness update
+#   indistinguishable from "checks pending" (#590). The line is PER PASS: this
+#   script is stateless, so a mutation that succeeded but whose queue entry lagged
+#   past the confirm sleep prints it too; a caller treats one as re-run and two
+#   consecutive ones as a stall. Without the flag nothing changes. The --direct staleness update
 #   is unbound under `gh pr update-branch`, so a bound run uses REST
 #   PUT pulls/{pr}/update-branch with expected_head_sha instead: success is exit
 #   25 saying the head moved BY DESIGN (the update is a merge commit; the caller
@@ -65,7 +68,9 @@
 #   MERGE_SHEPHERD_UPDATE_WAIT  seconds a bound --direct staleness update waits for the
 #                    PR head to move after the REST update returns (default 60; the update
 #                    is asynchronous, #590). MERGE_SHEPHERD_UPDATE_POLL is the interval
-#                    between head reads (default 5). Tests set them to 0.
+#                    between head reads (default 5, at least 1 whenever the wait is above 0).
+#                    Whole seconds; a leading zero is read as decimal. The wait is clamped to
+#                    the time left in a --watch budget. Bad values exit 1 before any PUT.
 #   DEFAULT_BRANCH   reconcile target (default: origin/HEAD, fallback "main")
 #                    — same contract as teardown.sh
 #   ISOLATION_BRANCH_PREFIX   prefix of the Agent runtime's isolation branches
@@ -152,6 +157,11 @@ STACK_PROBE="$SCRIPT_DIR/stack-probe.sh"
 REPO=""; PR=""; WT=""; WATCH=0; POLL=30; DIRECT=0; ALLOW_NO_CHECKS=0; EXPECTED_HEAD=""; EXPECTED_HEAD_SET=0
 UPDATE_WAIT="${MERGE_SHEPHERD_UPDATE_WAIT:-60}"; UPDATE_POLL="${MERGE_SHEPHERD_UPDATE_POLL:-5}"
 case "$UPDATE_WAIT$UPDATE_POLL" in *[!0-9]*|"") echo "MERGE_SHEPHERD_UPDATE_WAIT/POLL must be whole seconds" >&2; exit 1 ;; esac
+# Base 10 explicitly: a leading zero ("08") is invalid octal to bash arithmetic.
+UPDATE_WAIT=$((10#$UPDATE_WAIT)); UPDATE_POLL=$((10#$UPDATE_POLL))
+if [ "$UPDATE_WAIT" -gt 0 ] && [ "$UPDATE_POLL" -lt 1 ]; then
+  echo "MERGE_SHEPHERD_UPDATE_POLL must be at least 1 when MERGE_SHEPHERD_UPDATE_WAIT is above 0" >&2; exit 1
+fi
 while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
@@ -250,8 +260,15 @@ enqueue() {
                 mergeQueueEntry{ position state }}}' \
         -f prid="$prid" -f eho="$EXPECTED_HEAD" >/dev/null && return 0
       # A refusal because the head moved is exit 25, and no fallback is tried.
-      head_moved && return 25
-      ENQ_CAUSE="the enqueue mutation was refused or errored and the head is unchanged"
+      # Read the head ONCE: "unchanged" is claimed only on a successful read that matched.
+      refused_head="$(pr_head)"
+      if [ -z "$refused_head" ]; then
+        ENQ_CAUSE="the enqueue mutation was refused or errored and the head could not be re-read"
+      elif [ "$refused_head" != "$EXPECTED_HEAD" ]; then
+        return 25
+      else
+        ENQ_CAUSE="the enqueue mutation was refused or errored and the head is unchanged"
+      fi
     elif bash "$GH_RETRY" -- api graphql \
          -f query='mutation($prid:ID!){
              enqueuePullRequest(input:{pullRequestId:$prid}){
@@ -498,6 +515,8 @@ advance() { # one idempotent step against live state
             # exit 25 only once the head has actually moved, or the re-review would cover the
             # old head and the next hand-off would get a second 25.
             upd_until=$((SECONDS + UPDATE_WAIT)); new_head=""
+            # Under --watch the wait never outlives the watch budget (the loop below owns it).
+            [ "$WATCH" -gt 0 ] && [ "$upd_until" -gt "$deadline" ] && upd_until="$deadline"
             while :; do
               new_head="$(pr_head)"
               [ -n "$new_head" ] && [ "$new_head" != "$EXPECTED_HEAD" ] && break

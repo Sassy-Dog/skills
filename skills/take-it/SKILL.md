@@ -749,12 +749,18 @@ merged unreviewed. That commit is the head the main review covered; after a roll
 delta review covered; and on a step 7 release with no new commit, the cap record's `reviewed_head`.
 Pass nothing when no review ran (`review_agent: skip`) or under `review_site: agent`, where the
 coordinator holds no reviewed head. Exit `25` means the head moved: it is not a failure and spends
-no recovery. An exit `11` whose stdout carries `BOUND ENQUEUE FAILED — <cause>` is not "checks
-pending": a bound enqueue GitHub keeps refusing, with the head unchanged and no `--auto` fallback.
-It needs a human (check the cause, confirm the head is still the reviewed one, enqueue or merge by
-hand), so report it by name and hold the PR; do not demote and do not count it as a re-review. Re-review the new head (the **Delta base rule** above when a cap record exists,
+no recovery. Re-review the new head (the **Delta base rule** above when a cap record exists,
 otherwise a full review against the derived default branch), then hand the PR off again with the
 head that review covered. A moved head that review finds Blocking takes the existing Blocking path.
+
+An exit `11` whose stdout carries `BOUND ENQUEUE FAILED — <cause>` is not "checks pending": the
+bound enqueue was refused *this pass*, after `gh-retry`, with no `--auto` fallback. The script is
+stateless and prints the line on every failed pass, including after a mutation that succeeded while
+`isInMergeQueue` lagged past its confirm sleep, so one line is not yet a stall. Re-run the bound
+hand-off once (exit `11` already means re-run); only when the line appears on **two consecutive
+passes** does it need a human (check the cause, confirm the head is still the reviewed one, enqueue
+or merge by hand). Then report it by name and hold the PR; do not demote and do not count it as a
+re-review.
 
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
