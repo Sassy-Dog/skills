@@ -36,7 +36,7 @@ bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/gh-retry.sh" -- api graphql \
   -f prid="$PRID"
 ```
 
-(`scripts/merge-shepherd.sh` scripts this whole regime — gate, enqueue via the mutation, confirm, teardown — as one stateless, re-runnable step, dropping to `gh pr merge --auto` only when the mutation errors; the commands here are the underlying mechanics and the one-off/manual path.)
+(`scripts/merge-shepherd.sh` scripts this whole regime — gate, enqueue via the mutation, confirm, teardown — as one stateless, re-runnable step, dropping to `gh pr merge --auto` only when the mutation errors and never under `--expected-head` (see the `merge-shepherd.sh` paragraph in `SKILL.md`); the commands here are the underlying mechanics and the one-off/manual path.)
 
 ### The manual/fallback CLI path and its method-flag trap (cost a stuck canary in production use)
 

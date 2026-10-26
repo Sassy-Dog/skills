@@ -1093,9 +1093,50 @@ mutant_pin "$rollin_take" 'Bind the merge to the reviewed head \(the one definit
 mutant_pin "$rollin_take" 'on a step 7 release with no new commit, the cap record.s .reviewed_head.' \
     's/no new commit, the cap record.s .reviewed_head.//' \
     "take-it binds a no-commit roll-in release to reviewed_head"
-mutant_pin "$rollin_take" 'Exit .25. means the head moved: it is not a failure, spends no recovery' \
+mutant_pin "$rollin_take" 'Exit .25. means the head moved: it is not a failure and spends.no recovery' \
     's/spends no recovery//' \
     "take-it: exit 25 re-reviews and spends no recovery"
+# #587: the exit-25 re-review cycle is capped, once, in take-it §6; dispatch-ready points at it and keeps
+# the count in the per-attempt record beside reviewed_head.
+mutant_pin "$rollin_take" 'Cap on head-moved re-reviews \(the one definition' \
+    's/Cap on head-moved re-reviews//' \
+    "take-it defines the cap on head-moved re-reviews once"
+mutant_pin "$rollin_take" 'At most .*two.* re-reviews per attempt are spent on exit' \
+    's/re-reviews per attempt are spent//' \
+    "take-it caps exit-25 re-reviews at two per attempt"
+mutant_pin "$rollin_take" 'A third exit .25. holds the PR with .*no further review' \
+    's/A third exit .25. holds the PR//' \
+    "take-it: a third exit 25 holds the PR without another review"
+mutant_pin "$rollin_take" 'head kept moving after review.. The hold spends no recovery and writes no reservation. It.splits by coordinator' \
+    's/splits by coordinator//' \
+    "take-it names the cause and the hold is not blocked and spends no recovery"
+mutant_pin "$rollin_take" 'bound to the active.`attempt_id`' \
+    's/bound to the active//' \
+    "take-it binds head_moved_reviews to the active attempt_id"
+mutant_pin "$rollin_take" 'a fresh invocation ignores any .head_moved_reviews=<n>. already in the PR body' \
+    's/a fresh invocation ignores any//' \
+    "take-it never takes its head-moved count from the PR-body mirror"
+mutant_pin "$rollin_take" 'where that record is durable' \
+    's/where that record is durable//' \
+    "take-it binds the count to attempt_id only where the record is durable"
+mutant_pin "$takeit_flat" 'a PR given.*--expected-head is never given gh pr merge --auto' \
+    's/is never given//' \
+    "take-it hand-off never gives a bound PR gh pr merge --auto"
+mutant_pin "$rollin_take" 'dispatch-ready.\s*demotes the issue once to .blocked.' \
+    's/demotes the issue once to//' \
+    "take-it: dispatch-ready demotes once to blocked, take-it only holds"
+mutant_pin "$rollin_take" 'the hold ends with the batch' \
+    's/the hold ends with the batch//' \
+    "take-it: its own hold ends with the batch"
+mutant_pin "$rollin_take" 'a head the operator moved restores the budget' \
+    's/a head the operator moved restores the budget//' \
+    "take-it: a head the operator moved restores the re-review budget"
+mutant_pin "$dispatch_flat" 'keeps that count as .head_moved_reviews=<n>. in the same record as .reviewed_head.' \
+    's/in the same record as//' \
+    "dispatch-ready keeps head_moved_reviews beside reviewed_head in the verified record"
+mutant_pin "$dispatch_flat" 'an unreadable or unverifiable one is a hold' \
+    's/an unreadable or unverifiable one is a hold//' \
+    "dispatch-ready holds the PR when the head_moved_reviews count is unreadable"
 mutant_pin "$dispatch_flat" 'treat exit .25. \(the head moved\) as .take-it. §6.s \*\*Bind the merge to the reviewed head\*\* defines both' \
     's/Bind the merge to the reviewed head//' \
     "dispatch-ready passes the reviewed head and points at take-it for exit 25"

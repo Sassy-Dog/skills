@@ -190,10 +190,24 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   **Bind each hand-off to the head its review covered**: pass this loop's recorded `reviewed_head`
   (see the not-yet-reviewed bullet below) as `--expected-head` on every hand-off, including a later
   tick's re-run after exit `11`, and treat exit `25` (the head moved) as `take-it` §6's **Bind the
-  merge to the reviewed head** defines both. Where this loop reviewed (not under `review_agent:
+  merge to the reviewed head** defines both, with the cap on re-reviews in **Cap on head-moved
+  re-reviews** beside it. A tick keeps that count as `head_moved_reviews=<n>` in the same
+  record as `reviewed_head`, mirrored in the PR body and read back author-checked and
+  bound to the active `attempt_id`; an absent count is `0`, and an unreadable or unverifiable one
+  is a hold. **On the tick that sees exit `25`, write the incremented count to that record and
+  confirm the write BEFORE dispatching the re-review**, so a tick that dies in between leaves the
+  spent re-review counted. When that exit `25` is the one the cap refuses (take-it §6: the count is
+  already two), dispatch no review: write `head_moved_hold=<full oid of the held head>` to that
+  record, confirm the write, then demote the issue ONCE, exactly as the `CONFLICTING` bullet below
+  does: `issue-claim.sh block N --comment "dispatch-ready: PR #<pr> head kept moving after review
+  (held head <oid>) — update or rebase by hand, then clear the blocked label to resume the drain"`.
+  **Demote ONCE**: an issue already carrying `blocked` gets nothing written (an idempotency
+  predicate, not an attempt counter). **If the demotion write fails**, say so in the tick report and
+  treat the issue as still in-flight this tick. The marker is its own explicit state, never readable
+  as "re-review owed"; once `blocked`, the blocked-PR bullet and §7's row 1 already hold the PR. Where this loop reviewed (not under `review_agent:
   skip` or `review_site: agent`, which pass no head), never hand a PR off unbound: no matching
   record means the PR is not reviewed. A moved head is not a failure and spends no recovery; this section's
-  "Reviewed" rule re-reviews it next tick. **Keep the issue → open-PR mapping this step produces** — §4's Collision
+  "Reviewed" rule re-reviews it next tick, up to that cap. **Keep the issue → open-PR mapping this step produces** — §4's Collision
   filter reads those PRs' actual changed files, and re-deriving the mapping there costs a second
   round of lookups.
 - **Open PRs on blocked issues** → resolve these too, and hand them to nobody. **With `board:`**
@@ -247,7 +261,12 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   `reviewed_head`, which stays the delta base; a delta review rewrites this one to the head it
   covered), mirrored in the PR body and read back author-checked and bound to the active
   `attempt_id`, exactly like `recovery_used`. A record that is absent, or does not match the current
-  head, means not reviewed: review it, and never hand it off unbound. A record that cannot be read
+  head, means not reviewed: review it, and never hand it off unbound. **Check the cap first:** a
+  record carrying `head_moved_hold` on an issue that still carries `blocked` is held, neither
+  reviewed nor handed off. The same record on an issue that no longer carries `blocked` means a
+  human resumed it: clear the marker and reset `head_moved_reviews` to `0`, written and confirmed in
+  the verified record before anything else, then follow this rule as normal (a head that does not
+  match `reviewed_head` is reviewed in full). A record that cannot be read
   holds the PR this tick (a head that moved
   only by a Nit roll-in, as `take-it` §6's **Delta base rule** decides, is the delta case two
   bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
@@ -269,8 +288,9 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   resetting the budget. Refresh a stale plan before the batch within the same reserved round;
   an aggregate-only response cannot authorize a second batch. Custom agents retain their existing
   contract. Never change `review_site` or escalate through ancestors. Persist the outcome,
-  `reviewed_head=<full oid of the head it covered>` and `recovery_used` in the PR body and issue
-  comment, and hand only reviewed PRs to
+  `reviewed_head=<full oid of the head it covered>`, `head_moved_reviews` (and `head_moved_hold`
+  when set) and `recovery_used` in the PR body and issue comment; a delta-review rewrite carries
+  the count and the hold forward unchanged, never resetting the cap. Hand only reviewed PRs to
   `sassy-dog:pr-shepherd` this tick. A PR whose review
   could not run at all — no agent resolved, or the dispatch failed — reports
   `review: SKIPPED — no review_agent resolved (lint/type/test only)` with the cause (the dispatch
