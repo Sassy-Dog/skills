@@ -364,7 +364,7 @@ def strip_html_comments(text):
     "We use `<!--` rule markers here." then "Fixed in #451 and #452." then
     "flow: A --> B" reported NO refs, with comment_strip_refused 0 and nothing
     on stderr — under 2000 chars and free of a nested opener, so neither
-    existing guard fires. Both ingredients are ordinary here: CLAUDE.md
+    existing guard fires. Both ingredients are ordinary here: AGENTS.md
     documents `<!-- rule: <id> -->` parity markers, and `-->` is a mermaid
     arrow. blank() is length-preserving, which is what makes the offsets from
     the probe index the original exactly.

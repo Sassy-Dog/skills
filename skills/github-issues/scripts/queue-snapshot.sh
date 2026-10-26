@@ -65,7 +65,7 @@
 #     card from `board-snapshot.sh`, and `take-it`'s `gh issue view` on an issue
 #     nobody promoted (issue #341). Without it each of them writes its own
 #     resolver, and the rules above stop having one answer; this is the
-#     `taxonomy`-emitter shape CLAUDE.md already requires of a consumer, applied
+#     `taxonomy`-emitter shape AGENTS.md already requires of a consumer, applied
 #     to a resolver rather than a table. One `sites_of`, three callers.
 #   * No character grammar is applied to the value. A label is created through
 #     the GitHub UI or API by somebody with triage, is visible on the issue,

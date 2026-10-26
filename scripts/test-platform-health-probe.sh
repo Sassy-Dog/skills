@@ -896,7 +896,7 @@ chmod +x "$BIN/timeout"
 # them was reachable through $BIN. An earlier edition of this file asserted the
 # other two "cannot be exercised at all" and pinned them at source level on that
 # basis; both returning reviewers of #312 disproved it by construction in
-# minutes, and the claim was the durable half of the defect — CLAUDE.md tells
+# minutes, and the claim was the durable half of the defect — AGENTS.md tells
 # the next editor to trust a gate header. A curated PATH carrying everything the
 # probe needs EXCEPT a timeout binary runs it perfectly well.
 #
@@ -1904,7 +1904,7 @@ fi
 # MEASURED HERE, CONSUMED IN 23. The worst-case arithmetic §2b and the probe
 # header both state is `sites x (bound + grace) + status timeout`, and `sites`
 # is the one term a source-level assertion cannot read off a line. Taking it
-# from this run rather than transcribing `3` is CLAUDE.md's rule about counts:
+# from this run rather than transcribing `3` is AGENTS.md's rule about counts:
 # add a fourth bounded call and the ceiling assertion re-derives itself instead
 # of going quietly stale. 17d proves the no---repo path adds none.
 BOUNDED_SITES="$bound_n"
@@ -2660,7 +2660,7 @@ echo "17e. a host with NO timeout binary still measures, and says the bound did 
 # The branch an earlier edition of this file called impossible to exercise. It
 # is not: a curated PATH carrying everything the probe needs EXCEPT timeout runs
 # it fine. The claim mattered because it was load-bearing — it was the stated
-# reason this branch had no case, and CLAUDE.md tells the next editor to trust a
+# reason this branch had no case, and AGENTS.md tells the next editor to trust a
 # gate header. The behaviour under test is the SCOPE: `timeout_unavailable` is
 # `probe`-scoped, so it must NOT make the run not_measured. Scope it
 # `first_party` and every coreutils-less host reports `not_measured` on every
@@ -3238,7 +3238,7 @@ expect_default "the component scope defaults to the check-relevant set" \
 # stay out of — rewriting that filter to `select(.scope != "attribution")`, which
 # makes EVERY coreutils-less host report `not_measured` on every run, left this
 # gate fully green. A false impossibility in a gate header is worse than a
-# missing case, because CLAUDE.md tells the next editor to trust the header.
+# missing case, because AGENTS.md tells the next editor to trust the header.
 # Note the shape of the error and not just the fact of it: it asserted what
 # could not be done without trying, and nothing here could ever have failed.
 expect_default "the bound prefers timeout" \
@@ -3557,7 +3557,7 @@ echo "27c. the ONE fixture-reachable emitter death: a check name over the argv c
 # fallback. Measured on this host (ARG_MAX 1,048,576) and true on Linux at a
 # lower cap (MAX_ARG_STRLEN 131,072), so 1.2 MB clears both. The probe FAILS
 # CLOSED here — this is not a wrong verdict — but the false impossibility was
-# the defect: CLAUDE.md tells the next editor to trust the header. The name is
+# the defect: AGENTS.md tells the next editor to trust the header. The name is
 # built through stdin, since building it with `--arg` would die of the same
 # cap this case exists to cross.
 PR_HUGE_NAME="$(head -c 1200000 /dev/zero | tr '\0' 'a' | jq -Rs '{number:301, headRefOid:"aa11bb2",

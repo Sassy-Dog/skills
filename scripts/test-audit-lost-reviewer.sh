@@ -113,7 +113,7 @@
 # VALIDATES ITS OWN INPUTS BEFORE ANY ARITHMETIC TOUCHES THEM. A bare number was
 # measured not binding three separate ways in the precedent. Worse, `set -u`
 # inside `$(( ))` does not behave the same on bash 5 and on /bin/bash 3.2 — the
-# shell CLAUDE.md tells developers to run preflight on — where a deleted digit
+# shell AGENTS.md tells developers to run preflight on — where a deleted digit
 # aborts the summing loop and drops every later summand, and an unset floor
 # exits 0 having run ZERO assertions, which a preflight-shaped wrapper reports
 # as PASS. Every token is validated explicitly for that reason. The registry
@@ -157,7 +157,7 @@
 #
 # NO INVENTORY NUMBER IS TRANSCRIBED. The assertion count is PRINTED by the run;
 # the section inventory is enumerated beside its own counts, which is the form
-# CLAUDE.md sanctions for a count. The mutation battery lives in the PR that
+# AGENTS.md sanctions for a count. The mutation battery lives in the PR that
 # added this gate (issue #284).
 #
 # KNOWN LIMITS, stated rather than patched.
@@ -232,7 +232,7 @@ bad() { asserts=$((asserts + 1)); echo "  FAIL  $1" >&2; fails=$((fails + 1)); }
 
 # --- the section registry ----------------------------------------------------
 # `name:minimum`. Members enumerated beside their counts, which is the form
-# CLAUDE.md sanctions; ASSERT_FLOOR is their SUM, derived below rather than
+# AGENTS.md sanctions; ASSERT_FLOOR is their SUM, derived below rather than
 # transcribed. A section that never runs, or that runs fewer assertions than it
 # declares, FAILS — which a bare numeric floor cannot do.
 SECTIONS=(windows:7 canon:59 inventory:10 residue:5 sibling:2 premise:3 durable:13)

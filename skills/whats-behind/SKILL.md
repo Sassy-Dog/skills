@@ -88,7 +88,7 @@ recommendations LAST.
 long report, a truncated one, or a crowded header. Its value is `plugin` when this skill ran as
 `sassy-dog:whats-behind`, and `fallback (degraded)` when this body was read from
 `skills/whats-behind/SKILL.md` because the plugin skill was not among the session's available skills
-(the routine fallback clause in `CLAUDE.md`). It is a field rather than a sentence for one reason: a
+(the routine fallback clause in `AGENTS.md`). It is a field rather than a sentence for one reason: a
 missing sentence reads as a healthy run, while an empty slot reads as broken — on 2026-08-11 a
 degraded run silently omitted its degraded note and delivered an otherwise complete, authoritative
 report (#146). The field is still this run's own claim about itself, so it is never the authority:

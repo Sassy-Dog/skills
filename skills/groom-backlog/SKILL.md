@@ -65,7 +65,7 @@ answers to no particular name, so rubric #9 asks instead of proposing. Contract:
 the old filename directly.
 
 Otherwise run boardless (the `ready`-label flow below) and skip the repo-gotchas
-step in §4 — **do not invent gotchas** by reading the repo's CLAUDE.md or CI config; a wrong gotcha
+step in §4 — **do not invent gotchas** by reading the repo's `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`) or CI config; a wrong gotcha
 in an issue body misleads a cold sub-agent that has no way to check it. Say the step was skipped.
 
 Grooming is otherwise safe to run un-configured: its writes are issue-body edits and **issue-scoped**

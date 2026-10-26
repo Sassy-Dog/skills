@@ -3,7 +3,7 @@
 # ACROSS THE SEARCH INDEX'S LAG, and still discriminates (issue #339).
 #
 # WHAT THE DEFECT WAS. `file-or-link-issue.sh` is this repo's only issue-creation
-# path, and CLAUDE.md names marker-keyed idempotency as the reason it exists.
+# path, and AGENTS.md names marker-keyed idempotency as the reason it exists.
 # That idempotency was a read-after-write against GitHub's issue search index,
 # which is ASYNCHRONOUS. Measured 2026-09-04 against this repo: #337 filed at
 # 21:05:37Z carrying marker `stale-issues-title-only-shipped-detector`; the SAME
@@ -14,7 +14,7 @@
 # `{"action":"filed"}` both times, which every caller reads as success.
 #
 # AND NOTHING COVERED THIS SCRIPT AT ALL. `grep -l file-or-link-issue
-# scripts/test-*.sh` returned nothing before this file: the property CLAUDE.md
+# scripts/test-*.sh` returned nothing before this file: the property AGENTS.md
 # calls the script's defining one was enforced by prose alone, in a tree whose
 # own convention is that a rule with no gate rots silently.
 #
@@ -107,7 +107,7 @@
 # section 1 makes five live `gh` calls — one of them `gh issue create` — before
 # it asserts anything, this file runs `set -uo pipefail` with no `-e`, and
 # `bad()` records without exiting, so a failed `chmod` or a noexec $TMPDIR would
-# send a WRITE at api.github.com with the operator's credentials. CLAUDE.md is
+# send a WRITE at api.github.com with the operator's credentials. AGENTS.md is
 # verbatim on the shape: irreversible actions are gated structurally, not by
 # ordering. For the same reason `$MOCK_REPO` sits in `.invalid` (RFC 2606,
 # unregistrable) — the earlier `mock-org` is a REAL GitHub Organization, one
@@ -347,7 +347,7 @@ chmod +x "$WORK/bin/gh"
 # `bad()` records without exiting. So an ordering-based guarantee is no
 # guarantee: a failed `chmod`, a noexec or unwritable $TMPDIR, and the probe
 # reaches api.github.com with the operator's credentials and attempts a WRITE.
-# CLAUDE.md is verbatim on the shape — "irreversible actions are gated
+# AGENTS.md is verbatim on the shape — "irreversible actions are gated
 # structurally, not by ordering… one call site, its own fresh verification in
 # the same body" — so the check lives HERE, immediately after chmod, and it
 # EXITS rather than recording. The counted assertion in section 1 stays where it

@@ -162,7 +162,7 @@ set -uo pipefail
 # repo that has no VDI and no laptop, and `--check` would then report every such
 # repo as non-conformant for not carrying a site it has never had. There is no
 # correct row to write, because the members differ per repo — which is the
-# distinction CLAUDE.md's "a consumer runs the owner or reads its `taxonomy`
+# distinction AGENTS.md's "a consumer runs the owner or reads its `taxonomy`
 # emitter" rule turns on: that rule is about THIS table's members, and `site:*`
 # has none to transcribe.
 CANONICAL_LABELS=(

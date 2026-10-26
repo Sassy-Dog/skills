@@ -36,7 +36,7 @@
 #      lets one unlucky session permanently retire the plate's highest-signal
 #      surface, the only contradicting evidence being the check the carve-out
 #      just skipped. The three/four split is asserted on all four sites that
-#      state it: `SKILL.md`'s Guardrails list (which CLAUDE.md names as the copy
+#      state it: `SKILL.md`'s Guardrails list (which AGENTS.md names as the copy
 #      to trust), `SKILL.md` Phase 4, `config-contract.md`, and `update-mode.md`.
 #      #267 added `sentry:` to the guardrail list while removing it from the
 #      other two, so the same file contradicted itself forty lines apart and
@@ -97,7 +97,7 @@
 # different verb, different emphasis, different sentence shape.
 #
 # **NO INVENTORY NUMBER IS CARRIED HERE, DELIBERATELY.** This header used to
-# claim a mutation count and an assertion count; both were wrong, and CLAUDE.md
+# claim a mutation count and an assertion count; both were wrong, and AGENTS.md
 # repeated one of them into the one place a future editor trusts instead of
 # re-measuring (issue #268). A number nobody can re-derive from the tree is not
 # worth carrying. The run prints its own assertion count, and the mutation
@@ -1832,16 +1832,16 @@ dest_case "a determiner before a real noun still opens one" \
 # cases ARE the inventory, and `grep -c '^dest_case "passive auxiliary:'` plus
 # its `copular verb:` sibling re-derives it from the tree. A number here would
 # be the thing the next editor trusts instead of re-measuring, which is why
-# #268 stripped one from CLAUDE.md; this set has now changed size THREE times
+# #268 stripped one from AGENTS.md; this set has now changed size THREE times
 # under review, and every time the prose stating its old size survived the
 # change and contradicted the code beside it.
 #
 # THE RULE IS SHARPER THAN "NO NUMBERS", because a blanket ban would strip
 # counts that are perfectly safe. A count is safe when its MEMBERS ARE
-# ENUMERATED BESIDE IT, or when A GATE RE-DERIVES IT -- `CLAUDE.md`s
+# ENUMERATED BESIDE IT, or when A GATE RE-DERIVES IT -- `AGENTS.md`s
 # tracked-file count for `scripts/test-review-gate-decisions.sh` floats free of
 # any list and is safe anyway, because that gate re-derives it from its own read
-# set and reddens every site restating it, `CLAUDE.md` included -- measured,
+# set and reddens every site restating it, `AGENTS.md` included -- measured,
 # rewriting that number reddens the gate and names the site. Cite the gate by
 # filename when relying on that, so a later sweep does not rewrite a count
 # something is already holding.
@@ -1889,7 +1889,7 @@ dest_case "a determiner before a real noun still opens one" \
 #   grep -oniE "\\b(of|among|across) (the |these |those |them )?(one|two| \
 #     three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen| \
 #     fourteen|fifteen|twenty)\\b" scripts/test-sentry-verification.sh \
-#     scripts/preflight.sh CLAUDE.md
+#     scripts/preflight.sh AGENTS.md
 #
 # It finds BOTH original wordings (`ANY of the ten`, `eight of the ten`) and
 # returns a couple of dozen hits across the three files -- few enough to READ,
@@ -1910,7 +1910,7 @@ dest_case "a determiner before a real noun still opens one" \
 #     illustration of the SHAPE and was in fact an instance of it. The read set
 #     was variables iterated as literals in a `for` loop, its length existed
 #     nowhere, and the count was restated across this file, `scripts/preflight.sh`
-#     and `CLAUDE.md` with no member list beside any of them. Issue #278 closed
+#     and `AGENTS.md` with no member list beside any of them. Issue #278 closed
 #     it the way #276 closed the one before: the read set is an array, the
 #     counts section below derives from its length, and every restatement site
 #     is accounted for rather than looked up. `the four names` genuinely is
@@ -1928,7 +1928,7 @@ dest_case "a determiner before a real noun still opens one" \
 #     cited is worth more than the citation was. It was the closing summary of
 #     the review-gate decision gate -- "the five decisions, six tracked files",
 #     restated in that gate header, in `scripts/preflight.sh` and in
-#     `CLAUDE.md`, re-derived by nothing. Issue #276 moved it onto the OTHER
+#     `AGENTS.md`, re-derived by nothing. Issue #276 moved it onto the OTHER
 #     safe form named above: the counts section of
 #     `scripts/test-review-gate-decisions.sh` re-derives both numbers from its
 #     own source and reddens every site that disagrees. Two things outlive it.
@@ -2957,7 +2957,7 @@ fi
 # --- I8. setup-config/SKILL.md carries the three rules too --------------------
 #
 # SKILL.md is loaded on EVERY invocation while `references/` are read on demand,
-# and CLAUDE.md's "SKILL.md stays thin" rule is an active reason a later sweep
+# and AGENTS.md's "SKILL.md stays thin" rule is an active reason a later sweep
 # deletes these. Measured: inverting all three left this gate green, because §F
 # above greps `skill_flat` only for #213's strings.
 
@@ -3006,13 +3006,13 @@ else
     # ...AND the veto. Without it Phase 4 could state decision D and its inverse
     # at once — measured: appending "In practice a refresh keeps whatever
     # `sentry: none` the previous run recorded and never re-asks it." left the
-    # gate GREEN. That is #267's shape exactly, in the file CLAUDE.md names as
+    # gate GREEN. That is #267's shape exactly, in the file AGENTS.md names as
     # the copy to trust and the one loaded on every `setup-config` run.
     assert_no_sentence_affirms "Phase 4 never carries \`sentry: none\` forward" \
         "$phase4_win" 'sentry: none' "$CARRY_VOCAB"
 fi
 
-# The guardrail list, which CLAUDE.md names as the copy to trust. Its carve-out
+# The guardrail list, which AGENTS.md names as the copy to trust. Its carve-out
 # is read as a MEMBER LIST and every member is accounted for, because the check
 # that stood here was `grep -q '\`none\`'` — satisfied by any mention of the word
 # — and #267 had quietly added `sentry:` to the list, contradicting the same
@@ -3087,7 +3087,7 @@ fi
 #
 # The count itself is PRINTED, never transcribed. That is issue #268's sixth
 # acceptance item taken literally: a number nobody can re-derive from the tree is
-# not worth carrying, and CLAUDE.md carried a wrong one ("39 semantic mutations,
+# not worth carrying, and AGENTS.md carried a wrong one ("39 semantic mutations,
 # 0 stale and 0 undetected, 59 assertions measured load-bearing") for exactly
 # that reason, in the one place a future editor trusts instead of re-measuring.
 # ---------------------------------------------------------------------------
@@ -3235,18 +3235,18 @@ else
     bad "preflight's invocation-site comment did not resolve — the check over it would be vacuous"
 fi
 
-# --- site 4: CLAUDE.md's gate paragraph --------------------------------------
-# Bounded by the NEXT gate's opener, since CLAUDE.md's gate list is one line.
+# --- site 4: AGENTS.md's gate paragraph --------------------------------------
+# Bounded by the NEXT gate's opener, since AGENTS.md's gate list is one line.
 cm_desc="$(awk -v RS='\n' '
     { i = index($0, "scripts/test-sentry-verification.sh")
       if (i > 0) { rest = substr($0, i)
                    j = index(rest, "the sentry-counts tests")
-                   print (j > 0 ? substr(rest, 1, j) : rest) } }' CLAUDE.md)"
+                   print (j > 0 ? substr(rest, 1, j) : rest) } }' AGENTS.md)"
 if [ -n "$cm_desc" ]; then
-    ok "CLAUDE.md's paragraph for this gate resolves"
-    check_files "CLAUDE.md's gate paragraph" "$(normalize_278 "$cm_desc")" "tracked files" "$want_278"
+    ok "AGENTS.md's paragraph for this gate resolves"
+    check_files "AGENTS.md's gate paragraph" "$(normalize_278 "$cm_desc")" "tracked files" "$want_278"
 else
-    bad "CLAUDE.md's paragraph for this gate did not resolve — the check over it would be vacuous"
+    bad "AGENTS.md's paragraph for this gate did not resolve — the check over it would be vacuous"
 fi
 
 ASSERT_FLOOR=130

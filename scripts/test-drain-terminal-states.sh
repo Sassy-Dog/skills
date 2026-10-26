@@ -162,7 +162,7 @@
 # whole: every terminal row, conjunct and carve-out of #282, #286, #290 and
 # #342; the only moved blocks are the ones the canon was re-derived for.
 #
-# THE ENUMERATIONS THAT HAD TO MOVE WITH IT, since CLAUDE.md's rule — a count
+# THE ENUMERATIONS THAT HAD TO MOVE WITH IT, since AGENTS.md's rule — a count
 # stated in prose is safe only when its members are enumerated beside it, or when
 # a gate re-derives it — is what makes a fourth state cheap to add and expensive
 # to add badly. §7's heading; its "exactly N states" sentence, whose number this
@@ -254,7 +254,7 @@
 #       NOT CONTENT-PINNED — both of the first two carry text-pinned
 #       exceptions, enumerated below, so naming either one alone is what let
 #       this limit's three copies disagree — the header named §4 while
-#       preflight.sh and CLAUDE.md both named §2 (#290).
+#       preflight.sh and AGENTS.md both named §2 (#290).
 #       Rewriting the
 #       BODY of an existing bullet or paragraph there — not merely appending a
 #       sentence to it — changes no opener and no marker list, and was measured
@@ -328,7 +328,7 @@
 # deleting the entire window-STOP block — the one added after a review made
 # `sec7` run silently to EOF — left the gate at exit 0.
 # `SECTIONS` declares each section beside the count it must reach, which is the
-# form CLAUDE.md sanctions for a count (members enumerated beside it), and
+# form AGENTS.md sanctions for a count (members enumerated beside it), and
 # `ASSERT_FLOOR` is DERIVED as their sum rather than transcribed. An earlier
 # edition also compared the declared count to this file's own `section` call
 # sites; that was a file-to-itself comparison of the kind this header rules out
@@ -367,7 +367,7 @@
 #
 # NO INVENTORY NUMBER IS TRANSCRIBED. The assertion count is PRINTED by the run;
 # the section inventory is enumerated beside its own counts, which is the form
-# CLAUDE.md sanctions. Each mutation battery lives in the PR that added the
+# AGENTS.md sanctions. Each mutation battery lives in the PR that added the
 # section it proves (issues #282, #290 and #342).
 #
 # Three tracked files. No gh, no network, no repo mutation.
@@ -396,7 +396,7 @@ bad() { asserts=$((asserts + 1)); echo "  FAIL  $1" >&2; fails=$((fails + 1)); }
 
 # --- the section registry ----------------------------------------------------
 # `name:minimum`. Members enumerated beside their counts, which is the form
-# CLAUDE.md sanctions; ASSERT_FLOOR is their SUM, derived below rather than
+# AGENTS.md sanctions; ASSERT_FLOOR is their SUM, derived below rather than
 # transcribed. A section that never runs, or that runs fewer assertions than it
 # declares, FAILS — which is what a bare numeric floor could not do (measured
 # twice: a whole section deleted, and 14 assertions deleted from the largest).
@@ -411,14 +411,14 @@ SECTIONS=(windows:46 canon7:27 conjunct:7 enumeration:13 conflicting:17
 #
 # An earlier note here claimed that deleting this LINE "makes `$REGISTRY_MIN`
 # unset under `set -u`, which fails louder still". That was measured true on
-# bash 5 and FALSE on /bin/bash 3.2 — the shell CLAUDE.md tells developers to
+# bash 5 and FALSE on /bin/bash 3.2 — the shell AGENTS.md tells developers to
 # run preflight on — where the unset expansion inside `$(( ))` aborted the
 # script at exit 0 having run ZERO assertions, which a preflight-shaped wrapper
 # reports as PASS. Both tokens are validated explicitly below for that reason,
 # and the sentence is now what was measured rather than what was assumed.
 REGISTRY_MIN=14
 # EVERY token is validated before any arithmetic touches it. Measured on
-# /bin/bash 3.2 — the shell CLAUDE.md tells developers to run preflight on —
+# /bin/bash 3.2 — the shell AGENTS.md tells developers to run preflight on —
 # deleting one digit (`discriminator:17` -> `discriminator:`) aborted the `for`
 # inside `$(( ))`, silently dropped every later summand, left the floor at 80
 # instead of 120 and that section's own minimum void, and still exited 0 with
@@ -775,8 +775,8 @@ sec2_openers	## 2. Reconcile in-flight (always first) ~ **Checkout ownership is 
 sec2_bullets	0:- **Open PRs from those branches** ~ 0:- **Open PRs on blocked issues** ~ 0:- **Failed or red PRs** → ~ 0:- **Open PRs not yet reviewed, ~ 0:- **A review dispatched that never ~ 0:- **Reviewed PRs with no Blocking ~ 0:- **PRs carrying a Blocking review ~ 0:- **`CONFLICTING` PRs** → never auto-rebase;
 sec2_tablerows	
 sec2_headings	## 2. Reconcile in-flight (always first)
-sec4_openers	## 4. Select from Ready — ~ **With `board:`** — take the **Ready** ~ **Without a board** — take `ready[]` ~ Filter, in order: ~ | Filter | Rule | ~ ### Site — the array read, ~ Some work runs only from one ~ **Read `sites` off the §2 snapshot ~ **On the `board:` path, run the ~ **Plugin root.** If the plugin-root placeholder ~ ```bash ~ ``` ~ One resolver, two callers, one answer. ~ **A resolver that could not run ~ **The match is `not sites or ~ - **`sites` empty → dispatch, exactly ~ **A site hold is not a ~ ### Collision — an in-flight PR's ~ `touches:` is a **prediction**, written at ~ - **doc reconciliation** (`CLAUDE.md`, `README.md`, `docs/`) ~ **A blocked issue's open PR counts ~ So for an issue that **already ~ ```bash ~ ``` ~ §2 already resolved which in-flight issues ~ Resolve a source per in-flight issue, ~ | In-flight issue | Set used ~ **A failed read is never "no ~ **Known limitation: this narrows the gap, ~ **Do not "simplify" this back into ~ ### Stacks (ONLY if `stacked_prs:` is ~ **With no `stacked_prs:` block this section ~ When it IS configured, `queue-snapshot.sh` surfaces ~ - **Dependencies** — members may depend ~ **Capacity: a chain costs ONE `max_in_flight` ~ Verify the repo is actually enabled ~ ```bash ~ ``` ~ Exit `11` means the preview is ~ ### Reference decay — re-check at ~ groom-backlog resolves every reference before promoting, ~ ```bash ~ ``` ~ Exit `3` → **hold the issue ~ Exit `0` dispatches normally. Exit `10` ~ `likely-new` findings never hold an issue. ~ **If `migrations:` is configured** — additional ~ **If `codegen:` is configured** — additional ~ Take the first `capacity` survivors. The
-sec4_bullets	0:- **`sites` empty → dispatch, exactly ~ 0:- **`sites` containing this checkout's site ~ 0:- **No `execution_site` configured → the ~ 0:- **doc reconciliation** (`CLAUDE.md`, `README.md`, `docs/`) ~ 0:- **CI wiring** (`scripts/preflight.sh` and the ~ 0:- **Dependencies** — members may depend ~ 0:- **Collision** — overlapping `touches:` sets
+sec4_openers	## 4. Select from Ready — ~ **With `board:`** — take the **Ready** ~ **Without a board** — take `ready[]` ~ Filter, in order: ~ | Filter | Rule | ~ ### Site — the array read, ~ Some work runs only from one ~ **Read `sites` off the §2 snapshot ~ **On the `board:` path, run the ~ **Plugin root.** If the plugin-root placeholder ~ ```bash ~ ``` ~ One resolver, two callers, one answer. ~ **A resolver that could not run ~ **The match is `not sites or ~ - **`sites` empty → dispatch, exactly ~ **A site hold is not a ~ ### Collision — an in-flight PR's ~ `touches:` is a **prediction**, written at ~ - **doc reconciliation** (`AGENTS.md` (or `CLAUDE.md` ~ **A blocked issue's open PR counts ~ So for an issue that **already ~ ```bash ~ ``` ~ §2 already resolved which in-flight issues ~ Resolve a source per in-flight issue, ~ | In-flight issue | Set used ~ **A failed read is never "no ~ **Known limitation: this narrows the gap, ~ **Do not "simplify" this back into ~ ### Stacks (ONLY if `stacked_prs:` is ~ **With no `stacked_prs:` block this section ~ When it IS configured, `queue-snapshot.sh` surfaces ~ - **Dependencies** — members may depend ~ **Capacity: a chain costs ONE `max_in_flight` ~ Verify the repo is actually enabled ~ ```bash ~ ``` ~ Exit `11` means the preview is ~ ### Reference decay — re-check at ~ groom-backlog resolves every reference before promoting, ~ ```bash ~ ``` ~ Exit `3` → **hold the issue ~ Exit `0` dispatches normally. Exit `10` ~ `likely-new` findings never hold an issue. ~ **If `migrations:` is configured** — additional ~ **If `codegen:` is configured** — additional ~ Take the first `capacity` survivors. The
+sec4_bullets	0:- **`sites` empty → dispatch, exactly ~ 0:- **`sites` containing this checkout's site ~ 0:- **No `execution_site` configured → the ~ 0:- **doc reconciliation** (`AGENTS.md` (or `CLAUDE.md` ~ 0:- **CI wiring** (`scripts/preflight.sh` and the ~ 0:- **Dependencies** — members may depend ~ 0:- **Collision** — overlapping `touches:` sets
 sec4_tablerows	0:| Filter | Rule | ~ 0:| --- | --- | ~ 0:| Claimed | Skip if assignee ~ 0:| Blocked | Skip the `blocked` ~ 0:| Site | Skip if the ~ 0:| Dependencies | Skip while any ~ 0:| Collision | Skip if the ~ 0:| In-flight issue | Set used ~ 0:| --- | --- | --- ~ 0:| Open PR, `gh pr view` ~ 0:| No PR yet — sub-agent ~ 0:| Open PR, but the read ~ 0:| Smell test | Run take-it's ~ 0:| Reference decay | Re-resolve the
 sec4_headings	## 4. Select from Ready — and only Ready ~ ### Site — the array read, and an unnamed checkout is fail-open ~ ### Collision — an in-flight PR's real files beat the declaration ~ ### Stacks (ONLY if `stacked_prs:` is configured) ~ ### Reference decay — re-check at dispatch, not just at grooming
 sec6_openers	## 6. Tick report ~ Terse — this prints every few ~ ```text ~ ``` ~ Plus one line per failure with ~ Always report the execution mode: `isolation:

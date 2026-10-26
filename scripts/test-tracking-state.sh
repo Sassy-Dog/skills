@@ -129,7 +129,7 @@
 # tracking-state.sh resolves to the real file (setup-hooks reaches across skills
 # to setup-config's script and nothing else fails if it moves).
 #
-# CLAUDE.md names the pipeline-into-grep rule (test-pipefail-grep.sh): every
+# AGENTS.md names the pipeline-into-grep rule (test-pipefail-grep.sh): every
 # probe here captures into a variable and matches with a here-string or case.
 #
 # Wired into scripts/preflight.sh; run directly:

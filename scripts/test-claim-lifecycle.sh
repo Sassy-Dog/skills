@@ -994,7 +994,7 @@ fi
 
 # --- 7d. the `requested:` field (issue #323, second half) --------------------
 # A user-visible output field documented in SKILL.md with no gate is the rot
-# CLAUDE.md's count rule names: measured during review, replacing the emitter
+# AGENTS.md's count rule names: measured during review, replacing the emitter
 # with `:` left this file at "all pass". One row per subcommand that removes
 # something, because the value is built from THAT subcommand's own $REMOVALS
 # and a table with one home is a table that drifts.
@@ -1638,7 +1638,7 @@ fi
 # `(N of N declared)` line prints — deliberately not transcribed here, which is
 # this paragraph's own point. Counting the rows
 # whose env cell is not `-` and comparing for EQUALITY is the posture
-# EXPECTED_ASSERTS already takes, and it is CLAUDE.md's rule applied to the
+# EXPECTED_ASSERTS already takes, and it is AGENTS.md's rule applied to the
 # guard on the guard: a count in prose is safe only when a gate re-derives it.
 env_knobs_expected=0
 for row in "${MUTANTS[@]}"; do

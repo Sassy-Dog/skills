@@ -28,7 +28,7 @@
 # Mutants: each changes one construct in a COPY of the script and the same suite
 # must then fail, so a case that cannot see its construct is reported as vacuous.
 #
-# Parallel-safe (CLAUDE.md): one mktemp -d, scratch HOME, no fixed path, no write
+# Parallel-safe (AGENTS.md): one mktemp -d, scratch HOME, no fixed path, no write
 # inside the checkout, no port.
 set -uo pipefail
 export LC_ALL=C

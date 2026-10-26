@@ -365,13 +365,13 @@
 #      THREE shipping paths must tell the agent to fix docs its change made
 #      untrue, before the PR body is drafted (issue #220). Docs are an input
 #      to no other gate, so lint, type, test and the review agent all pass on
-#      a PR whose CLAUDE.md now says the opposite of what the repo does. This
+#      a PR whose AGENTS.md now says the opposite of what the repo does. This
 #      gates the INSTRUCTION, never staleness itself: #220 rules that out,
 #      because staleness is a semantic judgement with nothing to grep for and
 #      a script pretending otherwise reproduces the skimmed-past output of
 #      #199. take-it and dispatch-ready matter most — they dispatch sub-agents
 #      that open PRs from a cold worktree and never see an interactive
-#      session's CLAUDE.md, so a rule living only in send-it never runs for
+#      session's AGENTS.md, so a rule living only in send-it never runs for
 #      them. Pins both traps in both directions (a closed issue does not prove
 #      the behaviour landed; an OPEN one does not prove it did not) and the
 #      scope limiter, since an unbounded doc step is one nobody runs.
@@ -606,7 +606,7 @@
 #      decisions into the trailing sweeps) and a discriminator that silently
 #      matches nothing re-derives 0 and would pass every count vacuously. The
 #      file count is the length of the array the existence loop iterates. A
-#      stale restatement in the gate's header, in this list or in CLAUDE.md
+#      stale restatement in the gate's header, in this list or in AGENTS.md
 #      fails the gate — in the SPELLED forms those sites use; a digit form is a
 #      stated blind spot, as it is for the free-floating-count probe in
 #      scripts/test-sentry-verification.sh. Its count-re-derivation section
@@ -875,7 +875,7 @@
 #      `merge-shepherd.sh` — no gh, no network. The members are enumerated
 #      beside the number because the number rotted here once: 369bbef (#297)
 #      added the third subject and left "Two" standing through two later hand
-#      edits, which is CLAUDE.md's bare-count rule collecting its own example.
+#      edits, which is AGENTS.md's bare-count rule collecting its own example.
 #      IT NOW PINS A THIRD TERMINAL STATE (issue #286). DRAIN DEGRADED ends a
 #      loop that is ticking into a void under a platform outage: measured, an
 #      18-tick three-hour run that reported the state accurately, did nothing,
@@ -1176,7 +1176,7 @@
 #      substituted into `SKILL.md` at load time and nowhere else, so a
 #      reference doc that writes it in a command resolves the path against `/`
 #      and exits 127. Thirteen such lines accumulated across six docs (issue
-#      #329) while CLAUDE.md documented the rule in prose the whole time —
+#      #329) while AGENTS.md documented the rule in prose the whole time —
 #      this repo's own "a rule stated in prose with no gate rots silently"
 #      convention, applied to itself. The guard bans the token in COMMAND
 #      usage, keyed on fenced code blocks, and must NOT touch
@@ -1199,7 +1199,7 @@
 #      21:05:44Z searched, got `[]`, and filed the duplicate #338 — seven
 #      seconds — while the identical search four minutes later returned both.
 #      Nothing covered this script before: `grep -l file-or-link-issue
-#      scripts/test-*.sh` returned nothing, so the property CLAUDE.md calls the
+#      scripts/test-*.sh` returned nothing, so the property AGENTS.md calls the
 #      script's defining one was enforced by prose alone. The fix is TWO stages
 #      and the gate refuses to let either be simplified away: the search is
 #      unbounded in AGE but not fresh (M6 deletes it and loses every marker
@@ -1380,7 +1380,7 @@
 #      2026.8.83 — and only 2026.9.4 carried the feature about to be verified in
 #      those very repos, so the verification would have "failed" for a reason
 #      that had nothing to do with the change. The pin is silent and has no
-#      expiry, which is CLAUDE.md's bare-count rule in another shape.
+#      expiry, which is AGENTS.md's bare-count rule in another shape.
 #      `skills/repo-health/scripts/pull-plugin-drift.sh` reports it; this gate
 #      pins the four decisions that make the report trustworthy, each named by
 #      exactly one mutant. Two are the ones a later simplification takes out:
@@ -1760,7 +1760,7 @@ if command -v shellcheck >/dev/null 2>&1; then
     # twice: an UNESCAPED backtick inside a double-quoted test label is command
     # substitution, so `dest_case "a `which` clause …"` runs `which` and prints
     # the label with its identifying word eaten. It happened in
-    # test-sentry-verification.sh, was documented in CLAUDE.md, and then
+    # test-sentry-verification.sh, was documented in AGENTS.md, and then
     # happened again in the same file — three labels, executing `which`, `that`
     # and `where`, which is how a mutation of one rule produced three
     # indistinguishable FAIL lines in the gate that exists to say which rule
@@ -2105,23 +2105,23 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
     case "$legacy" in
         refresh-skills)
             # setup-config's marker recognizer, the adopt/update walkthrough
-            # that names the superseded producer, and CLAUDE.md's statement of
+            # that names the superseded producer, and AGENTS.md's statement of
             # the same recognition rule.
             allow=(
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-config/references/update-mode.md'
-                ':!CLAUDE.md'
+                ':!AGENTS.md'
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
-            # setup-hooks' generated-by ownership matcher + CLAUDE.md's
+            # setup-hooks' generated-by ownership matcher + AGENTS.md's
             # statement of it, plus the committed consumer artifacts that
             # PROVE the matcher still accepts this producer name (issue #133 —
             # the fixtures are verbatim upstream bytes; sanitising the name out
             # of them would defeat their entire purpose).
             allow=(
                 ':!skills/setup-hooks/SKILL.md'
-                ':!CLAUDE.md'
+                ':!AGENTS.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2142,7 +2142,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
-                ':!CLAUDE.md'
+                ':!AGENTS.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2158,7 +2158,7 @@ done
 # ai-agent-skills -> skills (issue #72). The old plugin name may
 # appear ONLY where it is still load-bearing:
 #   - README.md — the one historical line recording the #71 rename
-#   - CLAUDE.md — the marker-recognition rule: recognizers must accept
+#   - AGENTS.md — the marker-recognition rule: recognizers must accept
 #     pre-rename 'generated-by: ai-agent-skills:*' markers
 #   - skills/setup-deps/SKILL.md, skills/setup-hooks/SKILL.md — those
 #     generated-by recognizers themselves. Their markers are committed inside
@@ -2174,7 +2174,7 @@ done
 #   - this script (the guard itself)
 if git grep -l 'ai-agent-skills' -- \
     ':!README.md' \
-    ':!CLAUDE.md' \
+    ':!AGENTS.md' \
     ':!skills/setup-deps/SKILL.md' \
     ':!skills/setup-hooks/SKILL.md' \
     ':!scripts/preflight.sh' \

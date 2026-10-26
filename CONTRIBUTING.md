@@ -63,7 +63,7 @@ Run it only in a dedicated `chore(release)` PR, never in a feature PR: stamping 
 
 ## Where the tricky parts are
 
-Two architectures in this repo are easy to break from the outside. [`CLAUDE.md`](CLAUDE.md) states the decisions governing both; the depth sits in the skill, agent, and gate-script files it points at:
+Two architectures in this repo are easy to break from the outside. [`AGENTS.md`](AGENTS.md) states the decisions governing both; the depth sits in the skill, agent, and gate-script files it points at:
 
 - **Generator + capability skills.** The workflow skills (`survey-work`, `take-it`, `send-it`, …) are generic and ship once; per-repo behaviour lives in each consumer repo's `.claude/sassy-dog/*.md` config. Shared mechanics live in capability skills (`github-issues`, `pr-shepherd`, `repo-cleanup`, …). **Fix mechanics in the capability skill, never in a workflow skill.**
 - **Ownership markers must keep recognising historical names.** Generated files in consumer repos carry a `generated-by:` marker, and the producer name has changed more than once. Matchers accept every name this generator has emitted, across both marker namespaces. Narrowing a matcher to the current name makes every pre-rename consumer file look hand-written and get skipped **silently** — the contract is report-and-skip, not error. `scripts/test-ownership-matchers.sh` pins this against real committed artifacts; if it fails, that is the reason.

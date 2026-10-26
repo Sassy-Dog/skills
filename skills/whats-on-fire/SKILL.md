@@ -267,7 +267,7 @@ section, skip empty tiers. Recommendations go LAST.
 anti-verbosity rules above do not apply to it: it has no empty state to collapse. Its value is
 `plugin` when this skill ran as `sassy-dog:whats-on-fire`, and `fallback (degraded)` when this body
 was read from `skills/whats-on-fire/SKILL.md` because the plugin skill was not among the session's
-available skills (the routine fallback clause in `CLAUDE.md`). It is a field rather than a sentence
+available skills (the routine fallback clause in `AGENTS.md`). It is a field rather than a sentence
 for one reason: a missing sentence reads as a healthy run, while an empty slot reads as broken — on
 2026-08-11 a degraded run silently omitted its degraded note and delivered an otherwise complete,
 authoritative report (#146). It is distinct from the skips that follow it on the same line: those

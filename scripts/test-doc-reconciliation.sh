@@ -12,7 +12,7 @@
 #
 # The bug it guards. Nothing in the shipping path asked whether a change had
 # just made a doc wrong. Lint, type, test and the review agent all pass on a PR
-# whose CLAUDE.md now states the opposite of what the repo does, because docs
+# whose AGENTS.md now states the opposite of what the repo does, because docs
 # are an input to no other gate. One Solador PR shipped beside three doc claims
 # that were already false before it started — a "not consumed" value that had
 # been reaching the host cards for a while, a "hard-coded" version that was the
@@ -22,7 +22,7 @@
 #
 # Why all three skills, and why take-it/dispatch-ready are the important half:
 # those dispatch SUB-AGENTS that open their own PRs from a cold worktree. They
-# never see an interactive session's CLAUDE.md, so a rule that lives only in
+# never see an interactive session's AGENTS.md, so a rule that lives only in
 # send-it never runs for them. #220 calls this "the half most likely to be
 # missed" — so the gate treats the three as equals and fails if any one lacks
 # it.
@@ -214,10 +214,10 @@ else
     bad "dispatch-ready lost the reason its sub-agents need the rule"
 fi
 
-# --- 6. CLAUDE.md's gate count is DERIVED, not asserted -----------------------
+# --- 6. AGENTS.md's gate count is DERIVED, not asserted -----------------------
 #
 # This repo's own convention: "a count stated in prose is safe only when its
-# members are enumerated beside it, or when a gate re-derives it." CLAUDE.md
+# members are enumerated beside it, or when a gate re-derives it." AGENTS.md
 # spells the number of `scripts/test-*.sh` gates and nothing re-derived it —
 # equally bare at 30, 31 and 33, correct each time and unenforced every time
 # (issue #348). It belongs HERE rather than in preflight, because a doc claim
@@ -234,14 +234,14 @@ n_files="$(git -C "$REPO_ROOT" ls-files 'scripts/test-*.sh' | grep -c .)"
 # parallel runner, `pg_gate` (or `pg_gate_serial`); that each test is wired
 # EXACTLY ONCE, by name, is test-preflight-wiring.sh's job — this is the count.
 n_wired="$(grep -cE '^(el)?if pg_gate(_serial)? scripts/test-[a-z0-9-]+\.sh' "$REPO_ROOT/scripts/preflight.sh")"
-n_said="$(grep -oE 'the [0-9]+ `scripts/test-\*\.sh` gates' "$REPO_ROOT/CLAUDE.md" | grep -oE '[0-9]+' | head -1)"
+n_said="$(grep -oE 'the [0-9]+ `scripts/test-\*\.sh` gates' "$REPO_ROOT/AGENTS.md" | grep -oE '[0-9]+' | head -1)"
 
 if [ -z "$n_said" ]; then
-    bad "CLAUDE.md no longer spells a gate count in the form this gate re-derives — restore it, or this check silently covers nothing"
+    bad "AGENTS.md no longer spells a gate count in the form this gate re-derives — restore it, or this check silently covers nothing"
 elif [ "$n_files" = "$n_wired" ] && [ "$n_wired" = "$n_said" ]; then
-    ok "CLAUDE.md's gate count is re-derived: $n_said tracked = $n_wired wired = $n_said stated"
+    ok "AGENTS.md's gate count is re-derived: $n_said tracked = $n_wired wired = $n_said stated"
 else
-    bad "gate count disagrees — $n_files tracked scripts/test-*.sh, $n_wired wired into preflight, CLAUDE.md says $n_said"
+    bad "gate count disagrees — $n_files tracked scripts/test-*.sh, $n_wired wired into preflight, AGENTS.md says $n_said"
 fi
 
 # --- 7. Template applicability reconciles against actual frontmatter ----------

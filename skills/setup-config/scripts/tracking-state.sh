@@ -81,7 +81,7 @@
 # BEFORE it exists. setup-config itself passes none: it renders no script, and
 # `apply` refuses (exit 4) a path that does not exist yet.
 #
-# DESTRUCTIVE SHAPE (CLAUDE.md: one call site, fresh verification in the same
+# DESTRUCTIVE SHAPE (AGENTS.md: one call site, fresh verification in the same
 # body, as align-labels.sh's migrate_delete_gate): the .gitignore rewrite, the
 # `git rm --cached` and the `git add` each have exactly ONE call site, all inside
 # mutate(), whose body re-derives and compares the plan id before the first

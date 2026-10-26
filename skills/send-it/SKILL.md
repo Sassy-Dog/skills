@@ -341,10 +341,10 @@ makes the line worth more than it was before, not less.
 
 ### Reconcile the docs against the repo
 
-**Before drafting the PR body**, re-read the docs describing what this change touched — `CLAUDE.md`,
+**Before drafting the PR body**, re-read the docs describing what this change touched — `AGENTS.md` (or `CLAUDE.md` where the repo has no `AGENTS.md`),
 the relevant `README.md`, anything in `docs/` — and fix every claim the change just made untrue, in
 this PR. A stale doc is a defect in the change, not tidying for later: lint, type, test and the
-review agent all pass on a PR whose `CLAUDE.md` now states the opposite of what the repo does,
+review agent all pass on a PR whose `AGENTS.md` now states the opposite of what the repo does,
 because docs are an input to no other gate.
 
 It runs here, before §5, for a reason: §5 is where "what changed" gets written down, and a doc fix
