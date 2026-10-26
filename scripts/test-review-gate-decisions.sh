@@ -1136,12 +1136,19 @@ mutant_pin "$dispatch_flat" 'the count is already at the cap .take-it. §6 defin
 mutant_pin "$rollin_take" 'exit .11. whose stdout carries .BOUND ENQUEUE FAILED — <cause>. is not .checks.pending.' \
     's/BOUND ENQUEUE FAILED//' \
     "take-it: BOUND ENQUEUE FAILED is not checks pending"
-mutant_pin "$rollin_take" 'refused .this pass., after .gh-retry., with no .--auto. fallback' \
+mutant_pin "$rollin_take" 'bound enqueue call failed .this pass., after .gh-retry., with no .--auto. fallback' \
     's/this pass//' \
     "take-it: BOUND ENQUEUE FAILED is per pass, not a stall by itself"
-mutant_pin "$rollin_take" 'Re-run the bound hand-off once .exit .11. already means re-run.; only when the line appears on \*\*two consecutive passes\*\* does it need a human' \
-    's/two consecutive passes//' \
-    "take-it: one BOUND ENQUEUE FAILED line is a re-run; a human is needed on two consecutive passes"
+# #592: a lagged successful enqueue does not print the line, and the repeat rule has ONE home (pr-shepherd).
+mutant_pin "$rollin_take" 'a mutation that succeeded but is not yet confirmed in the queue does not print it' \
+    's/does not print//' \
+    "take-it: a lagged successful enqueue is not a BOUND ENQUEUE FAILED"
+mutant_pin "$rollin_take" 'pr-shepherd.{1,3}s .--expected-head. paragraph, the one home of that rule' \
+    's/the one home of that rule//' \
+    "take-it points at pr-shepherd for the repeat rule instead of restating it"
+mutant_pin "$rollin_take" 'Re-run the bound hand-off once .exit .11. already means re-run.\. When a human is needed, and what to check' \
+    's/Re-run the bound hand-off once//' \
+    "take-it: one BOUND ENQUEUE FAILED line is a re-run; when a human is needed is pr-shepherd's rule"
 mutant_pin "$rollin_take" 'report it by name and hold the PR; do not demote and do not count it as a re-review' \
     's/do not demote//' \
     "take-it: BOUND ENQUEUE FAILED is held and reported, never demoted nor counted as a re-review"

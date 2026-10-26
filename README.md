@@ -426,6 +426,8 @@ An error naming a path that does not exist is **not** a clean result: the compar
 claude plugin update sassy-dog@skills --scope project   # or: user, local, managed
 ```
 
+If step 1's row is a linked worktree's, this update cannot move it: delete that row, or run `scripts/update-plugin-everywhere.sh --apply` (see "A linked worktree's pin cannot be moved by `plugin update`" above).
+
 `--scope` defaults to `user`. A reader who correctly identifies a `project` copy in step 1 and then runs the bare command updates the *user* copy, sees no error, and finds step 3 unchanged — the same wrong-copy trap as step 1, on the write side. The update also says "restart required to apply": until you restart, the session keeps running the old skills and agents. Then re-run step 1 and step 3 — an update that crosses a release installs into a *new* version directory, so the `INSTALL_PATH` you just used now points at an abandoned copy that will differ forever.
 
 Step 2 is load-bearing rather than tidiness: an unrefreshed clone is stale in the same way the cache is, and matches it exactly. On the measurement above that identical pair of directories reported **zero** differences before the refresh and **28** after it, with nothing about the repo having changed in between.
@@ -434,7 +436,7 @@ This failure mode is silent: no error anywhere — skills just keep old bugs and
 
 ### Updates freeze at the cached version
 
-Re-run the update from step 4 above, with the `--scope` that matches the copy you are running. There is no marketplace auto-refresh unless you opt in, so a cache goes stale simply because nobody refreshed it.
+Re-run the update from step 4 above, with the `--scope` that matches the copy you are running. If that copy is a linked worktree's, the update cannot move it (the linked-worktree paragraph above): delete its row or run `scripts/update-plugin-everywhere.sh --apply`. There is no marketplace auto-refresh unless you opt in, so a cache goes stale simply because nobody refreshed it.
 
 This repo is **public**, so install and update clone it over anonymous HTTPS — no SSH key, no SSO authorization, no SAML step. If you are reading an older note about `Configure SSO` on <https://github.com/settings/keys>, it applied while the repo was `INTERNAL` and no longer does.
 
