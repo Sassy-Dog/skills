@@ -2104,24 +2104,20 @@ legacy_residue=0
 for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refresh-hooks' 'refresh-deps'; do
     case "$legacy" in
         refresh-skills)
-            # setup-config's marker recognizer, the adopt/update walkthrough
-            # that names the superseded producer, and the architecture doc's statement of
-            # the same recognition rule.
+            # setup-config's marker recognizer and the adopt/update walkthrough
+            # that names the superseded producer.
             allow=(
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-config/references/update-mode.md'
-                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
-            # setup-hooks' generated-by ownership matcher + the architecture doc's
-            # statement of it, plus the committed consumer artifacts that
+            # setup-hooks' generated-by ownership matcher, plus the committed consumer artifacts that
             # PROVE the matcher still accepts this producer name (issue #133 —
             # the fixtures are verbatim upstream bytes; sanitising the name out
             # of them would defeat their entire purpose).
             allow=(
                 ':!skills/setup-hooks/SKILL.md'
-                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2142,7 +2138,6 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
-                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2158,8 +2153,6 @@ done
 # ai-agent-skills -> skills (issue #72). The old plugin name may
 # appear ONLY where it is still load-bearing:
 #   - README.md — the one historical line recording the #71 rename
-#   - docs/ARCHITECTURE.md — the marker-recognition rule: recognizers must accept
-#     pre-rename 'generated-by: ai-agent-skills:*' markers
 #   - skills/setup-deps/SKILL.md, skills/setup-hooks/SKILL.md — those
 #     generated-by recognizers themselves. Their markers are committed inside
 #     every consumer repo, so each must also keep naming its own superseded
@@ -2174,7 +2167,6 @@ done
 #   - this script (the guard itself)
 if git grep -l 'ai-agent-skills' -- \
     ':!README.md' \
-    ':!docs/ARCHITECTURE.md' \
     ':!skills/setup-deps/SKILL.md' \
     ':!skills/setup-hooks/SKILL.md' \
     ':!scripts/preflight.sh' \
