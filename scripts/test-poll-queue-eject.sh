@@ -291,6 +291,10 @@ case "$1" in
             *enqueuePullRequest*)
                 # MS_LAG: the mutation succeeds but the queue entry is not visible yet (#592)
                 if [ "${MS_ENQUEUE_RC:-0}" = 0 ]; then [ -n "${MS_LAG:-}" ] || echo "OPEN CLEAN true" >"$MS_STATE"; echo '{}'; exit 0; fi
+                # MS_ENQUEUE_ERR_FIRST: the first attempt hits a transient error, later ones answer MS_ENQUEUE_ERR
+                if [ -n "${MS_ENQUEUE_ERR_FIRST:-}" ] && [ ! -e "$MS_CALLS.enqfirst" ]; then
+                    : >"$MS_CALLS.enqfirst"; printf '%s\n' "$MS_ENQUEUE_ERR_FIRST" >&2; exit 1
+                fi
                 printf '%s\n' "${MS_ENQUEUE_ERR:-enqueue refused}" >&2; exit "${MS_ENQUEUE_RC}" ;;
             *isInMergeQueue*)     cat "$MS_STATE" ;;
             *headRefOid*)         [ "${MS_HEAD_RC:-0}" = 0 ] || exit 1
@@ -334,10 +338,12 @@ ms_run() { # <script> <head the PR reports> <args…>   (env MS_* passes through
         GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@" 2>&1)"
     MS_RC=$?
 }
+bline() { grep '^BOUND ENQUEUE FAILED' <<<"$MS_OUT" || true; }
 ms_wrote() { grep -qE 'enqueuePullRequest|pr merge' "$MS_CALLS"; }
 ms_any_call() { [ -s "$MS_CALLS" ]; }
 
 # ms_suite <script> — appends a label to MS_FAILED for each case that does not hold.
+ESC=$'\033'
 MS_FAILED=""
 ms_expect() { # <label> <condition rc: 0 holds>
     [ "$2" = 0 ] || MS_FAILED="$MS_FAILED|$1"
@@ -421,10 +427,26 @@ ms_suite() {
     ms_expect "bound enqueue refused: the cause carries gh's own exit status (4)" "$(grep -q '^BOUND ENQUEUE FAILED — .*refused (gh exit 4): ' <<<"$MS_OUT"; echo $?)"
     ms_expect "bound enqueue refused: the stderr text is cut to at most 200 characters" \
         "$(grep -qE '^BOUND ENQUEUE FAILED.*x{150}' <<<"$MS_OUT" && ! grep -qE '^BOUND ENQUEUE FAILED.*x{201}' <<<"$MS_OUT"; echo $?)"
-    ms_expect "bound enqueue refused: a token-shaped string is masked" "$(! grep -q 'SECRET123' <<<"$MS_OUT"; echo $?)"
+    ms_expect "bound enqueue refused: a token-shaped string is masked" "$(! grep -q 'SECRET123' <<<"$(bline)"; echo $?)"
     MS_ENQUEUE_RC=4 MS_ENQUEUE_ERR="$(printf 'first line\nsecond line')" ms_run "$sc" "$H1" --expected-head "$H1"
     ms_expect "bound enqueue refused: only the first stderr line reaches the cause" \
-        "$(grep -q 'refused (gh exit 4): first line; the head' <<<"$MS_OUT" && ! grep -q 'second line' <<<"$MS_OUT"; echo $?)"
+        "$(grep -q 'refused (gh exit 4): first line; the head' <<<"$MS_OUT" && ! grep -q 'second line' <<<"$(bline)"; echo $?)"
+    # #592: the Bearer/token mask and the control-byte strip each have their own case
+    MS_ENQUEUE_RC=4 MS_ENQUEUE_ERR="Authorization: Bearer abc123BEARER rejected" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_expect "bound enqueue refused: a Bearer credential is masked in the cause" \
+        "$(grep -q 'refused (gh exit 4): Authorization: Bearer \*\*\*' <<<"$(bline)" && ! grep -q 'abc123BEARER' <<<"$(bline)"; echo $?)"
+    MS_ENQUEUE_RC=4 MS_ENQUEUE_ERR="bad${ESC}[31mred" ms_run "$sc" "$H1" --expected-head "$H1"
+    bl="$(bline)"
+    ms_expect "bound enqueue refused: control bytes are stripped from the cause" \
+        "$(case "$bl" in *"$ESC"*) echo 1 ;; *"refused (gh exit 4): bad[31mred"*) echo 0 ;; *) echo 1 ;; esac)"
+    # #592: a transient error before the refusal: gh-retry's own log line is not the cause, but still reaches stderr
+    rm -f "$MS_CALLS.enqfirst"
+    MS_ENQUEUE_RC=4 MS_ENQUEUE_ERR="Pull request is not mergeable" MS_ENQUEUE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_expect "bound enqueue refused after a transient error: the cause is GitHub's reason, not gh-retry's log line" \
+        "$(grep -q 'refused (gh exit 4): Pull request is not mergeable' <<<"$(bline)" && ! grep -q 'gh-retry\]' <<<"$(bline)"; echo $?)"
+    ms_expect "bound enqueue refused after a transient error: gh-retry's log still reaches stderr" \
+        "$(grep -q '^\[gh-retry\] attempt 1/5' <<<"$MS_OUT"; echo $?)"
+    rm -f "$MS_CALLS.enqfirst"
     # #592: a mutation that SUCCEEDED but whose queue entry lags prints no BOUND ENQUEUE FAILED
     MS_LAG=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound enqueue succeeded, confirm lags: exit 11" 11
@@ -478,13 +500,15 @@ ms_suite() {
     # "08" is invalid octal to bash arithmetic: it must read as 8
     MS_UPDATE_WAIT=08 MS_UPDATE_POLL=01 MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1"
     ms_rc "update wait 08 and poll 01 are read as decimal (accepted, head moved: exit 25)" 25
-    # under --watch the wait is clamped to the watch budget. Asserted on the bound the script PRINTS (#592),
-    # never on elapsed time: the stub moves the head on the first poll, so neither the real run nor a
-    # mutant waits, and the printed bound is the only thing that differs.
-    MS_UPDATE_WAIT=30 MS_UPDATE_POLL=1 MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1" --watch 1 --poll 0
+    # under --watch the wait is clamped to the watch budget. The case compares the bound the script PRINTS
+    # against the watch budget (5) while the configured wait is 30. The stub moves the head on the first
+    # poll, so neither the real run nor a mutant waits; the printed bound is floored at 0 by the script.
+    # The assertion is 0 <= bound <= 5, which a slow runner cannot push out of range (a clamped bound can
+    # only shrink with elapsed time, and the unclamped mutant prints about 30).
+    MS_UPDATE_WAIT=30 MS_UPDATE_POLL=1 MS_BEHIND=3 MS_MOVE_AT=2 MS_HEAD_LATER="$H2" ms_run "$sc" "$H1" --direct --expected-head "$H1" --watch 5 --poll 0
     wbound="$(sed -n 's/^  waiting up to \([0-9][0-9]*\)s for the head to move$/\1/p' <<<"$MS_OUT" | sed -n 1p)"
-    ms_expect "watch: the update wait is clamped to the watch budget (printed bound is at most 1)" \
-        "$(if [ -n "$wbound" ] && [ "$wbound" -le 1 ]; then echo 0; else echo 1; fi)"
+    ms_expect "watch: the update wait is clamped to the watch budget (printed bound is between 0 and 5)" \
+        "$(if [ -n "$wbound" ] && [ "$wbound" -ge 0 ] && [ "$wbound" -le 5 ]; then echo 0; else echo 1; fi)"
     ms_expect "watch: a clamped wait whose head moves still exits 25" "$(if [ "$MS_RC" = 25 ]; then echo 0; else echo 1; fi)"
     MS_UPDATE_WAIT=2 MS_UPDATE_POLL=1 MS_BEHIND=3 ms_run "$sc" "$H1" --direct --expected-head "$H1" --watch 1 --poll 0
     ms_expect "watch: an unmoved head under the clamp still exits through the bounded watch (11)" \
@@ -585,8 +609,12 @@ ms_mutant lagged-success-prints-bound-failed '[ "$erc" -ne 0 ] && [ "$EXPECTED_H
 ms_mutant cause-drops-retry-exhaustion 'if [ "$enq_rc" -eq 124 ]; then' 'if false; then'
 ms_mutant cause-drops-gh-exit-status 'enq_why="refused (gh exit $enq_rc): $enq_line"' 'enq_why="refused: $enq_line"'
 ms_mutant cause-stderr-uncut ' | cut -c1-200)"' ')"'
+ms_mutant cause-keeps-gh-retry-log "{ grep -v '^\\[gh-retry\\]' <<<\"\$enq_err\" || true; }" 'cat <<<"$enq_err"'
+ms_mutant cause-gh-retry-log-swallowed '[ -n "$enq_err" ] && printf '"'"'%s\n'"'"' "$enq_err" >&2' ':'
+ms_mutant cause-bearer-unmasked "; s/([Bb]earer|[Tt]oken) +[^ ]+/\\1 ***/g'" "'"
+ms_mutant cause-control-bytes-kept "LC_ALL=C tr -d '\\000-\\037\\177'" 'cat'
 ms_mutant cause-stderr-unmasked 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; ' ''
-ms_mutant cause-stderr-multiline "sed -n '/./{p;q;}' <<<\"\$enq_err\"" 'cat <<<"$enq_err"'
+ms_mutant cause-stderr-multiline "| sed -n '/./{p;q;}' |" '|'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'

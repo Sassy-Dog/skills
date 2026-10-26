@@ -51,7 +51,7 @@
 #   `enqueue not confirmed — re-run`, which is ordinary waiting (#592). The cause
 #   names the gh-retry outcome: `retries ran out on transient errors (gh-retry
 #   124)`, or `refused (gh exit <n>): <first stderr line>` (one line, at most 200
-#   characters, token-shaped strings masked). The line is PER PASS: this script
+#   characters, gh-retry's own `[gh-retry]` log lines skipped, token-shaped strings masked, control bytes stripped). The line is PER PASS: this script
 #   is stateless, and what a caller does with one line or a repeat is
 #   pr-shepherd's SKILL.md `--expected-head` paragraph, the rule's one home.
 #   Without the flag nothing changes. The --direct staleness update
@@ -267,10 +267,12 @@ enqueue() {
                 mergeQueueEntry{ position state }}}' \
         -f prid="$prid" -f eho="$EXPECTED_HEAD" 2>&1 >/dev/null)"; enq_rc=$?
       [ "$enq_rc" -eq 0 ] && return 0
+      # gh-retry's own log is for the operator, so it still reaches stderr (#592).
+      [ -n "$enq_err" ] && printf '%s\n' "$enq_err" >&2
       if [ "$enq_rc" -eq 124 ]; then
         enq_why="retries ran out on transient errors (gh-retry 124)"
       else
-        enq_line="$(sed -n '/./{p;q;}' <<<"$enq_err" | LC_ALL=C tr -d '\000-\037\177' \
+        enq_line="$({ grep -v '^\[gh-retry\]' <<<"$enq_err" || true; } | sed -n '/./{p;q;}' | LC_ALL=C tr -d '\000-\037\177' \
           | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; s/([Bb]earer|[Tt]oken) +[^ ]+/\1 ***/g' | cut -c1-200)"
         enq_why="refused (gh exit $enq_rc): $enq_line"
       fi
@@ -533,7 +535,8 @@ advance() { # one idempotent step against live state
             # Under --watch the wait never outlives the watch budget (the loop below owns it).
             [ "$WATCH" -gt 0 ] && [ "$upd_until" -gt "$deadline" ] && upd_until="$deadline"
             # The effective bound is printed so a test can assert the clamp without timing it (#592).
-            echo "  waiting up to $((upd_until - SECONDS))s for the head to move" >&2
+            wait_left=$((upd_until - SECONDS)); [ "$wait_left" -lt 0 ] && wait_left=0
+            echo "  waiting up to ${wait_left}s for the head to move" >&2
             while :; do
               new_head="$(pr_head)"
               [ -n "$new_head" ] && [ "$new_head" != "$EXPECTED_HEAD" ] && break

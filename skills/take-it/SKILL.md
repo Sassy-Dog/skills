@@ -757,10 +757,9 @@ An exit `11` whose stdout carries `BOUND ENQUEUE FAILED — <cause>` is not "che
 bound enqueue call failed *this pass*, after `gh-retry`, with no `--auto` fallback (or the PR node
 id did not resolve); a mutation that succeeded but is not yet confirmed in the queue does not print
 it. The script is stateless, so one line is not yet a stall: a refusal can be transient. Re-run the
-bound hand-off once (exit `11` already means re-run); only when the line appears on **two
-consecutive passes** does it need a human (`pr-shepherd`'s `--expected-head` paragraph is the one
-home of that rule and of what to check). Then report it by name and hold the PR; do not demote and
-do not count it as a re-review.
+bound hand-off once (exit `11` already means re-run). When a human is needed, and what to check,
+is `pr-shepherd`'s `--expected-head` paragraph, the one home of that rule. Then report it by name
+and hold the PR; do not demote and do not count it as a re-review.
 
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
