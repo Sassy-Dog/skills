@@ -50,7 +50,8 @@
 #   a mutation that SUCCEEDED but is not yet isInMergeQueue prints only
 #   `enqueue not confirmed — re-run`, which is ordinary waiting (#592). The cause
 #   names the gh-retry outcome: `retries ran out on transient errors (gh-retry
-#   124)`, or `refused (gh exit <n>): <first stderr line>` (one line, at most 200
+#   124)`, or `refused (gh exit <n>): <gh's error message>` (the text after the last
+#   `gh: ` in gh's output, else the first non-log line; one line, at most 200
 #   characters, gh-retry's own `[gh-retry]` log lines skipped, token-shaped strings masked, control bytes stripped). The line is PER PASS: this script
 #   is stateless, and what a caller does with one line or a repeat is
 #   pr-shepherd's SKILL.md `--expected-head` paragraph, the rule's one home.
@@ -249,7 +250,7 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # line the caller prints (#590). Set by enqueue(), read by advance().
 ENQ_CAUSE=""
 enqueue() {
-  local prid enq_err enq_rc enq_why enq_line
+  local prid enq_err enq_rc enq_why enq_body enq_line
   ENQ_CAUSE=""
   prid="$(gh api graphql \
     -f query='query($owner:String!,$name:String!,$pr:Int!){
@@ -272,7 +273,10 @@ enqueue() {
       if [ "$enq_rc" -eq 124 ]; then
         enq_why="retries ran out on transient errors (gh-retry 124)"
       else
-        enq_line="$({ grep -v '^\[gh-retry\]' <<<"$enq_err" || true; } | sed -n '/./{p;q;}' | LC_ALL=C tr -d '\000-\037\177' \
+        # gh api prints a GraphQL error's JSON body on stdout with no trailing newline, then `gh: <message>`: take the text after the last `gh: ` (#594).
+        enq_body="$(grep -v '^\[gh-retry\]' <<<"$enq_err" || true)"
+        case "$enq_body" in *'gh: '*) enq_body="${enq_body##*gh: }" ;; esac
+        enq_line="$(sed -n '/./{p;q;}' <<<"$enq_body" | LC_ALL=C tr -d '\000-\037\177' \
           | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; s/([Bb]earer|[Tt]oken) +[^ ]+/\1 ***/g' | cut -c1-200)"
         enq_why="refused (gh exit $enq_rc): $enq_line"
       fi

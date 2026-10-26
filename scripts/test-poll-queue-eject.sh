@@ -295,6 +295,8 @@ case "$1" in
                 if [ -n "${MS_ENQUEUE_ERR_FIRST:-}" ] && [ ! -e "$MS_CALLS.enqfirst" ]; then
                     : >"$MS_CALLS.enqfirst"; printf '%s\n' "$MS_ENQUEUE_ERR_FIRST" >&2; exit 1
                 fi
+                # MS_ENQUEUE_JSON: gh api's real shape, a JSON body on stdout with no trailing newline, then `gh: <msg>` on stderr (#594)
+                if [ -n "${MS_ENQUEUE_JSON:-}" ]; then printf '%s' "$MS_ENQUEUE_JSON"; printf 'gh: %s\n' "${MS_ENQUEUE_ERR:-enqueue refused}" >&2; exit "${MS_ENQUEUE_RC}"; fi
                 printf '%s\n' "${MS_ENQUEUE_ERR:-enqueue refused}" >&2; exit "${MS_ENQUEUE_RC}" ;;
             *isInMergeQueue*)     cat "$MS_STATE" ;;
             *headRefOid*)         [ "${MS_HEAD_RC:-0}" = 0 ] || exit 1
@@ -447,6 +449,10 @@ ms_suite() {
     ms_expect "bound enqueue refused after a transient error: gh-retry's log still reaches stderr" \
         "$(grep -q '^\[gh-retry\] attempt 1/5' <<<"$MS_OUT"; echo $?)"
     rm -f "$MS_CALLS.enqfirst"
+    # #594: gh's real shape is a JSON body on stdout (no trailing newline) then `gh: <msg>`; the cause carries the message
+    MS_ENQUEUE_RC=1 MS_ENQUEUE_JSON='{"data":{"enqueuePullRequest":null},"errors":[{"type":"NOT_FOUND","message":"scaffold"}]}' MS_ENQUEUE_ERR="Pull request is not queueable" ms_run "$sc" "$H1" --expected-head "$H1"
+    ms_expect "bound enqueue refused with a JSON body: the cause carries gh's message, not the JSON body (#594)" \
+        "$(grep -q 'refused (gh exit 1): Pull request is not queueable; the head' <<<"$(bline)" && ! grep -q '{"data"' <<<"$(bline)"; echo $?)"
     # #592: a mutation that SUCCEEDED but whose queue entry lags prints no BOUND ENQUEUE FAILED
     MS_LAG=1 ms_run "$sc" "$H1" --expected-head "$H1"
     ms_rc "bound enqueue succeeded, confirm lags: exit 11" 11
@@ -608,13 +614,14 @@ ms_mutant bound-failed-line-on-unbound-run '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEA
 ms_mutant lagged-success-prints-bound-failed '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"' '[ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="${ENQ_CAUSE:-the mutation lagged}"'
 ms_mutant cause-drops-retry-exhaustion 'if [ "$enq_rc" -eq 124 ]; then' 'if false; then'
 ms_mutant cause-drops-gh-exit-status 'enq_why="refused (gh exit $enq_rc): $enq_line"' 'enq_why="refused: $enq_line"'
+ms_mutant cause-drops-gh-prefix-extraction 'case "$enq_body" in *'"'"'gh: '"'"'*) enq_body="${enq_body##*gh: }" ;; esac' ':'
 ms_mutant cause-stderr-uncut ' | cut -c1-200)"' ')"'
-ms_mutant cause-keeps-gh-retry-log "{ grep -v '^\\[gh-retry\\]' <<<\"\$enq_err\" || true; }" 'cat <<<"$enq_err"'
+ms_mutant cause-keeps-gh-retry-log "grep -v '^\\[gh-retry\\]' <<<\"\$enq_err\" || true" 'printf "%s" "$enq_err"'
 ms_mutant cause-gh-retry-log-swallowed '[ -n "$enq_err" ] && printf '"'"'%s\n'"'"' "$enq_err" >&2' ':'
 ms_mutant cause-bearer-unmasked "; s/([Bb]earer|[Tt]oken) +[^ ]+/\\1 ***/g'" "'"
 ms_mutant cause-control-bytes-kept "LC_ALL=C tr -d '\\000-\\037\\177'" 'cat'
 ms_mutant cause-stderr-unmasked 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; ' ''
-ms_mutant cause-stderr-multiline "| sed -n '/./{p;q;}' |" '|'
+ms_mutant cause-stderr-multiline "sed -n '/./{p;q;}' <<<" 'cat <<<'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'
