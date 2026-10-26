@@ -1591,7 +1591,7 @@ assert_in "$dispatch_outside" \
 # list. Files are found rather than enumerated, and the floor refuses a sweep
 # that found nothing, which is how this check would otherwise pass vacuously.
 # A COPY is distinguished from a mere REFERENCE by the em-dash continuation:
-# AGENTS.md names the line twice without reproducing it, which is a
+# AGENTS.md and docs/ARCHITECTURE.md each name the line once without reproducing it, which is a
 # cross-reference and must not be held to byte-identity. Comparison runs
 # FLATTENED, because a copy routinely wraps mid-line — the config contract's
 # does, and a line-scoped compare reported that correct copy as drifted.

@@ -20,7 +20,7 @@
 > below is unchanged and still applies.
 
 Historical context follows, for the two routines as they ran until 2026-08-13. Each carried the
-skill-load fallback clause required by [`AGENTS.md`](../AGENTS.md) so that a plugin-loading gap
+skill-load fallback clause required by [`ARCHITECTURE.md`](ARCHITECTURE.md) so that a plugin-loading gap
 produced a degraded run rather than a silent no-op (#97, #98).
 
 | Routine | Invoked | Fallback body |
@@ -211,5 +211,5 @@ Both report skills render the field on their header line:
 - `skills/whats-behind/SKILL.md` §5 — `_Load: <plugin|fallback (degraded)> · Scanned: …_`
 
 When either skill's output format changes, keep the field on the header line and keep the
-precedence rule stated in both places — this doc and `AGENTS.md`. Dropping it from one leaves the
+precedence rule stated in both places — this doc and `ARCHITECTURE.md`. Dropping it from one leaves the
 other reading like the whole contract.

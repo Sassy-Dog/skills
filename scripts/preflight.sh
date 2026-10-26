@@ -1199,7 +1199,7 @@
 #      21:05:44Z searched, got `[]`, and filed the duplicate #338 — seven
 #      seconds — while the identical search four minutes later returned both.
 #      Nothing covered this script before: `grep -l file-or-link-issue
-#      scripts/test-*.sh` returned nothing, so the property AGENTS.md calls the
+#      scripts/test-*.sh` returned nothing, so the property docs/ARCHITECTURE.md calls the
 #      script's defining one was enforced by prose alone. The fix is TWO stages
 #      and the gate refuses to let either be simplified away: the search is
 #      unbounded in AGE but not fresh (M6 deletes it and loses every marker
@@ -2105,23 +2105,23 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
     case "$legacy" in
         refresh-skills)
             # setup-config's marker recognizer, the adopt/update walkthrough
-            # that names the superseded producer, and AGENTS.md's statement of
+            # that names the superseded producer, and the architecture doc's statement of
             # the same recognition rule.
             allow=(
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-config/references/update-mode.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
-            # setup-hooks' generated-by ownership matcher + AGENTS.md's
+            # setup-hooks' generated-by ownership matcher + the architecture doc's
             # statement of it, plus the committed consumer artifacts that
             # PROVE the matcher still accepts this producer name (issue #133 —
             # the fixtures are verbatim upstream bytes; sanitising the name out
             # of them would defeat their entire purpose).
             allow=(
                 ':!skills/setup-hooks/SKILL.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2142,7 +2142,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!skills/setup-config/SKILL.md'
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
-                ':!AGENTS.md'
+                ':!docs/ARCHITECTURE.md'
                 ':!scripts/preflight.sh'
                 ':!scripts/fixtures/legacy-markers/'
             ) ;;
@@ -2158,7 +2158,7 @@ done
 # ai-agent-skills -> skills (issue #72). The old plugin name may
 # appear ONLY where it is still load-bearing:
 #   - README.md — the one historical line recording the #71 rename
-#   - AGENTS.md — the marker-recognition rule: recognizers must accept
+#   - docs/ARCHITECTURE.md — the marker-recognition rule: recognizers must accept
 #     pre-rename 'generated-by: ai-agent-skills:*' markers
 #   - skills/setup-deps/SKILL.md, skills/setup-hooks/SKILL.md — those
 #     generated-by recognizers themselves. Their markers are committed inside
@@ -2174,7 +2174,7 @@ done
 #   - this script (the guard itself)
 if git grep -l 'ai-agent-skills' -- \
     ':!README.md' \
-    ':!AGENTS.md' \
+    ':!docs/ARCHITECTURE.md' \
     ':!skills/setup-deps/SKILL.md' \
     ':!skills/setup-hooks/SKILL.md' \
     ':!scripts/preflight.sh' \

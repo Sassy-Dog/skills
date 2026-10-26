@@ -3,7 +3,7 @@
 # ACROSS THE SEARCH INDEX'S LAG, and still discriminates (issue #339).
 #
 # WHAT THE DEFECT WAS. `file-or-link-issue.sh` is this repo's only issue-creation
-# path, and AGENTS.md names marker-keyed idempotency as the reason it exists.
+# path, and docs/ARCHITECTURE.md names marker-keyed idempotency as the reason it exists.
 # That idempotency was a read-after-write against GitHub's issue search index,
 # which is ASYNCHRONOUS. Measured 2026-09-04 against this repo: #337 filed at
 # 21:05:37Z carrying marker `stale-issues-title-only-shipped-detector`; the SAME
@@ -14,7 +14,7 @@
 # `{"action":"filed"}` both times, which every caller reads as success.
 #
 # AND NOTHING COVERED THIS SCRIPT AT ALL. `grep -l file-or-link-issue
-# scripts/test-*.sh` returned nothing before this file: the property AGENTS.md
+# scripts/test-*.sh` returned nothing before this file: the property docs/ARCHITECTURE.md
 # calls the script's defining one was enforced by prose alone, in a tree whose
 # own convention is that a rule with no gate rots silently.
 #
