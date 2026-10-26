@@ -2141,20 +2141,16 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
         refresh-sassydog-)
             # setup-deps' and setup-hooks' ownership matchers, plus the
             # committed consumer hook fixtures that carry it verbatim
-            # (issue #133).
+            # (issue #133). setup-config's marker recognizer must spell every
+            # producer name, so it names this one too.
             allow=(
+                ':!skills/setup-config/SKILL.md'
+                ':!skills/setup-config/references/update-mode.md'
                 ':!skills/setup-deps/SKILL.md'
                 ':!skills/setup-hooks/SKILL.md'
                 ':!scripts/fixtures/legacy-markers/'
                 ':!scripts/preflight.sh'
             ) ;;
-        *)
-            # Unreachable by construction: every name in the loop list has
-            # its own branch above. Fail loudly rather than guard with an
-            # empty allow list that would flag every file.
-            failed "legacy-name guard — no allow list for '$legacy'"
-            legacy_residue=1
-            continue ;;
     esac
     if git grep -l "$legacy" -- "${allow[@]}"; then
         failed "legacy-name guard — '$legacy' outside the sanctioned back-compat files"

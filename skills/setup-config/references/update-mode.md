@@ -193,7 +193,7 @@ When identifying a generated skill for migration, match the `generated-by:` mark
 the file** and accept **every** producer name:
 
 - `refresh-skills` — plugin 2026.7.22 until this skill was renamed `setup-config`
-- `refresh-skills` — plugin 0.9.0 through 2026.7.21
+- `refresh-sassydog-skills` — plugin 0.9.0 through 2026.7.21
 - `create-dev-workflows` — plugin ≤ 0.8.1
 
 This list is frozen history and takes no new entries. `setup-config` writes only
