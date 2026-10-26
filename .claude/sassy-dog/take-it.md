@@ -19,8 +19,8 @@ usually a blockquoted numbered list. By convention the first rule is numbered `4
 
 Why: take-it hands each sub-agent one self-contained prompt whose step 4 directs it to read this
 section (`skills/take-it/SKILL.md`, "Sub-agent prompt template"). The prompt spends its first three
-steps before that — stay inside your worktree · read the issue · implement per `AGENTS.md` — so
-rules written here continue its numbering from 4 rather than restarting at 1 and reading as a
+steps before that — stay inside your worktree · read the issue · implement per `AGENTS.md` (or
+`CLAUDE.md` where the repo has no `AGENTS.md`) — so rules written here continue its numbering from 4 rather than restarting at 1 and reading as a
 competing list.
 
 Note where that leaves you as a reader: the prompt's steps 1-3 are in the SKILL, not in this file,
