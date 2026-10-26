@@ -69,12 +69,9 @@
 #      worktree-isolated session refuses git beside expansions it cannot resolve, and the repo bans them all). The rule and
 #      its measured basis are in scripts/check-git-expansion.sh's header.
 #   4. no legacy name residue outside the per-name sanctioned back-compat
-#      files, in three groups (all enforced under this one gate): the renamed
-#      generator family — 'create-dev-workflows', 'refresh-sassydog-',
-#      'refresh-skills', 'refresh-hooks', 'refresh-deps' (issue #120); the
-#      plugin and marketplace renames — 'ai-agent-skills', 'sassy-dog-skills'
-#      (issue #71); and the workflow-skill naming sweep — 'plate-it',
-#      'groom-it', 'drain-it', 'clean-it'
+#      files (scripts/check-legacy-names.sh; its header holds the guarded names,
+#      the rename history and the rationale, and scripts/test-legacy-names.sh
+#      proves it — issues #120, #71, #612)
 #   5. plugin manifests are valid JSON, the plugin version is CalVer
 #      (YYYY.M.P — the one-way ratchet, docs/VERSIONING.md), and any
 #      marketplace.json plugins[].version equals it (issue #31)
@@ -82,7 +79,9 @@
 #   7. ownership-matcher tests (scripts/test-ownership-matchers.sh) — the
 #      setup-hooks / setup-deps `generated-by:` matchers, extracted from the
 #      shipped SKILL.md files and run against real pre-rename consumer
-#      artifacts committed under scripts/fixtures/legacy-markers/ (issue #133)
+#      artifacts committed under scripts/fixtures/legacy-markers/ (issue #133),
+#      and setup-config's two producer-name lists, each of which must name every
+#      producer exactly once (issue #612)
 #   8. label-taxonomy tests (scripts/test-label-taxonomy.sh) — the two label
 #      taxonomies stay disjoint AND perceptually separated (cross-set CIEDE2000
 #      check), issue-claim.sh's label reconcile still CORRECTS a drifted label
@@ -1681,6 +1680,10 @@
 #      WORKTREE (whose pin `claude plugin update` cannot move, #590), the dry run
 #      and its separate worktree count, `--apply` with its backup and prune, and a
 #      surviving stale copy; a mutant per construct. No gh, no network.
+#  64. legacy-name tests (scripts/test-legacy-names.sh) — scripts/check-legacy-names.sh
+#      executed over scratch copies of the tracked tree: per-name allow lists, the
+#      unbranched-name default arm, fail-closed scans; a mutant per construct.
+#      No gh, no network.
 #
 # All gates run even after a failure (accumulate-and-report, same pattern as
 # check-frontmatter.sh) and the summary lists each failed one. Exit 0 = all pass,
@@ -2084,147 +2087,15 @@ if [ -n "$GUARD_SCRATCH" ]; then
 fi
 
 # --- 4. no legacy skill-name residue -----------------------------------------
-# The whole generator family was renamed to setup-* in issue #120:
-#   create-dev-workflows -> refresh-sassydog-skills (0.9.0)
-#   refresh-sassydog-skills -> refresh-skills (2026.7.22)
-#   refresh-skills -> setup-config (issue #121)
-#   refresh-hooks -> setup-hooks (issue #122)
-#   refresh-deps  -> setup-deps  (issue #123)
-# Every superseded name may appear only in the sanctioned backward-compat
-# mentions — the ownership matchers still have to RECOGNISE artifacts produced
-# under the older names, and those markers are committed inside every consumer
-# repo. Anything else is a stale reference that would confuse a render or send
-# a reader to a dead path.
-#
-# Exclusions are PER NAME, not one shared union: a name is sanctioned in
-# exactly the files that must still spell it out. A union list would let a
-# stale `refresh-deps` hide in a file sanctioned only for `refresh-skills`,
-# which is the residue this guard exists to catch.
-legacy_residue=0
-for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refresh-hooks' 'refresh-deps'; do
-    case "$legacy" in
-        refresh-skills)
-            # setup-config's marker recognizer and the adopt/update walkthrough
-            # that names the superseded producer.
-            allow=(
-                ':!skills/setup-config/SKILL.md'
-                ':!skills/setup-config/references/update-mode.md'
-                ':!scripts/preflight.sh'
-            ) ;;
-        refresh-hooks)
-            # setup-hooks' generated-by ownership matcher, plus the committed
-            # consumer artifacts that PROVE the matcher still accepts this
-            # producer name (issue #133 —
-            # the fixtures are verbatim upstream bytes; sanitising the name out
-            # of them would defeat their entire purpose).
-            allow=(
-                ':!skills/setup-hooks/SKILL.md'
-                ':!scripts/preflight.sh'
-                ':!scripts/fixtures/legacy-markers/'
-            ) ;;
-        refresh-deps)
-            # setup-deps' generated-by ownership matcher + the committed
-            # consumer artifacts proving the matcher accepts it (issue #133).
-            allow=(
-                ':!skills/setup-deps/SKILL.md'
-                ':!scripts/preflight.sh'
-                ':!scripts/fixtures/legacy-markers/'
-            ) ;;
-        create-dev-workflows)
-            # setup-config's marker recognizer and the adopt/update walkthrough
-            # that names the original producer.
-            allow=(
-                ':!skills/setup-config/SKILL.md'
-                ':!skills/setup-config/references/update-mode.md'
-                ':!scripts/preflight.sh'
-            ) ;;
-        refresh-sassydog-)
-            # setup-deps' and setup-hooks' ownership matchers, plus the
-            # committed consumer hook fixtures that carry it verbatim
-            # (issue #133). setup-config's marker recognizer must spell every
-            # producer name, so it names this one too.
-            allow=(
-                ':!skills/setup-config/SKILL.md'
-                ':!skills/setup-config/references/update-mode.md'
-                ':!skills/setup-deps/SKILL.md'
-                ':!skills/setup-hooks/SKILL.md'
-                ':!scripts/fixtures/legacy-markers/'
-                ':!scripts/preflight.sh'
-            ) ;;
-    esac
-    if git grep -l "$legacy" -- "${allow[@]}"; then
-        failed "legacy-name guard — '$legacy' outside the sanctioned back-compat files"
-        legacy_residue=1
-    fi
-done
-
-# The plugin itself renamed too: ai-agent-skills -> sassy-dog, the marketplace
-# sassy-dog-skills -> skills (issue #71), and the GitHub repo
-# ai-agent-skills -> skills (issue #72). The old plugin name may
-# appear ONLY where it is still load-bearing:
-#   - README.md — the one historical line recording the #71 rename
-#   - skills/setup-deps/SKILL.md, skills/setup-hooks/SKILL.md — those
-#     generated-by recognizers themselves. Their markers are committed inside
-#     every consumer repo, so each must also keep naming its own superseded
-#     producers (setup-hooks accepts refresh-hooks and refresh-sassydog-hooks,
-#     see issue #122; setup-deps accepts refresh-deps and refresh-sassydog-deps,
-#     see issue #123) — a narrower matcher would silently treat a pre-rename
-#     consumer file as hand-written.
-#   - scripts/fixtures/legacy-markers/ — real consumer artifacts still stamped
-#     with the pre-rename namespace, committed verbatim so the matchers are
-#     proven against a genuine older-plugin file rather than a synthetic
-#     pattern we wrote ourselves (issue #133)
-#   - this script (the guard itself)
-if git grep -l 'ai-agent-skills' -- \
-    ':!README.md' \
-    ':!skills/setup-deps/SKILL.md' \
-    ':!skills/setup-hooks/SKILL.md' \
-    ':!scripts/preflight.sh' \
-    ':!scripts/fixtures/legacy-markers/'; then
-    failed "legacy-name guard — 'ai-agent-skills' outside the sanctioned files (plugin renamed to sassy-dog, issue #71)"
-    legacy_residue=1
+# The rule, the rename history, the per-name allow lists and what the guard does
+# not cover live in the header of scripts/check-legacy-names.sh; the checker is
+# proved by scripts/test-legacy-names.sh. Exit 1 is residue or a guarded name with
+# no allow list, exit 2 is a scan that could not run: both fail, neither is a pass.
+if bash "$ROOT/scripts/check-legacy-names.sh"; then
+    pass "legacy-name guard"
+else
+    failed "legacy-name guard (scripts/check-legacy-names.sh)"
 fi
-
-# The old marketplace name may appear only in the one-time re-add
-# instructions (which must name it to remove it) and this script.
-if git grep -l 'sassy-dog-skills' -- \
-    ':!README.md' \
-    ':!scripts/preflight.sh'; then
-    failed "legacy-name guard — 'sassy-dog-skills' outside the sanctioned files (marketplace renamed to skills, issue #71)"
-    legacy_residue=1
-fi
-
-# Four workflow skills lost the -it suffix in the collection-scope naming
-# sweep: plate-it -> survey-work, groom-it -> groom-backlog (nee fill-it),
-# drain-it -> dispatch-ready, clean-it -> tidy-repo. Each legacy name may
-# appear ONLY where it is still load-bearing:
-#   - the renamed skill's own SKILL.md — legacy trigger phrases, the
-#     "Formerly" note, and the stranded-pre-rename-config detection
-#   - skills/setup-config/SKILL.md + references/{migrate,update}-mode.md —
-#     the rename map and legacy-artifact recognition (generated dirs and
-#     pre-rename config filenames keep their old names in consumer repos)
-#   - skills/whats-on-fire/SKILL.md — the blind-spot probe distinguishes a
-#     legacy-named survey-work config from a missing one
-#   - README.md — the "(formerly ...)" annotations
-#   - this script (the guard itself)
-for legacy in 'plate-it' 'groom-it' 'drain-it' 'clean-it'; do
-    if git grep -l "$legacy" -- \
-        ':!skills/survey-work/SKILL.md' \
-        ':!skills/groom-backlog/SKILL.md' \
-        ':!skills/dispatch-ready/SKILL.md' \
-        ':!skills/tidy-repo/SKILL.md' \
-        ':!skills/setup-config/SKILL.md' \
-        ':!skills/setup-config/references/migrate-mode.md' \
-        ':!skills/setup-config/references/update-mode.md' \
-        ':!skills/whats-on-fire/SKILL.md' \
-        ':!README.md' \
-        ':!scripts/preflight.sh'; then
-        failed "legacy-name guard — '$legacy' outside the sanctioned back-compat files (naming sweep: collection-scoped skills lost -it)"
-        legacy_residue=1
-    fi
-done
-
-[ "$legacy_residue" -eq 0 ] && pass "legacy-name guard"
 
 # --- 5. plugin manifests -----------------------------------------------------
 if command -v jq >/dev/null 2>&1; then
@@ -2993,6 +2864,16 @@ if pg_gate scripts/test-update-plugin-everywhere.sh; then
     pass "update-plugin-everywhere tests (scripts/test-update-plugin-everywhere.sh)"
 else
     failed "update-plugin-everywhere tests (scripts/test-update-plugin-everywhere.sh)"
+fi
+
+# --- 64. legacy-name tests -----------------------------------------------------
+# scripts/check-legacy-names.sh (gate 4) executed over scratch copies of the tracked
+# tree: per-name allow lists, the unbranched-name default arm, fail-closed scans, and
+# a mutant per enforcing construct (issue #612). Scratch repos only, no gh, no network.
+if pg_gate scripts/test-legacy-names.sh; then
+    pass "legacy-name tests (scripts/test-legacy-names.sh)"
+else
+    failed "legacy-name tests (scripts/test-legacy-names.sh)"
 fi
 
 # ------------------------------------------------------------------------------
