@@ -74,10 +74,11 @@
 # added to CLAUDE.md (a /memory edit, a hand edit) is loaded by Claude Code,
 # never seen by Codex, and invisible to all of them. The whole file is compared
 # byte for byte, trailing newline included. Mutants (append, prepend, dropped
-# import, changed target, trailing newline removed, missing file) are built from
-# the expected file, never the checkout's CLAUDE.md, so a wrong CLAUDE.md cannot
-# skew them. They run on scratch copies in this suite's own mktemp -d, each
-# asserted to have applied before it must turn red.
+# import, changed target, trailing newline removed) are built from the expected
+# file, never the checkout's CLAUDE.md, so a wrong CLAUDE.md cannot skew them.
+# They run on scratch copies in this suite's own mktemp -d, each asserted to have
+# applied before it must turn red. A separate case checks an absent path: it
+# derives nothing from the expected file and has no applied-check.
 #
 # Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-doc-reconciliation.sh
@@ -485,7 +486,7 @@ else
     bad "$reason"
 fi
 
-claude_mutant() { # label, expected-reason-substring, mutation applied to a copy at $m
+claude_mutant() { # label, expected-reason-substring, each mutator rewrites the copy at $m, starting from the expected file
     local label="$1" want="$2" m="$claude_scratch/mutant"
     cp "$claude_expected_file" "$m"
     "$3" "$m"
@@ -505,7 +506,7 @@ mut_append()  { printf 'extra rule\n' >>"$1"; }
 mut_prepend() { { printf 'extra rule\n'; cat "$claude_expected_file"; } >"$1.t" && mv "$1.t" "$1"; }
 mut_drop()    { sed '$d' "$claude_expected_file" >"$1.t" && mv "$1.t" "$1"; }
 mut_target()  { sed 's/^@AGENTS\.md$/@CLAUDE.md/' "$claude_expected_file" >"$1.t" && mv "$1.t" "$1"; }
-mut_nonl()    { printf '%s' "$(cat "$claude_expected_file")" >"$1"; }
+mut_nonl()    { local c; c="$(cat "$claude_expected_file")" && printf '%s' "$c" >"$1.t" && mv "$1.t" "$1"; }
 differs="CLAUDE.md differs from the exact two-line @AGENTS.md import"
 claude_mutant "appended line" "$differs" mut_append
 claude_mutant "prepended line" "$differs" mut_prepend
