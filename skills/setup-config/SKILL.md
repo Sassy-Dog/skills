@@ -94,7 +94,7 @@ With local and remote in agreement, pick exactly one mode:
 
 **Marker recognition accepts every producer name.** Match on the `generated-by:` prefix and accept
 `refresh-skills` (plugin 2026.7.22 until this skill became `setup-config`),
-`refresh-skills` (plugin 0.9.0–2026.7.21), and `create-dev-workflows` (≤ 0.8.1). Match it
+`refresh-sassydog-skills` (plugin 0.9.0–2026.7.21), and `create-dev-workflows` (≤ 0.8.1). Match it
 **anywhere in the file** — older renders put it on line 1, where the loader could not parse the
 frontmatter, and hand-fixes moved it. A repo whose marker is not recognised falls through to adopt
 or create mode and its config is silently lost, so this matcher is load-bearing.
