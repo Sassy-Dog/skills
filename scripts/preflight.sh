@@ -2105,7 +2105,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
     case "$legacy" in
         refresh-skills)
             # setup-config's marker recognizer, the adopt/update walkthrough
-            # that names the superseded producer, and AGENTS.md's statement of
+            # that names the superseded producer, and the architecture doc's statement of
             # the same recognition rule.
             allow=(
                 ':!skills/setup-config/SKILL.md'
@@ -2114,7 +2114,7 @@ for legacy in 'create-dev-workflows' 'refresh-sassydog-' 'refresh-skills' 'refre
                 ':!scripts/preflight.sh'
             ) ;;
         refresh-hooks)
-            # setup-hooks' generated-by ownership matcher + AGENTS.md's
+            # setup-hooks' generated-by ownership matcher + the architecture doc's
             # statement of it, plus the committed consumer artifacts that
             # PROVE the matcher still accepts this producer name (issue #133 —
             # the fixtures are verbatim upstream bytes; sanitising the name out
@@ -2158,7 +2158,7 @@ done
 # ai-agent-skills -> skills (issue #72). The old plugin name may
 # appear ONLY where it is still load-bearing:
 #   - README.md — the one historical line recording the #71 rename
-#   - AGENTS.md — the marker-recognition rule: recognizers must accept
+#   - docs/ARCHITECTURE.md — the marker-recognition rule: recognizers must accept
 #     pre-rename 'generated-by: ai-agent-skills:*' markers
 #   - skills/setup-deps/SKILL.md, skills/setup-hooks/SKILL.md — those
 #     generated-by recognizers themselves. Their markers are committed inside

@@ -36,7 +36,7 @@
 #      lets one unlucky session permanently retire the plate's highest-signal
 #      surface, the only contradicting evidence being the check the carve-out
 #      just skipped. The three/four split is asserted on all four sites that
-#      state it: `SKILL.md`'s Guardrails list (which AGENTS.md names as the copy
+#      state it: `SKILL.md`'s Guardrails list (which docs/ARCHITECTURE.md names as the copy
 #      to trust), `SKILL.md` Phase 4, `config-contract.md`, and `update-mode.md`.
 #      #267 added `sentry:` to the guardrail list while removing it from the
 #      other two, so the same file contradicted itself forty lines apart and
@@ -3006,13 +3006,13 @@ else
     # ...AND the veto. Without it Phase 4 could state decision D and its inverse
     # at once — measured: appending "In practice a refresh keeps whatever
     # `sentry: none` the previous run recorded and never re-asks it." left the
-    # gate GREEN. That is #267's shape exactly, in the file AGENTS.md names as
+    # gate GREEN. That is #267's shape exactly, in the file docs/ARCHITECTURE.md names as
     # the copy to trust and the one loaded on every `setup-config` run.
     assert_no_sentence_affirms "Phase 4 never carries \`sentry: none\` forward" \
         "$phase4_win" 'sentry: none' "$CARRY_VOCAB"
 fi
 
-# The guardrail list, which AGENTS.md names as the copy to trust. Its carve-out
+# The guardrail list, which docs/ARCHITECTURE.md names as the copy to trust. Its carve-out
 # is read as a MEMBER LIST and every member is accounted for, because the check
 # that stood here was `grep -q '\`none\`'` — satisfied by any mention of the word
 # — and #267 had quietly added `sentry:` to the list, contradicting the same

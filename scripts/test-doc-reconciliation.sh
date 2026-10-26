@@ -80,6 +80,27 @@
 # applied before it must turn red. A separate case checks an absent path: it
 # derives nothing from the expected file and has no applied-check.
 #
+# Section 9 holds every tracked AGENTS.md chain to the org's 32 KiB guidance
+# budget (#606). A chain is one AGENTS.md plus the tracked AGENTS.md in every
+# ancestor directory up to the root, and its total must not exceed 32,768 bytes.
+# That is Codex's default project_doc_max_bytes: the file that crosses it is cut
+# at that byte with only a log-level warning, and every deeper file is dropped.
+# It lives here, not in a new gate, because it is a doc-reconciliation property
+# of the guide: a guide that grows past what a reader loads is stale in the way
+# this suite exists to catch, and a new scripts/test-*.sh would change the gate
+# count section 6 re-derives. The chain computation is a function over a
+# directory and a NUL-delimited file list, so its committed cases run on scratch
+# trees with no git. Those cases, each asserted to have applied before it must
+# give its verdict: a root of exactly 32,768 bytes passes and 32,769 fails; a
+# nested file fails when it takes the chain over though each file alone is
+# under; sibling directories are not summed; a deep file with no AGENTS.md in
+# the directories between still sums the root; an empty list and a nested file
+# with no root both fail, so the check cannot pass vacuously. Failure paths are
+# red, never a pass: a listed path that is missing or is a directory, and a git
+# that cannot list the tracked files. What it does NOT measure, each pinned by a
+# case so the claim stays true: an AGENTS.override.md, which Codex reads in
+# place of AGENTS.md, and any untracked AGENTS.md.
+#
 # Wired into scripts/preflight.sh; run directly:
 #   bash scripts/test-doc-reconciliation.sh
 set -uo pipefail
@@ -520,6 +541,198 @@ elif [ "$reason" = "CLAUDE.md is missing" ]; then
     ok "a missing CLAUDE.md fails with its own message"
 else
     bad "a missing CLAUDE.md failed with the wrong message: $reason"
+fi
+
+# --- 9. AGENTS.md chains stay within the 32 KiB guidance budget (#606) ---------
+#
+# See the header: chain function over (directory, file list), committed cases on
+# scratch trees, failure paths red.
+BUDGET_BYTES=32768
+budget_scratch="$claude_scratch/budget"
+mkdir -p "$budget_scratch" || { bad "cannot create the budget scratch directory"; budget_scratch=""; }
+
+# budget_bytes FILE: prints FILE's byte count; returns 1 unless it is a readable regular file.
+budget_bytes() {
+    local n
+    if [ ! -f "$1" ] || [ ! -r "$1" ]; then
+        return 1
+    fi
+    n="$(wc -c <"$1")" || return 1
+    n="${n//[[:space:]]/}"
+    case "$n" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$n"
+}
+
+# budget_check ROOT LISTFILE: LISTFILE is NUL-delimited AGENTS.md paths relative
+# to ROOT. Prints one line per problem and returns 1 if there is any.
+budget_check() {
+    local root="$1" list="$2" p cur cand member total n names found rc=0 have_root=0
+    local -a all=()
+    if [ ! -r "$list" ]; then
+        echo "cannot read the AGENTS.md file list"
+        return 1
+    fi
+    while IFS= read -r -d '' p; do
+        all+=("$p")
+    done <"$list"
+    if [ "${#all[@]}" -gt 0 ]; then
+        for p in "${all[@]}"; do
+            [ "$p" = "AGENTS.md" ] && have_root=1
+        done
+    fi
+    if [ "$have_root" -ne 1 ]; then
+        echo "no root AGENTS.md tracked: this repo must have one"
+        return 1
+    fi
+    for p in "${all[@]}"; do
+        case "$p" in
+            AGENTS.md|*/AGENTS.md) ;;
+            *) echo "listed path is not an AGENTS.md: $p"; rc=1; continue ;;
+        esac
+        total=0
+        names=""
+        cur="$(dirname "$p")"
+        while :; do
+            if [ "$cur" = "." ]; then cand="AGENTS.md"; else cand="$cur/AGENTS.md"; fi
+            found=0
+            for member in "${all[@]}"; do
+                [ "$member" = "$cand" ] && found=1
+            done
+            if [ "$found" -eq 1 ]; then
+                if ! n="$(budget_bytes "$root/$cand")"; then
+                    echo "cannot take the byte count of $cand"
+                    rc=1
+                    total=-1
+                    break
+                fi
+                total=$((total + n))
+                names="${names:+$names + }$cand"
+            fi
+            [ "$cur" = "." ] && break
+            cur="$(dirname "$cur")"
+        done
+        if [ "$total" -gt "$BUDGET_BYTES" ]; then
+            echo "AGENTS.md chain over budget: $names = $total bytes > $BUDGET_BYTES"
+            rc=1
+        fi
+    done
+    return "$rc"
+}
+
+# budget_list ROOT OUT: writes the tracked AGENTS.md paths (NUL-delimited) to OUT; returns 1 if git cannot list them.
+budget_list() {
+    git -C "$1" ls-files -z -- 'AGENTS.md' ':(glob)**/AGENTS.md' >"$2" 2>/dev/null
+}
+
+if [ -n "$budget_scratch" ]; then
+    live_list="$budget_scratch/live.list"
+    if ! budget_list "$REPO_ROOT" "$live_list"; then
+        bad "cannot list the tracked AGENTS.md files"
+    elif reason="$(budget_check "$REPO_ROOT" "$live_list")"; then
+        ok "every tracked AGENTS.md chain is within $BUDGET_BYTES bytes"
+    else
+        bad "$reason"
+    fi
+
+    # budget_tree NAME: a fresh scratch tree; sets $t. budget_file REL BYTES: writes BYTES bytes at $t/REL.
+    budget_tree() { t="$budget_scratch/$1"; rm -rf "$t"; mkdir -p "$t" || bad "cannot create scratch tree $1"; : >"$t/.list"; }
+    budget_file() {
+        mkdir -p "$(dirname "$t/$1")"
+        head -c "$2" /dev/zero | tr '\0' 'a' >"$t/$1"
+    }
+    budget_list_add() { printf '%s\0' "$1" >>"$t/.list"; }
+    # budget_case LABEL WANT: WANT is "pass" or a substring the failure message must carry.
+    budget_case() {
+        local label="$1" want="$2" out
+        if out="$(budget_check "$t" "$t/.list")"; then
+            if [ "$want" = "pass" ]; then ok "budget: $label passes"; else bad "budget: $label stayed green"; fi
+        elif [ "$want" = "pass" ]; then
+            bad "budget: $label failed: $out"
+        else
+            case "$out" in
+                *"$want"*) ok "budget: $label turns the section red" ;;
+                *) bad "budget: $label failed with the wrong message: $out" ;;
+            esac
+        fi
+    }
+    budget_applied() { # LABEL FILE BYTES: the mutant's file really has that size
+        local n
+        if n="$(budget_bytes "$2")" && [ "$n" = "$3" ]; then return 0; fi
+        bad "budget: mutant '$1' did not apply"
+        return 1
+    }
+
+    budget_tree boundary-pass; budget_file AGENTS.md 32768; budget_list_add AGENTS.md
+    budget_applied "root at the boundary" "$t/AGENTS.md" 32768 && budget_case "a root of exactly 32768 bytes" pass
+
+    budget_tree root-over; budget_file AGENTS.md 32769; budget_list_add AGENTS.md
+    budget_applied "root one byte over" "$t/AGENTS.md" 32769 && budget_case "a root of 32769 bytes" "AGENTS.md chain over budget: AGENTS.md = 32769 bytes"
+
+    budget_tree nested-over; budget_file AGENTS.md 20000; budget_file sub/AGENTS.md 15000
+    budget_list_add AGENTS.md; budget_list_add sub/AGENTS.md
+    if budget_applied "nested root" "$t/AGENTS.md" 20000 && budget_applied "nested file" "$t/sub/AGENTS.md" 15000; then
+        budget_case "a nested file that takes the chain over with each file alone under" "AGENTS.md chain over budget: sub/AGENTS.md + AGENTS.md = 35000 bytes"
+    fi
+
+    budget_tree nested-boundary; budget_file AGENTS.md 16384; budget_file sub/AGENTS.md 16384
+    budget_list_add AGENTS.md; budget_list_add sub/AGENTS.md
+    budget_applied "nested at the boundary" "$t/sub/AGENTS.md" 16384 && budget_case "a chain of exactly 32768 bytes across two files" pass
+
+    budget_tree siblings; budget_file AGENTS.md 20000; budget_file a/AGENTS.md 10000; budget_file b/AGENTS.md 10000
+    budget_list_add AGENTS.md; budget_list_add a/AGENTS.md; budget_list_add b/AGENTS.md
+    budget_applied "sibling" "$t/b/AGENTS.md" 10000 && budget_case "sibling directories are not summed" pass
+
+    budget_tree skipped-level; budget_file AGENTS.md 30000; budget_file sub/deep/AGENTS.md 5000
+    budget_list_add AGENTS.md; budget_list_add sub/deep/AGENTS.md
+    budget_applied "skipped level" "$t/sub/deep/AGENTS.md" 5000 && budget_case "a deep file with no AGENTS.md in the directory between still sums the root" "sub/deep/AGENTS.md + AGENTS.md = 35000 bytes"
+
+    budget_tree no-agents
+    budget_case "a tree with no AGENTS.md at all" "no root AGENTS.md tracked"
+
+    budget_tree nested-only; budget_file sub/AGENTS.md 100; budget_list_add sub/AGENTS.md
+    budget_applied "nested only" "$t/sub/AGENTS.md" 100 && budget_case "a nested AGENTS.md with no root" "no root AGENTS.md tracked"
+
+    budget_tree listed-missing; budget_file AGENTS.md 100; budget_list_add AGENTS.md; budget_list_add sub/AGENTS.md
+    if [ ! -e "$t/sub/AGENTS.md" ]; then
+        budget_case "a listed path that does not exist" "cannot take the byte count of sub/AGENTS.md"
+    else
+        bad "budget: mutant 'listed but missing' did not apply"
+    fi
+
+    budget_tree listed-dir; budget_file AGENTS.md 100; budget_list_add AGENTS.md; mkdir -p "$t/sub/AGENTS.md"; budget_list_add sub/AGENTS.md
+    if [ -d "$t/sub/AGENTS.md" ]; then
+        budget_case "a listed AGENTS.md that is a directory" "cannot take the byte count of sub/AGENTS.md"
+    else
+        bad "budget: mutant 'listed directory' did not apply"
+    fi
+
+    budget_tree list-unreadable; budget_file AGENTS.md 100
+    if out="$(budget_check "$t" "$t/absent.list")"; then
+        bad "budget: a missing file list passed"
+    else
+        case "$out" in
+            *"cannot read the AGENTS.md file list"*) ok "budget: a missing file list turns the section red" ;;
+            *) bad "budget: a missing file list failed with the wrong message: $out" ;;
+        esac
+    fi
+
+    budget_tree not-a-repo; budget_file AGENTS.md 100
+    if git -C "$t" rev-parse --git-dir >/dev/null 2>&1; then
+        bad "budget: mutant 'git cannot list' did not apply (scratch tree is inside a repository)"
+    elif budget_list "$t" "$t/.list"; then
+        bad "budget: a git that cannot list the tracked files passed"
+    else
+        ok "budget: a git that cannot list the tracked files turns the section red"
+    fi
+
+    # Shapes the gate does not measure, pinned so the header's claim stays true.
+    budget_tree untracked; budget_file AGENTS.md 20000; budget_file sub/AGENTS.md 20000; budget_list_add AGENTS.md
+    budget_applied "untracked file" "$t/sub/AGENTS.md" 20000 && budget_case "an untracked nested AGENTS.md is not measured" pass
+
+    budget_tree override; budget_file AGENTS.md 20000; budget_file AGENTS.override.md 40000; budget_list_add AGENTS.md
+    budget_applied "override file" "$t/AGENTS.override.md" 40000 && budget_case "an AGENTS.override.md is not measured" pass
 fi
 
 if [ "$fails" -ne 0 ]; then

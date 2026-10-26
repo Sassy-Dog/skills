@@ -9,7 +9,7 @@ node_modules/
 tmp/
 
 # Claude Code: track only the sassy-dog workflow config. This repo is public, so
-# .claude/settings.json and any hooks stay local (AGENTS.md, the settings.json bullet).
+# .claude/settings.json and any hooks stay local (docs/ARCHITECTURE.md, the settings.json bullet).
 .claude/*
 !.claude/sassy-dog/
 
