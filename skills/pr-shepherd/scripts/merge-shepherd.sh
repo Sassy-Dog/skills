@@ -380,8 +380,9 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
   gh api "repos/$OWNER/$NAME/compare/$BRANCH...$sha" --jq '.behind_by' 2>/dev/null || true
 }
 
-# One read of the PR's head branch per run, shared by drop_isolation_branch and
-# teardown's primary-checkout decision (#615). Sets PR_HEAD_REF (empty when the
+# The PR's head branch, shared by drop_isolation_branch and teardown's
+# primary-checkout decision (#615). A successful read is cached for the run; a
+# failed one is not, so the next caller retries. Sets PR_HEAD_REF (empty when the
 # read fails or is not a clean branch name; callers fail closed on empty). Goes
 # through gh-retry.sh because a failed read now leaves the primary on the merged
 # head with exit 0 and no later re-run; gh-retry.sh returns gh's combined output
@@ -440,6 +441,13 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
     return 0
   fi
   local wt_br="" wt_iso=""
+  # The run may have been started from inside the worktree removed below; once it
+  # is gone the cwd is gone too and every plain git call (check-ref-format in
+  # read_pr_head_ref) fails with 128. Make WT absolute first, then move to the
+  # primary checkout. Nothing later relies on the old cwd (script paths are
+  # absolute, git uses -C, gh uses --repo).
+  [ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"
+  cd "$MAIN_WT" 2>/dev/null || true
   if [ -n "$WT" ]; then
     # Isolation branch the runtime created the worktree on (worktree-<dirname>) —
     # derived from the PATH so idempotent re-runs still delete it after the
@@ -457,7 +465,9 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
   # #615: the primary checkout is switched only when it holds the PR's own head
   # branch, is already on the default branch, or is detached (a detached primary
-  # is reconciled as before this change, including one mid-bisect or mid-rebase).
+  # is handled as before this change: a mid-bisect primary is switched and
+  # fast-forwarded; a mid-rebase one is not switched, because git switch refuses
+  # and || true swallows that, and is fast-forwarded in place only if git allows).
   # Any other branch is left alone. An unreadable HEAD and an unreadable PR head
   # ref both fail closed to KEEP. The full ref is read, never --short: with a tag
   # of the same name, --short prints heads/<name> and both compares would miss.

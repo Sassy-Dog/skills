@@ -639,7 +639,8 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # empty, or noisy (KEEP, and the KEEP reason says the head was unreadable), HEAD
 # unreadable (KEEP), and #615's own scenario end to end: a real linked worktree on a
 # worktree-agent-* branch torn down while the primary holds an unrelated branch.
-# Not covered: a primary mid-bisect or mid-rebase (detached, reconciled as before).
+# Not covered: a primary mid-bisect or mid-rebase (handled as before: mid-bisect is switched and
+# fast-forwarded; mid-rebase is not switched, git refuses, and is ff'd in place only if git allows).
 echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or detached (#615)" >&2
 T8="$WORK/t8"; mkdir -p "$T8/bin"
 cat >"$T8/bin/gh" <<'MOCK'
@@ -688,7 +689,8 @@ T8_OUT=""; T8_N=0; T8_CALLS="$T8/calls"
 t8_run() { # <repo> [extra merge-shepherd args] -- env T8_HEAD / T8_HEAD_RC / T8_NOISE pass through
     local d="$1"; shift
     : >"$T8_CALLS"
-    T8_OUT="$(cd "$d" && PATH="$T8/bin:$PATH" T8_CALLS="$T8_CALLS" bash "$MS_SRC/merge-shepherd.sh" 977 --repo mock-org/mock-repo "$@" 2>&1)"
+    T8_OUT="$(cd "${T8_CWD:-$d}" && PATH="$T8/bin:$PATH" T8_CALLS="$T8_CALLS" bash "$MS_SRC/merge-shepherd.sh" 977 --repo mock-org/mock-repo "$@" 2>&1)"
+    T8_RC=$?
 }
 t8_cur() { local r; r="$(git -C "$1" symbolic-ref -q HEAD)" && echo "${r#refs/heads/}" || echo DETACHED; }
 # compares to the remote's own main (ls-remote), not origin/main, which is stale until a fetch
@@ -765,6 +767,17 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt2 || f "linked worktree, head read fails: isolation branch deleted without the head ref"
     [ "$(t8_cur "$d")" = feat/other ] || f "linked worktree, head read fails: primary moved"
     grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "linked worktree, head read fails: no KEEP line"
+    # run FROM INSIDE the worktree it removes: the cwd vanishes mid-run, and a good head ref
+    # must still read as good (primary on the PR's head is switched + ff'd, isolation branch deleted)
+    d="$(t8_mk y)"; git -C "$d" switch -q feat/pr
+    wt="$d-wts/agent-wt3"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt3 "$wt" main
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree "$wt"
+    [ "$T8_RC" = 0 ] || f "run from inside the removed worktree: exit $T8_RC"
+    [ ! -e "$wt" ] || f "run from inside the removed worktree: worktree not removed"
+    [ "$(t8_cur "$d")" = main ] || f "run from inside the removed worktree: primary on the PR head not switched to main"
+    t8_mains "$d" || f "run from inside the removed worktree: main not fast-forwarded"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt3 && f "run from inside the removed worktree: isolation branch not deleted"
     MS_SRC="$MS_SRC_SAVE"
 }
 t8_suite "$MS_SRC/merge-shepherd.sh"
@@ -792,6 +805,8 @@ t8_mutant unreadable-head-switched 'keep_why="HEAD unreadable"; cur="(unknown)"'
 t8_mutant own-head-kept 'elif [ "$cur" != "$PR_HEAD_REF" ]; then' 'elif true; then'
 t8_mutant short-ref-read 'symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?' 'symbolic-ref -q --short HEAD 2>/dev/null)"; cur_rc=$?'
 t8_mutant head-read-before-the-arm 'cur="${cur#refs/heads/}"' 'cur="${cur#refs/heads/}"; read_pr_head_ref'
+t8_mutant no-cd-out-of-removed-worktree '  cd "$MAIN_WT" 2>/dev/null || true
+' ''
 t8_mutant head-ref-unvalidated 'if [ -n "$out" ] && git check-ref-format --branch "$out" >/dev/null 2>&1; then' 'if [ -n "$out" ]; then'
 
 # ------------------------------------------------------------------------------
