@@ -20,7 +20,9 @@
 # QSTATES, which it was printing in the very line that got it wrong.
 #
 # Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
-# --expected-head cases, #585, against a second stubbed `gh` beside this one):
+# --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
+# adds merge-shepherd.sh's primary-checkout teardown cases, #615, run against real scratch
+# git repos):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
 #      isInMergeQueue:false with an empty timeline, re-reads instead of
@@ -625,6 +627,126 @@ ms_mutant cause-stderr-multiline "sed -n '/./{p;q;}' <<<" 'cat <<<'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'
+
+# --- 8. merge-shepherd.sh teardown leaves an unrelated primary checkout (#615) --
+# Executes teardown() against a real scratch repo (local bare origin) and a stubbed
+# gh that reports the PR MERGED. Not test-teardown-args.sh's #560: that is teardown.sh,
+# a different script; this function lives in merge-shepherd.sh and this file is
+# the gate that already executes that script. Shapes caught: primary on an unrelated
+# branch (KEEP, unmoved), on the PR's head (switched + ff), on the default branch
+# (ff), detached (switched + ff), PR head read failing (KEEP), HEAD unreadable (KEEP).
+# Not covered: the linked-worktree removal and isolation-branch paths (unchanged here).
+echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or detached (#615)" >&2
+T8="$WORK/t8"; mkdir -p "$T8/bin"
+cat >"$T8/bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+all="$*"
+case "$1" in
+    api) case "$all" in
+             *isInMergeQueue*) echo "MERGED CLEAN false" ;;
+             *) echo "mock gh: unhandled api: $all" >&2; exit 1 ;;
+         esac ;;
+    pr)  case "$2" in
+             view) [ "${T8_HEAD_RC:-0}" = 0 ] || exit 1; printf '%s\n' "${T8_HEAD:-}" ;;
+             *) exit 1 ;;
+         esac ;;
+    *) echo "mock gh: unhandled: $all" >&2; exit 1 ;;
+esac
+MOCK
+chmod +x "$T8/bin/gh"
+mkdir -p "$T8/gitshim"; REAL_GIT="$(command -v git)"
+cat >"$T8/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" symbolic-ref -q --short HEAD "*) exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$T8/gitshim/git"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+t8_git() { git -c user.name=t -c user.email=t@example.invalid "$@"; }
+t8_mk() { # <name> -> repo with origin/main one commit ahead of the local main
+    local d="$T8/$T8_N-$1" o="$T8/$T8_N-$1-origin.git"
+    git init -q --bare -b main "$o"
+    git init -q -b main "$d"
+    t8_git -C "$d" commit -q --allow-empty -m base
+    git -C "$d" remote add origin "$o"; git -C "$d" push -q -u origin main
+    git -C "$d" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+    t8_git -C "$d" switch -q -c feat/pr
+    t8_git -C "$d" switch -q -c feat/other main
+    git clone -q "$o" "$T8/$T8_N-$1-up"
+    t8_git -C "$T8/$T8_N-$1-up" commit -q --allow-empty -m squash-merge
+    git -C "$T8/$T8_N-$1-up" push -q origin main
+    echo "$d"
+}
+T8_OUT=""; T8_N=0
+t8_run() { # <repo> -- env T8_HEAD / T8_HEAD_RC pass through
+    T8_OUT="$(cd "$1" && PATH="$T8/bin:$PATH" bash "$MS_SRC/merge-shepherd.sh" 977 --repo mock-org/mock-repo 2>&1)"
+}
+t8_cur() { git -C "$1" symbolic-ref -q --short HEAD || echo DETACHED; }
+# compares to the remote's own main (ls-remote), not origin/main, which is stale until a fetch
+t8_mains() { [ "$(git -C "$1" rev-parse main)" = "$(git -C "$1" ls-remote origin main | cut -f1)" ]; }
+t8_suite() { # <script path>   (sets T8_FAILED)
+    MS_SRC_SAVE="$MS_SRC"; MS_SRC="$(dirname "$1")"; T8_FAILED=""; T8_N=$((T8_N+1))
+    local d
+    d="$(t8_mk a)"; git -C "$d" switch -q feat/other
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || T8_FAILED="$T8_FAILED|unrelated: branch moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || T8_FAILED="$T8_FAILED|unrelated: no KEEP line"
+    grep -q ' @ ' <<<"$T8_OUT" && T8_FAILED="$T8_FAILED|unrelated: printed the default-branch HEAD line"
+    t8_mains "$d" && T8_FAILED="$T8_FAILED|unrelated: main was fast-forwarded"
+    d="$(t8_mk b)"; git -C "$d" switch -q feat/pr
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || T8_FAILED="$T8_FAILED|own head: not switched to main"
+    t8_mains "$d" || T8_FAILED="$T8_FAILED|own head: main not fast-forwarded"
+    grep -q 'KEEP primary' <<<"$T8_OUT" && T8_FAILED="$T8_FAILED|own head: printed KEEP"
+    d="$(t8_mk c)"; git -C "$d" switch -q main
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || T8_FAILED="$T8_FAILED|default: left main"
+    t8_mains "$d" || T8_FAILED="$T8_FAILED|default: not fast-forwarded"
+    d="$(t8_mk d)"; git -C "$d" switch -q --detach feat/other
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || T8_FAILED="$T8_FAILED|detached: not switched to main"
+    t8_mains "$d" || T8_FAILED="$T8_FAILED|detached: not fast-forwarded"
+    d="$(t8_mk e)"; git -C "$d" switch -q feat/other
+    T8_HEAD_RC=1 t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || T8_FAILED="$T8_FAILED|head read fails: branch moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || T8_FAILED="$T8_FAILED|head read fails: no KEEP line"
+    grep -q 'PR head branch unreadable' <<<"$T8_OUT" || T8_FAILED="$T8_FAILED|head read fails: KEEP does not say the head ref was unreadable"
+    d="$(t8_mk f)"; git -C "$d" switch -q feat/other
+    T8_HEAD="" t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || T8_FAILED="$T8_FAILED|head empty: branch moved"
+    d="$(t8_mk g)"; git -C "$d" switch -q main
+    T8_HEAD_RC=1 t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] && t8_mains "$d" || T8_FAILED="$T8_FAILED|head read fails on default: not reconciled"
+    # unreadable HEAD: a git shim makes `symbolic-ref -q --short HEAD` fail with 128 (not 1 = detached)
+    d="$(t8_mk h)"; git -C "$d" switch -q feat/other
+    T8_HEAD=feat/pr PATH="$T8/gitshim:$PATH" t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || T8_FAILED="$T8_FAILED|unreadable HEAD: branch moved"
+    grep -q '^  KEEP primary checkout on (unknown)' <<<"$T8_OUT" || T8_FAILED="$T8_FAILED|unreadable HEAD: no KEEP line"
+    MS_SRC="$MS_SRC_SAVE"
+}
+t8_suite "$MS_SRC/merge-shepherd.sh"
+if [ -z "$T8_FAILED" ]; then ok "merge-shepherd teardown primary-checkout cases: every committed case holds"
+else bad "merge-shepherd teardown primary-checkout cases failed:$T8_FAILED"; fi
+t8_mutant() { # <label> <old> <new>
+    local d="$MUT/t8-$1"; rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
+    if ! python3 -I -c '
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+' "$d/merge-shepherd.sh" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
+    t8_suite "$d/merge-shepherd.sh"
+    if [ -n "$T8_FAILED" ]; then ok "teardown mutant '$1' fails the suite"
+    else bad "teardown mutant '$1' passes the suite — its case is vacuous"; fi
+}
+t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
+t8_mutant unreadable-head-ref-trusted 'elif [ -z "$PR_HEAD_REF" ]; then keep_why=' 'elif false; then keep_why='
+t8_mutant default-branch-kept 'if [ "$cur" = "$BRANCH" ]; then :' 'if false; then :'
+t8_mutant detached-kept 'elif [ "$cur_rc" -ne 1 ]; then' 'elif [ "$cur_rc" -ne 0 ]; then'
+t8_mutant unreadable-head-switched 'keep_why="HEAD unreadable"; cur="(unknown)"' 'cur="(unknown)"'
+t8_mutant own-head-kept 'elif [ "$cur" != "$PR_HEAD_REF" ]; then' 'elif true; then'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

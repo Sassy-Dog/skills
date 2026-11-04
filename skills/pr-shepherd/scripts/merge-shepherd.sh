@@ -93,6 +93,11 @@
 #             · 1 usage/error/closed
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
+#   It then switches and ff-reconciles the primary checkout ONLY when that checkout
+#   holds the PR's head branch, the default branch, or a detached HEAD (#615);
+#   any other branch, an unreadable HEAD, or an unreadable PR head ref prints a
+#   KEEP line and leaves it alone. Worktree removal and isolation-branch deletion
+#   are unaffected.
 #
 # ENQUEUE PRIMITIVE: the GraphQL `enqueuePullRequest` mutation (PR node id
 # resolved in-script), NOT `gh pr merge --auto`. Some queue configurations
@@ -210,7 +215,9 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 
 # The MAIN worktree is the first entry of `git worktree list` — NOT
 # --show-toplevel, which returns the linked worktree when invoked from inside
-# one (teardown would then no-op against the dir it's removing).
+# one (teardown would then no-op against the dir it's removing). It may hold
+# another session's unrelated branch, so teardown() switches it only when that
+# branch is the PR's head, the default branch, or detached (#615).
 MAIN_WT="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 BRANCH="${DEFAULT_BRANCH:-$(git -C "${MAIN_WT:-.}" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
 [ -z "$BRANCH" ] && BRANCH=main
@@ -380,13 +387,25 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
 # the worktree is removed. Guards: isolation prefix only; never the default
 # branch; never the PR's own head branch (--delete-branch / the [gone] sweep owns
 # that); never a branch some live worktree has checked out.
+# One read of the PR's head branch per run, shared by drop_isolation_branch and
+# teardown's primary-checkout decision (#615). Sets PR_HEAD_REF (empty when the
+# read fails or returns nothing; callers fail closed on empty). Not a command
+# substitution: a subshell would lose the cache.
+PR_HEAD_REF=""; PR_HEAD_REF_READ=0
+read_pr_head_ref() {
+  [ "$PR_HEAD_REF_READ" = 1 ] && return 0
+  PR_HEAD_REF="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
+  [ -n "$PR_HEAD_REF" ] && PR_HEAD_REF_READ=1
+  return 0
+}
+
 drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isolation)
   local br="$1" head_ref wts
   [ -n "$br" ] || return 0
   case "$br" in "$ISO_PREFIX"*) : ;; *) return 0 ;; esac
   [ "$br" = "$BRANCH" ] && return 0
   git -C "$MAIN_WT" show-ref --verify --quiet "refs/heads/$br" || return 0
-  head_ref="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
+  read_pr_head_ref; head_ref="$PR_HEAD_REF"
   if [ -z "$head_ref" ]; then
     echo "  (PR head ref unavailable — leaving $br for teardown.sh --sweep)"; return 0
   fi
@@ -428,6 +447,25 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   git -C "$MAIN_WT" worktree prune 2>/dev/null || true
   drop_isolation_branch "$wt_br"
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
+  # #615: the primary checkout is switched only when it is ours to move: it holds
+  # the PR's own head branch, is already on the default branch, or is detached.
+  # An unrelated branch (another session's work) is left alone. Unreadable HEAD
+  # and an unreadable PR head ref both fail closed to KEEP.
+  local cur cur_rc keep_why=""
+  cur="$(git -C "$MAIN_WT" symbolic-ref -q --short HEAD 2>/dev/null)"; cur_rc=$?
+  read_pr_head_ref
+  if [ "$cur_rc" -eq 0 ]; then
+    if [ "$cur" = "$BRANCH" ]; then :
+    elif [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR's"
+    elif [ "$cur" != "$PR_HEAD_REF" ]; then keep_why="not the PR's head branch $PR_HEAD_REF"
+    fi
+  elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached (reconcile); anything else = unreadable
+    keep_why="HEAD unreadable"; cur="(unknown)"
+  fi
+  if [ -n "$keep_why" ]; then
+    echo "  KEEP primary checkout on $cur ($keep_why) — not switched to $BRANCH, no ff reconcile"
+    return 0
+  fi
   git -C "$MAIN_WT" switch "$BRANCH" >/dev/null 2>&1 || true
   git_retry -C "$MAIN_WT" fetch origin "$BRANCH" --quiet || true
   git -C "$MAIN_WT" merge --ff-only "origin/$BRANCH" >/dev/null 2>&1 \
