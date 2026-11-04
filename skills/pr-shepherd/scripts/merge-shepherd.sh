@@ -380,6 +380,26 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
   gh api "repos/$OWNER/$NAME/compare/$BRANCH...$sha" --jq '.behind_by' 2>/dev/null || true
 }
 
+# One read of the PR's head branch per run, shared by drop_isolation_branch and
+# teardown's primary-checkout decision (#615). Sets PR_HEAD_REF (empty when the
+# read fails or is not a clean branch name; callers fail closed on empty). Goes
+# through gh-retry.sh because a failed read now leaves the primary on the merged
+# head with exit 0 and no later re-run; gh-retry.sh returns gh's combined output
+# on success, so the value is validated before it is trusted. Not a command
+# substitution at the call site: a subshell would lose the cache.
+PR_HEAD_REF=""; PR_HEAD_REF_READ=0
+read_pr_head_ref() {
+  [ "$PR_HEAD_REF_READ" = 1 ] && return 0
+  local out
+  out="$(bash "$GH_RETRY" -- pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null)" || out=""
+  if [ -n "$out" ] && git check-ref-format --branch "$out" >/dev/null 2>&1; then
+    PR_HEAD_REF="$out"; PR_HEAD_REF_READ=1
+  else
+    PR_HEAD_REF=""
+  fi
+  return 0
+}
+
 # Prevention (issue #26): the Agent runtime checks each worktree out on a
 # worktree-agent-<id> isolation branch. The PR merges from the agent's FEATURE
 # branch, so the isolation branch never gets an upstream — never [gone], never
@@ -387,18 +407,6 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
 # the worktree is removed. Guards: isolation prefix only; never the default
 # branch; never the PR's own head branch (--delete-branch / the [gone] sweep owns
 # that); never a branch some live worktree has checked out.
-# One read of the PR's head branch per run, shared by drop_isolation_branch and
-# teardown's primary-checkout decision (#615). Sets PR_HEAD_REF (empty when the
-# read fails or returns nothing; callers fail closed on empty). Not a command
-# substitution: a subshell would lose the cache.
-PR_HEAD_REF=""; PR_HEAD_REF_READ=0
-read_pr_head_ref() {
-  [ "$PR_HEAD_REF_READ" = 1 ] && return 0
-  PR_HEAD_REF="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
-  [ -n "$PR_HEAD_REF" ] && PR_HEAD_REF_READ=1
-  return 0
-}
-
 drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isolation)
   local br="$1" head_ref wts
   [ -n "$br" ] || return 0
@@ -447,17 +455,22 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   git -C "$MAIN_WT" worktree prune 2>/dev/null || true
   drop_isolation_branch "$wt_br"
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
-  # #615: the primary checkout is switched only when it is ours to move: it holds
-  # the PR's own head branch, is already on the default branch, or is detached.
-  # An unrelated branch (another session's work) is left alone. Unreadable HEAD
-  # and an unreadable PR head ref both fail closed to KEEP.
+  # #615: the primary checkout is switched only when it holds the PR's own head
+  # branch, is already on the default branch, or is detached (a detached primary
+  # is reconciled as before this change, including one mid-bisect or mid-rebase).
+  # Any other branch is left alone. An unreadable HEAD and an unreadable PR head
+  # ref both fail closed to KEEP. The full ref is read, never --short: with a tag
+  # of the same name, --short prints heads/<name> and both compares would miss.
   local cur cur_rc keep_why=""
-  cur="$(git -C "$MAIN_WT" symbolic-ref -q --short HEAD 2>/dev/null)"; cur_rc=$?
-  read_pr_head_ref
+  cur="$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?
+  cur="${cur#refs/heads/}"
   if [ "$cur_rc" -eq 0 ]; then
     if [ "$cur" = "$BRANCH" ]; then :
-    elif [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR's"
-    elif [ "$cur" != "$PR_HEAD_REF" ]; then keep_why="not the PR's head branch $PR_HEAD_REF"
+    else
+      read_pr_head_ref   # only this arm needs it: default and detached make no gh call
+      if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR's"
+      elif [ "$cur" != "$PR_HEAD_REF" ]; then keep_why="not the PR's head branch $PR_HEAD_REF"
+      fi
     fi
   elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached (reconcile); anything else = unreadable
     keep_why="HEAD unreadable"; cur="(unknown)"
