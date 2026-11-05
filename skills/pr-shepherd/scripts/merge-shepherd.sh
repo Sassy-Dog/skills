@@ -24,7 +24,8 @@
 #   seconds (keep N under the host's kill window, e.g. 240) then exits cleanly.
 #   --worktree: the linked worktree to remove after the merge. Prefer an absolute
 #   path: a relative one resolves against the directory this script was started
-#   in, and one that names nothing there removes no worktree.
+#   in, and one that names nothing there removes no worktree, though it can
+#   still delete that path's worktree-<basename> isolation branch.
 #   --direct: for repos WITHOUT a merge queue — squash-merge + --delete-branch
 #   instead of enqueueing. Default is queue mode (GraphQL enqueuePullRequest;
 #   `gh pr merge --auto` only as a fallback when the mutation errors, and never
