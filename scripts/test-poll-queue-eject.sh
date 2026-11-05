@@ -20,7 +20,9 @@
 # QSTATES, which it was printing in the very line that got it wrong.
 #
 # Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
-# --expected-head cases, #585, against a second stubbed `gh` beside this one):
+# --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
+# adds merge-shepherd.sh's primary-checkout teardown cases, #615, run against real scratch
+# git repos):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
 #      isInMergeQueue:false with an empty timeline, re-reads instead of
@@ -625,6 +627,235 @@ ms_mutant cause-stderr-multiline "sed -n '/./{p;q;}' <<<" 'cat <<<'
 ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
     live_head' 'if true; then
     live_head'
+
+# --- 8. merge-shepherd.sh teardown leaves an unrelated primary checkout (#615) --
+# Executes teardown() against real scratch repos (local bare origin) and a stubbed
+# gh that reports the PR MERGED. Not test-teardown-args.sh's #560: that is teardown.sh,
+# a different script; this function lives in merge-shepherd.sh and this file is
+# the gate that already executes that script. Shapes caught: primary on an unrelated
+# branch (KEEP, unmoved), on the PR's head (switched + ff), on the default branch
+# (ff), on the default branch with a same-named tag (ff), detached (switched + ff),
+# the default and detached paths making no `gh pr view` call, PR head read failing,
+# empty, or noisy (KEEP, and the KEEP reason says the head was unreadable), HEAD
+# unreadable (KEEP), and #615's own scenario end to end: a real linked worktree on a
+# worktree-agent-* branch torn down while the primary holds an unrelated branch.
+# A relative --worktree is the caller's path: naming nothing from the caller's cwd it
+# removes nothing, though the primary has a live worktree at that path (the live
+# worktree, its uncommitted file and its isolation branch all survive); naming a sibling
+# through .. it is honoured; already gone, it still names the isolation branch; and
+# `.` names it from the real directory rather than from ".".
+# Not covered: a primary mid-bisect or mid-rebase (handled as before: mid-bisect is switched and
+# fast-forwarded; mid-rebase is not switched, git refuses, and is ff'd in place only if git allows).
+echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or detached (#615)" >&2
+T8="$WORK/t8"; mkdir -p "$T8/bin"
+cat >"$T8/bin/gh" <<'MOCK'
+#!/usr/bin/env bash
+all="$*"
+printf '%s\n' "$all" >>"$T8_CALLS"
+case "$1" in
+    api) case "$all" in
+             *isInMergeQueue*) echo "MERGED CLEAN false" ;;
+             *) echo "mock gh: unhandled api: $all" >&2; exit 1 ;;
+         esac ;;
+    pr)  case "$2" in
+             view) [ "${T8_HEAD_RC:-0}" = 0 ] || exit 1
+                   printf '%s\n' "${T8_HEAD:-}"
+                   [ -z "${T8_NOISE:-}" ] || echo "warning: noisy stderr" >&2 ;;
+             *) exit 1 ;;
+         esac ;;
+    *) echo "mock gh: unhandled: $all" >&2; exit 1 ;;
+esac
+MOCK
+chmod +x "$T8/bin/gh"
+mkdir -p "$T8/gitshim"; REAL_GIT="$(command -v git)"
+cat >"$T8/gitshim/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" symbolic-ref -q HEAD "*) exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$T8/gitshim/git"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+t8_git() { git -c user.name=t -c user.email=t@example.invalid "$@"; }
+t8_mk() { # <name> -> repo with origin/main one commit ahead of the local main
+    local d="$T8/$T8_N-$1" o="$T8/$T8_N-$1-origin.git"
+    git init -q --bare -b main "$o"
+    git init -q -b main "$d"
+    t8_git -C "$d" commit -q --allow-empty -m base
+    git -C "$d" remote add origin "$o"; git -C "$d" push -q -u origin main
+    git -C "$d" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
+    t8_git -C "$d" switch -q -c feat/pr
+    t8_git -C "$d" switch -q -c feat/other main
+    git clone -q "$o" "$T8/$T8_N-$1-up"
+    t8_git -C "$T8/$T8_N-$1-up" commit -q --allow-empty -m squash-merge
+    git -C "$T8/$T8_N-$1-up" push -q origin main
+    echo "$d"
+}
+T8_OUT=""; T8_N=0; T8_CALLS="$T8/calls"
+t8_run() { # <repo> [extra merge-shepherd args] -- env T8_HEAD / T8_HEAD_RC / T8_NOISE pass through
+    local d="$1"; shift
+    : >"$T8_CALLS"
+    T8_OUT="$(cd "${T8_CWD:-$d}" && PATH="$T8/bin:$PATH" T8_CALLS="$T8_CALLS" bash "$MS_SRC/merge-shepherd.sh" 977 --repo mock-org/mock-repo "$@" 2>&1)"
+    T8_RC=$?
+}
+t8_cur() { local r; r="$(git -C "$1" symbolic-ref -q HEAD)" && echo "${r#refs/heads/}" || echo DETACHED; }
+# compares to the remote's own main (ls-remote), not origin/main, which is stale until a fetch
+t8_mains() { [ "$(git -C "$1" rev-parse refs/heads/main)" = "$(git -C "$1" ls-remote origin refs/heads/main | cut -f1)" ]; }
+t8_viewed() { grep -q '^pr view' "$T8_CALLS"; }
+t8_suite() { # <script path>   (sets T8_FAILED)
+    MS_SRC_SAVE="$MS_SRC"; MS_SRC="$(dirname "$1")"; T8_FAILED=""; T8_N=$((T8_N+1))
+    local d wt
+    f() { T8_FAILED="$T8_FAILED|$1"; }
+    d="$(t8_mk a)"; git -C "$d" switch -q feat/other
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || f "unrelated: branch moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "unrelated: no KEEP line"
+    grep -q ' @ ' <<<"$T8_OUT" && f "unrelated: printed the default-branch HEAD line"
+    t8_mains "$d" && f "unrelated: main was fast-forwarded"
+    d="$(t8_mk b)"; git -C "$d" switch -q feat/pr
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || f "own head: not switched to main"
+    t8_mains "$d" || f "own head: main not fast-forwarded"
+    grep -q 'KEEP primary' <<<"$T8_OUT" && f "own head: printed KEEP"
+    d="$(t8_mk c)"; git -C "$d" switch -q main
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || f "default: left main"
+    t8_mains "$d" || f "default: not fast-forwarded"
+    t8_viewed && f "default: made a gh pr view call"
+    # a tag named like the branch: `symbolic-ref --short` would print heads/main and miss
+    d="$(t8_mk t)"; git -C "$d" switch -q main; git -C "$d" tag main
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || f "default with same-named tag: left main"
+    t8_mains "$d" || f "default with same-named tag: not fast-forwarded"
+    grep -q 'KEEP primary' <<<"$T8_OUT" && f "default with same-named tag: printed KEEP"
+    d="$(t8_mk d)"; git -C "$d" switch -q --detach feat/other
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = main ] || f "detached: not switched to main"
+    t8_mains "$d" || f "detached: not fast-forwarded"
+    t8_viewed && f "detached: made a gh pr view call"
+    d="$(t8_mk e)"; git -C "$d" switch -q feat/other
+    T8_HEAD_RC=1 t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || f "head read fails: branch moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "head read fails: no KEEP line"
+    grep -q 'KEEP primary.*PR head branch unreadable' <<<"$T8_OUT" || f "head read fails: KEEP does not say the head ref was unreadable"
+    d="$(t8_mk f)"; git -C "$d" switch -q feat/other
+    T8_HEAD="" t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || f "head empty: branch moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "head empty: no KEEP line"
+    grep -q 'KEEP primary.*PR head branch unreadable' <<<"$T8_OUT" || f "head empty: KEEP does not say the head ref was unreadable"
+    # gh-retry returns gh's combined stdout+stderr: a noisy read is not a branch name
+    d="$(t8_mk n)"; git -C "$d" switch -q feat/pr
+    T8_HEAD=feat/pr T8_NOISE=1 t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/pr ] || f "noisy head read: branch moved"
+    grep -q 'KEEP primary.*PR head branch unreadable' <<<"$T8_OUT" || f "noisy head read: KEEP does not say the head ref was unreadable"
+    d="$(t8_mk g)"; git -C "$d" switch -q main
+    T8_HEAD_RC=1 t8_run "$d"
+    if [ "$(t8_cur "$d")" = main ] && t8_mains "$d"; then :; else f "head read fails on default: not reconciled"; fi
+    # unreadable HEAD: a git shim makes `symbolic-ref -q HEAD` fail with 128 (not 1 = detached)
+    d="$(t8_mk h)"; git -C "$d" switch -q feat/other
+    T8_HEAD=feat/pr PATH="$T8/gitshim:$PATH" t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/other ] || f "unreadable HEAD: branch moved"
+    grep -q '^  KEEP primary checkout on (unknown)' <<<"$T8_OUT" || f "unreadable HEAD: no KEEP line"
+    # #615's own scenario end to end: a linked worktree on an isolation branch, primary on an unrelated branch
+    d="$(t8_mk w)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt1"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt1 "$wt" main
+    T8_HEAD=feat/pr t8_run "$d" --worktree "$wt"
+    [ ! -e "$wt" ] || f "linked worktree, unrelated primary: worktree not removed"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt1 && f "linked worktree, unrelated primary: isolation branch not deleted"
+    [ "$(t8_cur "$d")" = feat/other ] || f "linked worktree, unrelated primary: primary moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "linked worktree, unrelated primary: no KEEP line"
+    d="$(t8_mk x)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt2"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt2 "$wt" main
+    T8_HEAD_RC=1 t8_run "$d" --worktree "$wt"
+    [ ! -e "$wt" ] || f "linked worktree, head read fails: worktree not removed"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt2 || f "linked worktree, head read fails: isolation branch deleted without the head ref"
+    [ "$(t8_cur "$d")" = feat/other ] || f "linked worktree, head read fails: primary moved"
+    grep -q '^  KEEP primary checkout on feat/other' <<<"$T8_OUT" || f "linked worktree, head read fails: no KEEP line"
+    # run FROM INSIDE the worktree it removes: the cwd vanishes mid-run, and a good head ref
+    # must still read as good (primary on the PR's head is switched + ff'd, isolation branch deleted)
+    d="$(t8_mk y)"; git -C "$d" switch -q feat/pr
+    wt="$d-wts/agent-wt3"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt3 "$wt" main
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree "$wt"
+    [ "$T8_RC" = 0 ] || f "run from inside the removed worktree: exit $T8_RC"
+    [ ! -e "$wt" ] || f "run from inside the removed worktree: worktree not removed"
+    [ "$(t8_cur "$d")" = main ] || f "run from inside the removed worktree: primary on the PR head not switched to main"
+    t8_mains "$d" || f "run from inside the removed worktree: main not fast-forwarded"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt3 && f "run from inside the removed worktree: isolation branch not deleted"
+    # --worktree is the CALLER's path. From linked worktree wt4, "nested/agent-wt5" names
+    # nothing, so nothing is removed, although the primary teardown moves to does have a live
+    # worktree at that path: resolved there, `worktree remove --force` deleted it and its
+    # uncommitted work, printed "worktree removed" and exited 0.
+    d="$(t8_mk z)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt4"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt4 "$wt" main
+    git -C "$d" worktree add -q -b worktree-agent-wt5 "$d/nested/agent-wt5" main
+    echo wip >"$d/nested/agent-wt5/uncommitted"
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree nested/agent-wt5
+    [ "$T8_RC" = 0 ] || f "relative --worktree naming nothing from the caller's cwd: exit $T8_RC"
+    [ -e "$d/nested/agent-wt5/uncommitted" ] || f "relative --worktree naming nothing from the caller's cwd: resolved against the primary, another worktree deleted"
+    grep -q 'worktree removed' <<<"$T8_OUT" && f "relative --worktree naming nothing from the caller's cwd: claimed a removal"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt5 || f "relative --worktree naming nothing from the caller's cwd: live worktree's isolation branch deleted"
+    # the relative form is honoured when it does name something from the caller's cwd: a
+    # sibling worktree the primary has nothing at, reached through a leading ..
+    d="$(t8_mk u)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt6"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt6 "$wt" main
+    git -C "$d" worktree add -q -b worktree-agent-wt7 "$d-wts/agent-wt7" main
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree ../agent-wt7
+    [ ! -e "$d-wts/agent-wt7" ] || f "relative --worktree from the caller's cwd: worktree not removed"
+    [ -e "$wt" ] || f "relative --worktree from the caller's cwd: removed the caller's own worktree"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt7 && f "relative --worktree from the caller's cwd: isolation branch not deleted"
+    # an idempotent re-run after the directory has gone: the path still names the isolation branch
+    d="$(t8_mk r)"; git -C "$d" switch -q feat/other
+    git -C "$d" worktree add -q -b worktree-agent-wt8 "$d/nested/agent-wt8" main
+    git -C "$d" worktree remove --force "$d/nested/agent-wt8"
+    T8_HEAD=feat/pr t8_run "$d" --worktree nested/agent-wt8
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt8 && f "relative --worktree already gone: isolation branch not deleted"
+    # `--worktree .` from inside it, checked out on the PR head: only the real directory name,
+    # never ".", can name the isolation branch
+    d="$(t8_mk v)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt9"; mkdir -p "$d-wts"
+    git -C "$d" branch worktree-agent-wt9 main
+    git -C "$d" worktree add -q "$wt" feat/pr
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree .
+    [ ! -e "$wt" ] || f "--worktree . from inside it: worktree not removed"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt9 && f "--worktree . from inside it: isolation branch not deleted"
+    MS_SRC="$MS_SRC_SAVE"
+}
+t8_suite "$MS_SRC/merge-shepherd.sh"
+if [ -z "$T8_FAILED" ]; then ok "merge-shepherd teardown primary-checkout cases: every committed case holds"
+else bad "merge-shepherd teardown primary-checkout cases failed:$T8_FAILED"; fi
+t8_mutant() { # <label> <old> <new>
+    local d="$MUT/t8-$1"; rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
+    if ! python3 -I -c '
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+' "$d/merge-shepherd.sh" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
+    t8_suite "$d/merge-shepherd.sh"
+    if [ -n "$T8_FAILED" ]; then ok "teardown mutant '$1' fails the suite"
+    else bad "teardown mutant '$1' passes the suite — its case is vacuous"; fi
+}
+t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
+t8_mutant unreadable-head-ref-trusted 'if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR'"'"'s"' 'if [ -z "$PR_HEAD_REF" ]; then :'
+t8_mutant default-branch-kept 'if [ "$cur" = "$BRANCH" ]; then :' 'if false; then :'
+t8_mutant detached-kept 'elif [ "$cur_rc" -ne 1 ]; then' 'elif [ "$cur_rc" -ne 0 ]; then'
+t8_mutant unreadable-head-switched 'keep_why="HEAD unreadable"; cur="(unknown)"' 'cur="(unknown)"'
+t8_mutant own-head-kept 'elif [ "$cur" != "$PR_HEAD_REF" ]; then' 'elif true; then'
+t8_mutant short-ref-read 'symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?' 'symbolic-ref -q --short HEAD 2>/dev/null)"; cur_rc=$?'
+t8_mutant head-read-before-the-arm 'cur="${cur#refs/heads/}"' 'cur="${cur#refs/heads/}"; read_pr_head_ref'
+t8_mutant no-cd-out-of-removed-worktree '  cd "$MAIN_WT" 2>/dev/null || true
+' ''
+t8_mutant head-ref-unvalidated 'if [ -n "$out" ] && git check-ref-format --branch "$out" >/dev/null 2>&1; then' 'if [ -n "$out" ]; then'
+t8_mutant relative-worktree-not-anchored 'case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac' ':'
+t8_mutant relative-worktree-anchored-to-primary 'WT="$PWD/$WT"' 'WT="$MAIN_WT/$WT"'
+t8_mutant worktree-path-not-normalized '[ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"' ':'
+t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac' 'case "$WT" in ""|/*) ;; *) [ -e "$WT" ] && WT="$PWD/$WT" || WT="" ;; esac'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

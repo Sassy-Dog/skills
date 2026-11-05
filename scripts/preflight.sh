@@ -399,6 +399,14 @@
 #      --match-head-commit, the re-read after a refused bound write, the
 #      bound --direct staleness update) against a second stubbed gh, each
 #      case with a mutant.
+#      Part 8 EXECUTES merge-shepherd.sh's post-merge teardown against real
+#      scratch git repos (#615): the primary checkout is switched and
+#      fast-forwarded only when it holds the PR's head branch, the default
+#      branch or a detached HEAD, and is otherwise KEPT, and a relative
+#      --worktree is the caller's path, never the primary's. The branch-decision,
+#      head-ref validation, run-from-inside-the-removed-worktree and relative
+#      --worktree cases each have a mutant; #615's two end-to-end linked-worktree
+#      scenarios (unrelated primary; PR head read fails) have none.
 #  26. template-actionlint tests (scripts/test-template-actionlint.sh) — the
 #      three setup-deps WORKFLOW templates are linted by actionlint, in a
 #      RENDER (issue #245). Bare actionlint lints real `.github/workflows/*`,

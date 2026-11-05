@@ -40,9 +40,10 @@
 #      refusal assertion. On a host WITHOUT python3 (a PATH built to exclude it)
 #      no guard still means exit 0 and unchanged behaviour, while a held guard
 #      still refuses (fail closed). merge-shepherd.sh's post-merge teardown
-#      carries the same call; it needs a live GitHub to run, so its function
-#      body is pinned at source level: the check precedes the first mutation and
-#      the refusal branch returns. Three mutants (check deleted, check moved
+#      carries the same call. Part 8 of test-poll-queue-eject.sh executes that
+#      function, but never with a guard held, so the guard ordering stays pinned
+#      here at source level: the check precedes the first mutation and the
+#      refusal branch returns. Three mutants (check deleted, check moved
 #      after the remove, `return` dropped) must each fail that pin.
 #
 #   8. The sweep keeps a live worker's worktree (#546): a feature-branch

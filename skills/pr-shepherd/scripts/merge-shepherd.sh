@@ -22,6 +22,10 @@
 #                     [--expected-head <commit id>]
 #   Single-shot by default (advances one step, exits). --watch N polls up to N
 #   seconds (keep N under the host's kill window, e.g. 240) then exits cleanly.
+#   --worktree: the linked worktree to remove after the merge. Prefer an absolute
+#   path: a relative one resolves against the directory this script was started
+#   in, and one that names nothing there removes no worktree, though it can
+#   still delete that path's worktree-<basename> isolation branch.
 #   --direct: for repos WITHOUT a merge queue — squash-merge + --delete-branch
 #   instead of enqueueing. Default is queue mode (GraphQL enqueuePullRequest;
 #   `gh pr merge --auto` only as a fallback when the mutation errors, and never
@@ -93,6 +97,11 @@
 #             · 1 usage/error/closed
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
+#   It then switches and ff-reconciles the primary checkout ONLY when that checkout
+#   holds the PR's head branch, the default branch, or a detached HEAD (#615);
+#   any other branch, an unreadable HEAD, or an unreadable PR head ref prints a
+#   KEEP line and leaves it alone. Worktree removal and isolation-branch deletion
+#   are unaffected.
 #
 # ENQUEUE PRIMITIVE: the GraphQL `enqueuePullRequest` mutation (PR node id
 # resolved in-script), NOT `gh pr merge --auto`. Some queue configurations
@@ -210,7 +219,9 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 
 # The MAIN worktree is the first entry of `git worktree list` — NOT
 # --show-toplevel, which returns the linked worktree when invoked from inside
-# one (teardown would then no-op against the dir it's removing).
+# one (teardown would then no-op against the dir it's removing). It may hold
+# another session's unrelated branch, so teardown() switches it only when that
+# branch is the PR's head, the default branch, or detached (#615).
 MAIN_WT="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 BRANCH="${DEFAULT_BRANCH:-$(git -C "${MAIN_WT:-.}" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
 [ -z "$BRANCH" ] && BRANCH=main
@@ -373,6 +384,27 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
   gh api "repos/$OWNER/$NAME/compare/$BRANCH...$sha" --jq '.behind_by' 2>/dev/null || true
 }
 
+# The PR's head branch, shared by drop_isolation_branch and teardown's
+# primary-checkout decision (#615). A successful read is cached for the run; a
+# failed one is not, so the next caller retries. Sets PR_HEAD_REF (empty when the
+# read fails or is not a clean branch name; callers fail closed on empty). Goes
+# through gh-retry.sh because a failed read now leaves the primary on the merged
+# head with exit 0 and no later re-run; gh-retry.sh returns gh's combined output
+# on success, so the value is validated before it is trusted. Not a command
+# substitution at the call site: a subshell would lose the cache.
+PR_HEAD_REF=""; PR_HEAD_REF_READ=0
+read_pr_head_ref() {
+  [ "$PR_HEAD_REF_READ" = 1 ] && return 0
+  local out
+  out="$(bash "$GH_RETRY" -- pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null)" || out=""
+  if [ -n "$out" ] && git check-ref-format --branch "$out" >/dev/null 2>&1; then
+    PR_HEAD_REF="$out"; PR_HEAD_REF_READ=1
+  else
+    PR_HEAD_REF=""
+  fi
+  return 0
+}
+
 # Prevention (issue #26): the Agent runtime checks each worktree out on a
 # worktree-agent-<id> isolation branch. The PR merges from the agent's FEATURE
 # branch, so the isolation branch never gets an upstream — never [gone], never
@@ -386,7 +418,7 @@ drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isola
   case "$br" in "$ISO_PREFIX"*) : ;; *) return 0 ;; esac
   [ "$br" = "$BRANCH" ] && return 0
   git -C "$MAIN_WT" show-ref --verify --quiet "refs/heads/$br" || return 0
-  head_ref="$(gh pr view "$PR" --repo "$REPO" --json headRefName --jq .headRefName 2>/dev/null || true)"
+  read_pr_head_ref; head_ref="$PR_HEAD_REF"
   if [ -z "$head_ref" ]; then
     echo "  (PR head ref unavailable — leaving $br for teardown.sh --sweep)"; return 0
   fi
@@ -413,6 +445,17 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
     return 0
   fi
   local wt_br="" wt_iso=""
+  # The run may have been started from inside the worktree removed below; once it
+  # is gone the cwd is gone too and every plain git call (check-ref-format in
+  # read_pr_head_ref) fails with 128, so move to the primary checkout. Nothing later
+  # relies on the old cwd (script paths are absolute, git uses -C, gh uses --repo).
+  # WT is the caller's path, so anchor it to the caller's cwd first, whether or not
+  # it exists from there: left relative it would resolve against the primary, where
+  # `worktree remove --force` can delete another session's worktree. A directory
+  # that does exist is then normalized, so `.` or `..` yields a real basename below.
+  case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac
+  [ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"
+  cd "$MAIN_WT" 2>/dev/null || true
   if [ -n "$WT" ]; then
     # Isolation branch the runtime created the worktree on (worktree-<dirname>) —
     # derived from the PATH so idempotent re-runs still delete it after the
@@ -428,6 +471,32 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   git -C "$MAIN_WT" worktree prune 2>/dev/null || true
   drop_isolation_branch "$wt_br"
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
+  # #615: the primary checkout is switched only when it holds the PR's own head
+  # branch, is already on the default branch, or is detached (a detached primary
+  # is handled as before this change: a mid-bisect primary is switched and
+  # fast-forwarded; a mid-rebase one is not switched, because git switch refuses
+  # and || true swallows that, and is fast-forwarded in place only if git allows).
+  # Any other branch is left alone. An unreadable HEAD and an unreadable PR head
+  # ref both fail closed to KEEP. The full ref is read, never --short: with a tag
+  # of the same name, --short prints heads/<name> and both compares would miss.
+  local cur cur_rc keep_why=""
+  cur="$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?
+  cur="${cur#refs/heads/}"
+  if [ "$cur_rc" -eq 0 ]; then
+    if [ "$cur" = "$BRANCH" ]; then :
+    else
+      read_pr_head_ref   # only this arm needs it: default and detached make no gh call
+      if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR's"
+      elif [ "$cur" != "$PR_HEAD_REF" ]; then keep_why="not the PR's head branch $PR_HEAD_REF"
+      fi
+    fi
+  elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached (reconcile); anything else = unreadable
+    keep_why="HEAD unreadable"; cur="(unknown)"
+  fi
+  if [ -n "$keep_why" ]; then
+    echo "  KEEP primary checkout on $cur ($keep_why) — not switched to $BRANCH, no ff reconcile"
+    return 0
+  fi
   git -C "$MAIN_WT" switch "$BRANCH" >/dev/null 2>&1 || true
   git_retry -C "$MAIN_WT" fetch origin "$BRANCH" --quiet || true
   git -C "$MAIN_WT" merge --ff-only "origin/$BRANCH" >/dev/null 2>&1 \
