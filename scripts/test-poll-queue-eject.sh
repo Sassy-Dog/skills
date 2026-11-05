@@ -639,6 +639,11 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # empty, or noisy (KEEP, and the KEEP reason says the head was unreadable), HEAD
 # unreadable (KEEP), and #615's own scenario end to end: a real linked worktree on a
 # worktree-agent-* branch torn down while the primary holds an unrelated branch.
+# A relative --worktree is the caller's path: naming nothing from the caller's cwd it
+# removes nothing, though the primary has a live worktree at that path (the live
+# worktree, its uncommitted file and its isolation branch all survive); naming a sibling
+# through .. it is honoured; already gone, it still names the isolation branch; and
+# `.` names it from the real directory rather than from ".".
 # Not covered: a primary mid-bisect or mid-rebase (handled as before: mid-bisect is switched and
 # fast-forwarded; mid-rebase is not switched, git refuses, and is ff'd in place only if git allows).
 echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or detached (#615)" >&2
@@ -778,6 +783,45 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     [ "$(t8_cur "$d")" = main ] || f "run from inside the removed worktree: primary on the PR head not switched to main"
     t8_mains "$d" || f "run from inside the removed worktree: main not fast-forwarded"
     git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt3 && f "run from inside the removed worktree: isolation branch not deleted"
+    # --worktree is the CALLER's path. From linked worktree wt4, "nested/agent-wt5" names
+    # nothing, so nothing is removed, although the primary teardown moves to does have a live
+    # worktree at that path: resolved there, `worktree remove --force` deleted it and its
+    # uncommitted work, printed "worktree removed" and exited 0.
+    d="$(t8_mk z)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt4"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt4 "$wt" main
+    git -C "$d" worktree add -q -b worktree-agent-wt5 "$d/nested/agent-wt5" main
+    echo wip >"$d/nested/agent-wt5/uncommitted"
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree nested/agent-wt5
+    [ "$T8_RC" = 0 ] || f "relative --worktree naming nothing from the caller's cwd: exit $T8_RC"
+    [ -e "$d/nested/agent-wt5/uncommitted" ] || f "relative --worktree naming nothing from the caller's cwd: resolved against the primary, another worktree deleted"
+    grep -q 'worktree removed' <<<"$T8_OUT" && f "relative --worktree naming nothing from the caller's cwd: claimed a removal"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt5 || f "relative --worktree naming nothing from the caller's cwd: live worktree's isolation branch deleted"
+    # the relative form is honoured when it does name something from the caller's cwd: a
+    # sibling worktree the primary has nothing at, reached through a leading ..
+    d="$(t8_mk u)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt6"; mkdir -p "$d-wts"
+    git -C "$d" worktree add -q -b worktree-agent-wt6 "$wt" main
+    git -C "$d" worktree add -q -b worktree-agent-wt7 "$d-wts/agent-wt7" main
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree ../agent-wt7
+    [ ! -e "$d-wts/agent-wt7" ] || f "relative --worktree from the caller's cwd: worktree not removed"
+    [ -e "$wt" ] || f "relative --worktree from the caller's cwd: removed the caller's own worktree"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt7 && f "relative --worktree from the caller's cwd: isolation branch not deleted"
+    # an idempotent re-run after the directory has gone: the path still names the isolation branch
+    d="$(t8_mk r)"; git -C "$d" switch -q feat/other
+    git -C "$d" worktree add -q -b worktree-agent-wt8 "$d/nested/agent-wt8" main
+    git -C "$d" worktree remove --force "$d/nested/agent-wt8"
+    T8_HEAD=feat/pr t8_run "$d" --worktree nested/agent-wt8
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt8 && f "relative --worktree already gone: isolation branch not deleted"
+    # `--worktree .` from inside it, checked out on the PR head: only the real directory name,
+    # never ".", can name the isolation branch
+    d="$(t8_mk v)"; git -C "$d" switch -q feat/other
+    wt="$d-wts/agent-wt9"; mkdir -p "$d-wts"
+    git -C "$d" branch worktree-agent-wt9 main
+    git -C "$d" worktree add -q "$wt" feat/pr
+    T8_CWD="$wt" T8_HEAD=feat/pr t8_run "$d" --worktree .
+    [ ! -e "$wt" ] || f "--worktree . from inside it: worktree not removed"
+    git -C "$d" show-ref --verify --quiet refs/heads/worktree-agent-wt9 && f "--worktree . from inside it: isolation branch not deleted"
     MS_SRC="$MS_SRC_SAVE"
 }
 t8_suite "$MS_SRC/merge-shepherd.sh"
@@ -808,6 +852,10 @@ t8_mutant head-read-before-the-arm 'cur="${cur#refs/heads/}"' 'cur="${cur#refs/h
 t8_mutant no-cd-out-of-removed-worktree '  cd "$MAIN_WT" 2>/dev/null || true
 ' ''
 t8_mutant head-ref-unvalidated 'if [ -n "$out" ] && git check-ref-format --branch "$out" >/dev/null 2>&1; then' 'if [ -n "$out" ]; then'
+t8_mutant relative-worktree-not-anchored 'case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac' ':'
+t8_mutant relative-worktree-anchored-to-primary 'WT="$PWD/$WT"' 'WT="$MAIN_WT/$WT"'
+t8_mutant worktree-path-not-normalized '[ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"' ':'
+t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac' 'case "$WT" in ""|/*) ;; *) [ -e "$WT" ] && WT="$PWD/$WT" || WT="" ;; esac'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

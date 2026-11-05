@@ -443,9 +443,13 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   local wt_br="" wt_iso=""
   # The run may have been started from inside the worktree removed below; once it
   # is gone the cwd is gone too and every plain git call (check-ref-format in
-  # read_pr_head_ref) fails with 128. Make WT absolute first, then move to the
-  # primary checkout. Nothing later relies on the old cwd (script paths are
-  # absolute, git uses -C, gh uses --repo).
+  # read_pr_head_ref) fails with 128, so move to the primary checkout. Nothing later
+  # relies on the old cwd (script paths are absolute, git uses -C, gh uses --repo).
+  # WT is the caller's path, so anchor it to the caller's cwd first, whether or not
+  # it exists from there: left relative it would resolve against the primary, where
+  # `worktree remove --force` can delete another session's worktree. A directory
+  # that does exist is then normalized, so `.` or `..` yields a real basename below.
+  case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac
   [ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"
   cd "$MAIN_WT" 2>/dev/null || true
   if [ -n "$WT" ]; then
