@@ -21,7 +21,7 @@
 #
 # Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
 # --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
-# adds merge-shepherd.sh's primary-checkout teardown cases, #615, run against real scratch
+# adds merge-shepherd.sh's primary-checkout teardown cases, #615 and #618, run against real scratch
 # git repos):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
@@ -647,9 +647,11 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # #618: a detached primary with a git operation under way (mid-bisect, mid-rebase) is KEPT:
 # HEAD unmoved, main not fast-forwarded, a KEEP line naming the operation; a detached primary
 # with none is still switched and ff'd. The marker list is a copy of teardown.sh's
-# worktree_op_in_progress list and a case fails if the two differ. Not covered: the merge,
-# cherry-pick and revert markers individually, and an unreadable git dir (fail-closed in the
-# source, not executed here).
+# worktree_op_in_progress list and a case fails if the two differ (checkout-guard.sh's clean()
+# holds a third copy that is not pinned). The mid-bisect and mid-rebase fixtures are real: a
+# bisect at a genuine midpoint and a `git rebase` stopped on a conflict. An unreadable git dir
+# (a shim fails `rev-parse --absolute-git-dir`) is KEPT. Not covered: the merge, cherry-pick
+# and revert markers individually.
 echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or idle-detached (#615, #618)" >&2
 T8="$WORK/t8"; mkdir -p "$T8/bin"
 cat >"$T8/bin/gh" <<'MOCK'
@@ -678,6 +680,13 @@ case " \$* " in *" symbolic-ref -q HEAD "*) exit 128 ;; esac
 exec "$REAL_GIT" "\$@"
 SHIM
 chmod +x "$T8/gitshim/git"
+mkdir -p "$T8/gitshim2"
+cat >"$T8/gitshim2/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" rev-parse --absolute-git-dir "*) exit 128 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$T8/gitshim2/git"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 t8_git() { git -c user.name=t -c user.email=t@example.invalid "$@"; }
 t8_mk() { # <name> -> repo with origin/main one commit ahead of the local main
@@ -737,16 +746,25 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     t8_mains "$d" || f "detached: not fast-forwarded"
     t8_viewed && f "detached: made a gh pr view call"
     # #618: detached mid-bisect and mid-rebase are KEPT
-    d="$(t8_mk i)"; git -C "$d" switch -q --detach feat/other
-    git -C "$d" bisect start >/dev/null 2>&1; git -C "$d" bisect bad >/dev/null 2>&1; git -C "$d" bisect good main >/dev/null 2>&1
+    d="$(t8_mk i)"; git -C "$d" switch -q feat/other
+    t8_git -C "$d" commit -q --allow-empty -m c1; t8_git -C "$d" commit -q --allow-empty -m c2; t8_git -C "$d" commit -q --allow-empty -m c3
+    git -C "$d" switch -q --detach feat/other
+    git -C "$d" bisect start >/dev/null || f "mid-bisect: bisect start failed"
+    git -C "$d" bisect bad >/dev/null || f "mid-bisect: bisect bad failed"
+    git -C "$d" bisect good main >/dev/null || f "mid-bisect: bisect good failed (no midpoint)"
     [ -e "$(git -C "$d" rev-parse --absolute-git-dir)/BISECT_LOG" ] || f "mid-bisect: fixture has no BISECT_LOG"
     h0="$(git -C "$d" rev-parse HEAD)"
     T8_HEAD=feat/pr t8_run "$d"
     [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "detached mid-bisect: HEAD moved"
     t8_mains "$d" && f "detached mid-bisect: main was fast-forwarded"
     grep -q '^  KEEP primary checkout on (detached) (a git operation' <<<"$T8_OUT" || f "detached mid-bisect: no KEEP line"
-    d="$(t8_mk j)"; git -C "$d" switch -q --detach feat/other
-    mkdir -p "$(git -C "$d" rev-parse --absolute-git-dir)/rebase-merge"
+    d="$(t8_mk j)"; git -C "$d" switch -q feat/other
+    echo one >"$d/conflict.txt"; git -C "$d" add conflict.txt; t8_git -C "$d" commit -q -m one
+    git -C "$d" switch -q -c rbbase main
+    echo two >"$d/conflict.txt"; git -C "$d" add conflict.txt; t8_git -C "$d" commit -q -m two
+    git -C "$d" switch -q --detach feat/other
+    t8_git -C "$d" rebase rbbase >/dev/null 2>&1   # stops on the conflict: exit 1 is the fixture
+    [ -d "$(git -C "$d" rev-parse --absolute-git-dir)/rebase-merge" ] || f "mid-rebase: fixture is not stopped mid-rebase"
     h0="$(git -C "$d" rev-parse HEAD)"
     T8_HEAD=feat/pr t8_run "$d"
     [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "detached mid-rebase: HEAD moved"
@@ -782,6 +800,13 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     T8_HEAD=feat/pr PATH="$T8/gitshim:$PATH" t8_run "$d"
     [ "$(t8_cur "$d")" = feat/other ] || f "unreadable HEAD: branch moved"
     grep -q '^  KEEP primary checkout on (unknown)' <<<"$T8_OUT" || f "unreadable HEAD: no KEEP line"
+    # #618 fail-closed: a detached primary whose git dir cannot be read (rev-parse --absolute-git-dir fails) is KEPT
+    d="$(t8_mk m)"; git -C "$d" switch -q --detach feat/other
+    h0="$(git -C "$d" rev-parse HEAD)"
+    T8_HEAD=feat/pr PATH="$T8/gitshim2:$PATH" t8_run "$d"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "detached, git dir unreadable: HEAD moved"
+    t8_mains "$d" && f "detached, git dir unreadable: main was fast-forwarded"
+    grep -q '^  KEEP primary checkout on (detached) (a git operation' <<<"$T8_OUT" || f "detached, git dir unreadable: no KEEP line"
     # #615's own scenario end to end: a linked worktree on an isolation branch, primary on an unrelated branch
     d="$(t8_mk w)"; git -C "$d" switch -q feat/other
     wt="$d-wts/agent-wt1"; mkdir -p "$d-wts"
@@ -872,6 +897,7 @@ t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
 t8_mutant unreadable-head-ref-trusted 'if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR'"'"'s"' 'if [ -z "$PR_HEAD_REF" ]; then :'
 t8_mutant default-branch-kept 'if [ "$cur" = "$BRANCH" ]; then :' 'if false; then :'
 t8_mutant detached-op-ignored 'if git_op_in_progress "$MAIN_WT"; then keep_why' 'if false; then keep_why'
+t8_mutant unreadable-gitdir-trusted 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0' 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1'
 t8_mutant op-marker-sequencer-dropped 'REVERT_HEAD BISECT_LOG sequencer; do
     [ -e "$gd/$f" ] && return 0
   done

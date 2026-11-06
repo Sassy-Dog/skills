@@ -98,9 +98,11 @@
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
 #   It then switches and ff-reconciles the primary checkout ONLY when that checkout
-#   holds the PR's head branch, the default branch, or a detached HEAD (#615);
-#   any other branch, an unreadable HEAD, or an unreadable PR head ref prints a
-#   KEEP line and leaves it alone. Worktree removal and isolation-branch deletion
+#   holds the PR's head branch, the default branch, or a detached HEAD with no
+#   git operation under way (#615, #618); any other branch, a detached HEAD
+#   mid-bisect/rebase/merge/cherry-pick/revert (or whose git dir cannot be read),
+#   an unreadable HEAD, or an unreadable PR head ref prints a KEEP line and
+#   leaves it alone. Worktree removal and isolation-branch deletion
 #   are unaffected.
 #
 # ENQUEUE PRIMITIVE: the GraphQL `enqueuePullRequest` mutation (PR node id
@@ -221,7 +223,8 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 # --show-toplevel, which returns the linked worktree when invoked from inside
 # one (teardown would then no-op against the dir it's removing). It may hold
 # another session's unrelated branch, so teardown() switches it only when that
-# branch is the PR's head, the default branch, or detached (#615).
+# branch is the PR's head, the default branch, or detached with no git operation
+# under way (#615, #618).
 MAIN_WT="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 BRANCH="${DEFAULT_BRANCH:-$(git -C "${MAIN_WT:-.}" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
 [ -z "$BRANCH" ] && BRANCH=main
@@ -436,7 +439,9 @@ drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isola
 
 # Same marker list as teardown.sh's worktree_op_in_progress (test-poll-queue-eject.sh
 # part 8 fails if the two drift). An unreadable git dir answers "in progress".
-# sequencer outlives CHERRY_PICK_HEAD, so it is in the list.
+# sequencer outlives CHERRY_PICK_HEAD, so it is in the list. This is the third copy
+# of the list: checkout-guard.sh's clean() (Python, lines 373-375) holds the same
+# seven markers plus index.lock, and nothing pins that one against these two.
 git_op_in_progress() { # $1 = checkout path
   local gd f
   gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0

@@ -402,7 +402,8 @@
 #      Part 8 EXECUTES merge-shepherd.sh's post-merge teardown against real
 #      scratch git repos (#615): the primary checkout is switched and
 #      fast-forwarded only when it holds the PR's head branch, the default
-#      branch or a detached HEAD, and is otherwise KEPT, and a relative
+#      branch or a detached HEAD with no git operation under way (#618), and is
+#      otherwise KEPT, and a relative
 #      --worktree is the caller's path, never the primary's. The branch-decision,
 #      head-ref validation, run-from-inside-the-removed-worktree and relative
 #      --worktree cases each have a mutant; #615's two end-to-end linked-worktree
