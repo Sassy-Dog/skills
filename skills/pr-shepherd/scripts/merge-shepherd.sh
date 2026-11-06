@@ -434,6 +434,19 @@ drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isola
     || echo "  ⚠ could not delete isolation branch $br"
 }
 
+# Same marker list as teardown.sh's worktree_op_in_progress (test-poll-queue-eject.sh
+# part 8 fails if the two drift). An unreadable git dir answers "in progress".
+# sequencer outlives CHERRY_PICK_HEAD, so it is in the list.
+git_op_in_progress() { # $1 = checkout path
+  local gd f
+  gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
+  [ -n "$gd" ] || return 0
+  for f in rebase-merge rebase-apply MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_LOG sequencer; do
+    [ -e "$gd/$f" ] && return 0
+  done
+  return 1
+}
+
 teardown() { # idempotent: safe whether or not the worktree/branch still exist
   [ -z "$MAIN_WT" ] && { echo "  (no local checkout — skipping teardown)"; return 0; }
   # Checkout guard (#486): a serial worker may own this checkout. A refusal (or a
@@ -472,13 +485,13 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   drop_isolation_branch "$wt_br"
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
   # #615: the primary checkout is switched only when it holds the PR's own head
-  # branch, is already on the default branch, or is detached (a detached primary
-  # is handled as before this change: a mid-bisect primary is switched and
-  # fast-forwarded; a mid-rebase one is not switched, because git switch refuses
-  # and || true swallows that, and is fast-forwarded in place only if git allows).
-  # Any other branch is left alone. An unreadable HEAD and an unreadable PR head
-  # ref both fail closed to KEEP. The full ref is read, never --short: with a tag
-  # of the same name, --short prints heads/<name> and both compares would miss.
+  # branch, is already on the default branch, or is detached with no git operation
+  # under way (#618: a detached HEAD is also what a bisect or rebase looks like, so
+  # a detached primary with rebase/merge/cherry-pick/revert/bisect state is KEPT).
+  # Any other branch is left alone. An unreadable HEAD, an unreadable git dir and
+  # an unreadable PR head ref all fail closed to KEEP. The full ref is read, never
+  # --short: with a tag of the same name, --short prints heads/<name> and both
+  # compares would miss.
   local cur cur_rc keep_why=""
   cur="$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?
   cur="${cur#refs/heads/}"
@@ -490,8 +503,11 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
       elif [ "$cur" != "$PR_HEAD_REF" ]; then keep_why="not the PR's head branch $PR_HEAD_REF"
       fi
     fi
-  elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached (reconcile); anything else = unreadable
+  elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached; anything else = unreadable
     keep_why="HEAD unreadable"; cur="(unknown)"
+  else                             # detached: reconcile unless an operation is under way (#618)
+    cur="(detached)"
+    if git_op_in_progress "$MAIN_WT"; then keep_why="a git operation (rebase, merge, cherry-pick, revert, bisect) is in progress"; fi
   fi
   if [ -n "$keep_why" ]; then
     echo "  KEEP primary checkout on $cur ($keep_why) — not switched to $BRANCH, no ff reconcile"
