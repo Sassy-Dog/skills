@@ -649,9 +649,12 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # with none is still switched and ff'd. The marker list is a copy of teardown.sh's
 # worktree_op_in_progress list and a case fails if the two differ (checkout-guard.sh's clean()
 # holds a third copy that is not pinned). The mid-bisect and mid-rebase fixtures are real: a
-# bisect at a genuine midpoint and a `git rebase` stopped on a conflict. An unreadable git dir
-# (a shim fails `rev-parse --absolute-git-dir`) is KEPT. Not covered: the merge, cherry-pick
-# and revert markers individually.
+# bisect at a genuine midpoint and a `git rebase -i` stopped at `break` with a clean tree. The
+# rebase stops at `break` rather than on a conflict because a conflict makes git refuse the ff
+# by itself, so only the script's own KEEP holds HEAD here: mutant keep-line-still-ffs-detached
+# prints KEEP, then reconciles, and must fail at this case. An unreadable git dir (a shim fails
+# `rev-parse --absolute-git-dir`) is KEPT. Not covered: the merge, cherry-pick and revert
+# markers individually.
 echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or idle-detached (#615, #618)" >&2
 T8="$WORK/t8"; mkdir -p "$T8/bin"
 cat >"$T8/bin/gh" <<'MOCK'
@@ -759,12 +762,12 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     t8_mains "$d" && f "detached mid-bisect: main was fast-forwarded"
     grep -q '^  KEEP primary checkout on (detached) (a git operation' <<<"$T8_OUT" || f "detached mid-bisect: no KEEP line"
     d="$(t8_mk j)"; git -C "$d" switch -q feat/other
-    echo one >"$d/conflict.txt"; git -C "$d" add conflict.txt; t8_git -C "$d" commit -q -m one
-    git -C "$d" switch -q -c rbbase main
-    echo two >"$d/conflict.txt"; git -C "$d" add conflict.txt; t8_git -C "$d" commit -q -m two
+    echo one >"$d/f.txt"; git -C "$d" add f.txt; t8_git -C "$d" commit -q -m one
     git -C "$d" switch -q --detach feat/other
-    t8_git -C "$d" rebase rbbase >/dev/null 2>&1   # stops on the conflict: exit 1 is the fixture
+    # the todo becomes a lone `break`: stopped on main's old tip with a clean tree, where a conflict would make git refuse the ff itself
+    GIT_SEQUENCE_EDITOR='echo break >' t8_git -C "$d" rebase -i main >/dev/null 2>&1
     [ -d "$(git -C "$d" rev-parse --absolute-git-dir)/rebase-merge" ] || f "mid-rebase: fixture is not stopped mid-rebase"
+    [ -z "$(git -C "$d" status --porcelain)" ] || f "mid-rebase: fixture tree is not clean"
     h0="$(git -C "$d" rev-parse HEAD)"
     T8_HEAD=feat/pr t8_run "$d"
     [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "detached mid-rebase: HEAD moved"
@@ -879,7 +882,7 @@ t8_suite() { # <script path>   (sets T8_FAILED)
 t8_suite "$MS_SRC/merge-shepherd.sh"
 if [ -z "$T8_FAILED" ]; then ok "merge-shepherd teardown primary-checkout cases: every committed case holds"
 else bad "merge-shepherd teardown primary-checkout cases failed:$T8_FAILED"; fi
-t8_mutant() { # <label> <old> <new>
+t8_mutant() { # <label> <old> <new> [the case failure that must be among those it causes]
     local d="$MUT/t8-$1"; rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
     if ! python3 -I -c '
 import sys
@@ -890,10 +893,16 @@ if s.count(old) != 1:
 open(p, "w").write(s.replace(old, new))
 ' "$d/merge-shepherd.sh" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
     t8_suite "$d/merge-shepherd.sh"
-    if [ -n "$T8_FAILED" ]; then ok "teardown mutant '$1' fails the suite"
-    else bad "teardown mutant '$1' passes the suite — its case is vacuous"; fi
+    if [ -z "$T8_FAILED" ]; then bad "teardown mutant '$1' passes the suite — its case is vacuous"
+    elif [ -n "${4:-}" ] && [[ "$T8_FAILED|" != *"|$4|"* ]]; then bad "teardown mutant '$1' fails the suite, but not at: $4"
+    else ok "teardown mutant '$1' fails the suite"; fi
 }
 t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
+t8_mutant keep-line-still-ffs-detached 'no ff reconcile"
+    return 0
+  fi' 'no ff reconcile"
+    [ "$cur" = "(detached)" ] || return 0
+  fi' "detached mid-rebase: HEAD moved"
 t8_mutant unreadable-head-ref-trusted 'if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR'"'"'s"' 'if [ -z "$PR_HEAD_REF" ]; then :'
 t8_mutant default-branch-kept 'if [ "$cur" = "$BRANCH" ]; then :' 'if false; then :'
 t8_mutant detached-op-ignored 'if git_op_in_progress "$MAIN_WT"; then keep_why' 'if false; then keep_why'
