@@ -449,17 +449,27 @@ fi
 echo "== reconcile $BRANCH =="
 git switch "$BRANCH" >/dev/null 2>&1 || true
 git fetch origin "$BRANCH" --prune --quiet
-# Clear cwd-reset stragglers: untracked files that are now TRACKED on origin/<branch>
-# AND byte-identical there (so nothing is lost) — these block the ff otherwise.
-while IFS= read -r f; do
-  [ -z "$f" ] && continue
-  if git cat-file -e "origin/$BRANCH:$f" 2>/dev/null && git show "origin/$BRANCH:$f" 2>/dev/null | diff -q - "$f" >/dev/null 2>&1; then
-    rm -f "$f" && echo "  cleared straggler (identical to origin/$BRANCH): $f"
+# A refused switch (a dirty file it would overwrite) leaves the checkout on whatever it
+# held; the straggler loop would then delete untracked files and the pull would
+# fast-forward THAT branch (#621). So nothing below runs unless HEAD is the default
+# branch. Full ref, never --short (a same-named tag makes --short print heads/<name>);
+# an unreadable HEAD fails closed.
+RECONCILED=0
+if [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$BRANCH" ]; then
+  # Clear cwd-reset stragglers: untracked files that are now TRACKED on origin/<branch>
+  # AND byte-identical there (so nothing is lost) — these block the ff otherwise.
+  while IFS= read -r f; do
+    [ -z "$f" ] && continue
+    if git cat-file -e "origin/$BRANCH:$f" 2>/dev/null && git show "origin/$BRANCH:$f" 2>/dev/null | diff -q - "$f" >/dev/null 2>&1; then
+      rm -f "$f" && echo "  cleared straggler (identical to origin/$BRANCH): $f"
+    fi
+  done < <(git ls-files --others --exclude-standard || true)
+  if git pull --ff-only origin "$BRANCH" >/dev/null 2>&1; then
+    echo "  $BRANCH @ $(git rev-parse --short HEAD)"
+    RECONCILED=1
   fi
-done < <(git ls-files --others --exclude-standard || true)
-if git pull --ff-only origin "$BRANCH" >/dev/null 2>&1; then
-  echo "  $BRANCH @ $(git rev-parse --short HEAD)"
-else
+fi
+if [ "$RECONCILED" != "1" ]; then
   echo "  ⚠ ff-only reconcile failed — residual local changes; clean up by hand"
   # In --reconcile-only mode the ff IS the job — surface the failure to the caller.
   # Explicit/sweep modes keep warn-and-continue: teardown already did its real work.

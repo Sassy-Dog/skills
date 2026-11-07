@@ -21,7 +21,7 @@
 #
 # Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
 # --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
-# adds merge-shepherd.sh's primary-checkout teardown cases, #615 and #618, run against real scratch
+# adds merge-shepherd.sh's primary-checkout teardown cases, #615, #618 and #621, run against real scratch
 # git repos):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
@@ -644,18 +644,39 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # worktree, its uncommitted file and its isolation branch all survive); naming a sibling
 # through .. it is honoured; already gone, it still names the isolation branch; and
 # `.` names it from the real directory rather than from ".".
-# #618: a detached primary with a git operation under way (mid-bisect, mid-rebase) is KEPT:
-# HEAD unmoved, main not fast-forwarded, a KEEP line naming the operation; a detached primary
-# with none is still switched and ff'd. The marker list is a copy of teardown.sh's
-# worktree_op_in_progress list and a case fails if the two differ (checkout-guard.sh's clean()
-# holds a third copy that is not pinned). The mid-bisect and mid-rebase fixtures are real: a
+# #618/#621: a primary with a git operation under way (mid-bisect, mid-rebase) is KEPT whether it is
+# detached, on the default branch or on the PR's head branch: HEAD unmoved, main not
+# fast-forwarded, a KEEP line naming the operation; a primary with none is still switched and
+# ff'd. The check runs ahead of the three arms (mutants op-check-detached-only,
+# op-check-skips-default and op-check-skips-pr-head are the old shape and each must fail at its
+# own case). The marker list is a copy of teardown.sh's worktree_op_in_progress list and a case
+# fails if the two differ; checkout-guard.sh's clean() holds a third copy, in Python, pinned the
+# same way with `index.lock` its one deliberate extra, which is filtered out of the comparison and
+# so asserted present by its own case (a mutant per file drops `sequencer`; one more drops
+# `index.lock` from the guard). The
+# detached mid-bisect and mid-rebase fixtures are real: a
 # bisect at a genuine midpoint and a `git rebase -i` stopped at `break` with a clean tree. The
+# attached ones are `git bisect start` on main and on the PR's head branch (no midpoint, which
+# is the shape the issue measured), plus a bare sequencer marker on main. The
 # rebase stops at `break` rather than on a conflict because a conflict makes git refuse the ff
-# by itself, so only the script's own KEEP holds HEAD here: mutant keep-line-still-ffs-detached
-# prints KEEP, then reconciles, and must fail at this case. An unreadable git dir (a shim fails
+# by itself, so only the script's own KEEP holds HEAD here. Since #621 a second guard also
+# holds it: git refuses `switch` mid-rebase and the post-switch check then skips the ff, so the
+# HEAD assertion alone no longer tells the KEEP from that check. Mutant detached-op-ignored
+# therefore must fail at this case's KEEP-line assertion, and mutant keep-line-still-ffs-detached
+# (prints KEEP, then reconciles) at the mid-bisect case, where the switch is allowed. An unreadable git dir (a shim fails
 # `rev-parse --absolute-git-dir`) is KEPT. Not covered: the merge, cherry-pick and revert
 # markers individually.
-echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or idle-detached (#615, #618)" >&2
+# #621: after `git switch` the primary must be on the default branch (the full ref, read again),
+# else the ff and the closing line are skipped and `ff reconcile skipped` prints. Fixtures: a
+# tracked file that exists on the PR's head and not on main, left modified, so the switch is
+# refused. Cases: from the PR's head and from a detached HEAD (squash-merged: nothing moves, no
+# `main @` line), and from a PR head that is an ancestor of origin/main (the PR branch is not
+# fast-forwarded). A shim that makes every `symbolic-ref -q HEAD` after the first fail covers the
+# unreadable-HEAD-after-the-switch fail-closed. Mutants: closing-line-unconditional (prints the
+# closing line after a refused switch) must fail at the squash-merged case, ff-unconditional (runs
+# the ff after a refused switch) at the ancestor case, and after-switch-unreadable-trusted at the
+# shim case.
+echo "8. merge-shepherd.sh teardown only moves a primary checkout that is the PR's, default or idle-detached (#615, #618, #621)" >&2
 T8="$WORK/t8"; mkdir -p "$T8/bin"
 cat >"$T8/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
@@ -690,6 +711,17 @@ case " \$* " in *" rev-parse --absolute-git-dir "*) exit 128 ;; esac
 exec "$REAL_GIT" "\$@"
 SHIM
 chmod +x "$T8/gitshim2/git"
+# fails every `symbolic-ref -q HEAD` after the first: the read before the switch works, the one after it does not
+mkdir -p "$T8/gitshim3"
+cat >"$T8/gitshim3/git" <<SHIM
+#!/usr/bin/env bash
+case " \$* " in *" symbolic-ref -q HEAD "*)
+    n=\$(cat "$T8/shim3.n" 2>/dev/null || echo 0); echo \$((n+1)) >"$T8/shim3.n"
+    [ "\$n" -ge 1 ] && exit 128 ;;
+esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$T8/gitshim3/git"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 t8_git() { git -c user.name=t -c user.email=t@example.invalid "$@"; }
 t8_mk() { # <name> -> repo with origin/main one commit ahead of the local main
@@ -717,6 +749,32 @@ t8_cur() { local r; r="$(git -C "$1" symbolic-ref -q HEAD)" && echo "${r#refs/he
 # compares to the remote's own main (ls-remote), not origin/main, which is stale until a fetch
 t8_mains() { [ "$(git -C "$1" rev-parse refs/heads/main)" = "$(git -C "$1" ls-remote origin refs/heads/main | cut -f1)" ]; }
 t8_viewed() { grep -q '^pr view' "$T8_CALLS"; }
+# the op-marker list on a `for f in ... ; do` line, sorted; and checkout-guard.sh's clean() tuple minus its one extra
+t8_list_sh() { sed -n 's/.*for f in \(.*\); do.*/\1/p' "$1" | head -1 | tr ' ' '\n' | sort | paste -sd' ' -; }
+# exits 0 only when clean()'s tuple still names index.lock, the one extra the list comparison filters out
+t8_guard_has_lock() {
+    python3 -I -c '
+import re, sys
+m = re.search(r"def clean\(self\):\s+for name in \(([^)]*)\):", open(sys.argv[1]).read())
+sys.exit(0 if m and "\"index.lock\"" in m.group(1) else 1)
+' "$1"
+}
+t8_list_guard() {
+    python3 -I -c '
+import re, sys
+m = re.search(r"def clean\(self\):\s+for name in \(([^)]*)\):", open(sys.argv[1]).read())
+names = re.findall(r"\"([^\"]+)\"", m.group(1)) if m else []
+print(" ".join(sorted(n for n in names if n != "index.lock")))
+' "$1"
+}
+# <repo>: the PR's head branch gains f.txt (absent on main) and is left checked out with f.txt modified,
+# so `git switch main` is refused. Leaves the primary on feat/pr.
+t8_refuse_switch_fixture() {
+    git -C "$1" switch -q feat/pr
+    echo one >"$1/f.txt"; git -C "$1" add f.txt; t8_git -C "$1" commit -q -m pr-file
+    echo dirty >>"$1/f.txt"
+    if git -C "$1" switch -q main 2>/dev/null; then return 1; fi
+}
 t8_suite() { # <script path>   (sets T8_FAILED)
     MS_SRC_SAVE="$MS_SRC"; MS_SRC="$(dirname "$1")"; T8_FAILED=""; T8_N=$((T8_N+1))
     local d wt
@@ -777,9 +835,64 @@ t8_suite() { # <script path>   (sets T8_FAILED)
     touch "$(git -C "$d" rev-parse --absolute-git-dir)/sequencer"
     T8_HEAD=feat/pr t8_run "$d"
     t8_mains "$d" && f "detached with only a sequencer marker: main was fast-forwarded"
-    [ -n "$(sed -n 's/.*for f in \(.*\); do.*/\1/p' "$MS_SRC/teardown.sh" | head -1)" ] \
-        && [ "$(sed -n 's/.*for f in \(.*\); do.*/\1/p' "$MS_SRC/merge-shepherd.sh" | head -1)" = "$(sed -n 's/.*for f in \(.*\); do.*/\1/p' "$MS_SRC/teardown.sh" | head -1)" ] \
+    # #621: an attached primary with an operation under way is KEPT too
+    d="$(t8_mk p)"; git -C "$d" switch -q main
+    git -C "$d" bisect start >/dev/null || f "default mid-bisect: bisect start failed"
+    [ -e "$(git -C "$d" rev-parse --absolute-git-dir)/BISECT_LOG" ] || f "default mid-bisect: fixture has no BISECT_LOG"
+    h0="$(git -C "$d" rev-parse HEAD)"
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "default mid-bisect: HEAD moved"
+    [ "$(t8_cur "$d")" = main ] || f "default mid-bisect: left main"
+    t8_mains "$d" && f "default mid-bisect: main was fast-forwarded"
+    grep -q '^  KEEP primary checkout on main (a git operation' <<<"$T8_OUT" || f "default mid-bisect: no KEEP line"
+    d="$(t8_mk q)"; git -C "$d" switch -q feat/pr
+    git -C "$d" bisect start >/dev/null || f "PR head mid-bisect: bisect start failed"
+    [ -e "$(git -C "$d" rev-parse --absolute-git-dir)/BISECT_LOG" ] || f "PR head mid-bisect: fixture has no BISECT_LOG"
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(t8_cur "$d")" = feat/pr ] || f "PR head mid-bisect: HEAD moved"
+    t8_mains "$d" && f "PR head mid-bisect: main was fast-forwarded"
+    grep -q '^  KEEP primary checkout on feat/pr (a git operation' <<<"$T8_OUT" || f "PR head mid-bisect: no KEEP line"
+    d="$(t8_mk s)"; git -C "$d" switch -q main
+    touch "$(git -C "$d" rev-parse --absolute-git-dir)/sequencer"
+    T8_HEAD=feat/pr t8_run "$d"
+    t8_mains "$d" && f "default with only a sequencer marker: main was fast-forwarded"
+    grep -q '^  KEEP primary checkout on main (a git operation' <<<"$T8_OUT" || f "default with only a sequencer marker: no KEEP line"
+    # #621: a refused switch skips the ff and the closing line
+    d="$(t8_mk ra)"; t8_refuse_switch_fixture "$d" || f "refused switch, PR head: fixture switch was not refused"
+    h0="$(git -C "$d" rev-parse HEAD)"
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "refused switch, PR head: HEAD moved"
+    [ "$(t8_cur "$d")" = feat/pr ] || f "refused switch, PR head: left the PR branch"
+    grep -q '^  main @' <<<"$T8_OUT" && f "refused switch, PR head: printed the closing line"
+    grep -q 'ff reconcile skipped' <<<"$T8_OUT" || f "refused switch, PR head: no ff reconcile skipped line"
+    t8_mains "$d" && f "refused switch, PR head: main was fast-forwarded"
+    d="$(t8_mk rb)"; t8_refuse_switch_fixture "$d" || f "refused switch, detached: fixture switch was not refused"
+    h0="$(git -C "$d" rev-parse HEAD)"; git -C "$d" switch -q --detach feat/pr 2>/dev/null || f "refused switch, detached: could not detach"
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(git -C "$d" rev-parse HEAD)" = "$h0" ] || f "refused switch, detached: HEAD moved"
+    [ "$(t8_cur "$d")" = DETACHED ] || f "refused switch, detached: no longer detached"
+    grep -q '^  main @' <<<"$T8_OUT" && f "refused switch, detached: printed the closing line"
+    grep -q 'ff reconcile skipped' <<<"$T8_OUT" || f "refused switch, detached: no ff reconcile skipped line"
+    d="$(t8_mk rc)"; t8_refuse_switch_fixture "$d" || f "refused switch, ancestor: fixture switch was not refused"
+    git -C "$d" push -q origin feat/pr
+    git -C "$T8/$T8_N-rc-up" fetch -q origin
+    t8_git -C "$T8/$T8_N-rc-up" merge -q --no-edit origin/feat/pr
+    git -C "$T8/$T8_N-rc-up" push -q origin main
+    h0="$(git -C "$d" rev-parse refs/heads/feat/pr)"
+    T8_HEAD=feat/pr t8_run "$d"
+    [ "$(git -C "$d" rev-parse refs/heads/feat/pr)" = "$h0" ] || f "refused switch, PR head an ancestor of origin/main: the PR branch moved"
+    grep -q '^  main @' <<<"$T8_OUT" && f "refused switch, PR head an ancestor of origin/main: printed the closing line"
+    d="$(t8_mk rd)"; git -C "$d" switch -q main; rm -f "$T8/shim3.n"
+    T8_HEAD=feat/pr PATH="$T8/gitshim3:$PATH" t8_run "$d"
+    t8_mains "$d" && f "HEAD unreadable after the switch: main was fast-forwarded"
+    grep -q '^  main @' <<<"$T8_OUT" && f "HEAD unreadable after the switch: printed the closing line"
+    grep -q 'ff reconcile skipped' <<<"$T8_OUT" || f "HEAD unreadable after the switch: no ff reconcile skipped line"
+    l_td="$(t8_list_sh "$MS_SRC/teardown.sh")"
+    [ -n "$l_td" ] && [ "$(t8_list_sh "$MS_SRC/merge-shepherd.sh")" = "$l_td" ] \
         || f "op marker list differs from teardown.sh's"
+    [ -n "$l_td" ] && [ "$(t8_list_guard "$MS_SRC/checkout-guard.sh")" = "$l_td" ] \
+        || f "op marker list differs from checkout-guard.sh's clean()"
+    t8_guard_has_lock "$MS_SRC/checkout-guard.sh" || f "checkout-guard.sh's clean() lost index.lock"
     d="$(t8_mk e)"; git -C "$d" switch -q feat/other
     T8_HEAD_RC=1 t8_run "$d"
     [ "$(t8_cur "$d")" = feat/other ] || f "head read fails: branch moved"
@@ -884,6 +997,7 @@ if [ -z "$T8_FAILED" ]; then ok "merge-shepherd teardown primary-checkout cases:
 else bad "merge-shepherd teardown primary-checkout cases failed:$T8_FAILED"; fi
 t8_mutant() { # <label> <old> <new> [the case failure that must be among those it causes]
     local d="$MUT/t8-$1"; rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
+    # T8_MUT_FILE names the copied file to mutate (default merge-shepherd.sh); the suite always runs merge-shepherd.sh
     if ! python3 -I -c '
 import sys
 p, old, new = sys.argv[1:4]
@@ -891,7 +1005,7 @@ s = open(p).read()
 if s.count(old) != 1:
     sys.exit(1)
 open(p, "w").write(s.replace(old, new))
-' "$d/merge-shepherd.sh" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
+' "$d/${T8_MUT_FILE:-merge-shepherd.sh}" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
     t8_suite "$d/merge-shepherd.sh"
     if [ -z "$T8_FAILED" ]; then bad "teardown mutant '$1' passes the suite — its case is vacuous"
     elif [ -n "${4:-}" ] && [[ "$T8_FAILED|" != *"|$4|"* ]]; then bad "teardown mutant '$1' fails the suite, but not at: $4"
@@ -902,10 +1016,41 @@ t8_mutant keep-line-still-ffs-detached 'no ff reconcile"
     return 0
   fi' 'no ff reconcile"
     [ "$cur" = "(detached)" ] || return 0
-  fi' "detached mid-rebase: HEAD moved"
+  fi' "detached mid-bisect: HEAD moved"
 t8_mutant unreadable-head-ref-trusted 'if [ -z "$PR_HEAD_REF" ]; then keep_why="PR head branch unreadable, cannot prove it is the PR'"'"'s"' 'if [ -z "$PR_HEAD_REF" ]; then :'
 t8_mutant default-branch-kept 'if [ "$cur" = "$BRANCH" ]; then :' 'if false; then :'
-t8_mutant detached-op-ignored 'if git_op_in_progress "$MAIN_WT"; then keep_why' 'if false; then keep_why'
+t8_mutant detached-op-ignored 'if git_op_in_progress "$MAIN_WT"; then
+    case' 'if false; then
+    case' "detached mid-rebase: no KEEP line"
+# the pre-#621 shape: the op check reached only the detached arm
+t8_mutant op-check-detached-only 'if git_op_in_progress "$MAIN_WT"; then
+    case' 'if [ "$cur_rc" -eq 1 ] && git_op_in_progress "$MAIN_WT"; then
+    case' "default mid-bisect: HEAD moved"
+t8_mutant op-check-skips-default 'if git_op_in_progress "$MAIN_WT"; then
+    case' 'if [ "$cur" != "$BRANCH" ] && git_op_in_progress "$MAIN_WT"; then
+    case' "default mid-bisect: HEAD moved"
+t8_mutant op-check-skips-pr-head 'if git_op_in_progress "$MAIN_WT"; then
+    case' 'if { [ "$cur_rc" -ne 0 ] || [ "$cur" = "$BRANCH" ]; } && git_op_in_progress "$MAIN_WT"; then
+    case' "PR head mid-bisect: HEAD moved"
+t8_mutant closing-line-unconditional 'echo "  ff reconcile skipped (residual local state — check by hand)"
+    return 0
+  fi
+  git_retry' 'echo "  ff reconcile skipped (residual local state — check by hand)"
+    echo "  $BRANCH @ $(git -C "$MAIN_WT" log --oneline -1 2>/dev/null)"
+    return 0
+  fi
+  git_retry' "refused switch, PR head: printed the closing line"
+t8_mutant ff-unconditional 'echo "  ff reconcile skipped (residual local state — check by hand)"
+    return 0
+  fi
+  git_retry' 'echo "  ff reconcile skipped (residual local state — check by hand)"
+  fi
+  git_retry' "refused switch, PR head an ancestor of origin/main: the PR branch moved"
+t8_mutant after-switch-unreadable-trusted 'if [ "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then' 'if [ -n "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" ] && [ "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then' "HEAD unreadable after the switch: main was fast-forwarded"
+T8_MUT_FILE=teardown.sh t8_mutant list-teardown-sequencer-dropped 'REVERT_HEAD BISECT_LOG sequencer; do' 'REVERT_HEAD BISECT_LOG; do' "op marker list differs from teardown.sh's"
+T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-sequencer-dropped '"rebase-apply", "sequencer", "BISECT_LOG", "index.lock"):' '"rebase-apply", "BISECT_LOG", "index.lock"):' "op marker list differs from checkout-guard.sh's clean()"
+T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-index-lock-dropped '"BISECT_LOG", "index.lock"):' '"BISECT_LOG"):' "checkout-guard.sh's clean() lost index.lock"
+T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-extra-marker 'BISECT_LOG", "index.lock"):' 'BISECT_LOG", "index.lock", "ORIG_HEAD"):' "op marker list differs from checkout-guard.sh's clean()"
 t8_mutant unreadable-gitdir-trusted 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0' 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1'
 t8_mutant op-marker-sequencer-dropped 'REVERT_HEAD BISECT_LOG sequencer; do
     [ -e "$gd/$f" ] && return 0
@@ -919,7 +1064,7 @@ teardown()' 'REVERT_HEAD BISECT_LOG; do
   return 1
 }
 
-teardown()'
+teardown()' "op marker list differs from teardown.sh's"
 t8_mutant detached-kept 'elif [ "$cur_rc" -ne 1 ]; then' 'elif [ "$cur_rc" -ne 0 ]; then'
 t8_mutant unreadable-head-switched 'keep_why="HEAD unreadable"; cur="(unknown)"' 'cur="(unknown)"'
 t8_mutant own-head-kept 'elif [ "$cur" != "$PR_HEAD_REF" ]; then' 'elif true; then'

@@ -11,7 +11,7 @@
 # the middle, and the phase that silently did nothing leaves nothing behind to
 # notice. A caller sees the worktrees gone and moves on.
 #
-# Nine properties are asserted (7 was added by #486, 8 by #546, 9 by #557):
+# Ten properties are asserted (7 was added by #486, 8 by #546, 9 by #557, 10 by #621):
 #
 #   1. Combined form: paths + --sweep in ONE call tears the named paths down
 #      first, then reaches all three sweep phases AND completes their work (an
@@ -98,6 +98,22 @@
 #      the comment there; a concurrent removal can still land there, so the guard
 #      is load-bearing and stays), so it has no fixture.
 #
+#  10. The reconcile only runs on the default branch (#621). `git switch` can be
+#      refused (a modified tracked file the switch would overwrite), and the
+#      straggler-clearing loop and the pull used to run on whatever was still
+#      checked out. Two refused-switch shapes under --reconcile-only, each with an
+#      untracked file byte-identical to one origin/main tracks (the straggler loop's
+#      target): a PR branch that diverged from origin/main (squash-merged), and one
+#      that is an ancestor of origin/main (landed without a squash, where the old pull
+#      fast-forwarded the PR branch). Both must exit 1 with the existing
+#      "ff-only reconcile failed" line, leave HEAD and the branch tip where they were,
+#      print no `main @` closing line and keep the untracked file. A clean primary on
+#      a feature branch is still switched and fast-forwarded. Mutant
+#      reconcile-on-any-branch (the HEAD check made always true) must fail the
+#      ancestor shape. teardown.sh has no KEEP rule of its own and this adds none:
+#      only the refused-switch rule. The same rule in merge-shepherd.sh's teardown is
+#      pinned by part 8 of test-poll-queue-eject.sh.
+#
 # Assertions read TEARDOWN'S OWN output (its phase headers, its rejection
 # message) and never `basename`'s, whose wording differs between BSD and GNU —
 # that difference is why this surfaced on macOS and not on a Linux runner.
@@ -179,7 +195,7 @@ mkscratch() { # <name> <n_worktrees> -> echoes the repo dir
     echo seed >"$dir/README.md"
     git -C "$dir" add README.md
     git -C "$dir" commit -qm seed
-    git init -q --bare "$origin"
+    git init -q --bare -b main "$origin"
     git -C "$dir" remote add origin "$origin"
     git -C "$dir" push -q -u origin main
     git -C "$dir" remote set-head origin main      # so origin/HEAD resolves
@@ -886,6 +902,67 @@ if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant pr-interp-keepcmp a
     hostile_sweep "$D" "$mut/teardown.sh"
     if hostile_jq_pinned; then bad "  mutant pr-interp-keepcmp passed the constant-program check"; dump
     else ok "  mutant pr-interp-keepcmp (interpolated jq, shell compare kept) is caught by the --jq assertion"; fi
+fi
+
+# --- 10. the reconcile only runs on the default branch (#621) ------------------
+echo "10. a refused switch skips the straggler loop, the pull and the closing line" >&2
+# <name> <ancestor|squash> -> repo on feat/pr with f.txt modified (so `switch main` is refused)
+# and an untracked g.txt identical to the g.txt origin/main now tracks
+mkrefused() {
+    local name="$1" shape="$2" d up
+    d="$(mkscratch "$name" 0)"; up="$WORK/$name-up"
+    # a user-level pull.rebase would make the pull refuse on the dirty tree for its own reason
+    git -C "$d" config pull.rebase false
+    git -C "$d" switch -q -c feat/pr
+    echo one >"$d/f.txt"; git -C "$d" add f.txt; git -C "$d" commit -qm pr-file
+    git clone -q "$WORK/$name-origin.git" "$up"
+    if [ "$shape" = ancestor ]; then
+        git -C "$d" push -q origin feat/pr || return 1
+        git -C "$up" fetch -q origin || return 1
+        git -C "$up" merge -q --no-edit origin/feat/pr || return 1
+    fi
+    echo gee >"$up/g.txt"; git -C "$up" add g.txt; git -C "$up" commit -qm add-g || return 1
+    git -C "$up" push -q origin main || { echo "test-teardown-args: fixture $name: the push of main failed" >&2; return 1; }
+    echo dirty >>"$d/f.txt"; echo gee >"$d/g.txt"
+    if git -C "$d" switch -q main 2>/dev/null; then echo "test-teardown-args: fixture $name: the switch was not refused" >&2; return 1; fi
+    echo "$d"
+}
+refused_case() { # <label> <repo> <teardown.sh>
+    local d="$2" tip head
+    tip="$(git -C "$d" rev-parse refs/heads/feat/pr)"; head="$(git -C "$d" symbolic-ref -q HEAD)"
+    OUT="$(cd "$d" && PATH="$BIN:$PATH" bash "$3" --reconcile-only 2>&1)"; STATUS=$?
+    expect_status "$1: the failed reconcile exits 1" 1
+    expect "$1: the existing failure line" "ff-only reconcile failed"
+    refute "$1: no closing line claims a tip" "  main @"
+    if [ "$(git -C "$d" rev-parse refs/heads/feat/pr)" = "$tip" ] && [ "$(git -C "$d" symbolic-ref -q HEAD)" = "$head" ]; then
+        ok "$1: HEAD and the PR branch did not move"
+    else bad "$1: HEAD or the PR branch moved"; dump; fi
+    if [ -f "$d/g.txt" ]; then ok "$1: the untracked file survived the straggler loop"; else bad "$1: the straggler loop deleted a file on the wrong branch"; fi
+}
+d="$(mkrefused rf-squash squash)" || exit 1
+refused_case "refused switch, squash-merged PR branch" "$d" "$TEARDOWN"
+d="$(mkrefused rf-anc ancestor)" || exit 1
+refused_case "refused switch, PR branch an ancestor of origin/main" "$d" "$TEARDOWN"
+D="$(mkscratch rf-clean 0)"
+git -C "$D" switch -q -c feat/pr; git -C "$D" commit -q --allow-empty -m pr-commit
+up="$WORK/rf-clean-up"; git clone -q "$WORK/rf-clean-origin.git" "$up"
+git -C "$up" commit -q --allow-empty -m squash || exit 1
+git -C "$up" push -q origin main || { echo "test-teardown-args: fixture rf-clean: the push of main failed" >&2; exit 1; }
+run_teardown "$D" --reconcile-only
+expect_status "clean primary on a feature branch: reconcile succeeds" 0
+if [ "$(git -C "$D" symbolic-ref -q HEAD)" = refs/heads/main ] && [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$D" ls-remote origin refs/heads/main | cut -f1)" ]; then
+    ok "  switched to main and fast-forwarded"
+else bad "  a clean primary on a feature branch was not switched and fast-forwarded"; dump; fi
+mut="$WORK/mut-reconcile-any"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut/"
+OLD_CHK='if [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$BRANCH" ]; then' \
+    awk 'index($0, ENVIRON["OLD_CHK"]) { print "if true; then"; next } { print }' "$TEARDOWN" >"$mut/teardown.sh"
+if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant reconcile-on-any-branch anchor drifted"; else
+    D="$(mkrefused mutrepo-rf-anc ancestor)" || exit 1
+    tip="$(git -C "$D" rev-parse refs/heads/feat/pr)"
+    OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$mut/teardown.sh" --reconcile-only 2>&1)"; STATUS=$?
+    if [ "$(git -C "$D" rev-parse refs/heads/feat/pr)" != "$tip" ] && grep -qF "cleared straggler" <<<"$OUT"; then
+        ok "  mutant reconcile-on-any-branch fast-forwards the PR branch and deletes the straggler (the gate bites)"
+    else bad "  mutant reconcile-on-any-branch left the PR branch alone — the ancestor case is vacuous"; dump; fi
 fi
 
 # ------------------------------------------------------------------------------
