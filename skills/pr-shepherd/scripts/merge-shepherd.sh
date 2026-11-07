@@ -98,12 +98,14 @@
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
 #   It then switches and ff-reconciles the primary checkout ONLY when that checkout
-#   holds the PR's head branch, the default branch, or a detached HEAD with no
-#   git operation under way (#615, #618); any other branch, a detached HEAD
-#   mid-bisect/rebase/merge/cherry-pick/revert (or whose git dir cannot be read),
-#   an unreadable HEAD, or an unreadable PR head ref prints a KEEP line and
-#   leaves it alone. Worktree removal and isolation-branch deletion
-#   are unaffected.
+#   holds the PR's head branch, the default branch, or a detached HEAD, and has no
+#   git operation under way (#615, #618, #621); any other branch, a checkout
+#   (attached or detached) mid-bisect/rebase/merge/cherry-pick/revert (or whose git
+#   dir cannot be read), an unreadable HEAD, or an unreadable PR head ref prints a
+#   KEEP line and leaves it alone. If the switch is then refused (a dirty file it
+#   would overwrite) or HEAD cannot be read afterwards, the ff and the closing line
+#   are skipped and `ff reconcile skipped` prints (#621). Worktree removal and
+#   isolation-branch deletion are unaffected.
 #
 # ENQUEUE PRIMITIVE: the GraphQL `enqueuePullRequest` mutation (PR node id
 # resolved in-script), NOT `gh pr merge --auto`. Some queue configurations
@@ -223,8 +225,8 @@ OWNER="${REPO%%/*}"; NAME="${REPO##*/}"
 # --show-toplevel, which returns the linked worktree when invoked from inside
 # one (teardown would then no-op against the dir it's removing). It may hold
 # another session's unrelated branch, so teardown() switches it only when that
-# branch is the PR's head, the default branch, or detached with no git operation
-# under way (#615, #618).
+# branch is the PR's head, the default branch, or detached, and no git operation is
+# under way (#615, #618, #621).
 MAIN_WT="$(git worktree list --porcelain 2>/dev/null | sed -n '1s/^worktree //p')"
 BRANCH="${DEFAULT_BRANCH:-$(git -C "${MAIN_WT:-.}" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's|^origin/||')}"
 [ -z "$BRANCH" ] && BRANCH=main
@@ -439,9 +441,9 @@ drop_isolation_branch() { # $1 = candidate branch name (may be empty / non-isola
 
 # Same marker list as teardown.sh's worktree_op_in_progress (test-poll-queue-eject.sh
 # part 8 fails if the two drift). An unreadable git dir answers "in progress".
-# sequencer outlives CHERRY_PICK_HEAD, so it is in the list. This is the third copy
-# of the list: checkout-guard.sh's clean() (Python, lines 373-375) holds the same
-# seven markers plus index.lock, and nothing pins that one against these two.
+# sequencer outlives CHERRY_PICK_HEAD, so it is in the list. This is the second copy
+# of the list; checkout-guard.sh's clean() (Python) holds the third, the same seven
+# markers plus index.lock, and part 8 pins it against these two too (#621).
 git_op_in_progress() { # $1 = checkout path
   local gd f
   gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0
@@ -490,17 +492,20 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
   drop_isolation_branch "$wt_br"
   if [ "$wt_iso" != "$wt_br" ]; then drop_isolation_branch "$wt_iso"; fi
   # #615: the primary checkout is switched only when it holds the PR's own head
-  # branch, is already on the default branch, or is detached with no git operation
-  # under way (#618: a detached HEAD is also what a bisect or rebase looks like, so
-  # a detached primary with rebase/merge/cherry-pick/revert/bisect state is KEPT).
-  # Any other branch is left alone. An unreadable HEAD, an unreadable git dir and
-  # an unreadable PR head ref all fail closed to KEEP. The full ref is read, never
-  # --short: with a tag of the same name, --short prints heads/<name> and both
-  # compares would miss.
+  # branch, is already on the default branch, or is detached. #618/#621: whichever it
+  # is, a primary with a git operation under way (rebase, merge, cherry-pick, revert,
+  # bisect) is KEPT first: a bisect on main is attached, and a switch plus ff would
+  # move it under the person running it. Any other branch is left alone too. An
+  # unreadable HEAD, an unreadable git dir and an unreadable PR head ref all fail
+  # closed to KEEP. The full ref is read, never --short: with a tag of the same name,
+  # --short prints heads/<name> and both compares would miss.
   local cur cur_rc keep_why=""
   cur="$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)"; cur_rc=$?
   cur="${cur#refs/heads/}"
-  if [ "$cur_rc" -eq 0 ]; then
+  if git_op_in_progress "$MAIN_WT"; then
+    case "$cur_rc" in 0) ;; 1) cur="(detached)" ;; *) cur="(unknown)" ;; esac
+    keep_why="a git operation (rebase, merge, cherry-pick, revert, bisect) is in progress"
+  elif [ "$cur_rc" -eq 0 ]; then
     if [ "$cur" = "$BRANCH" ]; then :
     else
       read_pr_head_ref   # only this arm needs it: default and detached make no gh call
@@ -510,15 +515,21 @@ teardown() { # idempotent: safe whether or not the worktree/branch still exist
     fi
   elif [ "$cur_rc" -ne 1 ]; then   # 1 = detached; anything else = unreadable
     keep_why="HEAD unreadable"; cur="(unknown)"
-  else                             # detached: reconcile unless an operation is under way (#618)
+  else                             # detached, no operation under way: reconcile
     cur="(detached)"
-    if git_op_in_progress "$MAIN_WT"; then keep_why="a git operation (rebase, merge, cherry-pick, revert, bisect) is in progress"; fi
   fi
   if [ -n "$keep_why" ]; then
     echo "  KEEP primary checkout on $cur ($keep_why) — not switched to $BRANCH, no ff reconcile"
     return 0
   fi
   git -C "$MAIN_WT" switch "$BRANCH" >/dev/null 2>&1 || true
+  # A refused switch (a dirty file it would overwrite) leaves the primary where it was;
+  # the ff below would then move THAT branch and the closing line would name its tip as
+  # the default's (#621). Fail closed on an unreadable HEAD too. Full ref, as above.
+  if [ "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then
+    echo "  ff reconcile skipped (residual local state — check by hand)"
+    return 0
+  fi
   git_retry -C "$MAIN_WT" fetch origin "$BRANCH" --quiet || true
   git -C "$MAIN_WT" merge --ff-only "origin/$BRANCH" >/dev/null 2>&1 \
     || echo "  ff reconcile skipped (residual local state — check by hand)"
