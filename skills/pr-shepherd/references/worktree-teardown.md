@@ -61,10 +61,11 @@ git branch -D <feature-branch>
 
 The branch delete is its own block and its own Bash call: the script line carries a shell expansion, and a worktree-isolated session refuses a command that names `git` beside one. Type the feature branch literally; a failed delete (branch already gone) is not an error to chase.
 
-`--reconcile-only` is the script's reconcile tail with nothing else: `git switch <default-branch>` (snaps HEAD back, Drift A), `fetch --prune`, clears origin-identical untracked stragglers that would block the ff (see below), then `pull --ff-only` — and exits `1` when the ff still fails, because in this mode the ff *is* the job. Equivalent by hand, if the script is unavailable:
+`--reconcile-only` is the script's reconcile tail with nothing else: `git switch <default-branch>` (snaps HEAD back, Drift A), `fetch --prune`, clears origin-identical untracked stragglers that would block the ff (see below), then `pull --ff-only` — and exits `1` when the ff still fails, because in this mode the ff *is* the job. The script reads HEAD again after the switch and runs neither the straggler loop nor the pull unless it is the default branch (a refused switch, #621), so by hand the recipe stops at a refused switch too. Equivalent by hand, if the script is unavailable:
 
 ```bash
-git switch <default-branch> 2>/dev/null || true   # snap HEAD back (Drift A)
+git switch <default-branch>                 # snap HEAD back (Drift A); if refused, STOP: nothing below may run on the wrong branch
+git symbolic-ref -q HEAD                    # must print refs/heads/<default-branch>, else stop
 git fetch origin <default-branch> --prune   # refresh + drop deleted-remote refs
 git pull --ff-only origin <default-branch>  # advance to the squash-merge commit
 ```

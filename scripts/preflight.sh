@@ -402,7 +402,7 @@
 #      Part 8 EXECUTES merge-shepherd.sh's post-merge teardown against real
 #      scratch git repos (#615): the primary checkout is switched and
 #      fast-forwarded only when it holds the PR's head branch, the default
-#      branch or a detached HEAD with no git operation under way (#618, #621:
+#      branch or a detached HEAD, and has no git operation under way (#618, #621:
 #      attached primaries get the operation check too), and is otherwise KEPT; a
 #      refused switch skips the ff and the closing line (#621); the op-marker list
 #      is pinned against teardown.sh's and checkout-guard.sh's; and a relative

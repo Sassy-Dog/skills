@@ -195,7 +195,7 @@ mkscratch() { # <name> <n_worktrees> -> echoes the repo dir
     echo seed >"$dir/README.md"
     git -C "$dir" add README.md
     git -C "$dir" commit -qm seed
-    git init -q --bare "$origin"
+    git init -q --bare -b main "$origin"
     git -C "$dir" remote add origin "$origin"
     git -C "$dir" push -q -u origin main
     git -C "$dir" remote set-head origin main      # so origin/HEAD resolves
@@ -917,14 +917,14 @@ mkrefused() {
     echo one >"$d/f.txt"; git -C "$d" add f.txt; git -C "$d" commit -qm pr-file
     git clone -q "$WORK/$name-origin.git" "$up"
     if [ "$shape" = ancestor ]; then
-        git -C "$d" push -q origin feat/pr
-        git -C "$up" fetch -q origin
-        git -C "$up" merge -q --no-edit origin/feat/pr
+        git -C "$d" push -q origin feat/pr || return 1
+        git -C "$up" fetch -q origin || return 1
+        git -C "$up" merge -q --no-edit origin/feat/pr || return 1
     fi
-    echo gee >"$up/g.txt"; git -C "$up" add g.txt; git -C "$up" commit -qm add-g
-    git -C "$up" push -q origin main
+    echo gee >"$up/g.txt"; git -C "$up" add g.txt; git -C "$up" commit -qm add-g || return 1
+    git -C "$up" push -q origin main || { echo "test-teardown-args: fixture $name: the push of main failed" >&2; return 1; }
     echo dirty >>"$d/f.txt"; echo gee >"$d/g.txt"
-    if git -C "$d" switch -q main 2>/dev/null; then echo "test-teardown-args: fixture $name: the switch was not refused" >&2; exit 1; fi
+    if git -C "$d" switch -q main 2>/dev/null; then echo "test-teardown-args: fixture $name: the switch was not refused" >&2; return 1; fi
     echo "$d"
 }
 refused_case() { # <label> <repo> <teardown.sh> <expect_pr_tip_kept: yes>
@@ -939,12 +939,15 @@ refused_case() { # <label> <repo> <teardown.sh> <expect_pr_tip_kept: yes>
     else bad "$1: HEAD or the PR branch moved"; dump; fi
     if [ -f "$d/g.txt" ]; then ok "$1: the untracked file survived the straggler loop"; else bad "$1: the straggler loop deleted a file on the wrong branch"; fi
 }
-refused_case "refused switch, squash-merged PR branch" "$(mkrefused rf-squash squash)" "$TEARDOWN"
-refused_case "refused switch, PR branch an ancestor of origin/main" "$(mkrefused rf-anc ancestor)" "$TEARDOWN"
+d="$(mkrefused rf-squash squash)" || exit 1
+refused_case "refused switch, squash-merged PR branch" "$d" "$TEARDOWN"
+d="$(mkrefused rf-anc ancestor)" || exit 1
+refused_case "refused switch, PR branch an ancestor of origin/main" "$d" "$TEARDOWN"
 D="$(mkscratch rf-clean 0)"
 git -C "$D" switch -q -c feat/pr; git -C "$D" commit -q --allow-empty -m pr-commit
 up="$WORK/rf-clean-up"; git clone -q "$WORK/rf-clean-origin.git" "$up"
-git -C "$up" commit -q --allow-empty -m squash; git -C "$up" push -q origin main
+git -C "$up" commit -q --allow-empty -m squash || exit 1
+git -C "$up" push -q origin main || { echo "test-teardown-args: fixture rf-clean: the push of main failed" >&2; exit 1; }
 run_teardown "$D" --reconcile-only
 expect_status "clean primary on a feature branch: reconcile succeeds" 0
 if [ "$(git -C "$D" symbolic-ref -q HEAD)" = refs/heads/main ] && [ "$(git -C "$D" rev-parse HEAD)" = "$(git -C "$D" ls-remote origin refs/heads/main | cut -f1)" ]; then
@@ -954,7 +957,8 @@ mut="$WORK/mut-reconcile-any"; mkdir -p "$mut"; cp "$TEARDOWN" "$GUARD_SH" "$mut
 OLD_CHK='if [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "refs/heads/$BRANCH" ]; then' \
     awk 'index($0, ENVIRON["OLD_CHK"]) { print "if true; then"; next } { print }' "$TEARDOWN" >"$mut/teardown.sh"
 if cmp -s "$mut/teardown.sh" "$TEARDOWN"; then bad "  mutant reconcile-on-any-branch anchor drifted"; else
-    D="$(mkrefused mutrepo-rf-anc ancestor)"; tip="$(git -C "$D" rev-parse refs/heads/feat/pr)"
+    D="$(mkrefused mutrepo-rf-anc ancestor)" || exit 1
+    tip="$(git -C "$D" rev-parse refs/heads/feat/pr)"
     OUT="$(cd "$D" && PATH="$BIN:$PATH" bash "$mut/teardown.sh" --reconcile-only 2>&1)"; STATUS=$?
     if [ "$(git -C "$D" rev-parse refs/heads/feat/pr)" != "$tip" ] && grep -qF "cleared straggler" <<<"$OUT"; then
         ok "  mutant reconcile-on-any-branch fast-forwards the PR branch and deletes the straggler (the gate bites)"
