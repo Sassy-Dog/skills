@@ -651,7 +651,9 @@ ms_mutant head-read-without-flag 'if [ "$EXPECTED_HEAD_SET" = 1 ]; then
 # op-check-skips-default and op-check-skips-pr-head are the old shape and each must fail at its
 # own case). The marker list is a copy of teardown.sh's worktree_op_in_progress list and a case
 # fails if the two differ; checkout-guard.sh's clean() holds a third copy, in Python, pinned the
-# same way with `index.lock` its one deliberate extra (a mutant per file drops `sequencer`). The
+# same way with `index.lock` its one deliberate extra, which is filtered out of the comparison and
+# so asserted present by its own case (a mutant per file drops `sequencer`; one more drops
+# `index.lock` from the guard). The
 # detached mid-bisect and mid-rebase fixtures are real: a
 # bisect at a genuine midpoint and a `git rebase -i` stopped at `break` with a clean tree. The
 # attached ones are `git bisect start` on main and on the PR's head branch (no midpoint, which
@@ -749,6 +751,14 @@ t8_mains() { [ "$(git -C "$1" rev-parse refs/heads/main)" = "$(git -C "$1" ls-re
 t8_viewed() { grep -q '^pr view' "$T8_CALLS"; }
 # the op-marker list on a `for f in ... ; do` line, sorted; and checkout-guard.sh's clean() tuple minus its one extra
 t8_list_sh() { sed -n 's/.*for f in \(.*\); do.*/\1/p' "$1" | head -1 | tr ' ' '\n' | sort | paste -sd' ' -; }
+# exits 0 only when clean()'s tuple still names index.lock, the one extra the list comparison filters out
+t8_guard_has_lock() {
+    python3 -I -c '
+import re, sys
+m = re.search(r"def clean\(self\):\s+for name in \(([^)]*)\):", open(sys.argv[1]).read())
+sys.exit(0 if m and "\"index.lock\"" in m.group(1) else 1)
+' "$1"
+}
 t8_list_guard() {
     python3 -I -c '
 import re, sys
@@ -882,6 +892,7 @@ t8_suite() { # <script path>   (sets T8_FAILED)
         || f "op marker list differs from teardown.sh's"
     [ -n "$l_td" ] && [ "$(t8_list_guard "$MS_SRC/checkout-guard.sh")" = "$l_td" ] \
         || f "op marker list differs from checkout-guard.sh's clean()"
+    t8_guard_has_lock "$MS_SRC/checkout-guard.sh" || f "checkout-guard.sh's clean() lost index.lock"
     d="$(t8_mk e)"; git -C "$d" switch -q feat/other
     T8_HEAD_RC=1 t8_run "$d"
     [ "$(t8_cur "$d")" = feat/other ] || f "head read fails: branch moved"
@@ -1038,6 +1049,7 @@ t8_mutant ff-unconditional 'echo "  ff reconcile skipped (residual local state â
 t8_mutant after-switch-unreadable-trusted 'if [ "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then' 'if [ -n "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" ] && [ "$(git -C "$MAIN_WT" symbolic-ref -q HEAD 2>/dev/null)" != "refs/heads/$BRANCH" ]; then' "HEAD unreadable after the switch: main was fast-forwarded"
 T8_MUT_FILE=teardown.sh t8_mutant list-teardown-sequencer-dropped 'REVERT_HEAD BISECT_LOG sequencer; do' 'REVERT_HEAD BISECT_LOG; do' "op marker list differs from teardown.sh's"
 T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-sequencer-dropped '"rebase-apply", "sequencer", "BISECT_LOG", "index.lock"):' '"rebase-apply", "BISECT_LOG", "index.lock"):' "op marker list differs from checkout-guard.sh's clean()"
+T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-index-lock-dropped '"BISECT_LOG", "index.lock"):' '"BISECT_LOG"):' "checkout-guard.sh's clean() lost index.lock"
 T8_MUT_FILE=checkout-guard.sh t8_mutant list-guard-extra-marker 'BISECT_LOG", "index.lock"):' 'BISECT_LOG", "index.lock", "ORIG_HEAD"):' "op marker list differs from checkout-guard.sh's clean()"
 t8_mutant unreadable-gitdir-trusted 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 0' 'gd="$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null)" || return 1'
 t8_mutant op-marker-sequencer-dropped 'REVERT_HEAD BISECT_LOG sequencer; do

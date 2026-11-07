@@ -927,7 +927,7 @@ mkrefused() {
     if git -C "$d" switch -q main 2>/dev/null; then echo "test-teardown-args: fixture $name: the switch was not refused" >&2; return 1; fi
     echo "$d"
 }
-refused_case() { # <label> <repo> <teardown.sh> <expect_pr_tip_kept: yes>
+refused_case() { # <label> <repo> <teardown.sh>
     local d="$2" tip head
     tip="$(git -C "$d" rev-parse refs/heads/feat/pr)"; head="$(git -C "$d" symbolic-ref -q HEAD)"
     OUT="$(cd "$d" && PATH="$BIN:$PATH" bash "$3" --reconcile-only 2>&1)"; STATUS=$?
