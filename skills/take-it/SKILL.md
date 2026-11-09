@@ -789,7 +789,8 @@ Args: "Watch PRs <numbers from the RESULT lines> in <repo>. Merge policy:
        <merge_queue ? 'MERGE QUEUE — merge-shepherd.sh in its queue mode (the GraphQL enqueue,
        no method flag, no --delete-branch), confirm isInMergeQueue, handle ejects; a PR given
        --expected-head is never given gh pr merge --auto'
-                    : 'DIRECT — gh pr merge --squash --delete-branch, serialize coupled PRs'>.
+                    : 'DIRECT — merge-shepherd.sh --direct (it merges with --delete-branch by the
+       method the repo allows, never an assumed --squash), serialize coupled PRs'>.
        <for each PR whose review you ran: 'PR <n>: pass --expected-head <reviewed commit id> to
        merge-shepherd.sh; on its exit 25 (head moved) merge nothing and report it back.'>
        <if migrations: 'Coupled-PR concern: migrations in <migrations.dirs> (regenerate with

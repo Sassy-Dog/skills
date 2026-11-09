@@ -58,6 +58,13 @@ live state no longer permits it, that disagreement is a **stop and surface**: re
 let the user decide which one is wrong. It is never an automatic rewrite of the configured value,
 and never a silent adaptation to whatever happens to be allowed today.
 
+This rule governs what a refresh writes. `merge-shepherd.sh --direct` makes a narrower choice at merge
+time: it merges by the first of squash, merge and rebase that the repo allows, because it used to
+hardcode `--squash`, and a repo with squash disabled then could not merge at all. Squash still wins
+wherever it is allowed, so the switch this rule guards against (merge commits enabled beside squash)
+changes nothing there. Only a repo that has disabled squash gets another method, and that setting is
+the one record of intent the script can read.
+
 ## Governing principle: presence is the toggle
 
 The old templates carried paired state — an `IF:SENTRY` flag *and* `{{SENTRY_ORG}}`/`{{SENTRY_PROJECTS}}`
@@ -79,7 +86,7 @@ replacement for presence, so a key that is simply absent is still off.
 
 Four keys are genuine scalars rather than blocks, because they carry no sub-facts:
 
-- `merge_queue: true|false` — merge queue vs. direct squash-merge. It carries **intent**, not an
+- `merge_queue: true|false` — merge queue vs. direct merge. It carries **intent**, not an
   observation: a refresh re-verifies it against `mergeQueue(branch:)`, but a live state that
   contradicts the configured value is surfaced to the user rather than written over it
 - `write_policy: read-only|gated` — whether `survey-work` may file issues under its Sentry gate
