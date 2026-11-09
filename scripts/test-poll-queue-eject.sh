@@ -315,7 +315,9 @@ case "$1" in
         case "$2" in
             view)  echo "0 0 1" ;;
             update-branch) exit 0 ;;
-            merge) if [ "${MS_MERGE_RC:-0}" != 0 ]; then printf '%s\n' "${MS_MERGE_ERR:-merge refused}" >&2; fi
+            # MS_MERGE_TOOK_ANYWAY: the PR merges on GitHub but the call still exits non-zero (a failed local branch delete)
+            merge) if [ -n "${MS_MERGE_TOOK_ANYWAY:-}" ]; then echo "MERGED CLEAN false" >"$MS_STATE"; fi
+                   if [ "${MS_MERGE_RC:-0}" != 0 ]; then printf '%s\n' "${MS_MERGE_ERR:-merge refused}" >&2; fi
                    if [ "${MS_MERGE_RC:-0}" = 0 ]; then
                        case "$all" in
                            # MS_MERGE_LAG: the merge call succeeds but the PR does not read MERGED yet (#629)
@@ -1174,6 +1176,9 @@ mm_suite() {
     mm_expect "bound refusal: stdout names DIRECT MERGE FAILED and gh's refusal text" \
         "$(grep -q '^DIRECT MERGE FAILED — refused (gh exit 1): Pull request is not mergeable: linear history required' <<<"$MS_OUT"; echo $?)"
     mm_expect "bound refusal, head unchanged: not HEAD MOVED" "$(! grep -q 'HEAD MOVED' <<<"$MS_OUT"; echo $?)"
+    MS_MERGE_RC=1 MS_MERGE_TOOK_ANYWAY=1 MS_MERGE_ERR="failed to delete local branch" ms_run "$sc" "$H1" --direct
+    mm_rc "merge call failed but the PR reads MERGED: exit 0" 0
+    mm_expect "merge call failed but the PR reads MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
     MS_MERGE_LAG=1 ms_run "$sc" "$H1" --direct
     mm_rc "unbound merge succeeded, not yet MERGED: exit 11" 11
     mm_expect "unbound merge succeeded, not yet MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
@@ -1230,6 +1235,8 @@ mm_mutant multiline-accepted "case \"\$line\" in *\$'\\n'*) return 2 ;; esac" ':
 mm_mutant no-direct-merge-failed-line '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'false && echo "DIRECT MERGE FAILED'
 mm_mutant direct-merge-failed-line-on-confirmed-later-path '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'echo "DIRECT MERGE FAILED'
 mm_mutant direct-cause-dropped 'direct_cause="$(gh_cause "$mg_rc" "$mg_err")"' 'direct_cause="the merge call failed"'
+mm_mutant direct-merge-failed-line-before-merged-check '      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi' '      [ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED — $direct_cause"
+      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi'
 mm_mutant method-read-in-queue-mode 'read -r st ms inq <<<"$(pr_state)"' 'merge_method >/dev/null; read -r st ms inq <<<"$(pr_state)"'
 # The query itself: a field gh does not know, a field the --jq reads but --json
 # never requested, and a probe of the cwd repo instead of --repo's.

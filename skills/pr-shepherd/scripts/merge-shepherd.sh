@@ -284,13 +284,6 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
     --jq '.data.repository.pullRequest | "\(.state) \(.mergeStateStatus) \(.isInMergeQueue)"' 2>/dev/null
 }
 
-# The enqueue primitive (see ENQUEUE PRIMITIVE in the header): resolve the PR
-# node id, then GraphQL enqueuePullRequest — wrapped in gh-retry.sh exactly
-# like the old CLI enqueue. Falls back to `gh pr merge --auto` (NO method
-# flag) only when the node id cannot be resolved or the mutation errors, and
-# never under --expected-head (#587): a bound run returns 1 instead.
-# Success here is advisory either way — the caller confirms via the
-# isInMergeQueue read, never via this function's exit code.
 # One line saying why a gh-retry-wrapped call failed, from its exit status and
 # captured stderr. Shared by the bound enqueue (BOUND ENQUEUE FAILED, #590) and
 # the direct merge (DIRECT MERGE FAILED, #629), so the two never word a cause
@@ -308,6 +301,13 @@ gh_cause() { # <gh-retry exit status> <captured stderr>
     echo "refused (gh exit $enq_rc): $enq_line"
   fi
 }
+# The enqueue primitive (see ENQUEUE PRIMITIVE in the header): resolve the PR
+# node id, then GraphQL enqueuePullRequest — wrapped in gh-retry.sh exactly
+# like the old CLI enqueue. Falls back to `gh pr merge --auto` (NO method
+# flag) only when the node id cannot be resolved or the mutation errors, and
+# never under --expected-head (#587): a bound run returns 1 instead.
+# Success here is advisory either way — the caller confirms via the
+# isInMergeQueue read, never via this function's exit code.
 # Why the last bound enqueue did not happen, for the stable BOUND ENQUEUE FAILED
 # line the caller prints (#590). Set by enqueue(), read by advance().
 ENQ_CAUSE=""
@@ -745,9 +745,10 @@ advance() { # one idempotent step against live state
       else
         mg_err="$(bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch 2>&1 >/dev/null)"; mg_rc=$?
       fi
+      # gh-retry's own log is for the operator, so it reaches stderr whether or not the call
+      # finally succeeded (a retried transient error shows its retry lines).
+      [ -n "$mg_err" ] && printf '%s\n' "$mg_err" >&2
       if [ "$mg_rc" -ne 0 ]; then
-        # gh-retry's own log is for the operator, so it still reaches stderr.
-        [ -n "$mg_err" ] && printf '%s\n' "$mg_err" >&2
         if [ "$EXPECTED_HEAD_SET" = 1 ] && head_moved; then
           echo "HEAD MOVED — the bound merge was refused because the PR head changed (re-review, then re-run with the new head)"; return 25
         fi
