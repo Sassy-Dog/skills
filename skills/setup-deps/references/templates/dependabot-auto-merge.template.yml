@@ -1,4 +1,4 @@
-# TEMPLATE: dependabot-auto-merge · version 6
+# TEMPLATE: dependabot-auto-merge · version 7
 # Rendered by sassy-dog:setup-deps.
 #   {{FACT}}              → replace with the detected/confirmed value
 #   # {{IF:FLAG}} ... # {{ENDIF}}
@@ -7,7 +7,7 @@
 #                           and every render is valid by construction.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 6
+# generated-by: sassy-dog:setup-deps | template: dependabot-auto-merge | template-version: 7
 #
 # Auto-merge green Dependabot PRs so security bumps do not rot in the queue.
 #
@@ -116,16 +116,51 @@ jobs:
         run: gh pr merge --auto "$PR_URL"
 # {{ENDIF}}
 # {{IF:DIRECT_MERGE}}
-      # Direct-merge repos: --auto --squash waits for the required checks, then
-      # squash-merges. Requires "Allow auto-merge" enabled on the repo AND at
-      # least one required status check — without a required check, --auto
-      # merges immediately and the gate is imaginary.
+      # Direct-merge repos: `--auto` waits for the required checks, then merges.
+      # Requires "Allow auto-merge" enabled on the repo AND at least one required
+      # status check — without a required check, --auto merges immediately and
+      # the gate is imaginary.
+      #
+      # The merge METHOD is chosen at run time (template version 7), never
+      # hard-coded: GitHub refuses a method the repo disallows, so a literal
+      # `--squash` failed every Dependabot PR in a repo with squash disabled.
+      # The step reads the repo's allowed set and passes the first allowed of
+      # squash, merge, rebase (the order merge-shepherd.sh's merge_method() uses).
+      # It FAILS CLOSED: if the settings cannot be read, or the repo allows no
+      # method, it exits before `gh pr merge` and says why — it never falls back
+      # to a default method. `gh repo view` reads repository metadata, which the
+      # App installation token has (any read access to the repo suffices).
       - name: Auto-merge minor/patch once checks pass
         if: ${{ steps.meta.outputs.update-type == 'version-update:semver-minor' || steps.meta.outputs.update-type == 'version-update:semver-patch' }}
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
+          REPO: ${{ github.repository }}
+        run: |
+          if ! settings="$(gh repo view "$REPO" --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed \
+            --jq '"\(.squashMergeAllowed) \(.mergeCommitAllowed) \(.rebaseMergeAllowed)"')"; then
+            echo "::error::Could not read the merge methods allowed on $REPO; not merging."
+            exit 1
+          fi
+          read -r squash_ok merge_ok rebase_ok extra <<<"$settings"
+          for v in "$squash_ok" "$merge_ok" "$rebase_ok"; do
+            case "$v" in
+              true|false) ;;
+              *) echo "::error::Unreadable merge-method settings for $REPO ('$settings'); not merging."; exit 1 ;;
+            esac
+          done
+          if [ -n "$extra" ]; then
+            echo "::error::Unreadable merge-method settings for $REPO ('$settings'); not merging."
+            exit 1
+          fi
+          if [ "$squash_ok" = true ]; then method=--squash
+          elif [ "$merge_ok" = true ]; then method=--merge
+          elif [ "$rebase_ok" = true ]; then method=--rebase
+          else
+            echo "::error::$REPO allows no merge method (squash, merge and rebase are all disabled); enable one in the repo settings. Not merging."
+            exit 1
+          fi
+          gh pr merge --auto "$method" --delete-branch "$PR_URL"
 # {{ENDIF}}
 
       # The exact complement of the merge condition above, so every PR either

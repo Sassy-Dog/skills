@@ -33,6 +33,20 @@
 #   - the hold step is the exact complement (`!=` minor `&&` `!=` patch), so
 #     every PR either merges or is held with a comment, never neither
 #
+# Version 7 (#628) adds a fourth property: the DIRECT_MERGE arm chooses its merge
+# method at run time. GitHub refuses a method the repo disallows, so the literal
+# `--squash` it used to carry failed every Dependabot PR in a squash-disabled
+# repo. Pinned source-level (no gh, no network): the direct arm's `gh pr merge`
+# line carries no literal --squash/--merge/--rebase; the step reads
+# squashMergeAllowed, mergeCommitAllowed and rebaseMergeAllowed; and it has an
+# `exit 1` for an unreadable read and another for "no method allowed", each
+# BEFORE the `gh pr merge` line. The merge-queue arm keeps plain `--auto`. These
+# pins read the text, not the behaviour; the shell logic is shellchecked and
+# actionlinted via test-template-actionlint.sh, and mirrors merge-shepherd.sh's
+# merge_method(), whose behaviour test-poll-queue-eject.sh executes. Not pinned:
+# the method ORDER and the malformed-output handling (text-level pins there
+# would only restate the script).
+#
 # Vacuous-green guard: zero merge steps found is a FAILURE (a renamed command
 # or reflowed step would otherwise check nothing). Mutation-proof: five
 # mutants are applied to a copy and each must fail the check: the three
@@ -108,6 +122,48 @@ check() {
             echo "hold step must be the exact complement (!= minor && != patch): $line"; rc=1
         fi
     done <<<"$holds"
+    method_check "$f" || rc=1
+    return "$rc"
+}
+
+# method_check <file> — the direct arm picks its merge method at run time.
+method_check() {
+    local f="$1" rc=0 step lines mline lastexit k ctx
+    step="$(awk '/^      - name:/ { on = ($0 ~ /Auto-merge minor\/patch once checks pass/) } on' "$f")"
+    if [ -z "$step" ]; then
+        echo "no direct-merge step ('Auto-merge minor/patch once checks pass') found"; return 1
+    fi
+    lines="$(grep -E '^[[:space:]]*gh pr merge' <<<"$step")"
+    if [ "$(grep -c . <<<"$lines")" != 1 ]; then
+        echo "the direct-merge step must run exactly one gh pr merge"; rc=1
+    fi
+    if grep -Eq -- '(^|[[:space:]])--(squash|merge|rebase)([[:space:]]|$)' <<<"$lines"; then
+        echo "the direct-merge gh pr merge carries a literal method flag: $lines"; rc=1
+    fi
+    for k in squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed; do
+        grep -q "$k" <<<"$step" || { echo "the direct-merge step does not read $k"; rc=1; }
+    done
+    grep -q 'Could not read the merge methods' <<<"$step" || { echo "no fail-closed exit for an unreadable settings read"; rc=1; }
+    grep -q 'allows no merge method' <<<"$step" || { echo "no fail-closed exit for a repo that allows no method"; rc=1; }
+    # Each of those messages must be followed by an `exit 1` on the next line,
+    # and every exit must precede the merge line.
+    ctx="$(grep -A1 'Could not read the merge methods' <<<"$step")"
+    if ! grep -q 'exit 1' <<<"$ctx"; then
+        echo "the unreadable-read path does not exit 1"; rc=1
+    fi
+    ctx="$(grep -A1 'allows no merge method' <<<"$step")"
+    if ! grep -q 'exit 1' <<<"$ctx"; then
+        echo "the no-method-allowed path does not exit 1"; rc=1
+    fi
+    mline="$(grep -nE '^[[:space:]]*gh pr merge' <<<"$step" | head -1 | cut -d: -f1)"
+    lastexit="$(grep -n 'exit 1' <<<"$step" | tail -1 | cut -d: -f1)"
+    if [ -z "$mline" ] || [ -z "$lastexit" ] || [ "$lastexit" -ge "$mline" ]; then
+        echo "the direct-merge step's failure exits must all precede gh pr merge"; rc=1
+    fi
+    # The merge-queue arm keeps plain --auto with no method flag.
+    if ! grep -qE '^        run: gh pr merge --auto "\$PR_URL"$' "$f"; then
+        echo "the merge-queue arm must stay plain: gh pr merge --auto \"\$PR_URL\""; rc=1
+    fi
     return "$rc"
 }
 
@@ -126,7 +182,7 @@ fi
 # carry `[bot]`, `$`, `{` and `|`, which sed would read as regex syntax.
 mutate() {
     local name="$1" m="$WORK/mutant.yml"
-    FROM="$2" TO="$3" perl -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$TEMPLATE" > "$m"
+    FROM="$2" TO="$3" perl -0777 -pe 's/\Q$ENV{FROM}\E/$ENV{TO}/g' "$TEMPLATE" > "$m"
     if cmp -s "$m" "$TEMPLATE"; then
         bad "mutation ($name) changed nothing, so it proves nothing (template reworded?)"
     elif check "$m" >/dev/null; then
@@ -143,5 +199,18 @@ mutate "author-only job gate"     " && $ACTOR"        ""
 mutate "hold only semver-major"   "$NOT_MINOR && $NOT_PATCH" "$MAJOR_EQ"
 mutate "runner as a render fact"  'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 mutate "self-hosted runs-on"      'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
+
+mutate "hardcoded --squash restored" 'gh pr merge --auto "$method" --delete-branch' 'gh pr merge --auto --squash --delete-branch'
+mutate "no read of mergeCommitAllowed" 'mergeCommitAllowed' 'mergeX'
+mutate "unreadable read does not exit" 'Could not read the merge methods allowed on $REPO; not merging."
+            exit 1' 'Could not read the merge methods allowed on $REPO; not merging."
+            true'
+mutate "no-method path falls through" 'Not merging."
+            exit 1
+          fi
+          gh pr merge' 'Not merging."
+          fi
+          gh pr merge'
+mutate "merge-queue arm gains a method flag" 'run: gh pr merge --auto "$PR_URL"' 'run: gh pr merge --auto --squash "$PR_URL"'
 
 exit "$fail"

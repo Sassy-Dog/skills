@@ -373,6 +373,9 @@ Classify into exactly one:
   too, so `render-cadence.sh --merge-gate` declines (exit `3`) every other classification.
 - **required checks, no queue** → render the `DIRECT_MERGE` arm, and confirm
   `allow_auto_merge` is on (`gh api repos/${REPO} --jq .allow_auto_merge`); enable it if not.
+  The arm chooses its merge method at run time from the repo's allowed set (squash, then merge,
+  then rebase) and fails without merging if that cannot be read or nothing is allowed, so the
+  render carries no method fact.
 - **no gate at all** → **do not render the auto-merge workflow.** Render `dependabot.yml`, plus any
   lockfile-sync workflow that its own preconditions still allow — **the visibility veto above
   applies here too**, so a public repo gets `dependabot.yml` alone. Tell the user the repo needs a
