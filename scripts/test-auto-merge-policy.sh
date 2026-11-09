@@ -37,21 +37,32 @@
 # method at run time. GitHub refuses a method the repo disallows, so the literal
 # `--squash` it used to carry failed every Dependabot PR in a squash-disabled
 # repo. Pinned source-level (no gh, no network): the direct arm's `gh pr merge`
-# line carries no literal --squash/--merge/--rebase; the step reads
+# line is exactly `gh pr merge --auto "$method" --delete-branch "$PR_URL"` (so no
+# literal method flag in any spelling, and "$method" is not dropped); the step reads
 # squashMergeAllowed, mergeCommitAllowed and rebaseMergeAllowed; and it has an
 # `exit 1` for an unreadable read and another for "no method allowed", each
 # BEFORE the `gh pr merge` line. The merge-queue arm keeps plain `--auto`. These
 # pins read the text, not the behaviour; the shell logic is shellchecked and
-# actionlinted via test-template-actionlint.sh, and mirrors merge-shepherd.sh's
-# merge_method(), whose behaviour test-poll-queue-eject.sh executes. Not pinned:
-# the method ORDER and the malformed-output handling (text-level pins there
-# would only restate the script).
+# actionlinted via test-template-actionlint.sh. The template's logic is NOT
+# executed here. It shares with merge-shepherd.sh's merge_method() (whose
+# behaviour test-poll-queue-eject.sh executes) the order squash, merge, rebase
+# and failing closed on an unreadable or empty read. It does NOT share the
+# multi-line-output rejection: merge_method() rejects it, the template's `read -r`
+# takes the first line (`gh repo view` with that --jq always prints one line).
+# Not pinned: the method ORDER and the malformed-output handling (text-level pins
+# there would only restate the script).
+#
+# The #628 mutants: "hardcoded --squash restored", "short -s restored", "dropped
+# $method", "gh pr merge before the settings read", "no read of
+# mergeCommitAllowed", "unreadable read does not exit", "no-method path falls
+# through", "merge-queue arm gains a method flag".
 #
 # Vacuous-green guard: zero merge steps found is a FAILURE (a renamed command
-# or reflowed step would otherwise check nothing). Mutation-proof: five
-# mutants are applied to a copy and each must fail the check: the three
-# regressions above plus the two runner mutants (a render-fact runner and a
-# self-hosted runs-on; the runner is hard-coded ubuntu-latest).
+# or reflowed step would otherwise check nothing). Mutation-proof: every mutant
+# is applied to a copy and must fail the check. They are: the three regressions
+# above (merge on != semver-major, author-only job gate, hold only semver-major),
+# the two runner mutants (a render-fact runner and a self-hosted runs-on; the
+# runner is hard-coded ubuntu-latest), and the #628 mutants listed above.
 #
 # Reads one tracked file. No gh, no network, no actionlint; perl for the
 # literal-string mutations.
@@ -137,8 +148,10 @@ method_check() {
     if [ "$(grep -c . <<<"$lines")" != 1 ]; then
         echo "the direct-merge step must run exactly one gh pr merge"; rc=1
     fi
-    if grep -Eq -- '(^|[[:space:]])--(squash|merge|rebase)([[:space:]]|$)' <<<"$lines"; then
-        echo "the direct-merge gh pr merge carries a literal method flag: $lines"; rc=1
+    # Pin the exact line. A regex over long flags alone let `-s` (short squash)
+    # and a dropped "$method" (which refuses in a non-interactive run) through.
+    if [ "$(sed 's/^[[:space:]]*//' <<<"$lines")" != 'gh pr merge --auto "$method" --delete-branch "$PR_URL"' ]; then
+        echo "the direct-merge gh pr merge must be exactly: gh pr merge --auto \"\$method\" --delete-branch \"\$PR_URL\" (got: $lines)"; rc=1
     fi
     for k in squashMergeAllowed mergeCommitAllowed rebaseMergeAllowed; do
         grep -q "$k" <<<"$step" || { echo "the direct-merge step does not read $k"; rc=1; }
@@ -201,6 +214,19 @@ mutate "runner as a render fact"  'runs-on: ubuntu-latest' 'runs-on: {{RUNNER}}'
 mutate "self-hosted runs-on"      'runs-on: ubuntu-latest' 'runs-on: [self-hosted, linux, sassy-dog]'
 
 mutate "hardcoded --squash restored" 'gh pr merge --auto "$method" --delete-branch' 'gh pr merge --auto --squash --delete-branch'
+mutate "short -s restored" 'gh pr merge --auto "$method" --delete-branch' 'gh pr merge --auto -s --delete-branch'
+mutate 'dropped "$method"' 'gh pr merge --auto "$method" --delete-branch' 'gh pr merge --auto --delete-branch'
+# Moving the merge above the settings read: delete the final merge line and
+# re-insert it before the read, so only the exit-before-merge pin can catch it.
+m="$WORK/mutant.yml"
+perl -0777 -pe 's/\n( *)gh pr merge --auto "\$method" --delete-branch "\$PR_URL"\n/\n/; s/( *)(if ! settings=)/$1gh pr merge --auto "\$method" --delete-branch "\$PR_URL"\n$1$2/' "$TEMPLATE" > "$m"
+if cmp -s "$m" "$TEMPLATE"; then
+    bad "mutation (gh pr merge before the settings read) changed nothing"
+elif check "$m" >/dev/null; then
+    bad "mutation (gh pr merge before the settings read) PASSED the check"
+else
+    ok "mutation (gh pr merge before the settings read) fails the check"
+fi
 mutate "no read of mergeCommitAllowed" 'mergeCommitAllowed' 'mergeX'
 mutate "unreadable read does not exit" 'Could not read the merge methods allowed on $REPO; not merging."
             exit 1' 'Could not read the merge methods allowed on $REPO; not merging."
