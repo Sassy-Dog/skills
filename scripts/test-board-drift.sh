@@ -38,14 +38,19 @@
 #     DONE_STATUS, READY_STATUS, BACKLOG_STATUS and ACTIVE_STATUSES
 #   - roles keyed on option ids (DONE_OPTION_ID and the four others, #627): ids
 #     that resolve to RENAMED columns (a second fixture, jq-derived: Done is
-#     Shipped, In progress is Doing, In review is Reviewing) give no warning and
+#     Shipped, In progress is Doing, In review is Reviewing, Ready is Queued,
+#     Backlog is Icebox: all five, so a ready id crossed with a backlog id lands on
+#     the wrong name and the ready-and-backlog-ids-crossed mutant fails) give no warning and
 #     the baseline's drift buckets; an id the Status options lack warns naming its
 #     key and the role matches no column, never the default name; a role with no
 #     id falls back to its *_STATUS name; In review stays active when only
 #     IN_PROGRESS_OPTION_ID is given; an unknown IN_REVIEW_OPTION_ID warns by its
 #     key and In review stops being active; a hand-set ACTIVE_STATUSES is replaced
 #     (not merged) once either active-role id is given, and the inert-set warning
-#     then names the id keys; the renamed fixture renames all five columns, so a
+#     then names the id keys; a board column that differs from its configured name
+#     only by case matches with no warning and `columns.<role>` carries the board's
+#     spelling, so column_ids[columns.<role>] resolves; the renamed fixture renames
+#     all five columns, so a
 #     ready id crossed with a backlog id is caught
 #   - any argument at all is a usage error (64), as are a missing or
 #     non-numeric PROJECT_NUMBER and a zero ceiling
@@ -274,6 +279,12 @@ jq 'def ren: (if . == "Done" then "Shipped" elif . == "In progress" then "Doing"
     | (.board[] | select(.status != null) | .status) |= ren' \
     "$MOCK_FIXTURE" >"$WORK/renamed.json"
 
+# The case board: Done and Backlog differ from the default names by case only.
+jq 'def ren: (if . == "Done" then "done" elif . == "Backlog" then "BACKLOG" else . end);
+    (.fields[] | select(.name == "Status") | .options[]) |= (.name |= ren)
+    | (.board[] | select(.status != null) | .status) |= ren' \
+    "$MOCK_FIXTURE" >"$WORK/case.json"
+
 # --- the harness ---------------------------------------------------------------
 OUT="$WORK/out.json"
 ERR="$WORK/err.txt"
@@ -386,7 +397,10 @@ suite() {   # suite <script> — every case; 0 when all hold
         eval 'rc_is 0 && jq_is ".board_columns" "[\"Backlog\",\"Done\",\"In progress\",\"In review\",\"Unstatused\"]" && jq_is ".column_ids" "{}"'
     check "no Status field: a warning says so" jq_is '[.warnings[] | test("no Status field")] | any' 'true'
     # Option ids (#627). The renamed fixture is the baseline's board with its
-    # Done, In progress and In review columns renamed, ids unchanged.
+    # five Status columns renamed (Done, In progress, In review, Ready, Backlog), ids
+    # unchanged. Ready and Backlog are renamed too so that a correctly resolved ready or
+    # backlog id cannot land on the default name by accident, which is what lets the
+    # ready-and-backlog-ids-crossed mutant fail the suite.
     local ids=(DONE_OPTION_ID=opt-done READY_OPTION_ID=opt-ready BACKLOG_OPTION_ID=opt-backlog
                IN_PROGRESS_OPTION_ID=opt-progress IN_REVIEW_OPTION_ID=opt-review)
     bd "$s" MOCK_FIXTURE="$WORK/renamed.json"
@@ -416,6 +430,9 @@ suite() {   # suite <script> — every case; 0 when all hold
     bd "$s" IN_PROGRESS_OPTION_ID=opt-progress
     check "In review stays active when only the in-progress id is given" \
         eval 'jq_is ".columns.active" "[\"In progress\",\"In review\"]" && jq_is "$(nums stale_claim)" "[13,24]"'
+    bd "$s" MOCK_FIXTURE="$WORK/case.json"
+    check "a column differing from its name only by case: no warning, the board's spelling, and column_ids resolves" \
+        eval 'jq_is ".warnings" "[]" && jq_is "[.columns.done, .columns.backlog]" "[\"done\",\"BACKLOG\"]" && jq_is "[.column_ids[.columns.done], .column_ids[.columns.backlog]]" "[\"opt-done\",\"opt-backlog\"]"'
     bd "$s" IN_REVIEW_OPTION_ID=opt-nowhere
     check "an unknown in-review id warns by key, and In review stops counting as active" \
         eval 'jq_is "[.warnings[] | test(\"in_review_option_id\")] | any" true && jq_is "$(nums stale_claim)" "[13]"'
@@ -606,6 +623,9 @@ mutant active-statuses-merged-with-ids \
 mutant inert-warning-always-names-active-statuses \
     'if active_from_ids else "ACTIVE_STATUSES")' \
     'if False else "ACTIVE_STATUSES")'
+mutant name-path-reports-configured-spelling \
+    'done_s = canon.get(norm(done_s), done_s)' \
+    'done_s = done_s'
 mutant role-with-id-also-name-checked \
     'if key not in id_roles and norm(value) not in known:' \
     'if norm(value) not in known:'

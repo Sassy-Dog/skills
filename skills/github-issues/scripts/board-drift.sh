@@ -247,6 +247,14 @@ if active_from_ids:
 done_n = norm(done_s)
 active_n = {norm(s) for s in active_s}
 
+# Names match case-insensitively, but a caller looks a move target up in column_ids
+# by exact key, so on the name path report the BOARD's spelling of a matched column.
+canon = {norm(c): c for c in board_columns}
+done_s = canon.get(norm(done_s), done_s)
+ready_s = canon.get(norm(ready_s), ready_s)
+backlog_s = canon.get(norm(backlog_s), backlog_s)
+active_s = [canon.get(norm(s), s) for s in active_s]
+
 
 def pr_repo(ref):
     r = ref.get("repository") or {}
