@@ -1152,6 +1152,22 @@ mutant_pin "$rollin_take" 'Re-run the bound hand-off once .exit .11. already mea
 mutant_pin "$rollin_take" 'report it by name and hold the PR; do not demote and do not count it as a re-review' \
     's/do not demote//' \
     "take-it: BOUND ENQUEUE FAILED is held and reported, never demoted nor counted as a re-review"
+# #635: the direct-merge failure line is routed the same way.
+mutant_pin "$rollin_take" 'exit .11. whose stdout carries .DIRECT MERGE FAILED — <cause>. is not .checks pending. either' \
+    's/DIRECT MERGE FAILED//' \
+    "take-it: DIRECT MERGE FAILED is not checks pending (#635)"
+mutant_pin "$rollin_take" 'the merge call itself failed .this pass., after .gh-retry.' \
+    's/this pass//g' \
+    "take-it: DIRECT MERGE FAILED is per pass, not a stall by itself (#635)"
+mutant_pin "$rollin_take" 'a merge call that succeeded but is not yet confirmed does not print it' \
+    's/does not print//g' \
+    "take-it: a lagged successful merge is not a DIRECT MERGE FAILED (#635)"
+mutant_pin "$rollin_take" 'pr-shepherd.{1,3}s .DIRECT MERGE FAILED. paragraph, the one home of that.rule' \
+    's/the one home of that//g' \
+    "take-it points at pr-shepherd for the DIRECT MERGE FAILED repeat rule instead of restating it (#635)"
+mutant_pin "$rollin_take" 'Report it by name with its cause and hold the PR; do not demote and do not count it as a.re-review' \
+    's/do not demote//g' \
+    "take-it: DIRECT MERGE FAILED is held and reported, never demoted nor counted as a re-review (#635)"
 mutant_pin "$rollin_take" 'the hold ends with the batch' \
     's/the hold ends with the batch//' \
     "take-it: its own hold ends with the batch"

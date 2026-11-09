@@ -761,6 +761,14 @@ bound hand-off once (exit `11` already means re-run). When a human is needed, an
 is `pr-shepherd`'s `--expected-head` paragraph, the one home of that rule. Then report it by name
 and hold the PR; do not demote and do not count it as a re-review.
 
+An exit `11` whose stdout carries `DIRECT MERGE FAILED — <cause>` is not "checks pending" either: on
+the `--direct` path the merge call itself failed *this pass*, after `gh-retry`, and the PR does not
+then read `MERGED`; a merge call that succeeded but is not yet confirmed does not print it. Handle it
+exactly as the line above: one line is a re-run (exit `11` already means re-run), and when a human is
+needed, and what to check, is `pr-shepherd`'s `DIRECT MERGE FAILED` paragraph, the one home of that
+rule. Report it by name with its cause and hold the PR; do not demote and do not count it as a
+re-review.
+
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
 PR behind forever (each pass updates the branch, the update is a merge commit so the Delta base rule

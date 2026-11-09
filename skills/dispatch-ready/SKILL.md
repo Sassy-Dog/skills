@@ -192,7 +192,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   tick's re-run after exit `11`, and treat exit `25` (the head moved) as `take-it` §6's **Bind the
   merge to the reviewed head** defines both, with the cap on re-reviews in **Cap on head-moved
   re-reviews** beside it. A hand-off that exits `11` with `BOUND ENQUEUE FAILED — <cause>` on stdout is
-  named in §6's `holds:` line on every tick it appears and nothing else. A tick keeps that count as `head_moved_reviews=<n>` in the same
+  named in §6's `holds:` line on every tick it appears and nothing else, and so is one that exits `11` with `DIRECT MERGE FAILED — <cause>` on stdout (the `--direct` path; `take-it` §6 routes both). A tick keeps that count as `head_moved_reviews=<n>` in the same
   record as `reviewed_head`, mirrored in the PR body and read back author-checked and
   bound to the active `attempt_id`; an absent count is `0`, and an unreadable or unverifiable one
   is a hold. **On the tick that sees exit `25`, write the incremented count to that record and
@@ -870,7 +870,7 @@ Plus one line per failure with its next action. Drop the `unannotated` line on t
 nothing unannotated, the `stacks:` line on ticks that dispatch no chain, and the `review:` line on
 ticks with no review outcome to report — but never drop a Blocking finding or a
 `review: SKIPPED` from it, nor a `review: NO REPORT`, which are outcomes, not noise. The
-`holds:` line also names, on every tick it appears, a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>` (exit `11`; when a human acts is `pr-shepherd`'s `--expected-head` rule): `PR #<pr> (BOUND ENQUEUE FAILED — <cause>; a human acts if it repeats)`. That is visibility only: no demotion, no recovery spent, because a platform outage prints the same line and DRAIN DEGRADED owns outages; the issue stays in-flight. The
+`holds:` line also names, on every tick it appears, a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>` (exit `11`; when a human acts is `pr-shepherd`'s `--expected-head` rule): `PR #<pr> (BOUND ENQUEUE FAILED — <cause>; a human acts if it repeats)`. That is visibility only: no demotion, no recovery spent, because a platform outage prints the same line and DRAIN DEGRADED owns outages; the issue stays in-flight. The same line also names a PR whose `--direct` hand-off printed `DIRECT MERGE FAILED — <cause>` (exit `11`; the per-pass rule is `pr-shepherd`'s): `PR #<pr> (DIRECT MERGE FAILED — <cause>; a human acts if it repeats)`, with the same visibility-only reasoning: gh-retry exhausting on an outage prints it too, so no demotion and no recovery spent. The
 `holds:` line carries **held PRs alongside held issues**, in the same reason-per-item shape, drawn
 from §2's enumeration and classified by §7's table — from §2 rather than from §7 because §2 is
 where the PRs are resolved and §6 renders before any terminal state is decided, and a held PR is
