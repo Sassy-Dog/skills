@@ -1604,8 +1604,10 @@
 #      actor as well as the PR author, and hold everything else with a comment.
 #      actionlint cannot see either defect — the expressions are valid, just
 #      permissive. The hard-coded `ubuntu-latest` runner (no {{RUNNER}} render fact,
-#      no self-hosted label) is a third property. Source-level, with five
-#      mutation checks: the three regressions plus the two runner mutants.
+#      no self-hosted label) is a third property, and a fourth: the direct arm picks
+#      its merge method at run time (#628). Source-level, with mutation
+#      checks: the three regressions, the two runner mutants and the #628
+#      run-time merge-method mutants (listed in the script's header).
 #  57. deps-cadence policy tests (scripts/test-deps-cadence-policy.sh) — the
 #      monthly lockfile-refresh templates (issue #509): one App-token credential
 #      with no GITHUB_TOKEN or PAT fallback, a failed refresh fails the job, no
