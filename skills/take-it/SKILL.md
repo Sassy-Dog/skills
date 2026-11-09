@@ -627,6 +627,17 @@ holds or releases the PR on its own outcome. Under `review_site: agent` a `defer
 worker skipped the review it was told to run. It is held exactly like `skipped`, with the same one
 redispatch and the same second-failure `blocked` path.
 
+**An exit `11` whose stdout carries `DIRECT MERGE FAILED — <cause>` is not "checks pending", on EITHER
+site, bound or unbound.** On the `--direct` path the merge call itself failed *this pass*, after
+`gh-retry`, and the PR does not then read `MERGED`; a merge call that succeeded but is not yet
+confirmed does not print it. This sits ABOVE the coordinator-only subsection for the same reason as
+the hold rule above: an unbound run (`review_site: agent`, or `review_agent: skip`) prints the line
+too, and a rule stated inside that subsection would leave those runs reading a refused merge as
+ordinary waiting. Report the line by name with its cause and hold the PR; do not demote, do not count
+it as a re-review. The script is stateless, so one line is a re-run (exit `11` already means re-run);
+when a human is needed, and what to check, is `pr-shepherd`'s `DIRECT MERGE FAILED` paragraph, the
+one home of that rule.
+
 ### Review gate on the coordinator site (ONLY when `review_site: coordinator`)
 
 **With `review_site: agent` this section does not run**: every sub-agent already reviewed its own diff at step 6, before its PR existed.
