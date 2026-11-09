@@ -442,7 +442,8 @@ layer while a lower one is open (exit 23), and refuses a stack under a merge que
 Skill: sassy-dog:pr-shepherd
 Args: "Shepherd PR #<N> in <repo>: mergeable check first, watch checks, then
        <merge_queue ? 'enqueue via merge queue (--auto, no method flag, confirm isInMergeQueue)'
-                    : 'squash-merge with --delete-branch'>.
+                    : 'direct merge via merge-shepherd.sh --direct (--delete-branch, by the
+                       method the repo allows, never an assumed --squash)'>.
        After merge, reconcile local <default_branch> and delete the feature branch."
 ```
 

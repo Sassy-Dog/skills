@@ -17,7 +17,7 @@ gh api graphql -f query='{repository(owner:"OWNER",name:"NAME"){mergeQueue(branc
 | Result | `merge_queue` | What the skills do |
 |---|---|---|
 | non-null | `true` | `gh pr merge --auto`, no method flag, **no** `--delete-branch` (GitHub rejects it when a queue is enabled), confirm `isInMergeQueue` |
-| `null` | `false` | `gh pr merge --squash --delete-branch` |
+| `null` | `false` | `gh pr merge --delete-branch`, by the first of `--squash`, `--merge`, `--rebase` the repo allows |
 
 This plugin's own repo had `merge_queue: false` written into a generated skill after the queue was
 enabled; the error only surfaced as a rejected merge. Never carry this value forward.

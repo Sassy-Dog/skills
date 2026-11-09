@@ -10,7 +10,7 @@ Ask the repo, don't assume:
 
 ```bash
 # Direct-merge settings (autoMergeAllowed is REST-only, not a gh-repo-view field)
-gh repo view --json deleteBranchOnMerge,squashMergeAllowed
+gh repo view --json deleteBranchOnMerge,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed
 gh api "repos/$REPO" --jq '{allow_auto_merge}'
 
 # Merge queue: no clean REST field — probe the branch protection rule
@@ -83,10 +83,13 @@ A `gh pr merge` that hits a 502 can leave the PR locked with `Merge already in p
 ## Regime B — direct merge (no queue)
 
 ```bash
+gh repo view "$REPO" --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed
+# <method>: the first of squash, merge, rebase that the line above reports true
 bash "$PLUGIN_ROOT/skills/pr-shepherd/scripts/gh-retry.sh" -- \
-  pr merge "$PR" --repo "$REPO" --squash --delete-branch
+  pr merge "$PR" --repo "$REPO" --<method> --delete-branch
 ```
 
+- The method is the repo's, never an assumed `--squash`: GitHub rejects `--squash` outright where squash merges are disabled. Squash → merge → rebase is the order `merge-shepherd.sh --direct` uses. A repo that allows none cannot merge at all until someone enables one in its settings.
 - `--delete-branch` is required here (belt-and-suspenders even when `delete_branch_on_merge` is on) — teardown's "upstream deleted (`[gone]`) == merged" signal depends on the branch disappearing.
 - Without a queue, *you* are the serializer: coupled PRs (migrations, codegen) must be merged one at a time with a mergeable re-check between each — see `serialization.md`.
 

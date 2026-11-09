@@ -22,7 +22,7 @@
 # Six properties are asserted about poll-queue.sh (part 7 below adds merge-shepherd.sh's
 # --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
 # adds merge-shepherd.sh's primary-checkout teardown cases, #615, #618 and #621, run against real scratch
-# git repos):
+# git repos; part 9 adds merge-shepherd.sh's --direct merge method, against part 7's stub):
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
 #      isInMergeQueue:false with an empty timeline, re-reads instead of
@@ -317,12 +317,39 @@ case "$1" in
             update-branch) exit 0 ;;
             merge) if [ "${MS_MERGE_RC:-0}" = 0 ]; then
                        case "$all" in
-                           *--squash*) echo "MERGED CLEAN false" >"$MS_STATE" ;;
+                           *" --squash "*|*" --merge "*|*" --rebase "*) echo "MERGED CLEAN false" >"$MS_STATE" ;;
                            *--auto*)   echo "OPEN CLEAN true" >"$MS_STATE" ;;
                        esac
                    fi
                    exit "${MS_MERGE_RC:-0}" ;;
             *) echo "mock gh: unhandled pr: $all" >&2; exit 1 ;;
+        esac ;;
+    repo)
+        # Part 9: the allowed merge methods. Unlike the rest of this mock, the
+        # script's own query is EXECUTED rather than answered by pattern: the repo
+        # argument must be the one given, an unknown --json field is refused the way
+        # gh refuses it, only the requested fields are present, and the script's
+        # real --jq expression runs through jq. MS_METHODS is the three booleans
+        # ("squash merge rebase", default all true). MS_METHODS_RAW, when set (even
+        # to empty), is served verbatim instead: a malformed answer.
+        case "$2" in
+            view) set -- "${@:3}"; target="${1:-}"; json=""; jqx=""
+                  while [ $# -gt 0 ]; do
+                      case "$1" in --json) json="${2:-}"; shift 2 ;; --jq) jqx="${2:-}"; shift 2 ;; *) shift ;; esac
+                  done
+                  [ "$target" = mock-org/mock-repo ] || { echo "mock gh: repo view of '$target'" >&2; exit 1; }
+                  [ "${MS_METHODS_RC:-0}" = 0 ] || exit 1
+                  if [ -n "${MS_METHODS_RAW+x}" ]; then printf '%s\n' "$MS_METHODS_RAW"; exit 0; fi
+                  for f in ${json//,/ }; do
+                      case "$f" in squashMergeAllowed|mergeCommitAllowed|rebaseMergeAllowed) ;;
+                          *) echo "Unknown JSON field: \"$f\"" >&2; exit 1 ;; esac
+                  done
+                  read -r s m r <<<"${MS_METHODS:-true true true}"
+                  jq -n --argjson s "$s" --argjson m "$m" --argjson r "$r" --arg f "$json" \
+                      '{squashMergeAllowed:$s, mergeCommitAllowed:$m, rebaseMergeAllowed:$r}
+                       | with_entries(select(.key as $k | ($f | split(",")) | index($k)))' \
+                      | jq -r "$jqx" ;;
+            *) echo "mock gh: unhandled repo: $all" >&2; exit 1 ;;
         esac ;;
     *) echo "mock gh: unhandled: $all" >&2; exit 1 ;;
 esac
@@ -1077,6 +1104,113 @@ t8_mutant relative-worktree-not-anchored 'case "$WT" in ""|/*) ;; *) WT="$PWD/$W
 t8_mutant relative-worktree-anchored-to-primary 'WT="$PWD/$WT"' 'WT="$MAIN_WT/$WT"'
 t8_mutant worktree-path-not-normalized '[ -n "$WT" ] && [ -d "$WT" ] && WT="$(cd "$WT" && pwd)"' ':'
 t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD/$WT" ;; esac' 'case "$WT" in ""|/*) ;; *) [ -e "$WT" ] && WT="$PWD/$WT" || WT="" ;; esac'
+
+# --- 9. merge-shepherd.sh --direct merges by a method the repo allows ---------
+# The direct path used to hardcode `--squash`. GitHub rejects that outright in a
+# repo with squash merges disabled, and the rejection read as exit 11 "merge not
+# confirmed — re-run" on every pass, so a caller looping on 11 retried forever.
+# These cases run the script against part 7's stubbed gh, whose `repo view` runs
+# the script's real --json field list and --jq expression over MS_METHODS ("squash
+# merge rebase" as three booleans), and assert:
+# squash stays preferred wherever it is allowed; a disabled squash falls to merge,
+# then rebase; the bound (--expected-head) merge carries the derived method too;
+# a repo allowing none is exit 1 with no merge call; an unreadable or malformed
+# answer is exit 11 with no merge call (unknown is never squash); and queue mode
+# never reads the method at all.
+echo "9. merge-shepherd.sh --direct merges by a method the repo allows" >&2
+MM_FAILED=""
+mm_expect() { [ "$2" = 0 ] || MM_FAILED="$MM_FAILED|$1"; }
+mm_rc() { [ "$MS_RC" = "$2" ] || MM_FAILED="$MM_FAILED|$1 (exit $MS_RC)"; }
+mm_merged_with() { # <method>: exactly one merge call, by that method, deleting the branch
+    [ "$(grep -c 'pr merge' "$MS_CALLS")" = 1 ] && grep -qE -- "pr merge 585 .*--$1 --delete-branch" "$MS_CALLS"
+}
+mm_no_merge() { ! grep -q 'pr merge' "$MS_CALLS"; }
+mm_suite() {
+    local sc="$1" i m
+    MM_FAILED=""
+    MS_METHODS="true true true" ms_run "$sc" "$H1" --direct
+    mm_rc "all allowed: merges" 0
+    mm_expect "all allowed: squash is preferred" "$(mm_merged_with squash; echo $?)"
+    MS_METHODS="true false false" ms_run "$sc" "$H1" --direct
+    mm_expect "squash only: squash" "$(mm_merged_with squash; echo $?)"
+    MS_METHODS="false true true" ms_run "$sc" "$H1" --direct
+    mm_rc "squash disabled: merges" 0
+    mm_expect "squash disabled: a merge commit is preferred over rebase, and no --squash" \
+        "$(mm_merged_with merge && ! grep -q -- '--squash' "$MS_CALLS"; echo $?)"
+    MS_METHODS="false false true" ms_run "$sc" "$H1" --direct
+    mm_rc "rebase only: merges" 0
+    mm_expect "rebase only: rebase" "$(mm_merged_with rebase; echo $?)"
+    MS_METHODS="false true false" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    mm_rc "bound, merge only: merges" 0
+    mm_expect "bound, merge only: the derived method carries --match-head-commit" \
+        "$(grep -qE -- "pr merge 585 .*--merge --delete-branch --match-head-commit $H1" "$MS_CALLS"; echo $?)"
+    MS_METHODS="false false false" ms_run "$sc" "$H1" --direct
+    mm_rc "none allowed: exit 1" 1
+    mm_expect "none allowed: no merge call" "$(mm_no_merge; echo $?)"
+    mm_expect "none allowed: says NO MERGE METHOD" "$(grep -q 'NO MERGE METHOD' <<<"$MS_OUT"; echo $?)"
+    MS_METHODS_RC=1 ms_run "$sc" "$H1" --direct
+    mm_rc "probe fails: exit 11" 11
+    mm_expect "probe fails: no merge call" "$(mm_no_merge; echo $?)"
+    i=0
+    for m in "" "null null null" "true true" "true true true true" "$(printf 'true true true\nnotice')"; do
+        i=$((i + 1))
+        MS_METHODS_RAW="$m" ms_run "$sc" "$H1" --direct
+        mm_rc "malformed answer $i: exit 11" 11
+        mm_expect "malformed answer $i: no merge call" "$(mm_no_merge; echo $?)"
+    done
+    MS_METHODS="false true false" ms_run "$sc" "$H1"
+    mm_rc "queue mode: enqueues" 10
+    mm_expect "queue mode: the merge method is never read" "$(! grep -q '^repo view' "$MS_CALLS"; echo $?)"
+}
+mm_suite "$MS_SRC/merge-shepherd.sh"
+if [ -z "$MM_FAILED" ]; then ok "merge-shepherd merge method: every committed case holds"
+else bad "merge-shepherd merge method cases failed:$MM_FAILED"; fi
+
+mm_mutant() { # <label> <old text, must occur once> <new text>
+    local label="$1" d="$MUT/mm-$1"
+    rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
+    if ! python3 -I -c '
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p).read()
+if s.count(old) != 1:
+    sys.exit(1)
+open(p, "w").write(s.replace(old, new))
+' "$d/merge-shepherd.sh" "$2" "$3"; then
+        bad "merge-method mutant '$label' did not apply (its anchor moved)"; return
+    fi
+    # A copy that does not parse fails every case whatever the cases check, so it
+    # would "fail the suite" while proving nothing about the construct it changed.
+    if ! bash -n "$d/merge-shepherd.sh" 2>/dev/null; then
+        bad "merge-method mutant '$label' did not apply (the mutated copy does not parse)"; return
+    fi
+    mm_suite "$d/merge-shepherd.sh"
+    if [ -n "$MM_FAILED" ]; then ok "merge-method mutant '$label' fails the suite"
+    else bad "merge-method mutant '$label' passes the suite — its case is vacuous"; fi
+}
+mm_mutant unbound-squash-hardcoded '"--$method" --delete-branch >/dev/null' '--squash --delete-branch >/dev/null'
+mm_mutant bound-squash-hardcoded '"--$method" --delete-branch \' '--squash --delete-branch \'
+mm_mutant merge-preferred-over-squash 'if [ "$s" = true ]; then echo squash
+  elif [ "$m" = true ]; then echo merge' 'if [ "$m" = true ]; then echo merge
+  elif [ "$s" = true ]; then echo squash'
+mm_mutant rebase-preferred-over-merge 'elif [ "$m" = true ]; then echo merge
+  elif [ "$r" = true ]; then echo rebase' 'elif [ "$r" = true ]; then echo rebase
+  elif [ "$m" = true ]; then echo merge'
+mm_mutant none-allowed-waits 'a human enables one in the repo settings"
+           return 1 ;;' 'a human enables one in the repo settings"
+           return 11 ;;'
+mm_mutant failed-probe-is-squash '2>/dev/null)" || return 2' '2>/dev/null)" || { echo squash; return 0; }'
+mm_mutant unreadable-merges-anyway '*) echo "merge methods unreadable (transient) — not merging this pass"; return 11 ;;' '*) method=squash ;;'
+mm_mutant no-boolean-check 'case "$v" in true|false) ;; *) return 2 ;; esac' ':'
+mm_mutant extra-words-accepted '[ -z "$rest" ] || return 2' ':'
+mm_mutant multiline-accepted "case \"\$line\" in *\$'\\n'*) return 2 ;; esac" ':'
+mm_mutant method-read-in-queue-mode 'read -r st ms inq <<<"$(pr_state)"' 'merge_method >/dev/null; read -r st ms inq <<<"$(pr_state)"'
+# The query itself: a field gh does not know, a field the --jq reads but --json
+# never requested, and a probe of the cwd repo instead of --repo's.
+mm_mutant probe-json-field-misspelt '--json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed' '--json squashMergeAllowed,mergeCommitAllowd,rebaseMergeAllowed'
+mm_mutant probe-json-field-dropped '--json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed' '--json squashMergeAllowed,rebaseMergeAllowed'
+mm_mutant probe-jq-field-misspelt '\(.mergeCommitAllowed)' '\(.mergeCommitAllowd)'
+mm_mutant probe-repo-dropped 'gh repo view "$REPO" --json' 'gh repo view --json'
 
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then

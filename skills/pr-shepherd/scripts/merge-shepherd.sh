@@ -12,9 +12,9 @@
 # and kill-proof; this adds resilient enqueue + confirmation + teardown.
 #
 # One step per run: mergeable check → red/pending gate → staleness gate
-# (`--direct` only) → enqueue via GraphQL enqueuePullRequest (or `--direct`
-# squash-merge) → GraphQL isInMergeQueue confirmation → teardown + ff-only
-# default-branch reconcile.
+# (`--direct` only) → enqueue via GraphQL enqueuePullRequest (or a `--direct`
+# merge by the repo's allowed method) → GraphQL isInMergeQueue confirmation →
+# teardown + ff-only default-branch reconcile.
 #
 # Usage:
 #   merge-shepherd.sh <pr> [--repo owner/name] [--worktree <path>] [--direct]
@@ -26,8 +26,9 @@
 #   path: a relative one resolves against the directory this script was started
 #   in, and one that names nothing there removes no worktree, though it can
 #   still delete that path's worktree-<basename> isolation branch.
-#   --direct: for repos WITHOUT a merge queue — squash-merge + --delete-branch
-#   instead of enqueueing. Default is queue mode (GraphQL enqueuePullRequest;
+#   --direct: for repos WITHOUT a merge queue — merge + --delete-branch instead
+#   of enqueueing, by the method the repo allows (MERGE METHOD below). Default
+#   is queue mode (GraphQL enqueuePullRequest;
 #   `gh pr merge --auto` only as a fallback when the mutation errors, and never
 #   under --expected-head, #587).
 #   --allow-no-checks: merge even when the PR reports ZERO checks in a repo that
@@ -88,13 +89,15 @@
 #                    (default "worktree-agent-") — same contract as teardown.sh
 #
 # Exit codes: 0 merged(+teardown) · 10 enqueued · 11 waiting/in-flight, or an
-#             unbound stale branch that was just updated (re-run)
+#             unbound stale branch that was just updated, or (--direct) merge
+#             methods that could not be read (re-run)
 #             · 20 red checks · 21 no checks reported where CI is expected
 #             (re-run) · 22 conflicting · 23 blocked by a lower stack layer
 #             (re-run) · 24 stacked under a merge queue (needs a human)
 #             · 25 head moved since the reviewed commit (--expected-head only;
 #             re-review, then re-run with the new head)
-#             · 1 usage/error/closed
+#             · 1 usage/error/closed, or (--direct) a repo that allows no
+#             merge method at all
 #   The post-merge local teardown first runs checkout-guard.sh `check` (#486): a
 #   refusal skips the local mutations, is reported, and never changes these codes.
 #   It then switches and ff-reconciles the primary checkout ONLY when that checkout
@@ -148,6 +151,26 @@
 # behind-count proceeds rather than stalling a healthy merge — unlike the
 # empty-rollup and stack gates, the failure mode here is a re-run, and the
 # update-branch write is the recovery, so a probe outage must not wedge it.
+#
+# MERGE METHOD (--direct only): read from the repo's settings at merge time
+# (squashMergeAllowed / mergeCommitAllowed / rebaseMergeAllowed) and never
+# assumed. `--squash` used to be hardcoded here. GitHub rejects it outright in a
+# repo with squash merges disabled, and the rejected call read as "merge not
+# confirmed — re-run" (exit 11) on every pass, so a caller looping on 11 retried
+# forever with nothing saying why. Preference is squash → merge → rebase, so
+# nothing changes wherever squash is allowed. This is an availability rule, not
+# a read of intent: the repo-level settings are the one record of intent this
+# script can see, so a repo that needs one particular method disables the others.
+# setup-config's "keep what is intended" rule (config-contract.md) governs what a
+# config refresh writes, and says how it relates to this choice. Branch
+# protection's "Require linear history" and rulesets that restrict merge methods
+# are NOT consulted: GitHub can still refuse the chosen method there, and that
+# refusal reads as "merge not confirmed — re-run" (exit 11), exactly as any
+# refused direct merge did before. A repo that allows none is exit 1, since
+# nothing can merge until a human enables one. An unreadable answer is exit 11
+# and never a merge, the same rule as an unreadable head. Queue mode passes no
+# method at all (the method-flag trap in references/merge-queue.md), so the
+# method is never read there.
 #
 # STACKED PRs: a middle layer of a stack reads green + MERGEABLE + CLEAN
 # exactly like an ordinary PR, so without a gate this writer would merge layer
@@ -389,6 +412,30 @@ behind_by() { # -> commits the PR head is behind the base, "" if unknown
   gh api "repos/$OWNER/$NAME/compare/$BRANCH...$sha" --jq '.behind_by' 2>/dev/null || true
 }
 
+# Which method a --direct merge uses (see MERGE METHOD above). Prints it and
+# returns 0; returns 1 when the repo allows no method at all (the caller stops:
+# nothing can merge until a human enables one), and 2 when the answer cannot be
+# read (the caller waits: unknown is never squash). Plain gh, not gh-retry.sh:
+# gh-retry returns gh's combined output on success, so even a clean read would
+# still need validating, and an unreadable pass is already a re-run here. The
+# answer must be exactly three JSON booleans; anything else is unreadable.
+merge_method() {
+  local line s m r rest v
+  line="$(gh repo view "$REPO" --json squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed \
+    --jq '"\(.squashMergeAllowed) \(.mergeCommitAllowed) \(.rebaseMergeAllowed)"' 2>/dev/null)" || return 2
+  case "$line" in *$'\n'*) return 2 ;; esac
+  read -r s m r rest <<<"$line"
+  [ -z "$rest" ] || return 2
+  for v in "$s" "$m" "$r"; do
+    case "$v" in true|false) ;; *) return 2 ;; esac
+  done
+  if [ "$s" = true ]; then echo squash
+  elif [ "$m" = true ]; then echo merge
+  elif [ "$r" = true ]; then echo rebase
+  else return 1
+  fi
+}
+
 # The PR's head branch, shared by drop_isolation_branch and teardown's
 # primary-checkout decision (#615). A successful read is cached for the run; a
 # failed one is not, so the next caller retries. Sets PR_HEAD_REF (empty when the
@@ -574,7 +621,7 @@ stack_gate() {
 }
 
 advance() { # one idempotent step against live state
-  local st ms inq fails pend total grc bb live_head erc
+  local st ms inq fails pend total grc bb live_head erc method mrc
   read -r st ms inq <<<"$(pr_state)"
   [ -z "$st" ] && { echo "state unavailable (transient) — retry later"; return 11; }
   case "$st" in
@@ -668,14 +715,21 @@ advance() { # one idempotent step against live state
         fi
         return 11
       fi
-      echo "CLEAN — direct merge (--squash --delete-branch)"
+      method="$(merge_method)"; mrc=$?
+      case "$mrc" in
+        0) ;;
+        1) echo "NO MERGE METHOD — $REPO allows none of squash, merge or rebase; a human enables one in the repo settings"
+           return 1 ;;
+        *) echo "merge methods unreadable (transient) — not merging this pass"; return 11 ;;
+      esac
+      echo "CLEAN — direct merge (--$method --delete-branch)"
       if [ "$EXPECTED_HEAD_SET" = 1 ]; then
-        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --squash --delete-branch \
+        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch \
           --match-head-commit "$EXPECTED_HEAD" >/dev/null \
           || { head_moved && { echo "HEAD MOVED — the bound merge was refused because the PR head changed (re-review, then re-run with the new head)"; return 25; }
                echo "  merge call failed (checking whether it took anyway)" >&2; }
       else
-        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --squash --delete-branch >/dev/null \
+        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch >/dev/null \
           || echo "  merge call failed (checking whether it took anyway)" >&2
       fi
       sleep 5
