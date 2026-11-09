@@ -165,8 +165,14 @@
 # config refresh writes, and says how it relates to this choice. Branch
 # protection's "Require linear history" and rulesets that restrict merge methods
 # are NOT consulted: GitHub can still refuse the chosen method there, and that
-# refusal reads as "merge not confirmed — re-run" (exit 11), exactly as any
-# refused direct merge did before. A repo that allows none is exit 1, since
+# refusal (like any refused direct merge) is exit 11 carrying the stable stdout
+# line `DIRECT MERGE FAILED — <cause>` (#629), so it is not indistinguishable from
+# "merge not confirmed — re-run". The line prints only when the merge call itself
+# failed after gh-retry; a call that succeeded but is not yet MERGED prints only
+# `merge not confirmed`, which is ordinary waiting. The cause is gh_cause's, the
+# same extraction as BOUND ENQUEUE FAILED's. Like that line it is PER PASS, and the
+# rule for one line versus a repeat is pr-shepherd's SKILL.md `--expected-head`
+# paragraph (the same one home). A repo that allows none is exit 1, since
 # nothing can merge until a human enables one. An unreadable answer is exit 11
 # and never a merge, the same rule as an unreadable head. Queue mode passes no
 # method at all (the method-flag trap in references/merge-queue.md), so the
@@ -285,11 +291,28 @@ pr_state() { # -> "STATE MERGESTATE INQUEUE"
 # never under --expected-head (#587): a bound run returns 1 instead.
 # Success here is advisory either way — the caller confirms via the
 # isInMergeQueue read, never via this function's exit code.
+# One line saying why a gh-retry-wrapped call failed, from its exit status and
+# captured stderr. Shared by the bound enqueue (BOUND ENQUEUE FAILED, #590) and
+# the direct merge (DIRECT MERGE FAILED, #629), so the two never word a cause
+# differently.
+gh_cause() { # <gh-retry exit status> <captured stderr>
+  local enq_rc="$1" enq_err="$2" enq_body enq_line
+  if [ "$enq_rc" -eq 124 ]; then
+    echo "retries ran out on transient errors (gh-retry 124)"
+  else
+    # gh api prints a GraphQL error's JSON body on stdout with no trailing newline, then `gh: <message>`: take the text after the last `gh: ` (#594).
+    enq_body="$(grep -v '^\[gh-retry\]' <<<"$enq_err" || true)"
+    case "$enq_body" in *'gh: '*) enq_body="${enq_body##*gh: }" ;; esac
+    enq_line="$(sed -n '/./{p;q;}' <<<"$enq_body" | LC_ALL=C tr -d '\000-\037\177' \
+      | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; s/([Bb]earer|[Tt]oken) +[^ ]+/\1 ***/g' | cut -c1-200)"
+    echo "refused (gh exit $enq_rc): $enq_line"
+  fi
+}
 # Why the last bound enqueue did not happen, for the stable BOUND ENQUEUE FAILED
 # line the caller prints (#590). Set by enqueue(), read by advance().
 ENQ_CAUSE=""
 enqueue() {
-  local prid enq_err enq_rc enq_why enq_body enq_line
+  local prid enq_err enq_rc enq_why
   ENQ_CAUSE=""
   prid="$(gh api graphql \
     -f query='query($owner:String!,$name:String!,$pr:Int!){
@@ -309,16 +332,7 @@ enqueue() {
       [ "$enq_rc" -eq 0 ] && return 0
       # gh-retry's own log is for the operator, so it still reaches stderr (#592).
       [ -n "$enq_err" ] && printf '%s\n' "$enq_err" >&2
-      if [ "$enq_rc" -eq 124 ]; then
-        enq_why="retries ran out on transient errors (gh-retry 124)"
-      else
-        # gh api prints a GraphQL error's JSON body on stdout with no trailing newline, then `gh: <message>`: take the text after the last `gh: ` (#594).
-        enq_body="$(grep -v '^\[gh-retry\]' <<<"$enq_err" || true)"
-        case "$enq_body" in *'gh: '*) enq_body="${enq_body##*gh: }" ;; esac
-        enq_line="$(sed -n '/./{p;q;}' <<<"$enq_body" | LC_ALL=C tr -d '\000-\037\177' \
-          | sed -E 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]+/\1***/g; s/([Bb]earer|[Tt]oken) +[^ ]+/\1 ***/g' | cut -c1-200)"
-        enq_why="refused (gh exit $enq_rc): $enq_line"
-      fi
+      enq_why="$(gh_cause "$enq_rc" "$enq_err")"
       # A refusal because the head moved is exit 25, and no fallback is tried.
       # Read the head ONCE: "unchanged" is claimed only on a successful read that matched.
       refused_head="$(pr_head)"
@@ -723,18 +737,29 @@ advance() { # one idempotent step against live state
         *) echo "merge methods unreadable (transient) — not merging this pass"; return 11 ;;
       esac
       echo "CLEAN — direct merge (--$method --delete-branch)"
+      # stdout is discarded and stderr kept (not /dev/null) so a failed call can name its cause (#629).
+      direct_cause=""
       if [ "$EXPECTED_HEAD_SET" = 1 ]; then
-        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch \
-          --match-head-commit "$EXPECTED_HEAD" >/dev/null \
-          || { head_moved && { echo "HEAD MOVED — the bound merge was refused because the PR head changed (re-review, then re-run with the new head)"; return 25; }
-               echo "  merge call failed (checking whether it took anyway)" >&2; }
+        mg_err="$(bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch \
+          --match-head-commit "$EXPECTED_HEAD" 2>&1 >/dev/null)"; mg_rc=$?
       else
-        bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch >/dev/null \
-          || echo "  merge call failed (checking whether it took anyway)" >&2
+        mg_err="$(bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" "--$method" --delete-branch 2>&1 >/dev/null)"; mg_rc=$?
+      fi
+      if [ "$mg_rc" -ne 0 ]; then
+        # gh-retry's own log is for the operator, so it still reaches stderr.
+        [ -n "$mg_err" ] && printf '%s\n' "$mg_err" >&2
+        if [ "$EXPECTED_HEAD_SET" = 1 ] && head_moved; then
+          echo "HEAD MOVED — the bound merge was refused because the PR head changed (re-review, then re-run with the new head)"; return 25
+        fi
+        echo "  merge call failed (checking whether it took anyway)" >&2
+        direct_cause="$(gh_cause "$mg_rc" "$mg_err")"
       fi
       sleep 5
       read -r st _ _ <<<"$(pr_state)"
       if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi
+      # Printed only when the merge call itself failed: a call that succeeded but is not yet
+      # MERGED prints only `merge not confirmed`, which is ordinary waiting (#629).
+      [ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED — $direct_cause (re-run, and if the next pass prints this again a human merges it)"
       echo "  merge not confirmed — re-run"; return 11
     fi
     echo "CLEAN — enqueuing (GraphQL enqueuePullRequest)"
