@@ -376,10 +376,24 @@ ms_run() { # <script> <head the PR reports> <args…>   (env MS_* passes through
     : >"$MS_CALLS"; echo "OPEN CLEAN false" >"$MS_STATE"; echo 0 >"$MS_HEADCNT"
     # GIT_DIR points nowhere, so the script finds no local checkout and skips
     # its teardown instead of touching this repo's.
-    MS_OUT="$(cd "$WORK" && PATH="$MSBIN:$PATH" MS_CALLS="$MS_CALLS" MS_STATE="$MS_STATE" MS_HEADCNT="$MS_HEADCNT" MS_HEAD="$head" \
+    # MS_SPLIT=1 keeps stderr apart: MS_OUT is then stdout alone and MS_ERR is stderr alone,
+    # so a case can tell which stream a line reached (#636). Otherwise both go to MS_OUT.
+    MS_ERR=""
+    if [ -n "${MS_SPLIT:-}" ]; then
+        : >"$WORK/ms-stderr"
+        MS_OUT="$(ms_exec "$script" "$head" "$@" 2>"$WORK/ms-stderr")"
+        MS_RC=$?
+        MS_ERR="$(cat "$WORK/ms-stderr")"
+    else
+        MS_OUT="$(ms_exec "$script" "$head" "$@" 2>&1)"
+        MS_RC=$?
+    fi
+}
+ms_exec() { # <script> <head> <args…> — one merge-shepherd run; the caller owns the redirections
+    local script="$1" head="$2"; shift 2
+    cd "$WORK" && PATH="$MSBIN:$PATH" MS_CALLS="$MS_CALLS" MS_STATE="$MS_STATE" MS_HEADCNT="$MS_HEADCNT" MS_HEAD="$head" \
         MERGE_SHEPHERD_UPDATE_WAIT="${MS_UPDATE_WAIT:-0}" MERGE_SHEPHERD_UPDATE_POLL="${MS_UPDATE_POLL:-0}" \
-        GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@" 2>&1)"
-    MS_RC=$?
+        GIT_DIR="$WORK/no-such-git-dir" bash "$script" 585 --repo mock-org/mock-repo "$@"
 }
 bline() { grep '^BOUND ENQUEUE FAILED' <<<"$MS_OUT" || true; }
 ms_wrote() { grep -qE 'enqueuePullRequest|pr merge' "$MS_CALLS"; }
@@ -1184,8 +1198,9 @@ t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD
 # a refused merge call, bound and unbound, prints it with the mock's refusal text and
 # exits 11; a merge call that failed but whose PR then reads MERGED exits 0 with no
 # such line; a merge that succeeded but is not yet MERGED prints no such line; and
-# gh-retry's stderr from a merge call that exited 0 still reaches stderr, bound and
-# unbound (#636), so the print is not tied to a failed call. Not
+# gh-retry's retry lines from a merge call that exited 0 still reach STDERR (captured
+# apart from stdout with MS_SPLIT=1, and absent from stdout), bound and unbound
+# (#636), so the print is neither tied to a failed call nor sent to stdout. Not
 # covered: the retry-exhaustion cause (124) on the direct path, which shares gh_cause
 # with the bound enqueue and is pinned there.
 echo "9. merge-shepherd.sh --direct merges by a method the repo allows" >&2
@@ -1243,15 +1258,19 @@ mm_suite() {
     mm_rc "merge call failed but the PR reads MERGED: exit 0" 0
     mm_expect "merge call failed but the PR reads MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
     rm -f "$MS_CALLS.mergefirst"
-    MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct
+    MS_SPLIT=1 MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct
     mm_rc "unbound merge recovered after a retry: exit 0" 0
     mm_expect "unbound merge recovered after a retry: the retry line reaches stderr" \
-        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_OUT"; echo $?)"
+        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_ERR"; echo $?)"
+    mm_expect "unbound merge recovered after a retry: the retry line is not on stdout" \
+        "$(! grep -q 'gh-retry' <<<"$MS_OUT"; echo $?)"
     rm -f "$MS_CALLS.mergefirst"
-    MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    MS_SPLIT=1 MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct --expected-head "$H1"
     mm_rc "bound merge recovered after a retry: exit 0" 0
     mm_expect "bound merge recovered after a retry: the retry line reaches stderr" \
-        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_OUT"; echo $?)"
+        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_ERR"; echo $?)"
+    mm_expect "bound merge recovered after a retry: the retry line is not on stdout" \
+        "$(! grep -q 'gh-retry' <<<"$MS_OUT"; echo $?)"
     MS_MERGE_LAG=1 ms_run "$sc" "$H1" --direct
     mm_rc "unbound merge succeeded, not yet MERGED: exit 11" 11
     mm_expect "unbound merge succeeded, not yet MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
@@ -1308,6 +1327,7 @@ mm_mutant multiline-accepted "case \"\$line\" in *\$'\\n'*) return 2 ;; esac" ':
 mm_mutant no-direct-merge-failed-line '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'false && echo "DIRECT MERGE FAILED'
 mm_mutant direct-merge-failed-line-on-confirmed-later-path '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'echo "DIRECT MERGE FAILED'
 mm_mutant merge-stderr-printed-only-on-failure '[ -n "$mg_err" ] && printf' '[ "$mg_rc" -ne 0 ] && [ -n "$mg_err" ] && printf'
+mm_mutant merge-stderr-printed-to-stdout '"$mg_err" >&2' '"$mg_err"'
 mm_mutant direct-cause-dropped 'direct_cause="$(gh_cause "$mg_rc" "$mg_err")"' 'direct_cause="the merge call failed"'
 mm_mutant direct-merge-failed-line-before-merged-check '      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi' '      [ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED — $direct_cause"
       if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi'
