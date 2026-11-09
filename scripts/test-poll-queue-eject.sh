@@ -23,6 +23,9 @@
 # --expected-head cases, #585, against a second stubbed `gh` beside this one; part 8
 # adds merge-shepherd.sh's primary-checkout teardown cases, #615, #618 and #621, run against real scratch
 # git repos; part 9 adds merge-shepherd.sh's --direct merge method, against part 7's stub):
+# Parts 7 and 8's mutant helpers report a mutated copy that does not parse (`bash -n`, plus
+# `ast.parse` of each `<<'PY'` heredoc) as not applied, and the `unapplied` fixtures prove that
+# deleting either guard fails the gate (#630).
 #
 #   1. The lag case is NOT terminal: seen in the queue on an earlier tick, then
 #      isInMergeQueue:false with an empty timeline, re-reads instead of
@@ -615,7 +618,8 @@ while i < len(lines):
 # Proof the parse guards are real (#630): run a helper on a replacement that applies but
 # leaves the copy unparseable, with ok/bad swapped for recorders in a subshell so the
 # deliberate failure cannot fail this gate. Deleting a guard makes the helper run its suite
-# (every case fails, so it would say "fails the suite") and the case below fails.
+# (it then says "fails the suite" or "passes the suite", neither of which is the parse report)
+# and the case below fails.
 unapplied() { # <label> <helper + args...>: the helper must report the copy as not parsing
     local label="$1" out; shift
     out="$( ok() { echo "OK: $1"; }; bad() { echo "BAD: $1"; }; "$@" 2>&1 )"
@@ -1088,6 +1092,11 @@ open(p, "w").write(s.replace(old, new))
 unapplied "t8_mutant (bash, merge-shepherd.sh)" t8_mutant proof-unparseable 'if [ -n "$keep_why" ]; then' '"never closed'
 T8_MUT_FILE=teardown.sh unapplied "t8_mutant (bash, teardown.sh)" t8_mutant proof-unparseable 'REVERT_HEAD BISECT_LOG sequencer; do' 'REVERT_HEAD BISECT_LOG sequencer; do "never closed'
 T8_MUT_FILE=checkout-guard.sh unapplied "t8_mutant (Python heredoc, checkout-guard.sh)" t8_mutant proof-unparseable '"BISECT_LOG", "index.lock"):' '"BISECT_LOG", "index.lock"'
+# bash -n exits 0 on an unclosed heredoc, so only mutant_parses' missing-closer branch catches this one
+T8_MUT_FILE=checkout-guard.sh unapplied "t8_mutant (unclosed Python heredoc, checkout-guard.sh)" t8_mutant proof-unclosed-heredoc 'sys.exit(main())
+PY
+' 'sys.exit(main())
+'
 t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
 t8_mutant keep-line-still-ffs-detached 'no ff reconcile"
     return 0
