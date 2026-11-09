@@ -1891,6 +1891,10 @@ swap_pin sec6 "$sec6_flat" '`PR #<pr> (DIRECT MERGE FAILED — <cause>; a human 
     "the holds entry for DIRECT MERGE FAILED says a human acts if it repeats (#635)"
 swap_pin sec6 "$sec6_flat" 'gh-retry exhausting on an outage prints it too, so no demotion and no recovery spent' 'gh-retry exhausting on an outage demotes the issue to blocked' \
     "the DIRECT MERGE FAILED holds entry is visibility only, no demotion (#635)"
+swap_pin sec6 "$sec6_flat" 'a PR whose `--direct` hand-off printed `DIRECT MERGE FAILED — <cause>`' 'a PR whose `--direct` hand-off was red' \
+    "the holds line names a PR whose --direct hand-off printed DIRECT MERGE FAILED (#635)"
+swap_pin sec6 "$sec6_flat" '(exit `11`; the per-pass rule is `pr-shepherd`'"'"'s)' '(exit `11`; the per-pass rule is restated here)' \
+    "the DIRECT MERGE FAILED holds entry points at pr-shepherd for the per-pass rule (#635)"
 swap_pin sec6 "$sec6_flat" 'That is visibility only: no demotion, no recovery spent' 'That demotes the issue to blocked and spends the recovery' \
     "the holds line names BOUND ENQUEUE FAILED as visibility only, no demotion (#590)"
 swap_pin sec6 "$sec6_flat" 'a PR whose hand-off printed `BOUND ENQUEUE FAILED — <cause>`' 'a PR whose hand-off was red' \
