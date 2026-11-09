@@ -315,9 +315,13 @@ case "$1" in
         case "$2" in
             view)  echo "0 0 1" ;;
             update-branch) exit 0 ;;
-            merge) if [ "${MS_MERGE_RC:-0}" = 0 ]; then
+            # MS_MERGE_TOOK_ANYWAY: the PR merges on GitHub but the call still exits non-zero (a failed local branch delete)
+            merge) if [ -n "${MS_MERGE_TOOK_ANYWAY:-}" ]; then echo "MERGED CLEAN false" >"$MS_STATE"; fi
+                   if [ "${MS_MERGE_RC:-0}" != 0 ]; then printf '%s\n' "${MS_MERGE_ERR:-merge refused}" >&2; fi
+                   if [ "${MS_MERGE_RC:-0}" = 0 ]; then
                        case "$all" in
-                           *" --squash "*|*" --merge "*|*" --rebase "*) echo "MERGED CLEAN false" >"$MS_STATE" ;;
+                           # MS_MERGE_LAG: the merge call succeeds but the PR does not read MERGED yet (#629)
+                           *" --squash "*|*" --merge "*|*" --rebase "*) [ -n "${MS_MERGE_LAG:-}" ] || echo "MERGED CLEAN false" >"$MS_STATE" ;;
                            *--auto*)   echo "OPEN CLEAN true" >"$MS_STATE" ;;
                        esac
                    fi
@@ -609,7 +613,7 @@ ms_mutant bound-run-arms-auto-fallback 'under --expected-head; re-run" >&2
     return 1' 'under --expected-head; re-run" >&2
     bash "$GH_RETRY" -- pr merge "$PR" --repo "$REPO" --auto --match-head-commit "$EXPECTED_HEAD" >/dev/null && return 0
     return 1'
-ms_mutant no-match-on-direct '          --match-head-commit "$EXPECTED_HEAD" >/dev/null \' '          >/dev/null \'
+ms_mutant no-match-on-direct '          --match-head-commit "$EXPECTED_HEAD" 2>&1 >/dev/null)"; mg_rc=$?' '          2>&1 >/dev/null)"; mg_rc=$?'
 ms_mutant no-charset-check '*[!0-9a-f]*) echo' 'NEVER) echo'
 ms_mutant no-length-check '40|64) : ;;' '*) : ;;'
 ms_mutant 25-not-terminal '0|1|20|22|24|25) exit' '0|1|20|22|24) exit'
@@ -617,7 +621,7 @@ ms_mutant empty-value-runs-unbound 'EXPECTED_HEAD="$2"; EXPECTED_HEAD_SET=1; shi
 ms_mutant no-moved-check-after-bound-enqueue '      elif [ "$refused_head" != "$EXPECTED_HEAD" ]; then
         return 25' '      elif false; then
         return 25'
-ms_mutant no-moved-check-after-bound-direct 'head_moved && { echo "HEAD MOVED — the bound merge' 'false && { echo "HEAD MOVED — the bound merge'
+ms_mutant no-moved-check-after-bound-direct 'if [ "$EXPECTED_HEAD_SET" = 1 ] && head_moved; then' 'if false; then'
 ms_mutant noid-path-rereads-head 'under --expected-head; re-run" >&2
     return 1' 'under --expected-head; re-run" >&2
     head_moved && return 25
@@ -642,7 +646,7 @@ ms_mutant no-bound-enqueue-failed-line '      [ -n "$bound_cause" ] && echo "BOU
 ms_mutant bound-failed-line-on-unbound-run '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"' '[ "$erc" -ne 0 ] && bound_cause="${ENQ_CAUSE:-x}"'
 ms_mutant lagged-success-prints-bound-failed '[ "$erc" -ne 0 ] && [ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="$ENQ_CAUSE"' '[ "$EXPECTED_HEAD_SET" = 1 ] && bound_cause="${ENQ_CAUSE:-the mutation lagged}"'
 ms_mutant cause-drops-retry-exhaustion 'if [ "$enq_rc" -eq 124 ]; then' 'if false; then'
-ms_mutant cause-drops-gh-exit-status 'enq_why="refused (gh exit $enq_rc): $enq_line"' 'enq_why="refused: $enq_line"'
+ms_mutant cause-drops-gh-exit-status 'echo "refused (gh exit $enq_rc): $enq_line"' 'echo "refused: $enq_line"'
 ms_mutant cause-drops-gh-prefix-extraction 'case "$enq_body" in *'"'"'gh: '"'"'*) enq_body="${enq_body##*gh: }" ;; esac' ':'
 ms_mutant cause-stderr-uncut ' | cut -c1-200)"' ')"'
 ms_mutant cause-keeps-gh-retry-log "grep -v '^\\[gh-retry\\]' <<<\"\$enq_err\" || true" 'printf "%s" "$enq_err"'
@@ -1116,7 +1120,11 @@ t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD
 # then rebase; the bound (--expected-head) merge carries the derived method too;
 # a repo allowing none is exit 1 with no merge call; an unreadable or malformed
 # answer is exit 11 with no merge call (unknown is never squash); and queue mode
-# never reads the method at all.
+# never reads the method at all. Part 9 also holds the DIRECT MERGE FAILED line (#629):
+# a refused merge call, bound and unbound, prints it with the mock's refusal text and
+# exits 11; a merge that succeeded but is not yet MERGED prints no such line. Not
+# covered: the retry-exhaustion cause (124) on the direct path, which shares gh_cause
+# with the bound enqueue and is pinned there.
 echo "9. merge-shepherd.sh --direct merges by a method the repo allows" >&2
 MM_FAILED=""
 mm_expect() { [ "$2" = 0 ] || MM_FAILED="$MM_FAILED|$1"; }
@@ -1158,6 +1166,26 @@ mm_suite() {
         mm_rc "malformed answer $i: exit 11" 11
         mm_expect "malformed answer $i: no merge call" "$(mm_no_merge; echo $?)"
     done
+    MS_MERGE_RC=1 MS_MERGE_ERR="Merge commits are not allowed on this repository" ms_run "$sc" "$H1" --direct
+    mm_rc "unbound refusal: exit 11" 11
+    mm_expect "unbound refusal: stdout names DIRECT MERGE FAILED and gh's refusal text" \
+        "$(grep -q '^DIRECT MERGE FAILED — refused (gh exit 1): Merge commits are not allowed on this repository' <<<"$MS_OUT"; echo $?)"
+    mm_expect "unbound refusal: no BOUND ENQUEUE FAILED" "$(! grep -q 'BOUND ENQUEUE FAILED' <<<"$MS_OUT"; echo $?)"
+    MS_MERGE_RC=1 MS_MERGE_ERR="Pull request is not mergeable: linear history required" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    mm_rc "bound refusal, head unchanged: exit 11" 11
+    mm_expect "bound refusal: stdout names DIRECT MERGE FAILED and gh's refusal text" \
+        "$(grep -q '^DIRECT MERGE FAILED — refused (gh exit 1): Pull request is not mergeable: linear history required' <<<"$MS_OUT"; echo $?)"
+    mm_expect "bound refusal, head unchanged: not HEAD MOVED" "$(! grep -q 'HEAD MOVED' <<<"$MS_OUT"; echo $?)"
+    MS_MERGE_RC=1 MS_MERGE_TOOK_ANYWAY=1 MS_MERGE_ERR="failed to delete local branch" ms_run "$sc" "$H1" --direct
+    mm_rc "merge call failed but the PR reads MERGED: exit 0" 0
+    mm_expect "merge call failed but the PR reads MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
+    MS_MERGE_LAG=1 ms_run "$sc" "$H1" --direct
+    mm_rc "unbound merge succeeded, not yet MERGED: exit 11" 11
+    mm_expect "unbound merge succeeded, not yet MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
+    mm_expect "unbound merge succeeded, not yet MERGED: ordinary waiting line" "$(grep -q 'merge not confirmed — re-run' <<<"$MS_OUT"; echo $?)"
+    MS_MERGE_LAG=1 ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    mm_rc "bound merge succeeded, not yet MERGED: exit 11" 11
+    mm_expect "bound merge succeeded, not yet MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
     MS_METHODS="false true false" ms_run "$sc" "$H1"
     mm_rc "queue mode: enqueues" 10
     mm_expect "queue mode: the merge method is never read" "$(! grep -q '^repo view' "$MS_CALLS"; echo $?)"
@@ -1188,7 +1216,7 @@ open(p, "w").write(s.replace(old, new))
     if [ -n "$MM_FAILED" ]; then ok "merge-method mutant '$label' fails the suite"
     else bad "merge-method mutant '$label' passes the suite — its case is vacuous"; fi
 }
-mm_mutant unbound-squash-hardcoded '"--$method" --delete-branch >/dev/null' '--squash --delete-branch >/dev/null'
+mm_mutant unbound-squash-hardcoded '"--$method" --delete-branch 2>&1 >/dev/null)"' '--squash --delete-branch 2>&1 >/dev/null)"'
 mm_mutant bound-squash-hardcoded '"--$method" --delete-branch \' '--squash --delete-branch \'
 mm_mutant merge-preferred-over-squash 'if [ "$s" = true ]; then echo squash
   elif [ "$m" = true ]; then echo merge' 'if [ "$m" = true ]; then echo merge
@@ -1204,6 +1232,11 @@ mm_mutant unreadable-merges-anyway '*) echo "merge methods unreadable (transient
 mm_mutant no-boolean-check 'case "$v" in true|false) ;; *) return 2 ;; esac' ':'
 mm_mutant extra-words-accepted '[ -z "$rest" ] || return 2' ':'
 mm_mutant multiline-accepted "case \"\$line\" in *\$'\\n'*) return 2 ;; esac" ':'
+mm_mutant no-direct-merge-failed-line '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'false && echo "DIRECT MERGE FAILED'
+mm_mutant direct-merge-failed-line-on-confirmed-later-path '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'echo "DIRECT MERGE FAILED'
+mm_mutant direct-cause-dropped 'direct_cause="$(gh_cause "$mg_rc" "$mg_err")"' 'direct_cause="the merge call failed"'
+mm_mutant direct-merge-failed-line-before-merged-check '      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi' '      [ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED — $direct_cause"
+      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi'
 mm_mutant method-read-in-queue-mode 'read -r st ms inq <<<"$(pr_state)"' 'merge_method >/dev/null; read -r st ms inq <<<"$(pr_state)"'
 # The query itself: a field gh does not know, a field the --jq reads but --json
 # never requested, and a probe of the cwd repo instead of --repo's.
