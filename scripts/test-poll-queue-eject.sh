@@ -319,7 +319,12 @@ case "$1" in
             view)  echo "0 0 1" ;;
             update-branch) exit 0 ;;
             # MS_MERGE_TOOK_ANYWAY: the PR merges on GitHub but the call still exits non-zero (a failed local branch delete)
-            merge) if [ -n "${MS_MERGE_TOOK_ANYWAY:-}" ]; then echo "MERGED CLEAN false" >"$MS_STATE"; fi
+            # MS_MERGE_ERR_FIRST: the first merge call hits a transient error, later ones succeed, so gh-retry logs its
+            # retry lines to stderr and the call still exits 0 (#636)
+            merge) if [ -n "${MS_MERGE_ERR_FIRST:-}" ] && [ ! -e "$MS_CALLS.mergefirst" ]; then
+                       : >"$MS_CALLS.mergefirst"; printf '%s\n' "$MS_MERGE_ERR_FIRST" >&2; exit 1
+                   fi
+                   if [ -n "${MS_MERGE_TOOK_ANYWAY:-}" ]; then echo "MERGED CLEAN false" >"$MS_STATE"; fi
                    if [ "${MS_MERGE_RC:-0}" != 0 ]; then printf '%s\n' "${MS_MERGE_ERR:-merge refused}" >&2; fi
                    if [ "${MS_MERGE_RC:-0}" = 0 ]; then
                        case "$all" in
@@ -1177,7 +1182,10 @@ t8_mutant missing-relative-worktree-dropped 'case "$WT" in ""|/*) ;; *) WT="$PWD
 # answer is exit 11 with no merge call (unknown is never squash); and queue mode
 # never reads the method at all. Part 9 also holds the DIRECT MERGE FAILED line (#629):
 # a refused merge call, bound and unbound, prints it with the mock's refusal text and
-# exits 11; a merge that succeeded but is not yet MERGED prints no such line. Not
+# exits 11; a merge call that failed but whose PR then reads MERGED exits 0 with no
+# such line; a merge that succeeded but is not yet MERGED prints no such line; and
+# gh-retry's stderr from a merge call that exited 0 still reaches stderr, bound and
+# unbound (#636), so the print is not tied to a failed call. Not
 # covered: the retry-exhaustion cause (124) on the direct path, which shares gh_cause
 # with the bound enqueue and is pinned there.
 echo "9. merge-shepherd.sh --direct merges by a method the repo allows" >&2
@@ -1234,6 +1242,16 @@ mm_suite() {
     MS_MERGE_RC=1 MS_MERGE_TOOK_ANYWAY=1 MS_MERGE_ERR="failed to delete local branch" ms_run "$sc" "$H1" --direct
     mm_rc "merge call failed but the PR reads MERGED: exit 0" 0
     mm_expect "merge call failed but the PR reads MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
+    rm -f "$MS_CALLS.mergefirst"
+    MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct
+    mm_rc "unbound merge recovered after a retry: exit 0" 0
+    mm_expect "unbound merge recovered after a retry: the retry line reaches stderr" \
+        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_OUT"; echo $?)"
+    rm -f "$MS_CALLS.mergefirst"
+    MS_MERGE_ERR_FIRST="502 Bad Gateway" ms_run "$sc" "$H1" --direct --expected-head "$H1"
+    mm_rc "bound merge recovered after a retry: exit 0" 0
+    mm_expect "bound merge recovered after a retry: the retry line reaches stderr" \
+        "$(grep -q '^\[gh-retry\] gh stderr: 502 Bad Gateway' <<<"$MS_OUT"; echo $?)"
     MS_MERGE_LAG=1 ms_run "$sc" "$H1" --direct
     mm_rc "unbound merge succeeded, not yet MERGED: exit 11" 11
     mm_expect "unbound merge succeeded, not yet MERGED: prints no DIRECT MERGE FAILED" "$(! grep -q 'DIRECT MERGE FAILED' <<<"$MS_OUT"; echo $?)"
@@ -1289,6 +1307,7 @@ mm_mutant extra-words-accepted '[ -z "$rest" ] || return 2' ':'
 mm_mutant multiline-accepted "case \"\$line\" in *\$'\\n'*) return 2 ;; esac" ':'
 mm_mutant no-direct-merge-failed-line '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'false && echo "DIRECT MERGE FAILED'
 mm_mutant direct-merge-failed-line-on-confirmed-later-path '[ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED' 'echo "DIRECT MERGE FAILED'
+mm_mutant merge-stderr-printed-only-on-failure '[ -n "$mg_err" ] && printf' '[ "$mg_rc" -ne 0 ] && [ -n "$mg_err" ] && printf'
 mm_mutant direct-cause-dropped 'direct_cause="$(gh_cause "$mg_rc" "$mg_err")"' 'direct_cause="the merge call failed"'
 mm_mutant direct-merge-failed-line-before-merged-check '      if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi' '      [ -n "$direct_cause" ] && echo "DIRECT MERGE FAILED — $direct_cause"
       if [ "$st" = MERGED ]; then echo "  MERGED — tearing down"; teardown; return 0; fi'

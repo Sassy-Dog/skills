@@ -52,10 +52,11 @@
 # Not pinned: the method ORDER and the malformed-output handling (text-level pins
 # there would only restate the script).
 #
-# The #628 mutants: "hardcoded --squash restored", "short -s restored", "dropped
-# $method", "gh pr merge before the settings read", "no read of
+# The #628 mutants: "hardcoded --squash restored", "short -s restored",
+# 'dropped "$method"', "gh pr merge before the settings read", "no read of
 # mergeCommitAllowed", "unreadable read does not exit", "no-method path falls
-# through", "merge-queue arm gains a method flag".
+# through", "merge-queue arm gains a method flag". The "before the settings read"
+# mutant also asserts that both its substitutions applied.
 #
 # Vacuous-green guard: zero merge steps found is a FAILURE (a renamed command
 # or reflowed step would otherwise check nothing). Mutation-proof: every mutant
@@ -220,8 +221,17 @@ mutate 'dropped "$method"' 'gh pr merge --auto "$method" --delete-branch' 'gh pr
 # re-insert it before the read, so only the exit-before-merge pin can catch it.
 m="$WORK/mutant.yml"
 perl -0777 -pe 's/\n( *)gh pr merge --auto "\$method" --delete-branch "\$PR_URL"\n/\n/; s/( *)(if ! settings=)/$1gh pr merge --auto "\$method" --delete-branch "\$PR_URL"\n$1$2/' "$TEMPLATE" > "$m"
+# Both substitutions must have applied, or the mutant could pass for the wrong
+# reason (only the delete, or only the insert): the merge line must now occur
+# exactly once, and on an earlier line than the settings read.
+mline='gh pr merge --auto "$method" --delete-branch "$PR_URL"'
+mcount="$(grep -cF -- "$mline" "$m")"
+mfirst="$(grep -nF -- "$mline" "$m" | head -n1 | cut -d: -f1)"
+rfirst="$(grep -n 'if ! settings=' "$m" | head -n1 | cut -d: -f1)"
 if cmp -s "$m" "$TEMPLATE"; then
     bad "mutation (gh pr merge before the settings read) changed nothing"
+elif [ "$mcount" != 1 ] || [ -z "$mfirst" ] || [ -z "$rfirst" ] || [ "$mfirst" -ge "$rfirst" ]; then
+    bad "mutation (gh pr merge before the settings read) did not apply both substitutions (merge line count $mcount, at line ${mfirst:-none}, read at ${rfirst:-none})"
 elif check "$m" >/dev/null; then
     bad "mutation (gh pr merge before the settings read) PASSED the check"
 else

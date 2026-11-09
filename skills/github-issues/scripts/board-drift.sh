@@ -66,6 +66,11 @@
 # move a card with no second lookup. `board_columns` is the Status field's option
 # list, not the statuses in use: an empty Done column is still a column.
 #
+# `columns.<role>` carries the board's own spelling of the column (a configured name
+# that differs only by case is reported as the board spells it, and an exact match is
+# never swapped for a case-variant), so `column_ids[columns.<role>]` is the option id
+# a card-move recipe needs.
+#
 # TRUNCATION IS UNKNOWN, NOT CLEAN. A truncated read can make any class wrong in
 # either direction: a dropped card makes its issue read as absent_from_board, and
 # a dropped open PR makes a live claim read as stale. So a caller treats a run
@@ -248,12 +253,23 @@ done_n = norm(done_s)
 active_n = {norm(s) for s in active_s}
 
 # Names match case-insensitively, but a caller looks a move target up in column_ids
-# by exact key, so on the name path report the BOARD's spelling of a matched column.
+# by exact key, so report the BOARD's spelling of a column matched by a differently
+# cased name. A spelling that is already a column_ids key (an exact match, and every
+# name an option id resolved to) is kept as it is: `canon` keeps only the last
+# column for each lowercased name, so rewriting it could swap in a case-variant
+# column and hand back the wrong option id. The unknown-id placeholder is no key
+# either and passes through unchanged.
 canon = {norm(c): c for c in board_columns}
-done_s = canon.get(norm(done_s), done_s)
-ready_s = canon.get(norm(ready_s), ready_s)
-backlog_s = canon.get(norm(backlog_s), backlog_s)
-active_s = [canon.get(norm(s), s) for s in active_s]
+
+
+def board_spelling(s):
+    return s if s in column_ids else canon.get(norm(s), s)
+
+
+done_s = board_spelling(done_s)
+ready_s = board_spelling(ready_s)
+backlog_s = board_spelling(backlog_s)
+active_s = [board_spelling(s) for s in active_s]
 
 
 def pr_repo(ref):

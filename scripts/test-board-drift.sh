@@ -49,9 +49,10 @@
 #     (not merged) once either active-role id is given, and the inert-set warning
 #     then names the id keys; a board column that differs from its configured name
 #     only by case matches with no warning and `columns.<role>` carries the board's
-#     spelling, so column_ids[columns.<role>] resolves; the renamed fixture renames
-#     all five columns, so a
-#     ready id crossed with a backlog id is caught
+#     spelling (Done, Ready, Backlog and In progress all differ in the case fixture),
+#     so column_ids[columns.<role>] resolves; an exact match is kept when a
+#     case-variant column also exists (a board with both Done and done, by name and
+#     by id), never swapped for the last-listed variant
 #   - any argument at all is a usage error (64), as are a missing or
 #     non-numeric PROJECT_NUMBER and a zero ceiling
 #   - REPO unset resolves through gh, and a failed resolution is 10; a REPO
@@ -279,11 +280,18 @@ jq 'def ren: (if . == "Done" then "Shipped" elif . == "In progress" then "Doing"
     | (.board[] | select(.status != null) | .status) |= ren' \
     "$MOCK_FIXTURE" >"$WORK/renamed.json"
 
-# The case board: Done and Backlog differ from the default names by case only.
-jq 'def ren: (if . == "Done" then "done" elif . == "Backlog" then "BACKLOG" else . end);
+# The case board: Done, Ready, Backlog and In progress differ from the default names
+# by case only.
+jq 'def ren: (if . == "Done" then "done" elif . == "Backlog" then "BACKLOG" elif . == "Ready" then "READY" elif . == "In progress" then "in progress" else . end);
     (.fields[] | select(.name == "Status") | .options[]) |= (.name |= ren)
     | (.board[] | select(.status != null) | .status) |= ren' \
     "$MOCK_FIXTURE" >"$WORK/case.json"
+
+# The variant board: the baseline plus Status options, listed AFTER the exact ones,
+# that differ from Done and Ready only by case. Whether GitHub allows such a board is
+# unverified; the script must not depend on it either way.
+jq '(.fields[] | select(.name == "Status") | .options) += [{"id": "opt-done-variant", "name": "done"}, {"id": "opt-ready-variant", "name": "READY"}]' \
+    "$MOCK_FIXTURE" >"$WORK/variant.json"
 
 # --- the harness ---------------------------------------------------------------
 OUT="$WORK/out.json"
@@ -433,6 +441,14 @@ suite() {   # suite <script> — every case; 0 when all hold
     bd "$s" MOCK_FIXTURE="$WORK/case.json"
     check "a column differing from its name only by case: no warning, the board's spelling, and column_ids resolves" \
         eval 'jq_is ".warnings" "[]" && jq_is "[.columns.done, .columns.backlog]" "[\"done\",\"BACKLOG\"]" && jq_is "[.column_ids[.columns.done], .column_ids[.columns.backlog]]" "[\"opt-done\",\"opt-backlog\"]"'
+    check "the case board: Ready and In progress carry the board's spelling too, and ready resolves to its option id" \
+        eval 'jq_is "[.columns.ready, .columns.active[0]]" "[\"READY\",\"in progress\"]" && jq_is ".column_ids[.columns.ready]" "\"opt-ready\""'
+    bd "$s" MOCK_FIXTURE="$WORK/variant.json"
+    check "an exact match beside a case-variant column keeps the exact one, by name" \
+        eval 'jq_is ".warnings" "[]" && jq_is "[.columns.done, .columns.ready]" "[\"Done\",\"Ready\"]" && jq_is "[.column_ids[.columns.done], .column_ids[.columns.ready]]" "[\"opt-done\",\"opt-ready\"]"'
+    bd "$s" MOCK_FIXTURE="$WORK/variant.json" "${ids[@]}"
+    check "an exact match beside a case-variant column keeps the exact one, by option id" \
+        eval 'jq_is "[.columns.done, .columns.ready]" "[\"Done\",\"Ready\"]" && jq_is "[.column_ids[.columns.done], .column_ids[.columns.ready]]" "[\"opt-done\",\"opt-ready\"]"'
     bd "$s" IN_REVIEW_OPTION_ID=opt-nowhere
     check "an unknown in-review id warns by key, and In review stops counting as active" \
         eval 'jq_is "[.warnings[] | test(\"in_review_option_id\")] | any" true && jq_is "$(nums stale_claim)" "[13]"'
@@ -624,8 +640,17 @@ mutant inert-warning-always-names-active-statuses \
     'if active_from_ids else "ACTIVE_STATUSES")' \
     'if False else "ACTIVE_STATUSES")'
 mutant name-path-reports-configured-spelling \
-    'done_s = canon.get(norm(done_s), done_s)' \
+    'done_s = board_spelling(done_s)' \
     'done_s = done_s'
+mutant ready-reports-configured-spelling \
+    'ready_s = board_spelling(ready_s)' \
+    'ready_s = ready_s'
+mutant active-reports-configured-spelling \
+    'active_s = [board_spelling(s) for s in active_s]' \
+    'active_s = active_s'
+mutant exact-match-rewritten-unconditionally \
+    '    return s if s in column_ids else canon.get(norm(s), s)' \
+    '    return canon.get(norm(s), s)'
 mutant role-with-id-also-name-checked \
     'if key not in id_roles and norm(value) not in known:' \
     'if norm(value) not in known:'
