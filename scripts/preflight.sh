@@ -2887,6 +2887,18 @@ else
     failed "legacy-name tests (scripts/test-legacy-names.sh)"
 fi
 
+# --- 65. board-drift tests -----------------------------------------------------
+# github-issues/scripts/board-drift.sh joins a board against live issue state for
+# groom-backlog's reconcile pass. Every drift class answers a healthy board with an
+# empty list, so a failed read taken as `[]`, a case-sensitive repo match or an
+# other-repo PR read as closed is silent; each is a mutant here. Mock gh only: no
+# repo, no network.
+if pg_gate scripts/test-board-drift.sh; then
+    pass "board-drift tests (scripts/test-board-drift.sh)"
+else
+    failed "board-drift tests (scripts/test-board-drift.sh)"
+fi
+
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
     echo "preflight: all gates green" >&2

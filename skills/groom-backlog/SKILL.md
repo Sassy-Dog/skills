@@ -80,9 +80,12 @@ never as tidying. Do not assume a board exists — a board with no config block 
 
 **With `board:` configured** — the board is authoritative. Snapshot via
 `sassy-dog:github-issues` (`board-snapshot.sh`, using `board.number` and `board.owner`).
-Candidates are every open issue in **Backlog** or with **no status** — *open* established by the
-reconcile join below, never assumed from the card. Open issues missing from the board are handled
-there too (drift class 4); they are not added unilaterally.
+Candidates are the snapshot's **Backlog** and **no-status** cards whose issue is open, and *open*
+comes from the reconcile pass below (`board-drift.sh`), never from the card. That script names only
+the cards it finds wrong, so the rule is subtraction: drop every card it lists under
+`closed_not_done` (closed) or `unresolved` (state unknown). When the pass is UNKNOWN there are **no**
+board candidates this run, since no card's state was established. Open issues missing from the
+board are handled there too (drift class 4); they are not added unilaterally.
 
 **Without a board** — open issues are the backlog and the `ready` label is Ready:
 
@@ -130,7 +133,7 @@ issue whose work has already shipped does not merely waste the pass, it re-legit
 and the next reader trusts it again.
 
 A `truncated: true` result means the detector's pull came back at its ceiling. Report that as
-**unknown**, not clean, and re-run with a higher `ALL_LIMIT` — same rule as the reconcile join
+**unknown**, not clean, and re-run with a higher `ALL_LIMIT` — same rule as the reconcile pass
 below.
 
 ### Reconcile the board against issue state (board mode only)
@@ -144,21 +147,39 @@ something its issue flatly contradicts. GitHub's built-in workflow only moves a 
 PR closes the issue via `Closes #N`; an issue closed by hand — an epic, a duplicate, a won't-fix —
 is never the target of such a line, so its card never moves and nothing else catches it.
 
-One extra read closes the gap. Join it to the snapshot by issue number:
+`sassy-dog:github-issues`' `board-drift.sh` does the join, in one run: the board, its Status
+field, every issue's state, assignees and closing PRs, and this repo's open PRs. Do not rebuild it
+from the snapshot by hand.
+
+**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/groom-backlog`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
 ```bash
-gh issue list --state all --limit 500 --json number,state,assignees
+REPO=<owner/name of the repo being groomed> PROJECT_NUMBER=<board.number> OWNER=<board.owner> \
+  bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-drift.sh
 ```
 
-Raise the limit if the result comes back at the ceiling — a truncated join silently reports "no
-drift", which is the failure this pass exists to end.
+**Only exit 0, with nothing truncated and no column warning, is a reconcile result.** Each of the
+other outcomes reads exactly like a clean board if you skip it:
 
-| # | Drift | Detection | Fix (on confirmation) |
+- **Exit 10:** a read failed and nothing was computed. The pass is
+  `board reconcile: UNKNOWN (<its stderr reason>)`, never "no drift".
+- **Any `truncated.*` true:** a dropped card reads as absent and a dropped open PR makes a live
+  claim look stale. Re-run with the ceiling its warning names raised (`PROJECT_LIMIT`,
+  `ISSUE_LIMIT`, `PR_LIMIT`) before proposing a single move.
+- **A warning naming `DONE_STATUS`, `READY_STATUS`, `BACKLOG_STATUS` or `ACTIVE_STATUSES`:**
+  this board's columns are named differently. Re-run with those set to its names, and move nothing
+  on the mismatched mapping.
+
+| # | Drift | `drift.` bucket | Fix (on confirmation) |
 | --- | --- | --- | --- |
-| 1 | Closed issue, card in a non-Done column | `state == CLOSED` and `status != Done` | move card → **Done** |
-| 2 | Open issue, card in **Done** | `state == OPEN` and `status == Done` | move card → **Backlog**, or **Ready** if it passes §3 this run |
-| 3 | Card claimed (**In progress** / **In review**) with no assignee and no open PR | board `status` vs `assignees`, plus `gh issue view N --json assignees,closedByPullRequestsReferences` | move card → **Ready** or **Backlog**; the claim is stale |
-| 4 | Open issue absent from the board | `gh issue list` minus the snapshot's items | add to board → **Backlog** |
+| 1 | Closed issue, card in a non-Done column | `closed_not_done` | move card → **Done** |
+| 2 | Open issue, card in **Done** | `open_in_done` | move card → **Backlog**, or **Ready** if it passes §3 this run |
+| 3 | Card claimed (**In progress** / **In review**) with no assignee and no open PR | `stale_claim` | move card → **Ready** or **Backlog**; the claim is stale |
+| 4 | Open issue absent from the board | `absent_from_board` | add to board → **Backlog** |
+
+Cards under `unresolved` are named in the report with their `reason` and never fixed: the script
+would not classify them, because the issue is outside the fetched window or the claim's only linked
+PRs are in another repo.
 
 Class 1 also constrains §2's candidate list: **a closed issue is never a grooming candidate.** Its
 card sitting in Backlog *is* the drift — route it here, and never refine, promote, or report it as
@@ -182,7 +203,11 @@ untouched, and carry each declined item into the §6 report so the drift stays n
 quietly dropped.
 
 **Mutations go through `sassy-dog:github-issues`** (`references/board-graphql.md`) — card moves via
-its `## Moving cards` recipe, board adds via `## Adding an issue to a board`. Wrap every mutating
+its `## Moving cards` recipe, board adds via `## Adding an issue to a board`. For classes 1-3 the
+card's `item_id` comes from its drift entry and the target option id from the output's
+`column_ids` (Done's included, which the `board:` block does not carry); the project and Status
+field ids come from `board:`. Class 4 entries have no card, so no `item_id`: they take the add
+recipe. Wrap every mutating
 call in `skills/pr-shepherd/scripts/gh-retry.sh`, as that reference mandates; the Projects GraphQL
 endpoint flakes. Never hand-roll the GraphQL here. A move whose retries exhaust (exit 124), or one
 whose card has since vanished, is recorded as `failed` and reported — not retried by hand, and not
@@ -225,8 +250,6 @@ label its own header calls legal ([#341](https://github.com/Sassy-Dog/skills/iss
 §2's candidate pull already returned each issue's labels, so feed **those** through the emitter,
 which runs no `gh` and touches no network. Re-fetching would cost one API call per candidate and
 read a tree that has moved since the pull:
-
-**Plugin root.** If the plugin-root placeholder in the command below reaches you unexpanded, do not run it and do not search for the script. Take the path in the `[Skill file: ...]` or `[Skill directory: ...]` line at the top of this skill and cut it at `/skills/groom-backlog`: what comes before the cut is the plugin root. Write that absolute root into the command in place of the placeholder, then run it.
 
 ```bash
 # Capture in the SAME Bash call as the read below — shell state does not survive between
@@ -558,7 +581,9 @@ board reconcile: 3 moved (class 1×2, class 4×1) · 2 declined · 1 failed
 ```
 
 Name every declined and failed item by issue number and drift class, so declining a fix leaves the
-drift recorded instead of forgotten. Write `board reconcile: no drift` when the §2 pass found none.
+drift recorded instead of forgotten, and name each `unresolved` card with its reason. Write
+`board reconcile: no drift` only when `board-drift.sh` exited 0 with nothing truncated, no column
+warning and every class empty; otherwise write `board reconcile: UNKNOWN (<reason>)`.
 **Never omit the line** — silence reads as "the board is fine", which is the assertion this whole
 pass exists to stop making by accident.
 
