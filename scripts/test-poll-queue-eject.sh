@@ -588,6 +588,41 @@ else bad "merge-shepherd --expected-head cases failed:$MS_FAILED"; fi
 # suite must then fail. A mutant that does not apply, or that leaves the suite
 # green, is a vacuous case.
 MUT="$WORK/ms-mut"; mkdir -p "$MUT"
+# mutant_parses <file>: does a mutated copy still parse? A copy that does not fails every
+# case whatever the cases check, so it would "fail the suite" while proving nothing about
+# the construct it changed (#630). `bash -n` reads the file; a script that embeds a Python
+# heredoc (checkout-guard.sh's `exec python3 -I - "$@" <<'PY'`) hides its logic from
+# `bash -n` as a string, so the text between each `<<'PY'` opener and the closing `PY` line
+# is also parsed as Python. An opener with no closing line does not parse.
+mutant_parses() {
+    bash -n "$1" 2>/dev/null || return 1
+    python3 -I -c '
+import ast, sys
+lines = open(sys.argv[1]).read().split("\n")
+i = 0
+while i < len(lines):
+    if lines[i].rstrip().endswith("<<\x27PY\x27"):
+        j = i + 1
+        while j < len(lines) and lines[j] != "PY":
+            j += 1
+        if j == len(lines):
+            sys.exit(1)
+        ast.parse("\n".join(lines[i + 1:j]))
+        i = j
+    i += 1
+' "$1" 2>/dev/null
+}
+# Proof the parse guards are real (#630): run a helper on a replacement that applies but
+# leaves the copy unparseable, with ok/bad swapped for recorders in a subshell so the
+# deliberate failure cannot fail this gate. Deleting a guard makes the helper run its suite
+# (every case fails, so it would say "fails the suite") and the case below fails.
+unapplied() { # <label> <helper + args...>: the helper must report the copy as not parsing
+    local label="$1" out; shift
+    out="$( ok() { echo "OK: $1"; }; bad() { echo "BAD: $1"; }; "$@" 2>&1 )"
+    if [[ "$out" == "BAD: "*"the mutated copy does not parse)" ]]; then
+        ok "$label: an unparseable replacement is reported as not applied"
+    else bad "$label: an unparseable replacement was not reported as not applied (got: ${out:-nothing})"; fi
+}
 ms_mutant() { # <label> <old text, must occur once> <new text>
     local label="$1" d="$MUT/$1"
     rm -rf "$d"; mkdir -p "$d"; cp "$MS_SRC"/*.sh "$d/"
@@ -601,10 +636,14 @@ open(p, "w").write(s.replace(old, new))
 ' "$d/merge-shepherd.sh" "$2" "$3"; then
         bad "merge-shepherd mutant '$label' did not apply (its anchor moved)"; return
     fi
+    if ! mutant_parses "$d/merge-shepherd.sh"; then
+        bad "merge-shepherd mutant '$label' did not apply (the mutated copy does not parse)"; return
+    fi
     ms_suite "$d/merge-shepherd.sh"
     if [ -n "$MS_FAILED" ]; then ok "merge-shepherd mutant '$label' fails the suite"
     else bad "merge-shepherd mutant '$label' passes the suite — its case is vacuous"; fi
 }
+unapplied "ms_mutant" ms_mutant proof-unparseable '[ "$live_head" != "$EXPECTED_HEAD" ]' '"never closed'
 ms_mutant no-mismatch-gate '[ "$live_head" != "$EXPECTED_HEAD" ]' 'false'
 ms_mutant no-unreadable-gate 'if [ -z "$live_head" ]; then' 'if false; then'
 ms_mutant no-expectedHeadOid-field 'enqueuePullRequest(input:{pullRequestId:$prid,expectedHeadOid:$eho})' 'enqueuePullRequest(input:{pullRequestId:$prid})'
@@ -1037,11 +1076,18 @@ if s.count(old) != 1:
     sys.exit(1)
 open(p, "w").write(s.replace(old, new))
 ' "$d/${T8_MUT_FILE:-merge-shepherd.sh}" "$2" "$3"; then bad "teardown mutant '$1' did not apply (its anchor moved)"; return; fi
+    # parse the file that was mutated (not always merge-shepherd.sh); checkout-guard.sh's Python heredoc too
+    if ! mutant_parses "$d/${T8_MUT_FILE:-merge-shepherd.sh}"; then
+        bad "teardown mutant '$1' did not apply (the mutated copy does not parse)"; return
+    fi
     t8_suite "$d/merge-shepherd.sh"
     if [ -z "$T8_FAILED" ]; then bad "teardown mutant '$1' passes the suite — its case is vacuous"
     elif [ -n "${4:-}" ] && [[ "$T8_FAILED|" != *"|$4|"* ]]; then bad "teardown mutant '$1' fails the suite, but not at: $4"
     else ok "teardown mutant '$1' fails the suite"; fi
 }
+unapplied "t8_mutant (bash, merge-shepherd.sh)" t8_mutant proof-unparseable 'if [ -n "$keep_why" ]; then' '"never closed'
+T8_MUT_FILE=teardown.sh unapplied "t8_mutant (bash, teardown.sh)" t8_mutant proof-unparseable 'REVERT_HEAD BISECT_LOG sequencer; do' 'REVERT_HEAD BISECT_LOG sequencer; do "never closed'
+T8_MUT_FILE=checkout-guard.sh unapplied "t8_mutant (Python heredoc, checkout-guard.sh)" t8_mutant proof-unparseable '"BISECT_LOG", "index.lock"):' '"BISECT_LOG", "index.lock"'
 t8_mutant always-switch '  if [ -n "$keep_why" ]; then' '  if false; then'
 t8_mutant keep-line-still-ffs-detached 'no ff reconcile"
     return 0
