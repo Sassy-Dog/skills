@@ -37,6 +37,8 @@ board:
   ready_option_id: {{BOARD_READY_OPTION_ID}}
   backlog_option_id: {{BOARD_BACKLOG_OPTION_ID}}
   in_progress_option_id: {{BOARD_IN_PROGRESS_OPTION_ID}}
+  in_review_option_id: {{BOARD_IN_REVIEW_OPTION_ID}}
+  done_option_id: {{BOARD_DONE_OPTION_ID}}
 migrations:
   dirs: {{MIGRATION_DIRS}}
   regen_command: {{MIGRATION_REGEN_COMMAND}}

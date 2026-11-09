@@ -33,11 +33,27 @@
 #   PROJECT_NUMBER, OWNER   the board (required; board.number and board.owner)
 #   REPO                    owner/name (default: resolved from the cwd with gh)
 #   PROJECT_LIMIT=2000 ISSUE_LIMIT=1000 PR_LIMIT=500   read ceilings
+#   DONE_OPTION_ID READY_OPTION_ID BACKLOG_OPTION_ID IN_PROGRESS_OPTION_ID
+#   IN_REVIEW_OPTION_ID     the board config's option ids (board.done_option_id,
+#                           ready_option_id, backlog_option_id, in_progress_option_id,
+#                           in_review_option_id), each optional
 #   DONE_STATUS=Done READY_STATUS=Ready BACKLOG_STATUS=Backlog
 #   ACTIVE_STATUSES="In progress,In review"   (comma-separated)
 # Column names match case-insensitively. READY_STATUS and BACKLOG_STATUS classify
 # nothing: they are the columns a caller's fixes move cards INTO, so they are
 # checked against the board and a miss is a warning.
+#
+# A role is keyed on its option id when one is given: the id is resolved to a
+# column name through `column_ids` (the Status field's options, read already), so
+# a renamed column keeps working. A role with no id uses its *_STATUS name, so a
+# hand run by name is unchanged. A given id that the Status options do not hold is
+# a warning naming its key, and the role then matches NO column: it never falls
+# back to the default name, because that would act on a column the config did not
+# name. The active set resolves member by member: In progress from
+# IN_PROGRESS_OPTION_ID, In review from IN_REVIEW_OPTION_ID, each else its default
+# name. With neither id given, ACTIVE_STATUSES is used as written; with either, the
+# two roles REPLACE it entirely (a hand-set ACTIVE_STATUSES is ignored, silently),
+# and the inert-set warning then names the id keys rather than ACTIVE_STATUSES.
 #
 # Output: one JSON object on stdout —
 #   {repo, board:{number,owner}, columns:{done,ready,backlog,active},
@@ -82,6 +98,11 @@ OWNER="${OWNER:-}"
 PROJECT_LIMIT="${PROJECT_LIMIT:-2000}"
 ISSUE_LIMIT="${ISSUE_LIMIT:-1000}"
 PR_LIMIT="${PR_LIMIT:-500}"
+DONE_OPTION_ID="${DONE_OPTION_ID:-}"
+READY_OPTION_ID="${READY_OPTION_ID:-}"
+BACKLOG_OPTION_ID="${BACKLOG_OPTION_ID:-}"
+IN_PROGRESS_OPTION_ID="${IN_PROGRESS_OPTION_ID:-}"
+IN_REVIEW_OPTION_ID="${IN_REVIEW_OPTION_ID:-}"
 DONE_STATUS="${DONE_STATUS:-Done}"
 READY_STATUS="${READY_STATUS:-Ready}"
 BACKLOG_STATUS="${BACKLOG_STATUS:-Backlog}"
@@ -145,11 +166,13 @@ pull issues issue list --repo "$REPO" --state all --limit "$ISSUE_LIMIT" \
 pull prs pr list --repo "$REPO" --state open --limit "$PR_LIMIT" --json number
 
 python3 - "$DIR" "$REPO" "$PROJECT_NUMBER" "$OWNER" "$PROJECT_LIMIT" "$ISSUE_LIMIT" "$PR_LIMIT" \
-  "$DONE_STATUS" "$READY_STATUS" "$BACKLOG_STATUS" "$ACTIVE_STATUSES" <<'PY'
+  "$DONE_STATUS" "$READY_STATUS" "$BACKLOG_STATUS" "$ACTIVE_STATUSES" \
+  "$DONE_OPTION_ID" "$READY_OPTION_ID" "$BACKLOG_OPTION_ID" "$IN_PROGRESS_OPTION_ID" "$IN_REVIEW_OPTION_ID" <<'PY'
 import json, os, sys
 
 (tmp, repo, project_number, owner, project_limit, issue_limit, pr_limit,
- done_s, ready_s, backlog_s, active_raw) = sys.argv[1:12]
+ done_s, ready_s, backlog_s, active_raw,
+ done_id, ready_id, backlog_id, progress_id, review_id) = sys.argv[1:17]
 project_limit, issue_limit, pr_limit = int(project_limit), int(issue_limit), int(pr_limit)
 active_s = [s.strip() for s in active_raw.split(",") if s.strip()]
 
@@ -184,8 +207,6 @@ _, issues = load("issues", required=("number", "state"))
 _, prs = load("prs", required=("number",))
 
 repo_n = norm(repo)
-done_n = norm(done_s)
-active_n = {norm(s) for s in active_s}
 open_prs = {p["number"] for p in prs}
 issue_by_num = {i["number"]: i for i in issues}
 
@@ -195,6 +216,44 @@ column_ids = {o["name"]: o["id"] for o in (status_field or {}).get("options") or
 observed = sorted({it.get("status") or "Unstatused" for it in items})
 board_columns = list(column_ids) or observed
 known = {norm(c) for c in board_columns}
+
+# Option ids resolve to column names through column_ids. An id the board does not
+# hold yields NO name (a sentinel that matches no column) and a warning naming its
+# key; it never degrades to the default name.
+id_warnings = []
+id_roles = set()
+name_by_id = {v: k for k, v in column_ids.items()}
+
+
+def resolve(key, opt_id, default):
+    if not opt_id:
+        return default
+    id_roles.add(key)
+    name = name_by_id.get(opt_id)
+    if name is None:
+        id_warnings.append(f"{key}={opt_id!r} is not an option of this board's Status field "
+                           f"{board_columns}; fix the key before acting on any drift")
+        return f"<unknown option id {opt_id}>"
+    return name
+
+
+done_s = resolve("done_option_id", done_id, done_s)
+ready_s = resolve("ready_option_id", ready_id, ready_s)
+backlog_s = resolve("backlog_option_id", backlog_id, backlog_s)
+active_from_ids = bool(progress_id or review_id)
+if active_from_ids:
+    active_s = [resolve("in_progress_option_id", progress_id, "In progress"),
+                resolve("in_review_option_id", review_id, "In review")]
+done_n = norm(done_s)
+active_n = {norm(s) for s in active_s}
+
+# Names match case-insensitively, but a caller looks a move target up in column_ids
+# by exact key, so on the name path report the BOARD's spelling of a matched column.
+canon = {norm(c): c for c in board_columns}
+done_s = canon.get(norm(done_s), done_s)
+ready_s = canon.get(norm(ready_s), ready_s)
+backlog_s = canon.get(norm(backlog_s), backlog_s)
+active_s = [canon.get(norm(s), s) for s in active_s]
 
 
 def pr_repo(ref):
@@ -262,15 +321,18 @@ truncated = {
     "prs": len(prs) >= pr_limit,
 }
 
-warnings = []
+warnings = list(id_warnings)
 # A mapping that names no column means a fix would move cards to the wrong place.
-for name, value in (("DONE_STATUS", done_s), ("READY_STATUS", ready_s), ("BACKLOG_STATUS", backlog_s)):
-    if norm(value) not in known:
+for name, key, value in (("DONE_STATUS", "done_option_id", done_s), ("READY_STATUS", "ready_option_id", ready_s),
+                         ("BACKLOG_STATUS", "backlog_option_id", backlog_s)):
+    if key not in id_roles and norm(value) not in known:
         warnings.append(f"{name}={value!r} matches no column on this board {board_columns}; "
                         "fix the mapping before acting on any drift")
 if not active_n & known:
-    warnings.append(f"ACTIVE_STATUSES={active_s} match no column on this board {board_columns}; "
-                    "stale_claim detection is inert")
+    src = ("in_progress_option_id / in_review_option_id (add the missing one to the config)"
+           if active_from_ids else "ACTIVE_STATUSES")
+    warnings.append(f"the active set {active_s}, from {src}, matches no column on this board "
+                    f"{board_columns}; stale_claim detection is inert")
 if status_field is None:
     warnings.append("the board has no Status field; columns were taken from the statuses in use "
                     "and column_ids is empty")

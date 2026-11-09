@@ -237,6 +237,8 @@ board:
   ready_option_id: 47fc9ee4
   backlog_option_id: f75ad846
   in_progress_option_id: 98236657
+  in_review_option_id: 6a1b2c3d   # optional: the In review column; absent when the board has none
+  done_option_id: 0e4f5a6b        # optional: the Done column; absent when the board has none
 
 sentry:                     # or `sentry: none` — no verified project (see the exception below)
   org: sassy-dog
@@ -273,6 +275,13 @@ claim_label: in-progress
 posthog: true                               # or `none` — confirmed: no product analytics
 merge_queue: false
 ```
+
+The `board:` block's option ids are what `groom-backlog` hands `board-drift.sh`, which resolves each
+to its column name through the Status field's options, so a board whose columns are named
+differently (`Shipped` for Done) reconciles with no column warning and a renamed column keeps
+working. `in_review_option_id` and `done_option_id` are optional: leave a key unwritten when the
+board has no such column. An id the board's Status options do not contain is a column warning that
+names the key, never a silent fallback to the default column name.
 
 Omit any block the repo doesn't use — with two exceptions, `review_agent:` and `review_site:`,
 where omitting the key selects a default rather than disabling anything. Four of these keys —
@@ -604,10 +613,10 @@ these paths to its actual frontmatter, not to key mentions in comments or body p
 
 | Template | Always-written | Conditional | Hand-set |
 | --- | --- | --- | --- |
-| `survey-work` | `scan_paths`, `exclude_pathspecs`, `ci_workflow`, `priority_labels`, `write_policy` | `execution_site`, `sentry.org`, `sentry.projects`, `sentry.gate`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `testflight.bundle_id`, `mobile.release_workflow`, `mobile.path_prefix`, `posthog`, `secret_bootstrap` | none |
-| `groom-backlog` | `gotcha_summary` | `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id` | none |
-| `take-it` | `stack_summary`, `preflight_commands`, `pr_template_sections`, `merge_queue`, `review_site` | `claim_label`, `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `migrations.dirs`, `migrations.regen_command`, `codegen.hint` | none |
-| `dispatch-ready` | `max_in_flight`, `merge_queue`, `review_site` | `claim_label`, `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `migrations.dirs`, `migrations.regen_command`, `codegen.hint` | none |
+| `survey-work` | `scan_paths`, `exclude_pathspecs`, `ci_workflow`, `priority_labels`, `write_policy` | `execution_site`, `sentry.org`, `sentry.projects`, `sentry.gate`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `board.in_review_option_id`, `board.done_option_id`, `testflight.bundle_id`, `mobile.release_workflow`, `mobile.path_prefix`, `posthog`, `secret_bootstrap` | none |
+| `groom-backlog` | `gotcha_summary` | `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `board.in_review_option_id`, `board.done_option_id` | none |
+| `take-it` | `stack_summary`, `preflight_commands`, `pr_template_sections`, `merge_queue`, `review_site` | `claim_label`, `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `board.in_review_option_id`, `board.done_option_id`, `migrations.dirs`, `migrations.regen_command`, `codegen.hint` | none |
+| `dispatch-ready` | `max_in_flight`, `merge_queue`, `review_site` | `claim_label`, `execution_site`, `stacked_prs.max_depth`, `board.number`, `board.owner`, `board.project_id`, `board.status_field_id`, `board.ready_option_id`, `board.backlog_option_id`, `board.in_progress_option_id`, `board.in_review_option_id`, `board.done_option_id`, `migrations.dirs`, `migrations.regen_command`, `codegen.hint` | none |
 | `send-it` | `pr_template_path`, `pr_template_sections`, `preflight_commands`, `merge_queue` | `stacked_prs.max_depth`, `migrations.schema_dir`, `migrations.dirs`, `migrations.regen_command`, `codegen.command`, `codegen.output_dirs`, `review_agent` | `review_surfaces` |
 | `tidy-repo` | `dep_version_globs`, `noise_allowlist`, `never_discard` | `claim_label` | none |
 

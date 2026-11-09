@@ -178,6 +178,10 @@ one machine wants exactly that, and nothing renders a blind-spot row for it. **N
 the user did not say**, and never offer a `none` — the confirmed-absent form does not cover this key
 and the contract says why.
 
+### 3e. Board option ids (every render with `IF:BOARD`, whichever skills are on)
+
+Pin `{{BOARD_IN_REVIEW_OPTION_ID}}` and `{{BOARD_DONE_OPTION_ID}}` alongside the Ready, Backlog and In progress ids, from the same Status-field option list (`gh project field-list`), whatever the columns are named. groom-backlog's `board-drift.sh` resolves its column names from these ids, and survey-work, take-it and dispatch-ready carry the same `board:` block. Leave either key unwritten when the board has no such column.
+
 ### 4. Commands (fact confirmation, free-text)
 
 - Pre-flight commands (`{{PREFLIGHT_COMMANDS}}`) — propose from the runner; user edits.
