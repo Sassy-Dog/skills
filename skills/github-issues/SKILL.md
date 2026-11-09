@@ -2,11 +2,12 @@
 name: github-issues
 description: >
   This skill should be used when the user asks to "snapshot the project board", "show the board
-  by status", "pull the backlog with labels", "find stale issues", "which issues shipped but are
-  still open", "find stub issues that need scoping", "file an issue but check for duplicates first",
-  "dedupe before filing", "link this Sentry or feedback item to a GitHub issue", or any task
-  involving GitHub issue/board reads via gh + GraphQL, label taxonomy, stale-issue detection, or
-  gated dedupe-then-file issue creation. Also triggers when a project workflow skill (a generated
+  by status", "find board drift", "which board cards are in the wrong column", "reconcile the
+  board against issue state", "pull the backlog with labels", "find stale issues", "which issues
+  shipped but are still open", "find stub issues that need scoping", "file an issue but check for
+  duplicates first", "dedupe before filing", "link this Sentry or feedback item to a GitHub
+  issue", or any task involving GitHub issue/board reads via gh + GraphQL, board-vs-issue-state
+  drift, label taxonomy, stale-issue detection, or gated dedupe-then-file issue creation. Also triggers when a project workflow skill (a generated
   survey-work or take-it) invokes sassy-dog:github-issues by name.
 ---
 
@@ -25,6 +26,16 @@ PROJECT_NUMBER=<n> OWNER=<org> bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/s
 ```
 
 Emits `{counts, truncated, items[]}`. If `truncated: true`, raise `PROJECT_LIMIT` — the newest issues are what got dropped. For board ID discovery (project/field/option IDs), card moves, and the board-vs-labels source-of-truth question, read `references/board-graphql.md`.
+
+### Board drift (cards whose column contradicts the issue)
+
+```bash
+REPO=<owner/name> PROJECT_NUMBER=<n> OWNER=<org> bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-drift.sh
+```
+
+The snapshot says what the board shows; this joins it against each issue's live state, assignees and linked PRs, and reports four classes: `closed_not_done`, `open_in_done`, `stale_claim` (an active column, no assignee, no open linked PR) and `absent_from_board`. Each entry with a card carries its `item_id`, and `column_ids` carries every Status option's id, so a card move needs no second lookup. Environment only: it refuses any argument (exit 64). Column names default to `Done`, `Ready`, `Backlog` and `In progress,In review`; override them with `DONE_STATUS`, `READY_STATUS`, `BACKLOG_STATUS` and `ACTIVE_STATUSES`.
+
+**Three outputs are not "no drift".** Exit **10** means a read failed and nothing was computed. Any `truncated.*` true makes the whole run unknown: re-run with the ceiling its warning names raised. A non-empty `warnings` naming a column means the mapping is wrong, and acting on it moves cards to the wrong place. `unresolved` lists cards the script would not classify, each with a `reason`; report them, never fix them.
 
 ### Backlog via labels
 
@@ -268,6 +279,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/scripts/align-labels.sh --repo <owner/name> --migrate
 | Script | Purpose |
 |--------|---------|
 | `scripts/board-snapshot.sh` | ProjectV2 snapshot grouped by status. Read-only. Guards the `--limit` truncation trap. |
+| `scripts/board-drift.sh` | Joins a ProjectV2 board against live issue state: `closed_not_done`, `open_in_done`, `stale_claim`, `absent_from_board`, plus `unresolved` (an issue outside the fetched window, or a claim whose linked PRs are in another repo) with a reason each. Environment only; any argument is exit 64. A failed, empty or misshapen read is exit 10 with nothing on stdout, never an empty class. Truncation is flagged per read (`board` exact from `totalCount`; `issues` and `prs` at their ceiling) and makes the run unknown. Read-only. Exit 0 / 10 / 64. |
 | `scripts/queue-snapshot.sh` | Boardless fill/drain queue read: ready/in-flight/blocked buckets + the parsed `touches:`, `Depends on #N` and `stack:` body contracts, plus the execution site read from `site:<name>` **labels** (prefix-matched including the colon, folded, empty value ignored). Emits `sites` as a sorted list with no scalar, so several labels are a conflict only a checkout named among them may take rather than "any site". `--sites-of` exposes that same resolver to callers holding labels from elsewhere — JSON array in, JSON array out, no `gh`. Read-only. Exit 10 skip convention. |
 | `scripts/verify-issue-refs.sh` | Resolves a body's paths, symbols, and `-p` package args against a checkout. Tiers each miss `likely-drift` (something close exists — a near-match symbol, package, or sibling file) vs `likely-new` (nothing resembles it, or the path came from `touches:`), and suggests the near match. Read-only with respect to the tree and the network; it writes one temp file for the symbol pool. Exit 0 clean / 3 drift / 10 skipped / 64 usage. |
 | `scripts/verify-gotcha-claims.sh` | Resolves a `groom-backlog` config's `gotcha_summary` against issue state and emits only the claims that survive, between SAFE GOTCHAS markers. Fail-closed: wrong state, ambiguous assertion, unresolvable, and malformed (an unpaired backtick run, which drops the whole field) all drop, so there is no skip exit. Inline code is parsed, spans paired by backtick run, before the sentence split, and the fragments of a sentence are committed as one group, so shell punctuation inside a span never ends a claim and a mis-parse degrades to a drop rather than a certified fragment. A splitter failure is its own exit 3, never a clean empty field. `--lint` reports time-varying shapes offline. Read-only. Exit 0 clean / 3 dropped or found / 64 usage. |
