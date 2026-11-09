@@ -42,7 +42,11 @@
 #     the baseline's drift buckets; an id the Status options lack warns naming its
 #     key and the role matches no column, never the default name; a role with no
 #     id falls back to its *_STATUS name; In review stays active when only
-#     IN_PROGRESS_OPTION_ID is given
+#     IN_PROGRESS_OPTION_ID is given; an unknown IN_REVIEW_OPTION_ID warns by its
+#     key and In review stops being active; a hand-set ACTIVE_STATUSES is replaced
+#     (not merged) once either active-role id is given, and the inert-set warning
+#     then names the id keys; the renamed fixture renames all five columns, so a
+#     ready id crossed with a backlog id is caught
 #   - any argument at all is a usage error (64), as are a missing or
 #     non-numeric PROJECT_NUMBER and a zero ceiling
 #   - REPO unset resolves through gh, and a failed resolution is 10; a REPO
@@ -262,9 +266,12 @@ cat >"$MOCK_FIXTURE" <<'JSON'
 }
 JSON
 
-# The renamed board: the same cards and option ids, three columns renamed.
-jq '(.fields[] | select(.name == "Status") | .options[]) |= (.name |= (if . == "Done" then "Shipped" elif . == "In progress" then "Doing" elif . == "In review" then "Reviewing" else . end))
-    | (.board[] | select(.status != null) | .status) |= (if . == "Done" then "Shipped" elif . == "In progress" then "Doing" elif . == "In review" then "Reviewing" else . end)' \
+# The renamed board: the same cards and option ids, all five columns renamed (Ready
+# and Backlog too, so a resolved ready/backlog id cannot land on the default name
+# by accident).
+jq 'def ren: (if . == "Done" then "Shipped" elif . == "In progress" then "Doing" elif . == "In review" then "Reviewing" elif . == "Ready" then "Queued" elif . == "Backlog" then "Icebox" else . end);
+    (.fields[] | select(.name == "Status") | .options[]) |= (.name |= ren)
+    | (.board[] | select(.status != null) | .status) |= ren' \
     "$MOCK_FIXTURE" >"$WORK/renamed.json"
 
 # --- the harness ---------------------------------------------------------------
@@ -387,7 +394,7 @@ suite() {   # suite <script> — every case; 0 when all hold
     bd "$s" MOCK_FIXTURE="$WORK/renamed.json" "${ids[@]}"
     check "ids resolving to renamed columns: no warning, the baseline's buckets" \
         eval 'rc_is 0 && jq_is ".warnings" "[]" && jq_is "$(nums closed_not_done)" "[10,20]" && jq_is "$(nums open_in_done)" "[12]" && jq_is "$(nums stale_claim)" "[13,24]"'
-    check "the resolved names are reported" jq_is '.columns' '{"done":"Shipped","ready":"Ready","backlog":"Backlog","active":["Doing","Reviewing"]}'
+    check "the resolved names are reported" jq_is '.columns' '{"done":"Shipped","ready":"Queued","backlog":"Icebox","active":["Doing","Reviewing"]}'
     bd "$s" DONE_OPTION_ID=opt-nowhere
     check "a done id the board lacks warns, naming its key" \
         eval 'jq_is "[.warnings[] | test(\"done_option_id\")] | any" true && stderr_has "done_option_id"'
@@ -403,12 +410,21 @@ suite() {   # suite <script> — every case; 0 when all hold
         eval 'jq_is "[.warnings[] | test(\"ready_option_id\")] | any" true && jq_is "[.warnings[] | test(\"backlog_option_id\")] | any" true'
     bd "$s" MOCK_FIXTURE="$WORK/renamed.json" DONE_OPTION_ID=opt-done DONE_STATUS=Nowhere
     check "a role with an id ignores its name" jq_is '.warnings | map(select(test("DONE_STATUS"))) | length' '0'
-    bd "$s" MOCK_FIXTURE="$WORK/renamed.json" DONE_STATUS=Shipped ACTIVE_STATUSES=Doing,Reviewing
+    bd "$s" MOCK_FIXTURE="$WORK/renamed.json" DONE_STATUS=Shipped READY_STATUS=Queued BACKLOG_STATUS=Icebox ACTIVE_STATUSES=Doing,Reviewing
     check "a role with no id falls back to its name" \
         eval 'jq_is ".warnings" "[]" && jq_is "$(nums open_in_done)" "[12]"'
     bd "$s" IN_PROGRESS_OPTION_ID=opt-progress
     check "In review stays active when only the in-progress id is given" \
         eval 'jq_is ".columns.active" "[\"In progress\",\"In review\"]" && jq_is "$(nums stale_claim)" "[13,24]"'
+    bd "$s" IN_REVIEW_OPTION_ID=opt-nowhere
+    check "an unknown in-review id warns by key, and In review stops counting as active" \
+        eval 'jq_is "[.warnings[] | test(\"in_review_option_id\")] | any" true && jq_is "$(nums stale_claim)" "[13]"'
+    bd "$s" IN_PROGRESS_OPTION_ID=opt-progress ACTIVE_STATUSES=Backlog
+    check "a hand-set ACTIVE_STATUSES is replaced, not merged, once an active-role id is given" \
+        eval 'jq_is ".columns.active" "[\"In progress\",\"In review\"]" && jq_is "$(nums stale_claim)" "[13,24]"'
+    bd "$s" IN_PROGRESS_OPTION_ID=opt-nowhere IN_REVIEW_OPTION_ID=opt-nowhere
+    check "an inert active set that came from ids names the id keys, not ACTIVE_STATUSES" \
+        eval 'jq_is "[.warnings[] | select(test(\"inert\")) | test(\"in_review_option_id\")] | any" true && jq_is "[.warnings[] | select(test(\"inert\")) | test(\"ACTIVE_STATUSES\")] | any" false'
     bail && return 1
 
     bd "$s" "ACTIVE_STATUSES=Doing"
@@ -576,6 +592,20 @@ mutant in-review-dropped-when-only-progress-id \
     '    active_s = [resolve("in_progress_option_id", progress_id, "In progress"),
                 resolve("in_review_option_id", review_id, "In review")]' \
     '    active_s = [resolve("in_progress_option_id", progress_id, "In progress")]'
+mutant ready-and-backlog-ids-crossed \
+    'ready_s = resolve("ready_option_id", ready_id, ready_s)
+backlog_s = resolve("backlog_option_id", backlog_id, backlog_s)' \
+    'ready_s = resolve("ready_option_id", backlog_id, ready_s)
+backlog_s = resolve("backlog_option_id", ready_id, backlog_s)'
+mutant in-review-id-ignored \
+    'resolve("in_review_option_id", review_id, "In review")]' \
+    'resolve("in_review_option_id", "", "In review")]'
+mutant active-statuses-merged-with-ids \
+    '    active_s = [resolve("in_progress_option_id"' \
+    '    active_s = active_s + [resolve("in_progress_option_id"'
+mutant inert-warning-always-names-active-statuses \
+    'if active_from_ids else "ACTIVE_STATUSES")' \
+    'if False else "ACTIVE_STATUSES")'
 mutant role-with-id-also-name-checked \
     'if key not in id_roles and norm(value) not in known:' \
     'if norm(value) not in known:'

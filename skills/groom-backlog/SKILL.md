@@ -174,7 +174,10 @@ other outcomes reads exactly like a clean board if you skip it:
   or `in_review_option_id`:** the mapping is wrong for this board. Move nothing on it. An id key
   means the configured id is not an option of the board's Status field: report it and say to fix
   that key. A name variable means the column is named differently: re-run with it set to the
-  board's name, or have the repo's config carry the id.
+  board's name, or have the repo's config carry the id. For an inert active set, add
+`in_review_option_id` / `in_progress_option_id` to the config rather than setting `ACTIVE_STATUSES`:
+once either id is passed, the two active roles replace `ACTIVE_STATUSES` entirely, which is then
+ignored.
 
 Pass every id the repo's `board:` block carries and omit the variable for a key it does not (an
 unset variable falls back to the default column name, an empty one is the same).
@@ -213,8 +216,11 @@ quietly dropped.
 
 **Mutations go through `sassy-dog:github-issues`** (`references/board-graphql.md`) — card moves via
 its `## Moving cards` recipe, board adds via `## Adding an issue to a board`. For classes 1-3 the
-card's `item_id` comes from its drift entry and the target option id from the output's
-`column_ids` (Done's included, which the `board:` block does not carry); the project and Status
+card's `item_id` comes from its drift entry. The target option id of a move is the `board:`
+block's `<role>_option_id` (`done_option_id`, `ready_option_id`, `backlog_option_id`) when the
+config carries it, and otherwise `column_ids[columns.<role>]`: the output's `columns.done`,
+`columns.ready` and `columns.backlog` are the resolved column names, and `column_ids` is keyed by
+name, so never look a target up by the literal name Done, Ready or Backlog. The project and Status
 field ids come from `board:`. Class 4 entries have no card, so no `item_id`: they take the add
 recipe. Wrap every mutating
 call in `skills/pr-shepherd/scripts/gh-retry.sh`, as that reference mandates; the Projects GraphQL

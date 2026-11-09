@@ -52,7 +52,8 @@
 # name. The active set resolves member by member: In progress from
 # IN_PROGRESS_OPTION_ID, In review from IN_REVIEW_OPTION_ID, each else its default
 # name. With neither id given, ACTIVE_STATUSES is used as written; with either, the
-# two roles replace it.
+# two roles REPLACE it entirely (a hand-set ACTIVE_STATUSES is ignored, silently),
+# and the inert-set warning then names the id keys rather than ACTIVE_STATUSES.
 #
 # Output: one JSON object on stdout —
 #   {repo, board:{number,owner}, columns:{done,ready,backlog,active},
@@ -239,7 +240,8 @@ def resolve(key, opt_id, default):
 done_s = resolve("done_option_id", done_id, done_s)
 ready_s = resolve("ready_option_id", ready_id, ready_s)
 backlog_s = resolve("backlog_option_id", backlog_id, backlog_s)
-if progress_id or review_id:
+active_from_ids = bool(progress_id or review_id)
+if active_from_ids:
     active_s = [resolve("in_progress_option_id", progress_id, "In progress"),
                 resolve("in_review_option_id", review_id, "In review")]
 done_n = norm(done_s)
@@ -319,8 +321,10 @@ for name, key, value in (("DONE_STATUS", "done_option_id", done_s), ("READY_STAT
         warnings.append(f"{name}={value!r} matches no column on this board {board_columns}; "
                         "fix the mapping before acting on any drift")
 if not active_n & known:
-    warnings.append(f"ACTIVE_STATUSES={active_s} match no column on this board {board_columns}; "
-                    "stale_claim detection is inert")
+    src = ("in_progress_option_id / in_review_option_id (add the missing one to the config)"
+           if active_from_ids else "ACTIVE_STATUSES")
+    warnings.append(f"the active set {active_s}, from {src}, matches no column on this board "
+                    f"{board_columns}; stale_claim detection is inert")
 if status_field is None:
     warnings.append("the board has no Status field; columns were taken from the statuses in use "
                     "and column_ids is empty")
