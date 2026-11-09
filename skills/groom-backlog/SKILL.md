@@ -155,6 +155,9 @@ from the snapshot by hand.
 
 ```bash
 REPO=<owner/name of the repo being groomed> PROJECT_NUMBER=<board.number> OWNER=<board.owner> \
+  DONE_OPTION_ID=<board.done_option_id> READY_OPTION_ID=<board.ready_option_id> \
+  BACKLOG_OPTION_ID=<board.backlog_option_id> IN_PROGRESS_OPTION_ID=<board.in_progress_option_id> \
+  IN_REVIEW_OPTION_ID=<board.in_review_option_id> \
   bash ${CLAUDE_PLUGIN_ROOT}/skills/github-issues/scripts/board-drift.sh
 ```
 
@@ -166,9 +169,15 @@ other outcomes reads exactly like a clean board if you skip it:
 - **Any `truncated.*` true:** a dropped card reads as absent and a dropped open PR makes a live
   claim look stale. Re-run with the ceiling its warning names raised (`PROJECT_LIMIT`,
   `ISSUE_LIMIT`, `PR_LIMIT`) before proposing a single move.
-- **A warning naming `DONE_STATUS`, `READY_STATUS`, `BACKLOG_STATUS` or `ACTIVE_STATUSES`:**
-  this board's columns are named differently. Re-run with those set to its names, and move nothing
-  on the mismatched mapping.
+- **A warning naming `DONE_STATUS`, `READY_STATUS`, `BACKLOG_STATUS` or `ACTIVE_STATUSES`, or one
+  of the id keys `done_option_id`, `ready_option_id`, `backlog_option_id`, `in_progress_option_id`
+  or `in_review_option_id`:** the mapping is wrong for this board. Move nothing on it. An id key
+  means the configured id is not an option of the board's Status field: report it and say to fix
+  that key. A name variable means the column is named differently: re-run with it set to the
+  board's name, or have the repo's config carry the id.
+
+Pass every id the repo's `board:` block carries and omit the variable for a key it does not (an
+unset variable falls back to the default column name, an empty one is the same).
 
 | # | Drift | `drift.` bucket | Fix (on confirmation) |
 | --- | --- | --- | --- |

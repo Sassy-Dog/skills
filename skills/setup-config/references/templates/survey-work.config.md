@@ -41,6 +41,8 @@ board:
   ready_option_id: {{BOARD_READY_OPTION_ID}}
   backlog_option_id: {{BOARD_BACKLOG_OPTION_ID}}
   in_progress_option_id: {{BOARD_IN_PROGRESS_OPTION_ID}}
+  in_review_option_id: {{BOARD_IN_REVIEW_OPTION_ID}}
+  done_option_id: {{BOARD_DONE_OPTION_ID}}
 testflight:                             # or `testflight: none` — confirmed: no beta channel
   bundle_id: {{BUNDLE_ID}}
 mobile:                                 # or `mobile: none` — confirmed: no mobile app

@@ -36,6 +36,13 @@
 #     not truncated
 #   - a column mapping that matches nothing warns, by name, for each of
 #     DONE_STATUS, READY_STATUS, BACKLOG_STATUS and ACTIVE_STATUSES
+#   - roles keyed on option ids (DONE_OPTION_ID and the four others, #627): ids
+#     that resolve to RENAMED columns (a second fixture, jq-derived: Done is
+#     Shipped, In progress is Doing, In review is Reviewing) give no warning and
+#     the baseline's drift buckets; an id the Status options lack warns naming its
+#     key and the role matches no column, never the default name; a role with no
+#     id falls back to its *_STATUS name; In review stays active when only
+#     IN_PROGRESS_OPTION_ID is given
 #   - any argument at all is a usage error (64), as are a missing or
 #     non-numeric PROJECT_NUMBER and a zero ceiling
 #   - REPO unset resolves through gh, and a failed resolution is 10; a REPO
@@ -255,6 +262,11 @@ cat >"$MOCK_FIXTURE" <<'JSON'
 }
 JSON
 
+# The renamed board: the same cards and option ids, three columns renamed.
+jq '(.fields[] | select(.name == "Status") | .options[]) |= (.name |= (if . == "Done" then "Shipped" elif . == "In progress" then "Doing" elif . == "In review" then "Reviewing" else . end))
+    | (.board[] | select(.status != null) | .status) |= (if . == "Done" then "Shipped" elif . == "In progress" then "Doing" elif . == "In review" then "Reviewing" else . end)' \
+    "$MOCK_FIXTURE" >"$WORK/renamed.json"
+
 # --- the harness ---------------------------------------------------------------
 OUT="$WORK/out.json"
 ERR="$WORK/err.txt"
@@ -366,6 +378,39 @@ suite() {   # suite <script> — every case; 0 when all hold
     check "no Status field: columns fall back to the statuses in use, column_ids is empty" \
         eval 'rc_is 0 && jq_is ".board_columns" "[\"Backlog\",\"Done\",\"In progress\",\"In review\",\"Unstatused\"]" && jq_is ".column_ids" "{}"'
     check "no Status field: a warning says so" jq_is '[.warnings[] | test("no Status field")] | any' 'true'
+    # Option ids (#627). The renamed fixture is the baseline's board with its
+    # Done, In progress and In review columns renamed, ids unchanged.
+    local ids=(DONE_OPTION_ID=opt-done READY_OPTION_ID=opt-ready BACKLOG_OPTION_ID=opt-backlog
+               IN_PROGRESS_OPTION_ID=opt-progress IN_REVIEW_OPTION_ID=opt-review)
+    bd "$s" MOCK_FIXTURE="$WORK/renamed.json"
+    check "renamed columns, no ids: the name mapping warns" jq_is '[.warnings[] | test("DONE_STATUS")] | any' 'true'
+    bd "$s" MOCK_FIXTURE="$WORK/renamed.json" "${ids[@]}"
+    check "ids resolving to renamed columns: no warning, the baseline's buckets" \
+        eval 'rc_is 0 && jq_is ".warnings" "[]" && jq_is "$(nums closed_not_done)" "[10,20]" && jq_is "$(nums open_in_done)" "[12]" && jq_is "$(nums stale_claim)" "[13,24]"'
+    check "the resolved names are reported" jq_is '.columns' '{"done":"Shipped","ready":"Ready","backlog":"Backlog","active":["Doing","Reviewing"]}'
+    bd "$s" DONE_OPTION_ID=opt-nowhere
+    check "a done id the board lacks warns, naming its key" \
+        eval 'jq_is "[.warnings[] | test(\"done_option_id\")] | any" true && stderr_has "done_option_id"'
+    check "an unknown done id matches no column: no silent fallback to Done" \
+        eval 'jq_is "$(nums closed_not_done)" "[10,11,20]" && jq_is "$(nums open_in_done)" "[]"'
+    check "an unknown id is one warning, by its key, not a second one by the name variable" \
+        jq_is '[.warnings[] | test("DONE_STATUS")] | any' 'false'
+    bd "$s" IN_PROGRESS_OPTION_ID=opt-nowhere
+    check "an unknown in-progress id warns by key and does not fall back to In progress" \
+        eval 'jq_is "[.warnings[] | test(\"in_progress_option_id\")] | any" true && jq_is "$(nums stale_claim)" "[24]"'
+    bd "$s" BACKLOG_OPTION_ID=opt-nowhere READY_OPTION_ID=opt-nowhere
+    check "unknown ready and backlog ids each warn by key" \
+        eval 'jq_is "[.warnings[] | test(\"ready_option_id\")] | any" true && jq_is "[.warnings[] | test(\"backlog_option_id\")] | any" true'
+    bd "$s" MOCK_FIXTURE="$WORK/renamed.json" DONE_OPTION_ID=opt-done DONE_STATUS=Nowhere
+    check "a role with an id ignores its name" jq_is '.warnings | map(select(test("DONE_STATUS"))) | length' '0'
+    bd "$s" MOCK_FIXTURE="$WORK/renamed.json" DONE_STATUS=Shipped ACTIVE_STATUSES=Doing,Reviewing
+    check "a role with no id falls back to its name" \
+        eval 'jq_is ".warnings" "[]" && jq_is "$(nums open_in_done)" "[12]"'
+    bd "$s" IN_PROGRESS_OPTION_ID=opt-progress
+    check "In review stays active when only the in-progress id is given" \
+        eval 'jq_is ".columns.active" "[\"In progress\",\"In review\"]" && jq_is "$(nums stale_claim)" "[13,24]"'
+    bail && return 1
+
     bd "$s" "ACTIVE_STATUSES=Doing"
     check "ACTIVE_STATUSES matching no column warns that stale_claim is inert" \
         eval 'jq_is "[.warnings[] | test(\"inert\")] | any" true && jq_is "$(nums stale_claim)" "[]"'
@@ -514,8 +559,26 @@ mutant foreign-pr-checked-before-local-open-pr \
         continue
     drift["stale_claim"]'
 mutant ready-and-backlog-mapping-unchecked \
-    'for name, value in (("DONE_STATUS", done_s), ("READY_STATUS", ready_s), ("BACKLOG_STATUS", backlog_s)):' \
-    'for name, value in (("DONE_STATUS", done_s),):'
+    '("DONE_STATUS", "done_option_id", done_s), ("READY_STATUS", "ready_option_id", ready_s),
+                         ("BACKLOG_STATUS", "backlog_option_id", backlog_s)):' \
+    '("DONE_STATUS", "done_option_id", done_s),):'
+# Option ids (#627). One mutant per defect the new cases pin.
+mutant id-ignored-default-name-used \
+    'name = name_by_id.get(opt_id)' \
+    'name = default'
+mutant unknown-id-falls-back-silently \
+    '        return f"<unknown option id {opt_id}>"' \
+    '        return default'
+mutant unknown-id-unwarned \
+    '        id_warnings.append(f"{key}=' \
+    '        (lambda *a: None)(f"{key}='
+mutant in-review-dropped-when-only-progress-id \
+    '    active_s = [resolve("in_progress_option_id", progress_id, "In progress"),
+                resolve("in_review_option_id", review_id, "In review")]' \
+    '    active_s = [resolve("in_progress_option_id", progress_id, "In progress")]'
+mutant role-with-id-also-name-checked \
+    'if key not in id_roles and norm(value) not in known:' \
+    'if norm(value) not in known:'
 mutant no-status-field-no-fallback \
     'board_columns = list(column_ids) or observed' \
     'board_columns = list(column_ids)'
