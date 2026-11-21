@@ -118,7 +118,7 @@ deny() { # <label> <command> [message fragment; default picked from the command]
         esac
     fi
     run_cmd "$2"
-    if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -qF -- "$frag"; then
+    if [ "$rc" -eq 2 ] && grep -qF -- "$frag" <<<"$err"; then
         ok "denied: $1"
     else
         bad "denied: $1 (rc=$rc, wanted message containing '$frag', err=${err:-<none>})"
@@ -130,7 +130,7 @@ allow() {
 }
 failopen() { # <label> <raw stdin>
     run_event "$2"
-    if [ "$rc" -eq 1 ] && printf '%s' "$err" | grep -q 'fail open'; then
+    if [ "$rc" -eq 1 ] && grep -q 'fail open' <<<"$err"; then
         ok "fails open and says so: $1"
     else
         bad "fails open and says so: $1 (rc=$rc err=${err:-<none>})"
@@ -388,7 +388,7 @@ mkdir -p "$WORK/nopython"
 ln -s "$(command -v dirname)" "$WORK/nopython/dirname"
 err="$(printf '%s' "$(event 'doppler secrets get X')" | PATH="$WORK/nopython" "$(command -v bash)" "$HOOK" 2>&1 >/dev/null)"
 rc=$?
-if [ "$rc" -eq 1 ] && printf '%s' "$err" | grep -q 'python3 not found.*fail open'; then
+if [ "$rc" -eq 1 ] && grep -q 'python3 not found.*fail open' <<<"$err"; then
     ok "python3 missing from PATH fails open and names python3"
 else
     bad "python3 missing from PATH fails open and names python3 (rc=$rc err=${err:-<none>})"
@@ -405,7 +405,7 @@ m.analyze = boom
 sys.exit(m.main())
 ' "$PY" 2>&1 >/dev/null)"
 rc=$?
-if [ "$rc" -eq 1 ] && printf '%s' "$err" | grep -q 'internal error.*fail open'; then
+if [ "$rc" -eq 1 ] && grep -q 'internal error.*fail open' <<<"$err"; then
     ok "an internal classifier fault fails open and says so"
 else
     bad "an internal classifier fault fails open and says so (rc=$rc err=${err:-<none>})"
@@ -430,7 +430,7 @@ declared="$(python3 -I -B -c 'import json,sys; print(json.load(open(sys.argv[1])
 harness_cmd="${declared//\$\{CLAUDE_PLUGIN_ROOT\}/$REPO_ROOT}"
 err="$(printf '%s' "$(event 'doppler secrets get DATABASE_URL')" | bash -c "$harness_cmd" 2>&1 >/dev/null)"
 rc=$?
-if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -q 'BLOCKED'; then ok "declared command denies a real printing command"; else bad "declared command denies a real printing command (rc=$rc)"; fi
+if [ "$rc" -eq 2 ] && grep -q 'BLOCKED' <<<"$err"; then ok "declared command denies a real printing command"; else bad "declared command denies a real printing command (rc=$rc)"; fi
 printf '%s' "$(event 'doppler secrets --only-names')" | bash -c "$harness_cmd" >/dev/null 2>&1
 rc=$?
 if [ "$rc" -eq 0 ]; then ok "declared command allows a real safe command"; else bad "declared command allows a real safe command (rc=$rc)"; fi
