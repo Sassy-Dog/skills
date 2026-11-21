@@ -7,78 +7,77 @@ non-blocking error). It never prints to stdout.
 
 Two rules, both over the command text only (a PreToolUse hook cannot see output):
 
-1. Doppler value-printing guard. `doppler secrets get|download|substitute` and bare
-   `doppler secrets` print secret values in their default output. Allowed only when the
-   invocation cannot put a value in the transcript: --only-names, --silent, any
-   `doppler run -- <cmd>` (the child decides what prints), stdout redirected to a real
-   file, or --plain whose output is consumed in the same command (a pipe into a counting,
-   hashing or totally-redacting stage, or a $(...) capture whose parent is a bare
-   assignment, export/local/declare, a test or a hasher). A capture inside any other
-   command (echo, curl, bash -c) may be printed by that command and is judged as printed.
-2. Literal credentialed URL guard. A command whose text embeds scheme://user:password@host.
+1. Doppler value-printing guard, DENY BY DEFAULT with a short allow list. Every word whose
+   basename is `doppler`, anywhere in any pipeline stage, is classified, whatever precedes it
+   (sudo, ssh, find -exec, docker exec, a for loop...): there is no wrapper table. If a
+   value-printing subcommand follows (`secrets get|download|substitute`, bare `secrets`, or an
+   unrecognised word after `secrets`), the invocation is allowed only when
+     (a) it is `doppler run ...` (the child decides what prints; the child's own
+         `doppler secrets get` is a separate doppler word and is still denied), or
+     (b) it carries `--only-names` (bare, or an explicit true value), or
+     (c) stdout of that stage goes to a real file (normalised path; /dev/* other than
+         /dev/null, /proc/*, process substitution, a later dup to &1/&2 and unresolved
+         variables are not files), or
+     (d) the subcommand does not print values (`secrets set`, `configs`, `setup`, ...).
+   Nothing else is trusted: not --plain, not --silent, not a pipe into wc/sed/grep, not a
+   $(...) capture. Command strings are looked into wherever they hide: `$(...)`, backticks,
+   `${...}`, `<(...)`, `bash -c` (any shell, `--` included), `eval`, `env -S`, here-strings
+   and strings piped to a shell.
+2. Literal credentialed URL guard. A word embedding scheme://[user]:password@host (a password
+   starting with `$` is an environment-variable reference and passes).
 
-Per-command bypass: put the variable in the command itself, e.g.
+Per-command bypass: a LEADING, unquoted assignment on the stage it applies to, e.g.
 `SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X` or
-`SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. The hook's own environment is never consulted,
-so the bypass is visible in the transcript and cannot be left on by accident.
+`SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. The hook's own environment and any other position
+are never consulted, so the bypass is visible in the transcript and cannot be left on.
 
-The shell is parsed by a small lexer (quotes, escapes, ; & | newline, $(...), backticks,
-bash/sh/zsh -c and eval strings, ${...} bodies, reserved words, wrapper commands and
-their option values), not by a shell. It is a seatbelt against the accident that motivated
-it, not a sandbox: heredoc bodies, aliases, functions and variable indirection are out of
-scope.
+Known limits (a seatbelt against the accident, not a sandbox): aliases, functions, variable
+indirection, symlinked redirect targets, a quoted command string handed to ssh/docker/su, and that `doppler run -- env` / `printenv` print everything because the child
+decides. Heredoc bodies are read as ordinary command lines, so a heredoc that only quotes
+`doppler secrets get X` is denied too.
 """
 
 import json
 import os
+import posixpath
 import re
 import sys
 
 URL_RE = re.compile(
-    r"(postgres(ql)?|mysql|mongodb(\+srv)?|redis(s)?|amqps?)://[^:@/\s]+:[^@/\s]+@[^/\s]+"
+    r"(?:postgres(?:ql)?|mysql|mongodb|redis|rediss|amqps?)(?:\+[a-z0-9.+-]+)?"
+    r"://[^:@/\s]*:(?!\$)[^@/\s]+@[^/\s]+",
+    re.I,
 )
 BYPASS_DOPPLER = "SASSYDOG_ALLOW_DOPPLER_PRINT=1"
-BYPASS_URL_RE = re.compile(r"(?:^|[;&|(\s])SASSYDOG_ALLOW_CREDENTIAL_URL=1(?=\s)")
+BYPASS_URL = "SASSYDOG_ALLOW_CREDENTIAL_URL=1"
 
-# Wrapper commands skipped to reach the real command word, with the options that take a
-# separate VALUE (that value is not the command). Anything this table does not understand is
-# caught by the fail-closed backstop in check_stage: it scans the wrapper's words for a
-# shell/eval/doppler word rather than trusting the parse.
-WRAPPER_OPTS = {
-    "env": {"-u", "-C", "-S", "-P", "--unset", "--chdir", "--split-string"},
-    "sudo": {"-u", "-g", "-C", "-h", "-p", "-r", "-t", "-U", "-T", "-D",
-             "--user", "--group", "--host", "--prompt", "--chdir", "--role", "--type"},
-    "command": set(),
-    "exec": {"-a"},
-    "time": {"-f", "-o", "--format", "--output"},
-    "nohup": set(),
-    "builtin": set(),
-    "nice": {"-n", "--adjustment"},
-    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
-    "timeout": {"-s", "-k", "--signal", "--kill-after"},
-    "xargs": {"-I", "-n", "-L", "-P", "-s", "-d", "-a", "-E",
-              "--max-args", "--max-lines", "--max-procs", "--max-chars", "--delimiter",
-              "--arg-file", "--replace", "--eof"},
-}
-WRAPPERS = set(WRAPPER_OPTS)
-# Shell reserved words that precede a command: `do doppler ...`, `then doppler ...`, `! doppler ...`.
-KEYWORDS = {"if", "then", "elif", "else", "do", "while", "until", "!", "{", "coproc"}
-TEST_CMDS = {"[", "[[", "test"}
-DECLARERS = {"export", "local", "declare", "readonly", "typeset"}
-SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "fish", "pwsh", "csh", "tcsh"}
+KEYWORDS = {"if", "then", "elif", "else", "do", "while", "until", "!", "{"}
 PRINT_SUBCMDS = {"get", "download", "substitute"}
 OTHER_SECRETS_SUBCMDS = {"set", "delete", "upload", "names", "notes", "update", "help"}
-HASHERS = {"wc", "sha1sum", "sha256sum", "sha512sum", "shasum", "md5sum", "md5", "cksum"}
-GREPS = {"grep", "egrep", "fgrep", "rg"}
+# Doppler global flags that take a separate value (so the value is not the subcommand).
+VALUE_FLAGS = {"-p", "--project", "-c", "--config", "--token", "-t", "--scope", "--api-host",
+               "--configuration", "--config-dir"}
 ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 MAX_DEPTH = 8
 
 SAFE_FORMS = (
     "Safe forms: `doppler secrets --only-names`, `doppler run -- <cmd>` (the child reads the "
-    "value from its environment), `--plain` piped into a counting or redacting stage "
-    "(wc, grep -c, sha256sum, `sed d`, `sed 's/.*//'`, head -c0), or captured by a bare assignment "
-    "(TOKEN=$(...)) or a test, or a redirect to a file."
+    "value from its environment; the child's own `doppler secrets get` is still denied), or a "
+    "redirect of stdout to a real file (`> /tmp/f`; /dev/*, /proc/*, process substitution and "
+    "a later >&2 are not files)."
 )
+DOPPLER_MSG = (
+    "`doppler secrets {shown}` prints secret values to the transcript. " + SAFE_FORMS +
+    " Deliberate override for one command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
+)
+URL_MSG = (
+    "the command embeds a URL with a literal password (scheme://user:password@host). "
+    "Pass the value through the environment instead (`doppler run -- <cmd>` and read the "
+    "variable in the child). Deliberate override for one command: prefix it with "
+    "SASSYDOG_ALLOW_CREDENTIAL_URL=1."
+)
+DEEP_MSG = "command nests too deeply to classify; denied rather than guessed. " + SAFE_FORMS
 
 
 class Word(str):
@@ -189,12 +188,25 @@ def lex(s):
             while i < n and s[i] != '"':
                 d = s[i]
                 if d == "\\" and i + 1 < n:
-                    cur.append(s[i + 1])
+                    e = s[i + 1]
+                    if e == "\n":
+                        pass
+                    elif e in '$`"\\':
+                        cur.append(e)
+                    else:
+                        cur.append(d + e)
                     i += 2
                 elif d == "$" and s[i + 1:i + 2] == "(" and s[i + 1:i + 3] != "((":
                     j = match_paren(s, i + 2)
                     seg.subs.append(s[i + 2:j])
                     cur.append("\0")
+                    i = j + 1
+                elif d == "$" and s[i + 1:i + 2] == "{":
+                    j = s.find("}", i + 2)
+                    j = n - 1 if j < 0 else j
+                    body = s[i:j + 1]
+                    seg.subs.extend(extract_subs(body))
+                    cur.append(body)
                     i = j + 1
                 elif d == "`":
                     j = s.find("`", i + 1)
@@ -262,70 +274,35 @@ def lex(s):
     return segs
 
 
-def cmd_pos(words):
-    """(command index or None, bypass flag, first wrapper index or None, inner strings).
-
-    Skips assignments, reserved words and wrappers (with their option values). `inner` holds
-    strings that are themselves commands (env -S 'cmd ...')."""
-    bypass = False
-    wrap_start = None
-    inner = []
-    i = 0
-    while i < len(words):
-        w = words[i]
-        if ASSIGN_RE.match(w) and not w.q:
-            bypass = bypass or w == BYPASS_DOPPLER
-            i += 1
-            continue
+def leading_bypass(words):
+    """(doppler bypass, url bypass) from LEADING unquoted assignments of this stage only."""
+    d = u = False
+    for w in words:
         if not w.q and w in KEYWORDS:
-            i += 1
             continue
-        name = os.path.basename(w)
-        if name in WRAPPERS:
-            if wrap_start is None:
-                wrap_start = i
-            takes = WRAPPER_OPTS[name]
-            i += 1
-            while i < len(words):
-                a = words[i]
-                if a == "--":
-                    i += 1
-                    break
-                if a.startswith("-") and len(a) > 1:
-                    if a in takes and i + 1 < len(words):
-                        if a in ("-S", "--split-string"):
-                            inner.append(words[i + 1])
-                        i += 2
-                    else:
-                        if a.startswith("--split-string="):
-                            inner.append(a.split("=", 1)[1])
-                        i += 1
-                    continue
-                if name == "timeout" and re.match(r"^\d+(\.\d+)?[smhd]?$", a):
-                    i += 1
-                    continue
-                if ASSIGN_RE.match(a) and name == "env":
-                    bypass = bypass or a == BYPASS_DOPPLER
-                    i += 1
-                    continue
-                break
+        if ASSIGN_RE.match(w) and not w.q:
+            d = d or w == BYPASS_DOPPLER
+            u = u or w == BYPASS_URL
             continue
-        return i, bypass, wrap_start, inner
-    return None, bypass, wrap_start, inner
+        break
+    return d, u
 
 
-def flag_on(args, flag):
-    return any(a == flag or (a.startswith(flag + "=") and not a.endswith("=false")) for a in args)
-
-
-NOT_A_FILE = ("/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/fd/", "/proc/", "/dev/pts/", "/dev/ptmx")
+def real_file(target):
+    """True when a redirect target is a regular file (or /dev/null), judged on a normalised path."""
+    if not target or "$" in target or "\0" in target or "`" in target:
+        return False  # cannot be resolved here; fail closed
+    t = re.sub(r"/+", "/", target)
+    t = posixpath.normpath(t)
+    if t.startswith(".."):
+        return False  # climbs out of an unknown cwd
+    if t == "/dev/null":
+        return True
+    return not (t == "/dev" or t.startswith("/dev/") or t == "/proc" or t.startswith("/proc/"))
 
 
 def stdout_to_file(words):
-    """True when, after every redirect in order, stdout ends up in a regular file (or closed).
-
-    A later dup of stdout onto another descriptor (`>file >&2`), or a target that is the
-    terminal, a descriptor path, a pty or a process substitution, puts it back in view."""
+    """True when, after every redirect in order, stdout ends up in a real file."""
     dest = "term"
     for i, w in enumerate(words):
         if w.q:
@@ -339,164 +316,156 @@ def stdout_to_file(words):
         if not target:
             nxt = words[i + 1] if i + 1 < len(words) else ""
             if not nxt or nxt.startswith(("&", ">", "<")):
-                continue  # `>` ending the line is `>(...)`: process substitution, not a file
+                continue  # `>` ending the stage is `>(...)`: process substitution, not a file
             target = nxt
         if target.startswith("&"):
             dup = target[1:]
             if dup == "1":
                 continue
-            dest = "file" if dup == "-" else "term"
+            if dup == "-":
+                dest = "file"
+            elif dup.isdigit():
+                dest = "term"
+            else:  # `>&word` redirects stdout and stderr to the file `word`
+                dest = "file" if real_file(dup) else "term"
             continue
-        dest = "term" if target.startswith(NOT_A_FILE) or "\0" in target else "file"
+        dest = "file" if real_file(target) else "term"
     return dest == "file"
 
 
-SED_TOTAL_RE = (
-    re.compile(r"^d$"),
-    re.compile(r"^s(?P<d>[/|#,])\.\*(?P=d)[^&\\]*(?P=d)g?$"),
-    re.compile(r"^s(?P<d>[/|#,])\.(?P=d)[^&\\]*(?P=d)g$"),
-)
+def only_names(rest):
+    state = False
+    for a in rest:
+        if a == "--only-names":
+            state = True
+        elif a.startswith("--only-names="):
+            state = a.split("=", 1)[1].lower() in ("true", "1", "t")
+    return state
 
 
-def sed_is_total_redaction(args):
-    """Only a sed whose single script provably replaces every input line/char counts."""
-    scripts = []
+def subcommand(rest):
+    """First positional word that is not a flag or a known flag's value; None when absent."""
     k = 0
-    while k < len(args):
-        a = args[k]
-        if a == "-e" and k + 1 < len(args):
-            scripts.append(args[k + 1])
-            k += 2
-        elif a in ("-n", "-E", "-r", "--quiet", "--silent", "--regexp-extended", "-u", "--unbuffered"):
-            k += 1
-        elif a.startswith("-") and len(a) > 1:
-            return False  # -f, -i, -s, -z, clusters, anything not understood
-        else:
-            scripts.append(a)
-            k += 1
-    if len(scripts) != 1:
-        return False
-    return any(r.match(scripts[0]) for r in SED_TOTAL_RE)
+    while k < len(rest):
+        a = rest[k]
+        if a.startswith("-") and len(a) > 1:
+            k += 2 if a in VALUE_FLAGS else 1
+            continue
+        return a
+    return None
 
 
-def is_consumer(words):
-    """True when this pipeline stage swallows (counts, hashes, totally redacts) its input."""
-    i, _, _, _ = cmd_pos(words)
-    if i is None:
-        return False
-    name = os.path.basename(words[i])
-    args = words[i + 1:]
-    if name == "sed":
-        return sed_is_total_redaction(args)
-    if name in HASHERS:
-        return True
-    if name in GREPS:
-        return any(
-            (a.startswith("-") and not a.startswith("--") and re.search(r"[cq]", a))
-            or a in ("--count", "--quiet", "--silent")
-            for a in args
-        )
-    if name == "head":
-        return any(a in ("-c0", "-n0") for a in args) or any(
-            a in ("-c", "-n") and k + 1 < len(args) and args[k + 1] == "0" for k, a in enumerate(args)
-        )
-    return False
+def classify_doppler(words, k, byp):
+    """Violations for the doppler word at words[k]."""
+    if byp[0]:
+        return []
+    args = words[k + 1:]
+    first = next((a for a in args if a in ("run", "secrets")), None)
+    if first != "secrets":
+        return []  # `doppler run ...` (the child is not classified) or a non-printing command
+    rest = args[args.index("secrets") + 1:]
+    sub = subcommand(rest)
+    if sub in OTHER_SECRETS_SUBCMDS:
+        return []
+    if "--help" in rest or "-h" in rest:
+        return []
+    if only_names(rest) or stdout_to_file(words):
+        return []
+    return [DOPPLER_MSG.format(shown=sub if sub in PRINT_SUBCMDS else ("(bare)" if sub is None else sub))]
 
 
-def check_stage(words, sink, depth):
-    """Violations for one simple command. sink is 'file', 'consumed' or None."""
-    i, bypass, wrap_start, inner = cmd_pos(words)
+def shell_script(words, k):
+    """The -c script string of the shell at words[k], or None when it has no -c."""
+    for j in range(k + 1, len(words)):
+        a = words[j]
+        if not (a.startswith("-") and len(a) > 1):
+            continue
+        if (not a.startswith("--") and "c" in a[1:]) or a.lower() == "-command":
+            j += 1
+            while j < len(words) and words[j] == "--":
+                j += 1
+            return words[j] if j < len(words) else None
+    return None
+
+
+def env_strings(words, k):
+    """Command strings handed to `env -S` / `--split-string` (clusters and attached forms)."""
+    vals = []
+    for j in range(k + 1, len(words)):
+        a = words[j]
+        if a.startswith("--split-string="):
+            vals.append(a.split("=", 1)[1])
+        elif a == "--split-string" and j + 1 < len(words):
+            vals.append(words[j + 1])
+        elif a.startswith("-") and not a.startswith("--") and "S" in a[1:]:
+            idx = a.index("S", 1)
+            rest = a[idx + 1:]
+            if rest:
+                vals.append(rest)
+            elif j + 1 < len(words):
+                vals.append(words[j + 1])
+    return vals
+
+
+def is_shellish(words):
+    return any(os.path.basename(w) in SHELLS or w in ("source", ".", "eval") for w in words)
+
+
+def scan_stage(seg, depth, byp, ctx):
+    words = seg.words
+    d, u = leading_bypass(words)
+    byp = (byp[0] or d, byp[1] or u)
     out = []
-    for text in inner:
-        out += analyze(text, sink is not None, depth + 1)
-    if i is None and wrap_start is None:
-        return out
-    name = os.path.basename(words[i]) if i is not None else ""
-    if wrap_start is not None and name not in SHELLS and name not in ("eval", "doppler"):
-        # Fail-closed backstop: the wrapper's option table may not understand its arguments
-        # (`sudo -u root doppler ...` read `root` as the command). Look for the real command.
-        for j in range(wrap_start, len(words)):
-            if os.path.basename(words[j]) in SHELLS or words[j] in ("eval", "doppler") or \
-                    os.path.basename(words[j]) == "doppler":
-                i, name = j, os.path.basename(words[j])
-                break
-    if i is None:
-        return out
-    args = words[i + 1:]
-    if name in SHELLS:
-        for j, a in enumerate(args):
-            if a.startswith("-") and not a.startswith("--") and "c" in a and j + 1 < len(args):
-                out += analyze(args[j + 1], sink is not None, depth + 1)
-                break
-        return out
-    if name == "eval":
-        return out + analyze(" ".join(args), sink is not None, depth + 1)
-    if name != "doppler" or bypass:
-        return out
-    for j, a in enumerate(args):
-        if a == "run":
-            for k, b in enumerate(args[j + 1:], j + 1):
-                if b == "--command" and k + 1 < len(args):
-                    out += analyze(args[k + 1], sink is not None, depth + 1)
-                elif b.startswith("--command="):
-                    out += analyze(b[len("--command="):], sink is not None, depth + 1)
-            if "--" in args[j + 1:]:
-                tail = args[args.index("--", j + 1) + 1:]
-                out += check_stage(tail, sink, depth + 1) if tail else []
-            return out
-        if a == "secrets":
-            rest = args[j + 1:]
-            sub = next((r for r in rest if r in PRINT_SUBCMDS), None)
-            if sub is None and any(r in OTHER_SECRETS_SUBCMDS for r in rest):
-                return []
-            if "--help" in rest or "-h" in rest:
-                return []
-            if flag_on(rest, "--only-names") or flag_on(rest, "--silent"):
-                return []
-            if sink == "file":
-                return []
-            if sink == "consumed" and flag_on(rest, "--plain"):
-                return []
-            shown = "doppler secrets " + (sub or "(bare)")
-            return [
-                f"`{shown}` prints secret values to the transcript. {SAFE_FORMS} "
-                "Deliberate override for one command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
-            ]
-    return []
+    for sub in seg.subs:
+        out += analyze(sub, depth + 1, byp, ctx)
+    for w in words:
+        if URL_RE.search(w):
+            ctx["url_seen"] += 1
+            if not byp[1]:
+                out.append(URL_MSG)
+    shellish = is_shellish(words)
+    for k, w in enumerate(words):
+        name = os.path.basename(w)
+        if name == "doppler":
+            out += classify_doppler(words, k, byp)
+        elif name in SHELLS:
+            script = shell_script(words, k)
+            if script is not None:
+                out += analyze(script, depth + 1, byp, ctx)
+        elif name == "env":
+            for text in env_strings(words, k):
+                out += analyze(text, depth + 1, byp, ctx)
+        elif w == "eval":
+            out += analyze(" ".join(words[k + 1:]), depth + 1, byp, ctx)
+        if name == "doppler":
+            for j in range(k + 1, len(words)):
+                if words[j] == "--command" and j + 1 < len(words):
+                    out += analyze(words[j + 1], depth + 1, byp, ctx)
+                elif words[j].startswith("--command="):
+                    out += analyze(words[j].split("=", 1)[1], depth + 1, byp, ctx)
+        if w == "<<<" and not w.q and shellish and k + 1 < len(words):
+            out += analyze(words[k + 1], depth + 1, byp, ctx)
+    return out
 
 
-def analyze(s, captured=False, depth=0):
+def analyze(text, depth, byp, ctx):
     if depth > MAX_DEPTH:
-        return ["command nests too deeply to classify; denied rather than guessed. " + SAFE_FORMS]
+        return [DEEP_MSG]
     out = []
-    segs = lex(s)
+    segs = lex(text)
     k = 0
     while k < len(segs):
         pipeline = [segs[k]]
         while pipeline[-1].sep == "|" and k + len(pipeline) < len(segs):
             pipeline.append(segs[k + len(pipeline)])
         k += len(pipeline)
+        last_shell = max((j for j, st in enumerate(pipeline) if j > 0 and is_shellish(st.words)),
+                         default=0)
         for idx, seg in enumerate(pipeline):
-            last = idx == len(pipeline) - 1
-            to_file = stdout_to_file(seg.words)
-            if to_file:
-                sink = "file"
-            elif last:
-                sink = "consumed" if captured else None
-            else:
-                sink = "consumed" if is_consumer(pipeline[idx + 1].words) else None
-            out += check_stage(seg.words, sink, depth)
-            pos, _, _, _ = cmd_pos(seg.words)
-            parent = os.path.basename(seg.words[pos]) if pos is not None else ""
-            # A $(...) capture is trusted only when its parent cannot show it: a bare
-            # assignment, export/local/declare, a test, a hasher, or stdout sent to a file.
-            # Any other parent (echo, curl, bash -c ...) may print it, so the inner command
-            # must be safe by itself.
-            trusted = bool(seg.words) and (
-                pos is None or parent in DECLARERS or parent in TEST_CMDS or parent in HASHERS
-            ) or to_file
-            for sub in seg.subs:
-                out += analyze(sub, trusted, depth + 1)
+            out += scan_stage(seg, depth, byp, ctx)
+            if idx < last_shell:
+                # Text piped into a shell is a command: `echo 'doppler secrets get X' | bash`.
+                out += analyze(" ".join(seg.words), depth + 1, byp, ctx)
     return out
 
 
@@ -525,14 +494,14 @@ def main():
     if not isinstance(command, str):
         return notice("Bash event carries no command string")
     try:
-        problems = analyze(command)
-        if URL_RE.search(command) and not BYPASS_URL_RE.search(command):
-            problems.append(
-                "the command embeds a URL with a literal password (scheme://user:password@host). "
-                "Pass the value through the environment instead (`doppler run -- <cmd>` and read "
-                "the variable in the child). Deliberate override for one command: prefix it with "
-                "SASSYDOG_ALLOW_CREDENTIAL_URL=1."
-            )
+        ctx = {"url_seen": 0}
+        problems = analyze(command, 0, (False, False), ctx)
+        if URL_RE.search(command) and ctx["url_seen"] == 0:
+            # A URL in text no stage word carries (a comment): no stage to anchor a bypass
+            # on, so only a leading bypass on the command's first stage clears it.
+            first = lex(command)
+            if not (first and leading_bypass(first[0].words)[1]):
+                problems.append(URL_MSG)
     except Exception as exc:  # noqa: BLE001 - any classifier fault must be reported, not swallowed
         return notice(f"internal error while classifying ({exc.__class__.__name__})")
     if problems:
