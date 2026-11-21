@@ -200,6 +200,17 @@ Notes on reading it:
   `skills/<name>`. Nothing gates them, so re-run the commands rather than trusting this table when
   the tree moves.
 
+### Bash guard hook
+
+The plugin ships one hook, `hooks/hooks.json` (auto-discovered by Claude Code, nothing to configure): a `PreToolUse` hook on `Bash` that runs `hooks/bash-secret-guard.sh`. It needs `python3` (stdlib only). It exists because a hook cannot see a command's output, so a secret leak has to be stopped by a rule about which commands may run. Two rules:
+
+1. **Doppler value-printing guard.** `doppler secrets get`, `download`, `substitute` and bare `doppler secrets` print secret values in their default output, which puts them in the session transcript. They are denied unless the invocation cannot print a value: `--only-names`, `--silent`, any `doppler run -- <cmd>` (the child decides what prints), stdout redirected to a file, or `--plain` whose output is consumed in the same command (piped into `wc`, `grep -c`, `sha256sum`, `sed` or `head -c0`, or captured with `$(...)` and not itself printed by `echo`/`printf`/`cat`). `sed` is trusted to redact. The denial names the safe forms.
+2. **Literal credentialed URL guard.** A command whose text embeds `scheme://user:password@host` for `postgres(ql)`, `mysql`, `mongodb(+srv)`, `redis(s)` or `amqp(s)` is denied; pass the value through the environment (`doppler run`) instead of the command line.
+
+**Bypass.** Put the variable in the command itself: `SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X` or `SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. It is per command and visible in the transcript on purpose: the hook never reads its own environment, so a bypass cannot be left switched on, and a deliberate override leaves a record of who chose it.
+
+**Failure mode.** If the hook cannot classify an event (empty or malformed input, no command string, `python3` missing, an internal fault) it **fails open and says so** on stderr (exit 1, a non-blocking error Claude Code shows); it never silently allows a printing form it did understand. This is a seatbelt against the accident, not a sandbox: heredoc bodies, process substitution, aliases and variable indirection are not analysed, and `--silent` and `--only-names` are taken at the Doppler CLI's word. A PostToolUse tripwire for credentialed URLs in tool results is not shipped. Pinned by `scripts/test-bash-secret-guard.sh`.
+
 ### Review agents
 
 Nine domain reviewers ship with the plugin (namespaced `sassy-dog:<name>`):
@@ -407,6 +418,8 @@ The quoting and the `[ -d ]` guard are not decoration. The quotes are what make 
 
 `scripts/` belongs in that list because of one file: `align-labels.sh` is the only root-`scripts/` path any skill invokes at runtime through `${CLAUDE_PLUGIN_ROOT}` (every other bundled script lives under `skills/` — almost all under `skills/<skill>/scripts/`, plus the two `skills/setup-hooks/references/templates/*.template.sh` renderer inputs — and is already covered by the first directory). One file is enough — a merge touching only it leaves `skills/` and `agents/` identical while changing what a label-writing run actually executes, which is the #167 failure. Most of root `scripts/` is CI gates that never run at plugin runtime, so drift counts there are not evidence about runtime behaviour and are not offered as any.
 
+`hooks/` loads at runtime too but is **not** in this comparison yet ([#642](https://github.com/Sassy-Dog/skills/issues/642)); to check it by hand, run the same `diff -rq "$CLONE/hooks" "$INSTALL_PATH/hooks"` (the plugin cache loads it, so a stale cache keeps the old guard).
+
 **Any output at all means the cache is stale, or the comparison did not run** — either way it is not current, so run the update in step 4. Silence across all three directories means it is current. The shapes say different things, and a reader scanning only for the word "differ" skips the one that matters most:
 
 | Output | Meaning |
@@ -442,11 +455,12 @@ This repo is **public**, so install and update clone it over anonymous HTTPS —
 
 ## Repository layout
 
-This repo is a single plugin: skills, agents, and the manifest live at the root.
+This repo is a single plugin: skills, agents, one hook, and the manifest live at the root.
 
 ```
 skills/
 ├── .claude-plugin/plugin.json   # Plugin manifest
+├── hooks/hooks.json             # Plugin hook: PreToolUse(Bash) secret guard (see Bash guard hook)
 ├── agents/                      # Subagents (auto-discovered, namespaced sassy-dog:<name>)
 │   ├── *-reviewer.md            # Nine domain reviewers — audit mode or diff-scoped mode
 │   └── pr-review-orchestrator.md  # Diff-scoped fan-out over those nine

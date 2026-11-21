@@ -2901,6 +2901,18 @@ else
     failed "board-drift tests (scripts/test-board-drift.sh)"
 fi
 
+# --- 66. bash-secret-guard tests -----------------------------------------------
+# hooks/bash-secret-guard.{sh,py} is the PreToolUse(Bash) hook hooks/hooks.json ships to
+# every consuming repo: it denies Doppler invocations that print secret values and commands
+# embedding a credentialed URL. A classifier that silently allows a printing form, or that
+# fails open without saying so, reddens nothing downstream; each is a case. Pipes the
+# harness's event JSON into the hook: no network, no repo mutation.
+if pg_gate scripts/test-bash-secret-guard.sh; then
+    pass "bash-secret-guard tests (scripts/test-bash-secret-guard.sh)"
+else
+    failed "bash-secret-guard tests (scripts/test-bash-secret-guard.sh)"
+fi
+
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
     echo "preflight: all gates green" >&2

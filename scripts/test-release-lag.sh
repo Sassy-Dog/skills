@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="release-lag-") as scratch:
         git(repo, "config", "core.hooksPath", os.devnull)
         put(repo, PLUGIN, json.dumps(dict(name="fixture", version="2026.9.1", nested={"version": "keep"})))
         put(repo, MARKET, json.dumps(dict(name="market", plugins=[dict(name="fixture", source="./")])))
-        for path in ("skills/a/SKILL.md", "agents/a.md", "scripts/align-labels.sh"):
+        for path in ("skills/a/SKILL.md", "agents/a.md", "hooks/a.sh", "scripts/align-labels.sh"):
             put(repo, path, "base\n")
         return repo, commit(repo, 0)
 
@@ -174,13 +174,14 @@ with tempfile.TemporaryDirectory(prefix="release-lag-") as scratch:
     put(repo, "skills/a/templates/example.yml", "template")
     put(repo, "skills/a/scripts/example.sh", "script")
     (repo / "agents/a.md").unlink()
+    put(repo, "hooks/a.sh", "changed hook")
     (repo / "scripts/align-labels.sh").chmod(0o755)
     put(repo, PLUGIN, '{"version":"2026.9.1","name":"renamed","nested":{"version":"changed"}}')
     put(repo, MARKET, '{"name":"market","plugins":[{"name":"fixture","source":"other"}]}')
     commit(repo, 10)
     check(repo, "pending", now=11, baseline=base, age=3600, paths={
         "skills/a/references/example.md": "added", "skills/a/templates/example.yml": "added",
-        "skills/a/scripts/example.sh": "added", "agents/a.md": "deleted",
+        "skills/a/scripts/example.sh": "added", "agents/a.md": "deleted", "hooks/a.sh": "modified",
         "scripts/align-labels.sh": "modified", PLUGIN: "modified", MARKET: "modified"})
     (repo / "skills/a/SKILL.md").unlink()
     (repo / "skills/a/SKILL.md").symlink_to("../elsewhere")
