@@ -15,9 +15,19 @@
 #     doppler path, a sudo/env wrapper, `bash -c`/eval strings, a nested
 #     `doppler run -- doppler secrets get`, a doppler in a later `;`/`&&` segment
 #   - each allowed form: --only-names, --silent, `doppler run -- <cmd>` (including the
-#     `bash -c '...$SECRET...'` child), --plain into sed/wc/grep -c/sha256sum/head -c0, a
-#     $(...) capture into an assignment, a redirect to a file (even without --plain),
-#     `secrets set`, and non-doppler commands that merely mention the words
+#     `bash -c '...$SECRET...'` child), --plain into sed d / sed 's/.*//' / sed 's/./*/g' /
+#     wc / grep -c / sha256sum / head -c0, a $(...) capture by an assignment, export, local
+#     or a test, a redirect to a file (even without --plain), `secrets set`, and non-doppler
+#     commands that merely mention the words
+#   - reserved words and wrapper options (coordinator review of #643): doppler after
+#     for/while/until/if/else/!, and after sudo -u/-g, env -u/-C/-S, nice -n, timeout -s/
+#     --kill-after, stdbuf -o, xargs -I/-n, stacked wrappers, plus an UNKNOWN wrapper option
+#     reaching the fail-closed backstop (it scans for doppler / a shell)
+#   - redirects and captures that can still print: /dev/fd, /proc/self/fd, /dev/pts,
+#     /dev/tty, /dev/stdout, `> >(...)`, a later `>&2` / `1>&2`; a $(...) inside curl -H,
+#     bash -c (double or single quoted), `${x:-$(...)}`, a command-prefix assignment, or as
+#     the command word; and sed that is not provably total redaction (p, -n p, s/a/b/, s/./*/
+#     without g, `&` in the replacement, two scripts, a file argument, -f)
 #   - the literal credentialed URL rule: each scheme denied, a URL without a password, a
 #     host:port URL and a bare `user@host` URL allowed
 #   - the per-command bypass variables, one per rule, work only when written in the command;
@@ -29,8 +39,18 @@
 #   - hooks/hooks.json parses, declares one PreToolUse/Bash command hook, and the command it
 #     declares, with ${CLAUDE_PLUGIN_ROOT} substituted as the harness does, denies a real
 #     printing command (exit 2) and allows a real safe one (exit 0)
-# Documented limits are NOT asserted as caught: heredoc bodies, process substitution, aliases
-# and variable indirection (see the module docstring). `sed` is trusted to redact.
+# Every deny case asserts a fragment of the expected message (the Doppler text or the
+# literal-password text), so a denial for the wrong reason is red.
+# Documented limits are NOT asserted as caught: heredoc bodies, aliases, functions and
+# variable indirection (see the module docstring).
+#
+# Mutations run against hooks/bash-secret-guard.py, each making cases red (count of failing
+# cases in parentheses), then reverted: KEYWORDS emptied (6); wrapper option table emptied
+# with the backstop off (13); backstop alone off (2); /dev/fd, /proc, /dev/pts targets
+# counted as a file (6); the later-dup rule removed (2); every $(...) capture trusted (10);
+# sed always a consumer (7); ${...} bodies not scanned (1); env -S string not analysed (1);
+# the nesting ceiling removed (1). Earlier, before the review round: is_consumer always
+# true, and any sink allowing, each turned cases red.
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -58,9 +78,20 @@ run_event() {
 }
 run_cmd() { run_event "$(event "$1")"; }
 
-deny() { # <label> <command>
+deny() { # <label> <command> [message fragment; default picked from the command]
+    local frag="${3:-}"
+    if [ -z "$frag" ]; then
+        case "$2" in
+            *://*:*@*) frag='literal password' ;;
+            *) frag='prints secret values' ;;
+        esac
+    fi
     run_cmd "$2"
-    if [ "$rc" -eq 2 ] && [ -n "$err" ]; then ok "denied: $1"; else bad "denied: $1 (rc=$rc err=${err:-<none>})"; fi
+    if [ "$rc" -eq 2 ] && printf '%s' "$err" | grep -qF -- "$frag"; then
+        ok "denied: $1"
+    else
+        bad "denied: $1 (rc=$rc, wanted message containing '$frag', err=${err:-<none>})"
+    fi
 }
 allow() {
     run_cmd "$2"
@@ -124,12 +155,21 @@ allow "doppler run bash -c child reading \$SECRET" "doppler run -- bash -c 'psql
 allow "--plain into wc" 'doppler secrets get X --plain | wc -c'
 allow "--raw --plain into sha256sum" 'doppler secrets get X --raw --plain | sha256sum'
 allow "--plain into grep -c" 'doppler secrets get X --plain | grep -c .'
-allow "--plain into sed" 'doppler secrets get X --plain | sed "s/./*/g"'
 allow "--plain into head -c0" 'doppler secrets get X --plain | head -c0'
 allow "--plain into head -c 0" 'doppler secrets get X --plain | head -c 0'
 allow "--plain captured into an assignment" 'TOKEN=$(doppler secrets get X --plain)'
 allow "--plain captured in a test" '[ -n "$(doppler secrets get X --plain)" ] && echo set'
-allow "--plain captured as a header argument" 'curl -H "Authorization: Bearer $(doppler secrets get T --plain)" https://example.com'
+allow "--plain captured by export" 'export TOKEN=$(doppler secrets get X --plain)'
+allow "--plain captured by local" 'f() { local t=$(doppler secrets get X --plain); }'
+allow "--plain captured inside [[ ]]" '[[ -n "$(doppler secrets get X --plain)" ]] && echo set'
+allow "--plain into sed d" 'doppler secrets get X --plain | sed d'
+allow "--plain into sed s/.*//" "doppler secrets get X --plain | sed 's/.*//'"
+allow "--plain into sed s/./*/g" 'doppler secrets get X --plain | sed "s/./*/g"'
+allow "redirect with a later fd-2 dup is still a file" 'doppler secrets get X --plain > key.txt 2>&1'
+allow "append redirect" 'doppler secrets get X --plain >> key.txt'
+allow "inside a for loop, redirected" 'for x in A B; do doppler secrets get $x --plain >> keys.txt; done'
+allow "inside a for loop, --only-names" 'for x in A B; do doppler secrets --only-names; done'
+allow "sudo -u with doppler run" 'sudo -u root doppler run -- ./deploy.sh'
 allow "--plain redirected to a file" 'doppler secrets get X --plain > key.txt'
 allow "download redirected to a file" 'doppler secrets download --no-file > .env'
 allow "table form redirected with &>" 'doppler secrets get X &> /dev/null'
@@ -139,6 +179,56 @@ allow "mentions the words without running doppler" 'git commit -m "doppler secre
 allow "grep for the words" 'grep -rn "doppler secrets" docs/'
 allow "ordinary command" 'ls -la'
 allow "empty command" ''
+
+echo "== reserved words and wrapper options (coordinator review, blocking) =="
+deny "for loop" 'for x in A B; do doppler secrets get $x; done'
+deny "while loop" 'while read x; do doppler secrets get $x; done < names.txt'
+deny "if/then" 'if true; then doppler secrets get X; fi'
+deny "else branch" 'if false; then :; else doppler secrets get X; fi'
+deny "negation" '! doppler secrets get X'
+deny "until loop" 'until false; do doppler secrets get X; done'
+deny "sudo -u value" 'sudo -u root doppler secrets get X'
+deny "sudo -g value" 'sudo -g wheel doppler secrets get X'
+deny "env -u value" 'env -u FOO doppler secrets get X'
+deny "env -C value" 'env -C /tmp doppler secrets get X'
+deny "env -S command string" "env -S 'doppler secrets get X'"
+deny "nice -n value" 'nice -n 5 doppler secrets get X'
+deny "timeout -s value and duration" 'timeout -s KILL 5 doppler secrets get X'
+deny "timeout --kill-after=value" 'timeout --kill-after=1 5 doppler secrets get X'
+deny "stdbuf -o value" 'stdbuf -o0 doppler secrets get X'
+deny "stdbuf -o separate value" 'stdbuf -o L doppler secrets get X'
+deny "xargs -I value" 'echo X | xargs -I {} doppler secrets get {}'
+deny "xargs -n value" 'echo X | xargs -n 1 doppler secrets get'
+deny "stacked wrappers" 'sudo -u root env -u A nice -n 3 doppler secrets get X'
+deny "unknown sudo option falls to the backstop" 'sudo --frobnicate-level 9 doppler secrets get X'
+deny "unknown wrapper option, shell child" "sudo --frobnicate-level 9 bash -c 'doppler secrets get X'"
+deny "sudo -u then bash -c" "sudo -u root bash -c 'doppler secrets get X'"
+
+echo "== redirects that are not a file, captures that can print (automated security review) =="
+deny "redirect to /dev/fd/1" 'doppler secrets get X --plain > /dev/fd/1'
+deny "redirect to /dev/fd/2" 'doppler secrets get X --plain >/dev/fd/2'
+deny "redirect to /proc/self/fd/1" 'doppler secrets get X --plain > /proc/self/fd/1'
+deny "redirect to /dev/pts" 'doppler secrets get X --plain > /dev/pts/0'
+deny "redirect to /dev/tty" 'doppler secrets get X --plain > /dev/tty'
+deny "redirect to /dev/stdout" 'doppler secrets get X --plain > /dev/stdout'
+deny "process substitution target" 'doppler secrets get X --plain > >(cat)'
+deny "file redirect then dup to stderr" 'doppler secrets get X --plain > key.txt >&2'
+deny "file redirect then dup to stdout of a tty fd" 'doppler secrets get X --plain > key.txt 1>&2'
+deny "curl header capture" 'curl -H "A: $(doppler secrets get T --plain)" https://example.com'
+deny "bash -c double-quoted capture" 'bash -c "echo $(doppler secrets get X --plain)"'
+deny "bash -c single-quoted capture" "bash -c 'echo \$(doppler secrets get X --plain)'"
+deny "default-value expansion" 'echo ${x:-$(doppler secrets get X --plain)}'
+deny "quoted default-value expansion" 'echo "${x:-$(doppler secrets get X --plain)}"'
+deny "env var prefix on a printing command" 'V=$(doppler secrets get X --plain) printenv V'
+deny "capture as the command word" '$(doppler secrets get X --plain)'
+deny "sed p is not redaction" 'doppler secrets get X --plain | sed p'
+deny "sed -n p is not redaction" 'doppler secrets get X --plain | sed -n p'
+deny "sed s/x/y/ is not total redaction" 'doppler secrets get X --plain | sed s/a/b/'
+deny "sed s/./*/ without g leaks the tail" 'doppler secrets get X --plain | sed "s/./*/"'
+deny "sed with &" 'doppler secrets get X --plain | sed "s/.*/&/"'
+deny "sed with two scripts" 'doppler secrets get X --plain | sed -e d -e p'
+deny "sed reading a file argument" 'doppler secrets get X --plain | sed d other.txt'
+deny "sed -f script file" 'doppler secrets get X --plain | sed -f script.sed'
 
 echo "== literal credentialed URL rule =="
 deny "postgres" 'psql postgres://app:hunter2@db.example.com:5432/app'
@@ -208,7 +298,7 @@ fi
 echo "== nesting ceiling denies rather than guessing =="
 deep='doppler secrets get X'
 for _ in 1 2 3 4 5 6 7 8 9 10; do deep="bash -c '$(printf '%s' "$deep" | sed "s/'/'\\\\''/g")'"; done
-deny "ten levels of bash -c" "$deep"
+deny "ten levels of bash -c" "$deep" 'nests too deeply'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"
