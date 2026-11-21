@@ -5,468 +5,456 @@ stderr, which the harness feeds to the model), exit 1 means "could not classify"
 FAILS OPEN there and says so on stderr (Claude Code shows stderr of any non-0/2 exit as a
 non-blocking error). It never prints to stdout.
 
-Two rules, both over the command text only (a PreToolUse hook cannot see output):
+Two rules, both over the raw command text only (a PreToolUse hook cannot see output). There
+is no shell parser anywhere: every shell-parsing classifier tried here lost to a new spelling,
+so the Doppler rule is a WHOLE-COMMAND ALLOW LIST matched on the raw string, which cannot
+disagree with itself about quoting.
 
-1. Doppler value-printing guard, DENY BY DEFAULT with a short allow list. Every word whose
-   basename is `doppler`, anywhere in any pipeline stage, is classified, whatever precedes it
-   (sudo, ssh, find -exec, docker exec, a for loop...): there is no wrapper table. If a
-   value-printing subcommand follows (`secrets get|download|substitute`, bare `secrets`, or an
-   unrecognised word after `secrets`), the invocation is allowed only when
-     (a) it is `doppler run ...` (the child decides what prints; the child's own
-         `doppler secrets get` is a separate doppler word and is still denied), or
-     (b) it carries `--only-names` (bare, or an explicit true value), or
-     (c) stdout of that stage goes to a real file (normalised path; /dev/* other than
-         /dev/null, /proc/*, process substitution, a later dup to &1/&2 and unresolved
-         variables are not files), or
-     (d) the subcommand does not print values (`secrets set`, `configs`, `setup`, ...).
-   Nothing else is trusted: not --plain, not --silent, not a pipe into wc/sed/grep, not a
-   $(...) capture. Command strings are looked into wherever they hide: `$(...)`, backticks,
-   `${...}`, `<(...)`, `bash -c` (any shell, `--` included), `eval`, `env -S`, here-strings
-   and strings piped to a shell.
-2. Literal credentialed URL guard. A word embedding scheme://[user]:password@host (a password
-   starting with `$` is an environment-variable reference and passes).
+1. Doppler value-printing guard, deny by construction.
+   Trigger: the command mentions `doppler` in any spelling the text can show. The raw text is
+   lower-cased, Unicode-folded and ANSI-C escapes are decoded; then `doppler` is looked for
+   both as written and with every character that is not a letter, digit or whitespace removed
+   (so `DOPPLER`, `$'\\x64oppler'`, `d"o"ppler`, `dopp\\ler`, `{doppler,}`, `doppl[e]r`,
+   `dop*ler` all trigger). A second trigger covers a command name the text does not spell
+   (`${X}pler secrets get`): a shell expansion character plus a value-printing doppler
+   phrase (`secrets get|download|substitute`, `configure get|--all`, `configs tokens`,
+   `--print-config`).
+   A triggered command is allowed only if the ENTIRE command is exactly one of:
+     1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
+        `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
+     2. `doppler [global flags] run [flags] -- <rest>` or `run --command '<string>'`, where
+        <rest> is a single simple command line that does not itself trigger and has no
+        `$(`, backtick, `<(`, `>(`
+     3. `doppler secrets get NAME... [flags] > <literal path>`, `secrets download --no-file
+        [flags] > <literal path>`, `secrets download [flags] <literal path>`, and
+        `secrets substitute <template> [flags] (> | --output) <literal path>`
+     4. a bare non-printing subcommand: login, logout, setup, configs, projects,
+        environments, me, update, activity, changelog, open, settings, flags, help,
+        --version, --help
+   where "exactly one" means: a single simple command (no ; & | && || newline, backtick, $(,
+   <(, >(, <<, <, >& ...), no environment prefix, no wrapper, the command word is the literal
+   lower-case `doppler`, every flag is on an explicit per-subcommand allow list with a literal
+   value that does not start with `-`, and an unknown flag denies. A literal path has only
+   [A-Za-z0-9._/~-], no `.`/`..` segment, is not under /dev, /proc or /sys, and a relative
+   path may not start with a device-like segment (fd, stdout, tty, ...).
+2. Literal credentialed URL guard. The raw text embeds scheme://[user]:password@host (scheme
+   postgres(ql)/mysql/mongodb/redis(s)/amqp(s), optional +driver, case-insensitive). A password
+   that starts with an unquoted `$name`, `${` or `$(` is an environment reference and passes;
+   inside single quotes `$` is literal and does not.
 
-Per-command bypass: a LEADING, unquoted assignment on the stage it applies to, e.g.
-`SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X` or
-`SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. The hook's own environment and any other position
-are never consulted, so the bypass is visible in the transcript and cannot be left on.
+Per-command bypass: LEADING, unquoted `SASSYDOG_ALLOW_DOPPLER_PRINT=1` /
+`SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments, honoured only when the rest of the command is a
+single simple command (no ; & | newline, backtick, $(, <(, >( outside single quotes). Never by
+substring, never from the hook's own environment.
 
-Known limits (a seatbelt against the accident, not a sandbox): aliases, functions, variable
-indirection, symlinked redirect targets, a quoted command string handed to ssh/docker/su, and that `doppler run -- env` / `printenv` print everything because the child
-decides. Heredoc bodies are read as ordinary command lines, so a heredoc that only quotes
-`doppler secrets get X` is denied too.
+Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
+name assembled at run time from pieces the text never spells (printf formatting), symlinked
+redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
+`printenv` (the child decides), `password=` / `?password=` URL forms, and false denies for any
+text that merely mentions doppler (a commit message, a PR body): use the bypass.
 """
 
 import json
-import os
-import posixpath
 import re
 import sys
+import unicodedata
 
 URL_RE = re.compile(
     r"(?:postgres(?:ql)?|mysql|mongodb|redis|rediss|amqps?)(?:\+[a-z0-9.+-]+)?"
-    r"://[^:@/\s]*:(?!\$)[^@/\s]+@[^/\s]+",
+    r"://[^:@/\s]*:([^@/\s]+)@[^/\s]+",
     re.I,
 )
 BYPASS_DOPPLER = "SASSYDOG_ALLOW_DOPPLER_PRINT=1"
 BYPASS_URL = "SASSYDOG_ALLOW_CREDENTIAL_URL=1"
-
-SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "ash", "fish", "pwsh", "csh", "tcsh"}
-KEYWORDS = {"if", "then", "elif", "else", "do", "while", "until", "!", "{"}
-PRINT_SUBCMDS = {"get", "download", "substitute"}
-OTHER_SECRETS_SUBCMDS = {"set", "delete", "upload", "names", "notes", "update", "help"}
-# Doppler global flags that take a separate value (so the value is not the subcommand).
-VALUE_FLAGS = {"-p", "--project", "-c", "--config", "--token", "-t", "--scope", "--api-host",
-               "--configuration", "--config-dir"}
-ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-MAX_DEPTH = 8
+BYPASS_PREFIX_RE = re.compile(
+    r"^\s*((?:(?:SASSYDOG_ALLOW_DOPPLER_PRINT|SASSYDOG_ALLOW_CREDENTIAL_URL)=1[ \t]+)+)"
+)
 
 SAFE_FORMS = (
-    "Safe forms: `doppler secrets --only-names`, `doppler run -- <cmd>` (the child reads the "
-    "value from its environment; the child's own `doppler secrets get` is still denied), or a "
-    "redirect of stdout to a real file (`> /tmp/f`; /dev/*, /proc/*, process substitution and "
-    "a later >&2 are not files)."
+    "Allowed forms (the whole command, nothing else): `doppler secrets --only-names`; "
+    "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
+    "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
+    "`substitute`; the file is yours, reading it back is your responsibility); a bare "
+    "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
-    "`doppler secrets {shown}` prints secret values to the transcript. " + SAFE_FORMS +
-    " Deliberate override for one command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
+    "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
+    "print secret values to the transcript. " + SAFE_FORMS + " Text that merely mentions the "
+    "word (a commit message, a PR body) is denied too. Deliberate override for one single "
+    "command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "
     "Pass the value through the environment instead (`doppler run -- <cmd>` and read the "
-    "variable in the child). Deliberate override for one command: prefix it with "
+    "variable in the child). Deliberate override for one single command: prefix it with "
     "SASSYDOG_ALLOW_CREDENTIAL_URL=1."
 )
-DEEP_MSG = "command nests too deeply to classify; denied rather than guessed. " + SAFE_FORMS
+
+# ---- trigger -------------------------------------------------------------------------------
+
+EXPANSION_RE = re.compile(r"[$`{*?\[]")
 
 
-class Word(str):
-    """A shell word; `.q` is True when any part of it was quoted or escaped."""
-
-    q = False
-
-
-def mkword(text, quoted):
-    w = Word(text)
-    w.q = quoted
-    return w
+def decode_escapes(s):
+    s = re.sub(r"\\x([0-9a-f]{1,2})", lambda m: chr(int(m.group(1), 16)), s)
+    s = re.sub(r"\\u([0-9a-f]{4})", lambda m: chr(int(m.group(1), 16)), s)
+    s = re.sub(r"\\([0-7]{1,3})", lambda m: chr(int(m.group(1), 8) & 0xFF), s)
+    return s
 
 
-class Seg:
-    def __init__(self):
-        self.words = []
-        self.sep = None
-        self.subs = []
+def triggered(text):
+    t = decode_escapes(unicodedata.normalize("NFKC", text).lower())
+    if "doppler" in t:
+        return True
+    if "doppler" in re.sub(r"[^a-z0-9\s]", "", t):
+        return True
+    if EXPANSION_RE.search(text):
+        w = lambda *names: all(re.search(r"\b" + n + r"\b", t) for n in names)  # noqa: E731
+        if (w("secrets") and any(re.search(r"\b" + n + r"\b", t) for n in ("get", "download", "substitute"))) \
+                or (w("configure") and (w("get") or "--all" in t)) \
+                or w("configs", "tokens") or "print-config" in t:
+            return True
+    return False
 
 
-def match_paren(s, i):
-    """Index of the ')' closing the '(' whose body starts at s[i]; len(s) if unterminated."""
-    depth = 1
+# ---- single simple command, quote-aware ------------------------------------------------------
+
+
+def single_simple(s):
+    """True when s has no control operator outside single quotes (and no unbalanced quote)."""
     quote = None
+    i = 0
     while i < len(s):
         c = s[i]
-        if c == "\\" and quote != "'":
-            i += 2
-            continue
-        if quote:
-            if c == quote:
+        nxt = s[i + 1] if i + 1 < len(s) else ""
+        if quote == "'":
+            if c == "'":
                 quote = None
-        elif c in "'\"":
-            quote = c
-        elif c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                return i
+        elif quote == '"':
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quote = None
+            elif c == "`" or (c == "$" and nxt == "("):
+                return False
+        else:
+            if c == "\\":
+                i += 1
+            elif c in "'\"":
+                quote = c
+            elif c in ";&|<>()\n\r`" or (c == "$" and nxt == "("):
+                return False
         i += 1
-    return len(s)
+    return quote is None
 
 
-def extract_subs(text):
-    """Inner strings of every $(...) and `...` inside text (used for ${...} bodies)."""
-    found = []
+def in_single_quotes(s, pos):
+    quote = None
     i = 0
-    while i < len(text):
-        if text.startswith("$(", i) and not text.startswith("$((", i):
-            j = match_paren(text, i + 2)
-            found.append(text[i + 2:j])
-            i = j + 1
-        elif text[i] == "`":
-            j = text.find("`", i + 1)
-            j = len(text) if j < 0 else j
-            found.append(text[i + 1:j])
-            i = j + 1
-        else:
-            i += 1
-    return found
-
-
-def lex(s):
-    segs = []
-    seg = Seg()
-    cur = []
-    has = False
-    quoted = False
-    i = 0
-    n = len(s)
-
-    def end_word():
-        nonlocal cur, has, quoted
-        if has or cur:
-            seg.words.append(mkword("".join(cur), quoted))
-        cur, has, quoted = [], False, False
-
-    def end_seg(sep):
-        nonlocal seg
-        end_word()
-        seg.sep = sep
-        if seg.words or seg.subs:
-            segs.append(seg)
-        seg = Seg()
-
-    while i < n:
+    while i < pos:
         c = s[i]
-        nxt = s[i + 1] if i + 1 < n else ""
-        if c == "\\":
-            if nxt == "\n":
-                i += 2
-                continue
-            if nxt:
-                cur.append(nxt)
-                has = quoted = True
-            i += 2
-        elif c == "'":
-            j = s.find("'", i + 1)
-            j = n if j < 0 else j
-            cur.append(s[i + 1:j])
-            has = quoted = True
-            i = j + 1
-        elif c == '"':
-            has = quoted = True
-            i += 1
-            while i < n and s[i] != '"':
-                d = s[i]
-                if d == "\\" and i + 1 < n:
-                    e = s[i + 1]
-                    if e == "\n":
-                        pass
-                    elif e in '$`"\\':
-                        cur.append(e)
-                    else:
-                        cur.append(d + e)
-                    i += 2
-                elif d == "$" and s[i + 1:i + 2] == "(" and s[i + 1:i + 3] != "((":
-                    j = match_paren(s, i + 2)
-                    seg.subs.append(s[i + 2:j])
-                    cur.append("\0")
-                    i = j + 1
-                elif d == "$" and s[i + 1:i + 2] == "{":
-                    j = s.find("}", i + 2)
-                    j = n - 1 if j < 0 else j
-                    body = s[i:j + 1]
-                    seg.subs.extend(extract_subs(body))
-                    cur.append(body)
-                    i = j + 1
-                elif d == "`":
-                    j = s.find("`", i + 1)
-                    j = n if j < 0 else j
-                    seg.subs.append(s[i + 1:j])
-                    cur.append("\0")
-                    i = j + 1
-                else:
-                    cur.append(d)
-                    i += 1
-            i += 1
-        elif c == "$" and nxt == "(" and s[i + 1:i + 3] != "((":
-            j = match_paren(s, i + 2)
-            seg.subs.append(s[i + 2:j])
-            cur.append("\0")
-            has = True
-            i = j + 1
-        elif c == "$" and nxt == "{":
-            j = s.find("}", i + 2)
-            j = n - 1 if j < 0 else j
-            body = s[i:j + 1]
-            seg.subs.extend(extract_subs(body))
-            cur.append(body)
-            has = True
-            i = j + 1
-        elif c == "`":
-            j = s.find("`", i + 1)
-            j = n if j < 0 else j
-            seg.subs.append(s[i + 1:j])
-            cur.append("\0")
-            has = True
-            i = j + 1
-        elif c in ";\n(){}":
-            end_seg(";")
-            i += 1
-        elif c == "|":
-            if nxt == "|":
-                end_seg("||")
-                i += 2
-            else:
-                end_seg("|")
-                i += 2 if nxt == "&" else 1
-        elif c == "&":
-            if (cur and cur[-1] == ">") or nxt == ">":
-                cur.append(c)
-                has = True
+        if quote == "'":
+            if c == "'":
+                quote = None
+        elif quote == '"':
+            if c == "\\":
                 i += 1
-            elif nxt == "&":
-                end_seg("&&")
-                i += 2
-            else:
-                end_seg("&")
-                i += 1
-        elif c in " \t\r":
-            end_word()
-            i += 1
-        elif c == "#" and not cur and not has:
-            j = s.find("\n", i)
-            i = n if j < 0 else j
+            elif c == '"':
+                quote = None
         else:
-            cur.append(c)
-            has = True
+            if c == "\\":
+                i += 1
+            elif c in "'\"":
+                quote = c
+        i += 1
+    return quote == "'"
+
+
+# ---- the allow list --------------------------------------------------------------------------
+
+STRICT_RE = re.compile(r"[A-Za-z0-9._/@:=,+~ \t|>-]*")
+VALUE_RE = re.compile(r"[A-Za-z0-9._/@:-]+")
+NAME_RE = re.compile(r"[A-Za-z0-9_]+")
+PATH_RE = re.compile(r"[A-Za-z0-9._/~-]+")
+DEVLIKE = {"fd", "stdin", "stdout", "stderr", "tty", "console", "pts", "ptmx", "self", "dev",
+           "proc", "sys", "null"}
+PIPE_OK_RE = re.compile(
+    r"wc -l|head -n [0-9]+|grep(?: -[cqxFiwv]+)? [A-Za-z0-9_.-]+"
+)
+
+# Flags are taken from `doppler --help`, `doppler help secrets [get|download|substitute]` and
+# `doppler run --help` (CLI v3.76). Left out on purpose: -t/--token and --passphrase (a
+# credential on the command line), --copy, --print-config, --no-verify-tls, --mount, --fallback.
+GLOBAL_BOOL = {"--debug", "--json", "--no-check-version", "--no-read-env", "--no-timeout",
+               "--enable-dns-resolver", "--silent"}
+GLOBAL_VAL = {"--api-host", "--attempts", "--config-dir", "--dashboard-host",
+              "--dns-resolver-address", "--dns-resolver-proto", "--dns-resolver-timeout",
+              "--scope", "--timeout"}
+PC_VAL = {"-p", "--project", "-c", "--config"}
+SECRETS_BOOL = {"--only-names", "--raw", "--type", "--visibility"}
+GET_BOOL = {"--plain", "--raw", "--type", "--visibility", "--no-exit-on-missing-secret"}
+DOWNLOAD_BOOL = {"--no-file", "--no-cache", "--no-fallback", "--no-exit-on-write-failure"}
+DOWNLOAD_VAL = {"--format", "--name-transformer", "--dynamic-ttl"}
+SUBST_VAL = {"--use-env", "--dynamic-ttl", "--output"}
+RUN_BOOL = {"--no-cache"}
+RUN_VAL = {"--name-transformer", "--format", "--dynamic-ttl"}
+BARE_SUBS = {
+    "login": (set(), set()),
+    "logout": (set(), set()),
+    "setup": ({"--no-interactive", "--no-save-token"}, PC_VAL),
+    "configs": (set(), {"-p", "--project", "-e", "--environment", "-n", "--number", "--page"}),
+    "projects": (set(), {"-n", "--number", "--page"}),
+    "environments": (set(), {"-p", "--project", "-n", "--number", "--page"}),
+    "me": (set(), set()),
+    "update": (set(), set()),
+    "activity": (set(), {"-n", "--number", "--page"}),
+    "changelog": (set(), set()),
+    "open": (set(), set()),
+    "settings": (set(), set()),
+    "flags": (set(), set()),
+}
+INFO_FLAGS = {"--version", "-v", "--help", "-h"}
+
+
+def literal_path(p):
+    if not PATH_RE.fullmatch(p) or p.startswith("-"):
+        return False
+    if "~" in p and not (p.startswith("~/") and p.count("~") == 1):
+        return False
+    segs = p.split("/")
+    for k, seg in enumerate(segs):
+        if seg in (".", "..") or (seg == "" and k != 0):
+            return False
+    if p.startswith("/"):
+        return not any(p == r or p.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
+    first = segs[0]
+    return first not in DEVLIKE
+
+
+def parse_args(toks, i, bools, vals):
+    """Flags (from the given sets) and positionals starting at toks[i]; None on anything else."""
+    flags = {}
+    pos = []
+    while i < len(toks):
+        t = toks[i]
+        if t.startswith("-"):
+            name, eq, val = t.partition("=")
+            if name in bools and not eq:
+                flags[name] = True
+                i += 1
+            elif name in vals:
+                if eq:
+                    v = val
+                    i += 1
+                elif i + 1 < len(toks):
+                    v = toks[i + 1]
+                    i += 2
+                else:
+                    return None
+                if not VALUE_RE.fullmatch(v) or v.startswith("-"):
+                    return None
+                flags[name] = v
+            else:
+                return None
+        else:
+            pos.append(t)
             i += 1
-    end_seg(None)
-    return segs
+    return flags, pos
 
 
-def leading_bypass(words):
-    """(doppler bypass, url bypass) from LEADING unquoted assignments of this stage only."""
-    d = u = False
-    for w in words:
-        if not w.q and w in KEYWORDS:
+def parse_global(toks):
+    """Leading global flags after `doppler`: (index of the subcommand, flags) or None."""
+    i = 1
+    glob = {}
+    while i < len(toks) and toks[i].startswith("-"):
+        name, eq, val = toks[i].partition("=")
+        if name in GLOBAL_BOOL and not eq:
+            glob[name] = True
+            i += 1
+        elif name in GLOBAL_VAL:
+            if eq:
+                v = val
+                i += 1
+            elif i + 1 < len(toks):
+                v = toks[i + 1]
+                i += 2
+            else:
+                return None
+            if not VALUE_RE.fullmatch(v) or v.startswith("-"):
+                return None
+            glob[name] = v
+        else:
+            return None
+    return i, glob
+
+
+def split_redirect(toks):
+    """(tokens without the redirect, path or None); None when a `>` is anywhere but last-but-one."""
+    n = toks.count(">")
+    if n == 0:
+        return toks, None
+    if n != 1 or len(toks) < 2 or toks[-2] != ">":
+        return None
+    return toks[:-2], toks[-1]
+
+
+def check_rest(rest):
+    """The child of `doppler run --`: one simple command line that cannot name doppler."""
+    if not rest.strip() or "\n" in rest or "\r" in rest:
+        return False
+    if any(x in rest for x in ("$(", "`", "<(", ">(")):
+        return False
+    return single_simple(rest) and not triggered(rest)
+
+
+def allowed_run(cmd):
+    m = re.fullmatch(r"(doppler[ \t][A-Za-z0-9._/@:=, \t-]*?)[ \t]--command[ \t]'([^']*)'", cmd)
+    if m:
+        head, string = m.group(1), m.group(2)
+        if not check_string(string):
+            return False
+    else:
+        head, sep, rest = cmd.partition(" -- ")
+        if not sep or not check_rest(rest):
+            return False
+    if not STRICT_RE.fullmatch(head) or any(c in head for c in "|>"):
+        return False
+    toks = head.split()
+    if not toks or toks[0] != "doppler":
+        return False
+    parsed = parse_args(toks, 1, GLOBAL_BOOL | RUN_BOOL, GLOBAL_VAL | PC_VAL | RUN_VAL)
+    return bool(parsed) and parsed[1] == ["run"]
+
+
+def check_string(s):
+    return bool(s.strip()) and not any(x in s for x in ("$(", "`", "<(", ">(")) and not triggered(s)
+
+
+def allowed_strict(cmd):
+    """True when the whole command is exactly one of the allowed Doppler forms."""
+    cmd = cmd.strip()
+    if not cmd:
+        return False
+    if cmd.startswith("doppler ") and (" -- " in cmd or " --command " in cmd) and \
+            re.match(r"doppler[ \t]+(?:[^ \t]+[ \t]+)*?run\b", cmd):
+        return allowed_run(cmd)
+    if not STRICT_RE.fullmatch(cmd):
+        return False
+    toks = cmd.split()
+    for t in toks:
+        if t not in ("|", ">") and ("|" in t or ">" in t):
+            return False
+    if not toks or toks[0] != "doppler":
+        return False
+    tail = None
+    if "|" in toks:
+        k = toks.index("|")
+        toks, tail = toks[:k], toks[k + 1:]
+        if "|" in tail or ">" in tail or not PIPE_OK_RE.fullmatch(" ".join(tail)):
+            return False
+    split = split_redirect(toks)
+    if split is None:
+        return False
+    toks, redirect = split
+    if redirect is not None and (tail is not None or not literal_path(redirect)):
+        return False
+    rest = toks[1:]
+    # info
+    if rest and (rest[0] in INFO_FLAGS or rest[0] == "help") and tail is None and redirect is None:
+        return len(rest) == 1 or (rest[0] == "help" and len(rest) <= 3 and all(re.fullmatch(r"[a-z]+", x) for x in rest[1:]))
+    if rest[:2] in (["run", "--help"], ["run", "-h"]) and len(rest) == 2:
+        return tail is None and redirect is None
+    # global flags, then the subcommand
+    g = parse_global(toks)
+    if g is None:
+        return False
+    i, glob = g
+    if i >= len(toks):
+        return False
+    sub = toks[i]
+    if sub == "secrets":
+        return allowed_secrets(toks, i + 1, redirect, tail)
+    if sub in BARE_SUBS and tail is None and redirect is None:
+        bools, vals = BARE_SUBS[sub]
+        if sub == "me":
+            return i + 1 == len(toks) and not glob
+        parsed = parse_args(toks, i + 1, GLOBAL_BOOL | bools, GLOBAL_VAL | vals)
+        return bool(parsed) and not parsed[1]
+    return False
+
+
+def allowed_secrets(toks, i, redirect, tail):
+    probe = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL | GET_BOOL | DOWNLOAD_BOOL | RUN_BOOL,
+                       GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL | SUBST_VAL)
+    if probe is None:
+        return False
+    sub = probe[1][0] if probe[1] else None
+    if sub is None:
+        # form 1: names only
+        parsed = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL, GLOBAL_VAL | PC_VAL)
+        return bool(parsed) and parsed[0].get("--only-names") is True and not parsed[1] \
+            and redirect is None
+    if tail is not None:
+        return False
+    if sub == "get":
+        parsed = parse_args(toks, i, GLOBAL_BOOL | GET_BOOL, GLOBAL_VAL | PC_VAL)
+        if not parsed or parsed[1][0] != "get" or len(parsed[1]) < 2:
+            return False
+        return redirect is not None and all(NAME_RE.fullmatch(n) for n in parsed[1][1:])
+    if sub == "download":
+        parsed = parse_args(toks, i, GLOBAL_BOOL | DOWNLOAD_BOOL, GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL)
+        if not parsed or parsed[1][0] != "download":
+            return False
+        flags, pos = parsed
+        if flags.get("--no-file"):
+            return len(pos) == 1 and redirect is not None
+        return len(pos) == 2 and redirect is None and literal_path(pos[1])
+    if sub == "substitute":
+        parsed = parse_args(toks, i, GLOBAL_BOOL, GLOBAL_VAL | PC_VAL | SUBST_VAL)
+        if not parsed or parsed[1][0] != "substitute" or len(parsed[1]) != 2:
+            return False
+        flags, pos = parsed
+        if not literal_path(pos[1]):
+            return False
+        out = flags.get("--output")
+        if (out is None) == (redirect is None):
+            return False
+        return out is None or literal_path(out)
+    return False
+
+
+# ---- bypass and URL --------------------------------------------------------------------------
+
+
+def split_bypass(cmd):
+    """(doppler bypass, url bypass, body): leading assignments count only on a single command."""
+    m = BYPASS_PREFIX_RE.match(cmd)
+    if not m:
+        return False, False, cmd
+    body = cmd[m.end():]
+    if not single_simple(body):
+        return False, False, cmd
+    toks = m.group(1).split()
+    return BYPASS_DOPPLER in toks, BYPASS_URL in toks, body
+
+
+def url_violation(text):
+    for m in URL_RE.finditer(text):
+        pw = m.group(1)
+        if re.match(r"\$[A-Za-z_{(]", pw) and not in_single_quotes(text, m.start(1)):
             continue
-        if ASSIGN_RE.match(w) and not w.q:
-            d = d or w == BYPASS_DOPPLER
-            u = u or w == BYPASS_URL
-            continue
-        break
-    return d, u
-
-
-def real_file(target):
-    """True when a redirect target is a regular file (or /dev/null), judged on a normalised path."""
-    if not target or "$" in target or "\0" in target or "`" in target:
-        return False  # cannot be resolved here; fail closed
-    t = re.sub(r"/+", "/", target)
-    t = posixpath.normpath(t)
-    if t.startswith(".."):
-        return False  # climbs out of an unknown cwd
-    if t == "/dev/null":
         return True
-    return not (t == "/dev" or t.startswith("/dev/") or t == "/proc" or t.startswith("/proc/"))
+    return False
 
 
-def stdout_to_file(words):
-    """True when, after every redirect in order, stdout ends up in a real file."""
-    dest = "term"
-    for i, w in enumerate(words):
-        if w.q:
-            continue
-        m = re.match(r"^(\d*|&)>>?(.*)$", w)
-        if not m:
-            continue
-        fd, target = m.group(1), m.group(2)
-        if fd not in ("", "1", "&"):
-            continue
-        if not target:
-            nxt = words[i + 1] if i + 1 < len(words) else ""
-            if not nxt or nxt.startswith(("&", ">", "<")):
-                continue  # `>` ending the stage is `>(...)`: process substitution, not a file
-            target = nxt
-        if target.startswith("&"):
-            dup = target[1:]
-            if dup == "1":
-                continue
-            if dup == "-":
-                dest = "file"
-            elif dup.isdigit():
-                dest = "term"
-            else:  # `>&word` redirects stdout and stderr to the file `word`
-                dest = "file" if real_file(dup) else "term"
-            continue
-        dest = "file" if real_file(target) else "term"
-    return dest == "file"
-
-
-def only_names(rest):
-    state = False
-    for a in rest:
-        if a == "--only-names":
-            state = True
-        elif a.startswith("--only-names="):
-            state = a.split("=", 1)[1].lower() in ("true", "1", "t")
-    return state
-
-
-def subcommand(rest):
-    """First positional word that is not a flag or a known flag's value; None when absent."""
-    k = 0
-    while k < len(rest):
-        a = rest[k]
-        if a.startswith("-") and len(a) > 1:
-            k += 2 if a in VALUE_FLAGS else 1
-            continue
-        return a
-    return None
-
-
-def classify_doppler(words, k, byp):
-    """Violations for the doppler word at words[k]."""
-    if byp[0]:
-        return []
-    args = words[k + 1:]
-    first = next((a for a in args if a in ("run", "secrets")), None)
-    if first != "secrets":
-        return []  # `doppler run ...` (the child is not classified) or a non-printing command
-    rest = args[args.index("secrets") + 1:]
-    sub = subcommand(rest)
-    if sub in OTHER_SECRETS_SUBCMDS:
-        return []
-    if "--help" in rest or "-h" in rest:
-        return []
-    if only_names(rest) or stdout_to_file(words):
-        return []
-    return [DOPPLER_MSG.format(shown=sub if sub in PRINT_SUBCMDS else ("(bare)" if sub is None else sub))]
-
-
-def shell_script(words, k):
-    """The -c script string of the shell at words[k], or None when it has no -c."""
-    for j in range(k + 1, len(words)):
-        a = words[j]
-        if not (a.startswith("-") and len(a) > 1):
-            continue
-        if (not a.startswith("--") and "c" in a[1:]) or a.lower() == "-command":
-            j += 1
-            while j < len(words) and words[j] == "--":
-                j += 1
-            return words[j] if j < len(words) else None
-    return None
-
-
-def env_strings(words, k):
-    """Command strings handed to `env -S` / `--split-string` (clusters and attached forms)."""
-    vals = []
-    for j in range(k + 1, len(words)):
-        a = words[j]
-        if a.startswith("--split-string="):
-            vals.append(a.split("=", 1)[1])
-        elif a == "--split-string" and j + 1 < len(words):
-            vals.append(words[j + 1])
-        elif a.startswith("-") and not a.startswith("--") and "S" in a[1:]:
-            idx = a.index("S", 1)
-            rest = a[idx + 1:]
-            if rest:
-                vals.append(rest)
-            elif j + 1 < len(words):
-                vals.append(words[j + 1])
-    return vals
-
-
-def is_shellish(words):
-    return any(os.path.basename(w) in SHELLS or w in ("source", ".", "eval") for w in words)
-
-
-def scan_stage(seg, depth, byp, ctx):
-    words = seg.words
-    d, u = leading_bypass(words)
-    byp = (byp[0] or d, byp[1] or u)
-    out = []
-    for sub in seg.subs:
-        out += analyze(sub, depth + 1, byp, ctx)
-    for w in words:
-        if URL_RE.search(w):
-            ctx["url_seen"] += 1
-            if not byp[1]:
-                out.append(URL_MSG)
-    shellish = is_shellish(words)
-    for k, w in enumerate(words):
-        name = os.path.basename(w)
-        if name == "doppler":
-            out += classify_doppler(words, k, byp)
-        elif name in SHELLS:
-            script = shell_script(words, k)
-            if script is not None:
-                out += analyze(script, depth + 1, byp, ctx)
-        elif name == "env":
-            for text in env_strings(words, k):
-                out += analyze(text, depth + 1, byp, ctx)
-        elif w == "eval":
-            out += analyze(" ".join(words[k + 1:]), depth + 1, byp, ctx)
-        if name == "doppler":
-            for j in range(k + 1, len(words)):
-                if words[j] == "--command" and j + 1 < len(words):
-                    out += analyze(words[j + 1], depth + 1, byp, ctx)
-                elif words[j].startswith("--command="):
-                    out += analyze(words[j].split("=", 1)[1], depth + 1, byp, ctx)
-        if w == "<<<" and not w.q and shellish and k + 1 < len(words):
-            out += analyze(words[k + 1], depth + 1, byp, ctx)
-    return out
-
-
-def analyze(text, depth, byp, ctx):
-    if depth > MAX_DEPTH:
-        return [DEEP_MSG]
-    out = []
-    segs = lex(text)
-    k = 0
-    while k < len(segs):
-        pipeline = [segs[k]]
-        while pipeline[-1].sep == "|" and k + len(pipeline) < len(segs):
-            pipeline.append(segs[k + len(pipeline)])
-        k += len(pipeline)
-        last_shell = max((j for j, st in enumerate(pipeline) if j > 0 and is_shellish(st.words)),
-                         default=0)
-        for idx, seg in enumerate(pipeline):
-            out += scan_stage(seg, depth, byp, ctx)
-            if idx < last_shell:
-                # Text piped into a shell is a command: `echo 'doppler secrets get X' | bash`.
-                out += analyze(" ".join(seg.words), depth + 1, byp, ctx)
-    return out
+def analyze(command):
+    bd, bu, body = split_bypass(command)
+    problems = []
+    if not bd and triggered(body) and not allowed_strict(body):
+        problems.append(DOPPLER_MSG)
+    if not bu and url_violation(body if (bd or bu) else command):
+        problems.append(URL_MSG)
+    return problems
 
 
 def notice(msg):
@@ -494,14 +482,7 @@ def main():
     if not isinstance(command, str):
         return notice("Bash event carries no command string")
     try:
-        ctx = {"url_seen": 0}
-        problems = analyze(command, 0, (False, False), ctx)
-        if URL_RE.search(command) and ctx["url_seen"] == 0:
-            # A URL in text no stage word carries (a comment): no stage to anchor a bypass
-            # on, so only a leading bypass on the command's first stage clears it.
-            first = lex(command)
-            if not (first and leading_bypass(first[0].words)[1]):
-                problems.append(URL_MSG)
+        problems = analyze(command)
     except Exception as exc:  # noqa: BLE001 - any classifier fault must be reported, not swallowed
         return notice(f"internal error while classifying ({exc.__class__.__name__})")
     if problems:
