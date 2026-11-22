@@ -100,6 +100,14 @@
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
+# KNOWN LIMIT, pinned allow (operator decision on review 7, option b): the command-word trigger
+# inspects only the first word of a simple command, so a glob/expansion doppler name behind a
+# prefix word (`time`, `!`, `{`), inside `<(...)` or a here-string, or after a detached redirect
+# target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is allowed. Those spellings carry allow cases
+# in the "KNOWN LIMIT" section. No mutant was run for the pin; it asserts current behaviour only.
+# Review 6's bootstrap-tail spellings (`&& {set,}`, `&& FOO=1 set`, `&& let x=API_KEY`,
+# `&& [[ DB -gt 0 ]]`) are pinned as denies; the review-6 mutant (bootstrap accepts text after the
+# eval) is the one that targets them, and was not re-run against these four cases.
 # Documented limits are NOT asserted as caught: aliases and functions, a command name built at
 # run time from pieces the text never spells (printf formatting), symlinked redirect targets,
 # reading a redirected file back, `doppler run -- env` / `printenv` (the child decides),
@@ -948,6 +956,34 @@ big_time "a quote at the front and many URLs" 0 '"echo " + "\x27" * 100000 + "po
 big_time "many literal-password URLs" 2 '"psql postgres://u:pw@h " * 30000'
 big_time "an expansion and many words, then secrets" 2 '"x $HOME " * 100000 + "secrets"'
 big_time "a very long plain command" 0 '"echo a " * 300000'
+
+echo "== review 6 bootstrap tails stay denied =="
+BOOT='eval "$(doppler secrets download --no-file --format env)"'
+deny "bootstrap then a brace-expansion tail" "$BOOT && {set,}"
+deny "bootstrap then an assignment-prefixed set" "$BOOT && FOO=1 set"
+deny "bootstrap then let reading a secret name" "$BOOT && let x=API_KEY"
+deny "bootstrap then a [[ ]] test" "$BOOT && [[ DB -gt 0 ]]"
+
+echo "== wrapped presence probe (survey-work) =="
+allow "run wrapping sh -c with a single-quoted test" "doppler run -p P -c C -- sh -c 'test -n \"\$ASC_KEY_ID\"'"
+deny "run wrapping a command piped onward" 'doppler run -p P -c C -- test -n x | grep a'
+deny "run wrapping a command redirected" 'doppler run -p P -c C -- test -n x > out'
+
+echo "== KNOWN LIMIT, pinned allow: a glob/expansion command name that is not the first word =="
+# The command-word trigger inspects only the first word of a simple command. These deliberate
+# obfuscations are an accepted limit (README, Bash guard hook, Known limits). They are pinned as
+# ALLOWS so closing or reopening them is a conscious decision: if one starts to deny, update the
+# README and the hook docstring in the same change.
+allow "limit: brace group prefix, globbed name, quoted subcommand" "{ /opt/homebrew/bin/dop?ler \$'secrets'; }"
+allow "limit: brace group prefix, globbed name" '{ dop?ler $S; }'
+allow "limit: time prefix" 'time dop?ler $S'
+allow "limit: time prefix, expansion name" 'time $D $S'
+allow "limit: ! prefix" '! dop?ler $S'
+allow "limit: process substitution capture" 'cat <(dop?ler $S)'
+allow "limit: here-string capture" 'cat <<< $(dop?ler $S)'
+allow "limit: &< detached redirect target" '&< out dop?ler $S'
+allow "limit: < in redirect before a quoted expansion name" '< in "$D" $S'
+allow "limit: 2> out redirect before an expansion name" '2> out $D $S'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"

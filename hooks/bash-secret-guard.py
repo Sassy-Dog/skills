@@ -28,6 +28,13 @@ disagree with itself about quoting.
    split a segment either (`dop?ler 2>&1 secrets`). A command word (the first word of a segment,
    after leading `NAME=value` assignments and redirections) that holds an expansion or glob character triggers on
    its own, whatever follows: the allow list then decides (`"$D" >&2 secrets`, `dop?ler s?crets`).
+   KNOWN LIMIT (accepted, pinned as allows in the gate): that trigger inspects ONLY the first word
+   of a simple command. A doppler name produced by a glob or expansion and sitting behind a prefix
+   word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string `<<< $(...)`), or after a
+   detached redirect target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is not caught. The
+   threat model is accidental printing; these are deliberate obfuscations, in the same class as
+   aliases/functions, printf-assembled names, symlink targets and the two-step symlink rename, and
+   a redirected file read back. A future change that closes or reopens them is a conscious decision.
    A triggered command is allowed only if the ENTIRE command is exactly one of:
      1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
@@ -542,6 +549,8 @@ def allowed_bootstrap(cmd):
     if not m:
         return False
     toks = m.group(1).split()
+    # Defence in depth, deliberately unreachable today: BOOTSTRAP_RE only matches a command that
+    # starts with `doppler`. Kept so a loosened regex cannot make this check silently permissive.
     if toks[0] != "doppler":
         return False
     parsed = parse_args(toks, 1, {"--no-file"}, PC_VAL | {"--format"})

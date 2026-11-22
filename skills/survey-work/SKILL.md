@@ -138,7 +138,11 @@ next one. When the configured line is the Doppler eval-of-a-secrets-download
 form, do not run it; run each env-dependent command (a presence probe, the §3 TestFlight pull)
 as its own call wrapped in Doppler's run subcommand (project and config flags copied from the
 configured line, then `--`, then the command with its paths written literally). The child inherits the loaded
-secrets and the plugin's Bash guard allows that form. Any other configured line is not guarded:
+secrets and the plugin's Bash guard allows that form. A presence probe must run its test inside
+the child's own shell: `doppler run -p P -c C -- sh -c 'test -n "$ASC_KEY_ID"'`, because
+`... -- test -n "$ASC_KEY_ID"` expands the variable in the OUTER shell before Doppler loads and
+reports missing on credentials Doppler holds. The wrapped command must be one simple command: a
+`| grep` or a `> out` after it is denied. Any other configured line is not guarded:
 run it joined to the command by `&&`. On bootstrap error, continue; the probes then report their
 surfaces per the skip rule above. A denial from the guard (`bash-secret-guard: BLOCKED`) is not a
 bootstrap error to absorb: say so on the plate rather than letting every probe read as missing.

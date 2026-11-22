@@ -165,6 +165,11 @@ ORG=Sassy-Dog REPO=platform WORKFLOW_FILE=relay-drift-check.yml \
   bash "$PLUGIN_ROOT/skills/whats-on-fire/scripts/check-dispatch-recovery.sh"
 ```
 
+The plugin's Bash guard denies any command whose text mentions the secrets manager, and a
+workflow file named `doppler-audit.yml` does. For such a file, put the per-command bypass in front:
+`SASSYDOG_ALLOW_DOPPLER_PRINT=1 ORG=... REPO=... WORKFLOW_FILE=doppler-audit.yml ... bash ...`. It applies to that one
+command only and is visible in the transcript on purpose (README, Bash guard hook, "Bypass").
+
 **A truncated page is a third state, and it renders exactly like an empty one.** The script's
 query is scoped server-side to the one workflow (`/actions/workflows/<file>/runs?event=workflow_dispatch&status=completed&per_page=10`),
 which is what makes "no qualifying run" trustworthy: 10 runs of one workflow reach back months. Any
