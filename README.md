@@ -216,7 +216,7 @@ The plugin ships one hook, `hooks/hooks.json` (auto-discovered by Claude Code, n
 
 **Bypass.** Put the variable at the start of the command it applies to, as an unquoted assignment: `SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X` or `SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. It applies to that command (and the strings it runs) only, and it is visible in the transcript on purpose: the hook never reads its own environment and never matches the token anywhere else in the text, so a bypass cannot be left switched on, and a deliberate override leaves a record of who chose it.
 
-**Failure mode.** If the hook cannot classify an event (empty or malformed input, no command string, `python3` missing, an internal fault) it **fails open and says so** on stderr (exit 1, a non-blocking error Claude Code shows). This is a seatbelt against the accident, not a sandbox. Known limits: aliases and functions; a doppler name produced by a glob or expansion that is not the first word of a simple command, i.e. behind a prefix word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string), or after a detached redirect target (`< in "$D" $S`, `2> out $D $S`): the command-word trigger inspects only the first word (after skipped assignments and redirections), the limit applies only when the subcommand is not spelled literally too (the second trigger still denies `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`, `cat <(dop?ler secrets get X)` and `! $D run`), and the threat model is accidental printing, so these deliberate obfuscations are accepted and pinned as allows in the gate; a command name assembled at run time from pieces the text never spells (printf formatting); symlinked redirect targets; a redirected file that is read back afterwards; a two-step symlink rename (`ln -s /opt/homebrew/bin/dop?ler /tmp/dp`, then `/tmp/dp secrets`: each command text is innocent alone); `doppler run -- env`, `printenv` or `doppler run --command 'echo $X'` print secrets because the child decides; a relative redirect target is resolved against the event's `cwd`, so with no `cwd` it is checked as written; the `password=` URL forms. A false deny also hits a command whose first word is an unresolved expansion or glob (`$HOME/bin/tool`): use the bypass. `scripts/update-plugin-everywhere.sh` compares only skills, agents and scripts, so a machine can run a stale `hooks/` until the plugin is reinstalled ([#642](https://github.com/Sassy-Dog/skills/issues/642)). A PostToolUse tripwire for credentialed URLs in tool results is not shipped. Pinned by `scripts/test-bash-secret-guard.sh`.
+**Failure mode.** If the hook cannot classify an event (empty or malformed input, no command string, `python3` missing, an internal fault) it **fails open and says so** on stderr (exit 1, a non-blocking error Claude Code shows). This is a seatbelt against the accident, not a sandbox. Known limits: aliases and functions; a doppler name produced by a glob or expansion that is not the first word of a simple command, i.e. behind a prefix word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string), or after a detached redirect target (`< in "$D" $S`, `2> out $D $S`): the command-word trigger inspects only the first word (after skipped assignments and redirections), the limit applies only when the subcommand is not spelled literally too (the second trigger still denies `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`, `cat <(dop?ler secrets get X)` and `! $D run`), and the threat model is accidental printing, so these deliberate obfuscations are accepted and pinned as allows in the gate; a command name assembled at run time from pieces the text never spells (printf formatting); symlinked redirect targets; a redirected file that is read back afterwards; a two-step symlink rename (`ln -s /opt/homebrew/bin/dop?ler /tmp/dp`, then `/tmp/dp secrets`: each command text is innocent alone); `doppler run -- env`, `printenv` or `doppler run --command 'echo $X'` print secrets because the child decides; a relative redirect target is resolved against the event's `cwd`, so with no `cwd` it is checked as written; the `password=` URL forms. A false deny also hits a command whose first word is an unresolved expansion or glob (`$HOME/bin/tool`): use the bypass. A PostToolUse tripwire for credentialed URLs in tool results is not shipped. Pinned by `scripts/test-bash-secret-guard.sh`.
 
 ### Review agents
 
@@ -410,13 +410,13 @@ A `project` row wins for sessions in that project; the `user` row is the answer 
 claude plugin marketplace update skills
 ```
 
-**3. Compare content** — the clone against that install path, over all three directories that load or execute:
+**3. Compare content** — the clone against that install path, over all four directories that load or execute:
 
 ```bash
 INSTALL_PATH='<paste the installPath from step 1>'
 CLONE="$HOME/.claude/plugins/marketplaces/skills"
-for d in skills agents scripts; do
-  [ -d "$INSTALL_PATH/$d" ] || { echo "NOT COMPARED: $d — check INSTALL_PATH"; continue; }
+for d in skills agents scripts hooks; do
+  [ -d "$INSTALL_PATH/$d" ] || { echo "NOT COMPARED: $d — check INSTALL_PATH (a cache that predates hooks/ also lands here: it is stale)"; continue; }
   diff -rq "$CLONE/$d" "$INSTALL_PATH/$d" 2>&1
 done
 ```
@@ -425,9 +425,9 @@ The quoting and the `[ -d ]` guard are not decoration. The quotes are what make 
 
 `scripts/` belongs in that list because of one file: `align-labels.sh` is the only root-`scripts/` path any skill invokes at runtime through `${CLAUDE_PLUGIN_ROOT}` (every other bundled script lives under `skills/` — almost all under `skills/<skill>/scripts/`, plus the two `skills/setup-hooks/references/templates/*.template.sh` renderer inputs — and is already covered by the first directory). One file is enough — a merge touching only it leaves `skills/` and `agents/` identical while changing what a label-writing run actually executes, which is the #167 failure. Most of root `scripts/` is CI gates that never run at plugin runtime, so drift counts there are not evidence about runtime behaviour and are not offered as any.
 
-`hooks/` loads at runtime too but is **not** in this comparison yet ([#642](https://github.com/Sassy-Dog/skills/issues/642)); to check it by hand, run the same `diff -rq "$CLONE/hooks" "$INSTALL_PATH/hooks"` (the plugin cache loads it, so a stale cache keeps the old guard).
+`hooks/` is in the list because it loads at runtime: the plugin cache carries the `bash-secret-guard` PreToolUse hook, so a stale cache keeps the old guard. A cache that predates `hooks/` has no such directory, which the guard above reports as `NOT COMPARED` — treat that as stale too.
 
-**Any output at all means the cache is stale, or the comparison did not run** — either way it is not current, so run the update in step 4. Silence across all three directories means those three are current (`hooks/` is the extra check above until [#642](https://github.com/Sassy-Dog/skills/issues/642) lands). The shapes say different things, and a reader scanning only for the word "differ" skips the one that matters most:
+**Any output at all means the cache is stale, or the comparison did not run** — either way it is not current, so run the update in step 4. Silence across all four directories means they are current. The shapes say different things, and a reader scanning only for the word "differ" skips the one that matters most:
 
 | Output | Meaning |
 | --- | --- |
