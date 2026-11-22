@@ -64,13 +64,10 @@
 #     `ls $HOME/secrets`, `gh run view $ID` and `echo "$HOME" && gh run list` allowed so the rule
 #     cannot grow into a ban on `run`; /DEV, /Dev, /PROC, /Sys and a relative DEV/ or Fd/
 #     redirect target; and the forms the plugin's own skills emit, with their near misses as
-#     denies (the `eval "$(doppler secrets download --no-file ...)"` bootstrap alone or before one
-#     `&&` command, and `get NAME --plain | gh secret set NAME`)
-#   - review 5 (four Blocking findings), each with committed cases: the bootstrap's `&&` tail may
-#     not expand a variable or dump the environment (env, printenv, set, declare, export -p,
-#     compgen, `$VAR`, `bash -c`/python/perl/node/awk strings, /proc/self/environ), while
-#     `gh auth status`, a TestFlight pull with a literal path and `gh secret set` stay allowed;
-#     the bootstrap is exactly `--no-file --format env` (no --format json/dotnet-json/
+#     denies (the `eval "$(doppler secrets download --no-file ...)"` bootstrap, and
+#     `get NAME --plain | gh secret set NAME`; review 6 cut the bootstrap's `&&` tail)
+#   - review 5 (four Blocking findings), each with committed cases: the bootstrap's `&&` tail
+#     (since cut by review 6, see below); the bootstrap is exactly `--no-file --format env` (no --format json/dotnet-json/
 #     env-no-quotes/docker, no --name-transformer with or without `=`, no global --json/--debug/
 #     --api-host); the subcommand word is found with quotes and backslashes removed and on
 #     segments split outside quotes (`sec''rets`, `s"e"crets`, `\configure`, `r''un`, `\me`,
@@ -80,6 +77,16 @@
 #     json.loads fails open (injected, since newer Pythons parse any depth); and the sweep below
 #     checks every line of a fenced block that mentions doppler, with a fixture holding the OLD
 #     bulk-sync text that must still be flagged
+#   - review 6 (two Blocking bypasses in the code that let the plugin's own skills pass; the
+#     operator cut the surface): the bootstrap's `&&` compound form and its tail checker are
+#     removed, so the bootstrap is allowed only as the whole command (`&&`, `;`, `|`, `||`, `&`,
+#     newline, a redirect or any text after it denies; the follow-up runs as `doppler run -- cmd`,
+#     which is allowed and pinned); an `&` beside `>` or `<` is a redirect and no longer splits a
+#     segment (`dop?ler 2>&1 secrets`, `"$D" >&2 secrets`, `$D 2>&1 configure`, `${D} 1>&2 secrets`,
+#     `dop?ler >&2 run --command set`, `&>`, `<&`); a command word that holds an expansion or glob
+#     triggers on its own, past leading assignments and redirections (`dop?ler s?crets`,
+#     `A=1 $D projects`, `>out $D projects`), with `[`, `[[`, `ls $HOME/secrets`, `gh run view $ID`,
+#     `gh api .../actions/secrets` and `2>&1` on ordinary commands allowed
 #   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (every non-comment
 #     line of a fenced block that mentions doppler at all, and inline code spans holding
 #     `doppler <word>`) must be allowed by the guard or carry the bypass, so the
@@ -92,12 +99,12 @@
 #     exit code; a hook timeout fails open without a word
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
-# joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger); a bootstrap tail that runs
-# a script which itself prints the environment (the child decides).
+# joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
 # Documented limits are NOT asserted as caught: aliases and functions, a command name built at
 # run time from pieces the text never spells (printf formatting), symlinked redirect targets,
 # reading a redirected file back, `doppler run -- env` / `printenv` (the child decides),
-# `password=` URL forms. See the module docstring.
+# `password=` URL forms, the two-step symlink rename (`ln -s <doppler> /tmp/dp`, then
+# `/tmp/dp secrets`: each command text is innocent alone). See the module docstring.
 #
 # Mutations run against hooks/bash-secret-guard.py after the rewrite, each making cases red
 # (failing-case count in parentheses), then reverted:
@@ -120,15 +127,12 @@
 #              (4); `\U` not decoded (2); `\U` four digits only (2); case folded before decoding,
 #              which turns `\U` into `\u` (1); `\x` lower-case digits only (1); command-name
 #              keyword rule dropped (14); path prefix check not folded (6); relative device
-#              segment not folded (2); bootstrap form not allowed (7); bootstrap `&&` tail
-#              unchecked (4); bootstrap without `--no-file` allowed (1); gh pipe not allowed (4);
+#              segment not folded (2); bootstrap form not allowed (7); bootstrap without `--no-file` allowed (1); gh pipe not allowed (4);
 #              gh pipe allows `--body` (1); gh pipe without `--plain` allowed (1); decoded reading
 #              only, which drops the letter after `\e` (1); quote scan restarted per URL match,
 #              i.e. quadratic (2); scope-hierarchy.md's old bulk-sync loop restored (1);
 #              interview.md's prose span `doppler secrets download` restored (1)
-#   review 5 (failing-case count in parentheses): bootstrap tail check off (26); tail `$` allowed
-#              (5); tail env/proc text allowed (12); command-word dumpers (set, declare, export,
-#              compgen) allowed (9); dumper after a wrapper or `-c` allowed (1); bootstrap
+#   review 5 (failing-case count in parentheses): bootstrap
 #              `--format` not required to be env (6); `--name-transformer` allowed (2); global
 #              --json/--debug/--api-host allowed in the bootstrap (4); `--debug` back on the
 #              global list (1); `--api-host` back on the global list (1); segment text not
@@ -139,6 +143,14 @@
 #              (8); cwd symlinks not resolved (1); cwd not case-folded (1); RecursionError not
 #              caught (1, the injected case); the sweep matching only `doppler <word>` lines in
 #              fenced blocks (1)
+#   review 6 (failing-case count in parentheses): the bootstrap accepts text after the eval (23);
+#              the segment splitter splits at every `&` (2); only an `&` BEFORE `>`/`<` is
+#              spared (1); only an `&` AFTER `>`/`<` is spared (1); command-word trigger dropped
+#              (5); leading assignments not skipped (2); leading redirections not skipped (2);
+#              `[`/`[[`/`{` not exempt (2). The first-word rule also covers the splitter probes
+#              by itself, which is why the splitter has its own `> out $D 2>&1 secrets` cases.
+#              The deleted tail code's mutants (tail check off, `$`, env/proc text, dumpers) went
+#              with it.
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -661,11 +673,38 @@ deny "a different case, relative: Fd/1" 'doppler secrets get X --plain > Fd/1'
 deny "a different case: download to /DEV/stderr" 'doppler secrets download --no-file > /DEV/stderr'
 deny "a different case: substitute --output" 'doppler secrets substitute t.yaml --output /DEV/stdout'
 
+echo "== review 6: a redirect ampersand does not split the command, and a command word that expands triggers =="
+deny "2>&1 before the subcommand, globbed name" '/opt/homebrew/bin/dop?ler 2>&1 secrets'
+deny "\"\$D\" >&2 secrets" '"$D" >&2 secrets'
+deny "\$D 2>&1 configure" '$D 2>&1 configure'
+deny "\${D} 1>&2 secrets" '${D} 1>&2 secrets'
+deny ">&2 run --command set" '/opt/homebrew/bin/dop?ler >&2 run --command set'
+deny "&> before the subcommand" '$D &> /dev/null secrets'
+deny "<&0 before the subcommand" '$D <&0 secrets'
+deny "glob in the subcommand word too" '/opt/homebrew/bin/dop?ler s?crets'
+deny "glob in the subcommand word, expanded name" '$D s*ets get X'
+deny "command word expands, subcommand not a keyword" '/opt/homebrew/bin/dop?ler projects'
+deny "command word expands behind an assignment" 'A=1 $D projects'
+deny "expanded command word after a separator" 'echo hi && $D projects'
+deny "redirect-ampersand alone must not split: > out, then an expansion name, 2>&1, subcommand" '> out $D 2>&1 secrets'
+deny "redirect-ampersand alone must not split: &> before the subcommand" '> out $D &> x secrets'
+deny "an attached leading redirect does not hide the command word" '>out $D projects'
+deny "a leading fd redirect does not hide the command word" '2>/dev/null "$D" projects'
+allow "2>&1 on an ordinary command" 'ls /nonexistent 2>&1'
+allow "2>&1 then a path argument named secrets" 'ls 2>&1 secrets'
+allow ">&2 on an ordinary command with a variable path" 'echo hi >&2 && ls $HOME/secrets'
+allow "gh run view with 2>&1" 'gh run view $ID 2>&1'
+allow "gh api actions/secrets" 'gh api repos/a/b/actions/secrets'
+allow "gh api actions/secrets with 2>&1" 'gh api repos/$R/actions/secrets 2>&1'
+allow "a test bracket is syntax, not a command word" '[ -n "$HOME" ] && echo ok'
+allow "a double bracket is syntax" '[[ -n "$HOME" ]] && echo ok'
+allow "an assignment prefix on an ordinary command" 'FOO=$HOME ls'
+
 echo "== review 4: the forms this plugin's own skills emit =="
 allow "secret_bootstrap, as written in config-contract.md" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)"'
 allow "secret_bootstrap without the stderr redirect" 'eval "$(doppler secrets download --no-file --format env)"'
 allow "secret_bootstrap with project and config" 'eval "$(doppler secrets download --no-file --format env -p app -c dev)"'
-allow "secret_bootstrap, then one later command" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)" && gh api user'
+deny "secret_bootstrap, then one later command (the tail is gone: use doppler run)" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)" && gh api user'
 deny "bootstrap without --no-file writes a file the eval then reads as text" 'eval "$(doppler secrets download --format env)"'
 deny "bootstrap that eval-s a printing get" 'eval "$(doppler secrets get X --plain)"'
 deny "bootstrap that eval-s bare secrets" 'eval "$(doppler secrets)"'
@@ -694,18 +733,16 @@ deny "download piped into gh" 'doppler secrets download --no-file --format env |
 deny "gh secret set with an unknown flag" 'doppler secrets get X --plain | gh secret set X --env-file /dev/stdin'
 allow "download to a literal file, then gh reads it (the github-secrets bulk sync)" 'doppler secrets download --no-file --format env > /tmp/doppler-sync.env'
 
-echo "== review 5: the bootstrap tail runs in a shell that already holds the secrets =="
+echo "== review 6: nothing may follow the bootstrap (the compound form is cut) =="
 BOOT='eval "$(doppler secrets download --no-file --format env)"'
-for tail in 'env' 'printenv' 'printenv API_KEY' 'set' 'declare -p' 'typeset -x' 'export -p' 'export' 'readonly -p' 'compgen -v' \
-    'echo $API_KEY' 'echo "$DATABASE_URL"' 'printf %s "$API_KEY"' 'echo ${API_KEY}' 'echo "${!A*}"' \
-    "bash -c 'printenv'" "bash -c 'echo hi; set'" "sh -c 'declare -p'" 'sudo env' 'command env' '/usr/bin/env' 'cat /proc/self/environ' \
-    "python3 -c 'import os; print(os.environ)'" "perl -e 'print %ENV'" "node -e 'console.log(process.env)'" "awk 'BEGIN{for(k in ENVIRON)print k}'"; do
-    deny "bootstrap tail: && $tail" "$BOOT && $tail"
+for tail in '&& gh auth status' '&& gh secret set NAME --repo a/b' '&& env' '&& echo $API_KEY' '; env' '; gh auth status' \
+    '| cat' '|| true' '& env' $'\nenv' $'\ngh auth status' '&& printenv' "&& bash -c 'printenv'" '&& python3 -c "import os"' '2>&1' '> /tmp/o'; do
+    deny "bootstrap, then: $tail" "$BOOT $tail"
 done
-allow "bootstrap tail: gh auth status (survey-work section 1)" "$BOOT && gh auth status"
-allow "bootstrap tail: a TestFlight pull with a literal path (survey-work section 3)" "$BOOT && bash /Users/me/.claude/plugins/sassy-dog/skills/testflight/scripts/appstore-connect.sh com.example.app feedback"
-allow "bootstrap tail: gh secret set is not a command-word set" "$BOOT && gh secret set NAME --repo a/b"
-allow "bootstrap tail: the config-contract line, then gh api" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)" && gh api user'
+allow "the bare bootstrap, alone" "$BOOT"
+allow "the bare bootstrap with -p/-c and the stderr redirect" 'eval "$(doppler secrets download --no-file --format env -p app -c dev 2>/dev/null)"'
+allow "doppler run carries the follow-up instead: gh auth status" 'doppler run -p app -c dev -- gh auth status'
+allow "doppler run carries the follow-up instead: a TestFlight pull" 'doppler run -- bash /Users/me/.claude/plugins/sassy-dog/skills/testflight/scripts/appstore-connect.sh com.example.app feedback'
 
 echo "== review 5: the bootstrap shape is exactly --no-file --format env =="
 for v in 'secrets download --no-file' \
@@ -747,7 +784,7 @@ deny "unsplit control: the same without the quoted separator" '"$D" --scope=x se
 allow "ls with an expansion and a path piece" 'ls $HOME/secrets'
 allow "gh run with an expansion" 'gh run view $ID'
 allow "gh api on the secrets endpoint" 'gh api repos/$R/actions/secrets'
-allow "an unquoted ; really does separate the commands" '"$D" --scope=x; secrets'
+allow "an unquoted ; really does separate the commands" 'echo --scope=$X; secrets'
 
 echo "== review 5: decoder and fold cases that only the decoder can catch =="
 deny "octal escape, non-keyword subcommand" "\$'\\144oppler' get FOO"
@@ -907,7 +944,7 @@ PYEOF
     if [ $? -eq 0 ]; then ok "stays fast and classifies (rc $2): $1 [$out]"; else bad "stays fast and classifies (rc $2): $1 [$out]"; fi
 }
 big_time "many literal credential URLs with an env password" 0 '"psql postgres://u:$p@h " * 30000'
-big_time "a quote at the front and many URLs" 0 '"\x27" * 100000 + "postgres://u:$p@h " * 20000'
+big_time "a quote at the front and many URLs" 0 '"echo " + "\x27" * 100000 + "postgres://u:$p@h " * 20000'
 big_time "many literal-password URLs" 2 '"psql postgres://u:pw@h " * 30000'
 big_time "an expansion and many words, then secrets" 2 '"x $HOME " * 100000 + "secrets"'
 big_time "a very long plain command" 0 '"echo a " * 300000'

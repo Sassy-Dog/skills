@@ -23,7 +23,11 @@ disagree with itself about quoting.
    later in the same simple command (`dop*ler secrets`, `"$D" run`; `ls $HOME/secrets` and
    `gh run view $ID` stay quiet). That search runs on text with quotes and backslashes removed
    (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`) and on segments split quote-aware, so a
-   quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob.
+   quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob. An `&`
+   next to `>` or `<` (`2>&1`, `>&2`, `&>`, `<&`) is a redirect, not a separator, so it does not
+   split a segment either (`dop?ler 2>&1 secrets`). A command word (the first word of a segment,
+   after leading `NAME=value` assignments and redirections) that holds an expansion or glob character triggers on
+   its own, whatever follows: the allow list then decides (`"$D" >&2 secrets`, `dop?ler s?crets`).
    A triggered command is allowed only if the ENTIRE command is exactly one of:
      1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
@@ -36,13 +40,12 @@ disagree with itself about quoting.
      3b. `doppler secrets get NAME --plain | gh secret set NAME [--repo R ...]` (gh reads the
         value from stdin and prints none of it; no `--body`, no other consumer)
      3c. the secret_bootstrap shape `eval "$(doppler secrets download --no-file --format env
-        [-p P] [-c C] [2>/dev/null])"` (exactly that: no other format, no --name-transformer,
-        no global flag), alone or followed by `&& <one command>` that does not mention doppler,
-        expands no variable (`$`) and does not dump the environment (env, printenv, set,
-        declare, typeset, export, compgen, `environ`, /proc, also inside a `-c` string). The
-        eval consumes the output, so the loaded secrets live in the shell: the tail is where
-        they would print. The gate extracts every doppler command under skills/ and requires it
-        to pass)
+        [-p P] [-c C] [2>/dev/null])"`, as the WHOLE command and nothing after it (exactly that:
+        no other format, no --name-transformer, no global flag; `&&`, `;`, a pipe or a newline
+        after it denies). Each Bash call is a fresh shell, so the eval only helps a caller that
+        needs the loaded shell inside one call; a follow-up command runs as
+        `doppler run [-p P] [-c C] -- <command>` (form 2). The gate extracts every doppler
+        command under skills/ and requires it to pass)
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
@@ -68,8 +71,8 @@ Known limits (a seatbelt against the accident, not a sandbox): aliases and funct
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
-child decides), a bootstrap tail that runs a script which itself prints the environment, a
-relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
+child decides), a two-step symlink rename (`ln -s <doppler> /tmp/dp`, then `/tmp/dp secrets`:
+each command text is innocent alone), a relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
 text that merely mentions doppler (a commit message, a PR body): use the bypass.
 """
 
@@ -96,8 +99,7 @@ SAFE_FORMS = (
     "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
     "`doppler secrets get NAME --plain | gh secret set NAME`; `eval \"$(doppler secrets download "
-    "--no-file --format env 2>/dev/null)\"` (alone, or before `&& <command>` that expands no "
-    "variable and dumps no environment); a bare "
+    "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it); a bare "
     "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
@@ -168,7 +170,9 @@ def _mentions(t):
         # an expansion character, then later in the same simple command a Doppler subcommand as a
         # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
         for seg in split_segments(t):
-            seg = QUOTES_RE.sub("", seg)  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
+            seg = QUOTES_RE.sub("", seg)
+            if _command_word_expands(seg):
+                return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
             m = EXPANSION_RE.search(seg)
             if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s)", seg[m.start():])
                          for n in SUBCOMMAND_WORDS):
@@ -176,8 +180,25 @@ def _mentions(t):
     return False
 
 
+_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_REDIRECT_WORD_RE = re.compile(r"(?:[0-9]*|&)[<>]")
+_SYNTAX_WORDS = {"[", "[[", "{", "}", "(", ")", "]]", "]"}
+
+
+def _command_word_expands(seg):
+    """True when the first word of a segment (after NAME=value prefixes) holds an expansion or glob.
+
+    `[`, `[[` and `{` are shell syntax, not command names, so they stay quiet.
+    """
+    for w in seg.split():
+        if _ASSIGN_RE.match(w) or _REDIRECT_WORD_RE.match(w):
+            continue
+        return w not in _SYNTAX_WORDS and EXPANSION_RE.search(w) is not None
+    return False
+
+
 def split_segments(s):
-    """Split at ; & | newline outside quotes, so `--scope=';' secrets` stays one simple command.
+    """Split at ; & | newline outside quotes (an `&` beside `>` or `<` is a redirect), so `--scope=';' secrets` stays one simple command.
 
     Quote-aware on purpose: splitting inside a quote hid the later subcommand word from the
     earlier glob. `$'...'` honours a backslash. An unbalanced quote runs to the end, which keeps
@@ -201,6 +222,8 @@ def split_segments(s):
         elif c in "'\"":
             quote = c
             ansi_c = c == "'" and i > 0 and s[i - 1] == "$"
+        elif c == "&" and ((i > 0 and s[i - 1] in "<>") or (i + 1 < len(s) and s[i + 1] in "<>")):
+            pass  # a redirect (`2>&1`, `>&2`, `&>`, `<&`), not a separator
         elif c in ";&|\n\r":
             segs.append(s[start:i])
             start = i + 1
@@ -507,49 +530,17 @@ def allowed_strict(cmd):
     return False
 
 
-ENV_DUMPERS = {"set", "declare", "typeset", "export", "readonly", "compgen", "local"}
-WRAPPERS = {"eval", "exec", "command", "builtin", "sudo", "nice", "nohup", "time", "xargs", "then",
-            "do", "else", "!"}
-
-
-def tail_prints_env(rest):
-    """True when the command after a bootstrap's `&&` could print the secrets it just loaded.
-
-    The loaded values live in the environment, so the tail may not expand a variable (`$`) and
-    may not dump the environment: `env`/`printenv`/`environ`/`ENV` anywhere in the text (also
-    inside a `bash -c`, `python -c`, `perl -e` string), or `set`, `declare`, `typeset`, `export`,
-    `readonly`, `compgen`, `local` where a command word stands (first word of a segment, or after
-    a wrapper or a `-c` option). `gh secret set X` is not a command-word `set`.
-    """
-    n = QUOTES_RE.sub("", rest).lower()
-    if "$" in n or "env" in n or "/proc" in n:
-        return True
-    for seg in re.split(r"[;&|(){}`\n\r]+", n):
-        toks = seg.split()
-        for k, tok in enumerate(toks):
-            if tok.rsplit("/", 1)[-1] not in ENV_DUMPERS:
-                continue
-            prev = toks[k - 1] if k else None
-            if prev is None or prev in WRAPPERS or (prev.startswith("-") and prev.endswith("c")):
-                return True
-    return False
-
-
 def allowed_bootstrap(cmd):
-    """`eval "$(doppler secrets download --no-file --format env ...)"`, alone or before `&& <one command>`.
+    """`eval "$(doppler secrets download --no-file --format env ...)"` as the whole command.
 
     Exactly `secrets download --no-file --format env` plus -p/-c. Doppler's default format is
     json, and eval of json, env-no-quotes or a --name-transformer output prints the values in
     eval's own error text, so no other format, no transformer, no global flag rides here.
+    Nothing may follow the eval: a tail runs in a shell that already holds the secrets.
     """
-    m = BOOTSTRAP_RE.match(cmd)
+    m = BOOTSTRAP_RE.fullmatch(cmd)
     if not m:
         return False
-    after = cmd[m.end():]
-    if after.strip():
-        mm = re.fullmatch(r"[ \t]+&&[ \t]+(.+)", after, re.S)
-        if not mm or not check_rest(mm.group(1)) or tail_prints_env(mm.group(1)):
-            return False
     toks = m.group(1).split()
     if toks[0] != "doppler":
         return False

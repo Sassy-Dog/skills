@@ -187,7 +187,7 @@ Pin `{{BOARD_IN_REVIEW_OPTION_ID}}` and `{{BOARD_DONE_OPTION_ID}}` alongside the
 - Pre-flight commands (`{{PREFLIGHT_COMMANDS}}`) — propose from the runner; user edits.
 - Migration regen command (`{{MIGRATION_REGEN_COMMAND}}`) if `IF:MIGRATIONS`.
 - Codegen command + output dirs if `IF:CODEGEN`.
-- Secret bootstrap command (`{{SECRET_BOOTSTRAP_CMD}}`) if detection reports a `secret_manager` (`.envrc`/`doppler.yaml`) — the one-liner survey-work §1 runs to load managed secrets BEFORE its env presence probes (propose `eval "$(doppler secrets download --no-file --format env 2>/dev/null)"` for Doppler repos). Confirming it sets `IF:SECRET_BOOTSTRAP`. In update/adopt mode, an "environment bootstrap" note sitting in a PROJECT-SPECIFIC fence (typically under §2.C — too late, the §1 probes already ran) is the tell: offer to promote that command into this placeholder.
+- Secret bootstrap command (`{{SECRET_BOOTSTRAP_CMD}}`) if detection reports a `secret_manager` (`.envrc`/`doppler.yaml`) — the one-liner survey-work §1 reads to load managed secrets BEFORE its env presence probes (propose `eval "$(doppler secrets download --no-file --format env 2>/dev/null)"` for Doppler repos; the guard allows that line only alone, so survey-work does not run it but turns it into Doppler's run subcommand (same project and config flags) wrapping each env-dependent command). Confirming it sets `IF:SECRET_BOOTSTRAP`. In update/adopt mode, an "environment bootstrap" note sitting in a PROJECT-SPECIFIC fence (typically under §2.C — too late, the §1 probes already ran) is the tell: offer to promote that command into this placeholder.
 
 ### 4b. tidy-repo never-discard files (fact confirmation; tidy-repo is core, so always asked)
 
