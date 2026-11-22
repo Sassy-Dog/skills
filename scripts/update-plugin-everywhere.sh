@@ -39,7 +39,8 @@
 #      is stamped only on release PRs while content lands on every merge, so
 #      a cache and main routinely share one version over different files
 #      (issue #296). Any diff output, or a directory that could not be
-#      compared, is STALE.
+#      compared, is STALE (hooks/ absent from both sides is a pre-hooks
+#      version and counts as current).
 #   6. name the one stale state the installer cannot fix: every copy already
 #      AT the clone's stamped version yet differing by content. `claude plugin
 #      update` is version-keyed — "already at the latest version" and nothing
@@ -123,6 +124,7 @@ project_kind() {  # $1 = project path -> dead | worktree | live
 
 content_state() {  # $1 = installPath → prints current | stale | not-compared
     local ip="$1" d out state="current"
+    [ -d "$ip" ] || { printf 'not-compared'; return; }
     for d in skills agents scripts hooks; do
         if [ "$d" = hooks ]; then
             # hooks/ is optional: absent from BOTH sides is a version that predates it (current);

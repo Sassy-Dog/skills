@@ -28,7 +28,8 @@
 # hooks/ (#642): the cases above pin it in both directions: a cache that predates hooks/ is stale (never
 # not-compared), hooks/ absent from both sides is current (a version before hooks existed must not false-stale),
 # and a not-compared directory never overrides an earlier stale. Mutants for each: hooks-dropped-from-loop,
-# hooks-missing-in-cache-not-stale, hooks-absent-both-false-stale, not-compared-overrides-stale.
+# hooks-missing-in-cache-not-stale, hooks-absent-both-false-stale, not-compared-overrides-stale,
+# missing-install-path-stale (content_state opens with an install-path existence check).
 #
 # Mutants: each changes one construct in a COPY of the script and the same suite
 # must then fail, so a case that cannot see its construct is reported as vacuous.
@@ -207,8 +208,9 @@ suite() { # <script>
     hooks_case "an old file under the cache's hooks/" stale 'echo OLD >"$c/hooks/f.txt"'
     hooks_case "a cache that predates hooks/ (clone has it, cache does not)" stale 'rm -rf "$c/hooks"'
     hooks_case "hooks/ absent from BOTH sides (a version before hooks existed)" current 'rm -rf "$c/hooks" "$k/hooks"'
-    hooks_case "a cache that predates hooks/ and also lacks agents/: stale is not overridden by not-compared" stale 'rm -rf "$c/hooks" "$c/agents"'
+    hooks_case "not-compared then hooks stale -> stale" stale 'rm -rf "$c/hooks" "$c/agents"'
     hooks_case "skills/ stale and agents/ missing: not-compared does not override stale" stale 'echo OLD >"$c/skills/f.txt"; rm -rf "$c/agents"'
+    hooks_case "a missing install path stays not-compared, never stale" not-compared 'rm -rf "$c"'
     hooks_case "agents/ missing alone stays not-compared" not-compared 'rm -rf "$c/agents"'
 
     # --- a stale surviving copy still fails the run, by content ----------------
@@ -255,6 +257,7 @@ mutant hooks-dropped-from-loop 'for d in skills agents scripts hooks; do' 'for d
 mutant hooks-missing-in-cache-not-stale 'if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="stale"; continue; fi' 'if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="not-compared"; continue; fi'
 mutant hooks-absent-both-false-stale 'if [ ! -d "$ip/$d" ] && [ ! -d "$CLONE/$d" ]; then continue; fi' ':'
 mutant not-compared-overrides-stale '[ "$state" = stale ] || state="not-compared"; continue' 'state="not-compared"; continue'
+mutant missing-install-path-stale '    [ -d "$ip" ] || { printf '"'"'not-compared'"'"'; return; }' ':'
 mutant backup-skipped 'cp "$REGISTRY" "$REGISTRY.bak-$stamp" ||' 'true ||'
 
 if [ "$fail" -eq 0 ]; then
