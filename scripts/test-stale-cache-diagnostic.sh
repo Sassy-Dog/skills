@@ -25,6 +25,12 @@
 #      documented rule true of what a reader actually sees. Drop either and the
 #      block reports "current" for a path that was never compared.
 #
+#   4. THE LOOP COVERS FOUR DIRECTORIES, hooks/ INCLUDED (#642). hooks/ loads at
+#      runtime (the bash-secret-guard PreToolUse hook), so a cache comparison that
+#      skips it reports "current" over a stale guard. Mutant: the README loop
+#      reverted to `skills agents scripts` fails the loop assertion in section 2.
+#      The updater's own content_state() is pinned in test-update-plugin-everywhere.sh.
+#
 # A PROCESS NOTE, because it cost a CI cycle here. `preflight.sh` runs shellcheck
 # over a `git ls-files` corpus, so a NEW gate that has not been `git add`ed yet
 # is INVISIBLE to it: preflight passed locally on this very file while CI failed
@@ -93,7 +99,7 @@ absent "$README_FLAT" "$README_EMPH" 'ls ~/\.claude/plugins/cache/skills/sassy-d
 absent "$README_FLAT" "$README_EMPH" 'Compare against .?version.? in .?\.claude-plugin/plugin\.json.? on .?main' \
     "and nothing tells a reader to compare against the manifest version again"
 
-# --- 2. all three directories, and WHY scripts/ is one of them ---------------
+# --- 2. all four directories, and WHY scripts/ is one of them ---------------
 # SCOPED TO THE CODE BLOCK, and that scoping is the whole assertion. Measured:
 # checking the flattened FILE for `skills`, `agents`, `scripts`, `2>&1` and
 # `[ -d ` passed on a README whose code block had each of them REMOVED, because
@@ -112,8 +118,8 @@ else
 fi
 
 hasb() { if grep -qF -- "$2" <<<"$1"; then ok "$3"; else bad "$3"; fi; }
-hasb "$compare_block" "for d in skills agents scripts; do" \
-    "the loop itself compares all three directories"
+hasb "$compare_block" "for d in skills agents scripts hooks; do" \
+    "the loop itself compares all four directories, hooks/ included (#642)"
 hasb "$compare_block" "2>&1" \
     "the diff folds stderr into stdout IN THE CODE, not only in the prose"
 hasb "$compare_block" '[ -d "$INSTALL_PATH/$d" ]' \

@@ -25,6 +25,11 @@
 # GIT_COMMON_DIR, GIT_WORK_TREE and GIT_INDEX_FILE removed; only `run`'s deliberate GIT_DIR case
 # below exports one).
 #
+# hooks/ (#642): the cases above pin it in both directions: a cache that predates hooks/ is stale (never
+# not-compared), hooks/ absent from both sides is current (a version before hooks existed must not false-stale),
+# and a not-compared directory never overrides an earlier stale. Mutants for each: hooks-dropped-from-loop,
+# hooks-missing-in-cache-not-stale, hooks-absent-both-false-stale, not-compared-overrides-stale.
+#
 # Mutants: each changes one construct in a COPY of the script and the same suite
 # must then fail, so a case that cannot see its construct is reported as vacuous.
 #
@@ -67,7 +72,7 @@ mkdir -p "$WORK/githome"
 build() { # <home dir>
     local h="$1" repos="$1/repos" cache="$1/cache" clone="$1/.claude/plugins/marketplaces/skills" d
     mkdir -p "$repos" "$cache" "$clone/.claude-plugin" "$h/bin"
-    for d in skills agents scripts; do
+    for d in skills agents scripts hooks; do
         mkdir -p "$clone/$d" "$cache/cur/$d" "$cache/old/$d"
         echo "current $d" >"$clone/$d/f.txt"
         echo "current $d" >"$cache/cur/$d/f.txt"
@@ -180,6 +185,32 @@ suite() { # <script>
         rm -rf "$hx"
     done
 
+    # --- hooks/ in the content comparison (#642) -------------------------------
+    # The user row compares cache/cur against the clone. Each scenario starts from a
+    # fresh fixture (hooks/ present and identical on both sides) and breaks one thing.
+    hh="$WORK/hh-$RANDOM"
+    user_state() { grep -E '^user ' <<<"$OUT" | awk '{print $3}'; }
+    hooks_case() { # <label> <expected state> <setup commands run with $c = cache/cur, $k = clone>
+        local label="$1" want="$2" c k
+        build "$hh"
+        # c and k are read by the eval below, which shellcheck cannot see
+        # shellcheck disable=SC2034
+        c="$hh/cache/cur"
+        # shellcheck disable=SC2034
+        k="$hh/.claude/plugins/marketplaces/skills"
+        eval "$3"
+        run "$sc" "$hh"
+        expect "hooks/: $label -> $want" "$(if [ "$(user_state)" = "$want" ]; then echo 0; else echo 1; fi)"
+        rm -rf "$hh"
+    }
+    hooks_case "identical hooks/ on both sides" current ':'
+    hooks_case "an old file under the cache's hooks/" stale 'echo OLD >"$c/hooks/f.txt"'
+    hooks_case "a cache that predates hooks/ (clone has it, cache does not)" stale 'rm -rf "$c/hooks"'
+    hooks_case "hooks/ absent from BOTH sides (a version before hooks existed)" current 'rm -rf "$c/hooks" "$k/hooks"'
+    hooks_case "a cache that predates hooks/ and also lacks agents/: stale is not overridden by not-compared" stale 'rm -rf "$c/hooks" "$c/agents"'
+    hooks_case "skills/ stale and agents/ missing: not-compared does not override stale" stale 'echo OLD >"$c/skills/f.txt"; rm -rf "$c/agents"'
+    hooks_case "agents/ missing alone stays not-compared" not-compared 'rm -rf "$c/agents"'
+
     # --- a stale surviving copy still fails the run, by content ----------------
     jq --arg p "$PLUGIN" --arg c "$h/cache" '.plugins[$p] += [{scope:"project", projectPath:"'"$repos"'/main", version:"2026.10.101", installPath:($c+"/old")}]' \
         "$h/.claude/plugins/installed_plugins.json" >"$h/stale.json" && cp "$h/stale.json" "$h/.claude/plugins/installed_plugins.json"
@@ -220,6 +251,10 @@ mutant worktree-not-pruned '    elif [ "$kind" = worktree ]; then
 mutant dead-not-pruned '    if [ "$kind" = dead ]; then' '    if false; then'
 mutant dry-run-no-worktree-count 'worktree) wt=$((wt + 1)) ;;' 'worktree) live=$((live + 1)) ;;'
 mutant table-no-worktree-mark 'worktree) st="WORKTREE" ;;' 'worktree) ;;'
+mutant hooks-dropped-from-loop 'for d in skills agents scripts hooks; do' 'for d in skills agents scripts; do'
+mutant hooks-missing-in-cache-not-stale 'if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="stale"; continue; fi' 'if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="not-compared"; continue; fi'
+mutant hooks-absent-both-false-stale 'if [ ! -d "$ip/$d" ] && [ ! -d "$CLONE/$d" ]; then continue; fi' ':'
+mutant not-compared-overrides-stale '[ "$state" = stale ] || state="not-compared"; continue' 'state="not-compared"; continue'
 mutant backup-skipped 'cp "$REGISTRY" "$REGISTRY.bak-$stamp" ||' 'true ||'
 
 if [ "$fail" -eq 0 ]; then

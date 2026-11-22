@@ -34,8 +34,8 @@
 #      --absolute-git-dir` vs `--git-common-dir`); a submodule, whose `.git` is
 #      also a file, has the same dir for both and is NOT a worktree. The dry run
 #      reports them under their own count. Gate: scripts/test-update-plugin-everywhere.sh.
-#   5. verify every surviving entry BY CONTENT — `diff -rq` of skills/, agents/
-#      and scripts/ against the clone — never by version string: the manifest
+#   5. verify every surviving entry BY CONTENT — `diff -rq` of skills/, agents/,
+#      scripts/ and hooks/ against the clone — never by version string: the manifest
 #      is stamped only on release PRs while content lands on every merge, so
 #      a cache and main routinely share one version over different files
 #      (issue #296). Any diff output, or a directory that could not be
@@ -123,8 +123,15 @@ project_kind() {  # $1 = project path -> dead | worktree | live
 
 content_state() {  # $1 = installPath → prints current | stale | not-compared
     local ip="$1" d out state="current"
-    for d in skills agents scripts; do
-        if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="not-compared"; continue; fi
+    for d in skills agents scripts hooks; do
+        if [ "$d" = hooks ]; then
+            # hooks/ is optional: absent from BOTH sides is a version that predates it (current);
+            # present on only one side is drift (a cache that predates hooks/ keeps no guard) — stale.
+            if [ ! -d "$ip/$d" ] && [ ! -d "$CLONE/$d" ]; then continue; fi
+            if [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then state="stale"; continue; fi
+        elif [ ! -d "$ip/$d" ] || [ ! -d "$CLONE/$d" ]; then
+            [ "$state" = stale ] || state="not-compared"; continue
+        fi
         out="$(diff -rq "$CLONE/$d" "$ip/$d" 2>&1)"
         [ -z "$out" ] || state="stale"
     done
