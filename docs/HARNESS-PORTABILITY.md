@@ -25,6 +25,15 @@ means "not found in the summary". Evidence labelled **observed** was produced by
 installed package's `src/` and was not run through a model; it is as good as that version and no
 better.
 
+## Plugin hooks are Claude Code only
+
+`hooks/hooks.json` (the PreToolUse(Bash) secret guard, `hooks/bash-secret-guard.{sh,py}`) sits
+outside this inventory, which counts mechanisms under `skills/` and `agents/`. It depends on a
+harness that auto-discovers a plugin's `hooks/hooks.json`, expands `${CLAUDE_PLUGIN_ROOT}` in the
+hook command, and has `python3` on `PATH`. That is Claude Code. No other harness has been tested
+to load it, so on omp (or anything else) the guard enforces nothing and says nothing. Nothing
+gates this statement; it is a design fact, not a measured result.
+
 ## Inventory
 
 | # | Mechanism | Files | Reproducing command |

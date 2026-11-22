@@ -156,7 +156,7 @@ must be valid CalVer (non-padded month 1–12, positive patch).
 
 The fixed release-relevant inventory is:
 
-- All tracked content under `skills/` and `agents/`, including bundled scripts,
+- All tracked content under `skills/`, `agents/` and `hooks/`, including bundled scripts,
   references, templates and removals.
 - The runtime root helper `scripts/align-labels.sh`, not every root script.
 - `.claude-plugin/plugin.json`, parsed with **only top-level `version` removed**.

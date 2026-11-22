@@ -2,7 +2,7 @@
 
 Sassy Dog AI agent skills marketplace for Claude Code, Gemini CLI, and other AI coding tools.
 
-Everything here is plain Markdown plus Bash. Claude Code consumes it as a plugin via the marketplace below; any other agent that can read a Markdown instruction file and run a shell script can use the same `skills/` directory directly. Model choice is harness-neutral: every dispatch site names a tier, bound per harness in [`docs/MODEL-TIERS.md`](docs/MODEL-TIERS.md). The dispatch *mechanics* are still Claude-Code-shaped (the Agent tool, `isolation: "worktree"`, `${CLAUDE_PLUGIN_ROOT}`), so another harness has to supply those.
+Everything here is plain Markdown plus Bash (and one stdlib-only Python hook under `hooks/`). Claude Code consumes it as a plugin via the marketplace below; any other agent that can read a Markdown instruction file and run a shell script can use the same `skills/` directory directly. Model choice is harness-neutral: every dispatch site names a tier, bound per harness in [`docs/MODEL-TIERS.md`](docs/MODEL-TIERS.md). The dispatch *mechanics* are still Claude-Code-shaped (the Agent tool, `isolation: "worktree"`, `${CLAUDE_PLUGIN_ROOT}`), so another harness has to supply those.
 
 **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)** · **[Versioning](docs/VERSIONING.md)** · Licensed [Apache-2.0](LICENSE)
 
@@ -189,6 +189,7 @@ parallel dispatch, live review or merge behavior.
 
 Notes on reading it:
 
+- The plugin-wide `hooks/` guard (the [Bash guard hook](#bash-guard-hook)) is not a skill and has no row here: it needs `${CLAUDE_PLUGIN_ROOT}` expansion in `hooks/hooks.json` and `python3`, so it enforces on Claude Code only. On omp or any harness that does not load a plugin's `hooks/hooks.json` it silently does nothing; there is no equivalent to rely on.
 - `none` means no inventory mechanism matched under that skill's directory (row 14 excluded: not a dependency per the inventory), which is not evidence
   it runs on omp. The skill may still use a Claude Code tool that no row covers.
 - `whats-on-fire` hits row 1 only through its cloud-routine fallback, and `pr-shepherd` and
@@ -199,6 +200,23 @@ Notes on reading it:
 - The row sets above were derived with the reproducing commands in the inventory scoped to
   `skills/<name>`. Nothing gates them, so re-run the commands rather than trusting this table when
   the tree moves.
+
+### Bash guard hook
+
+The plugin ships one hook, `hooks/hooks.json` (auto-discovered by Claude Code, nothing to configure): a `PreToolUse` hook on `Bash` that runs `hooks/bash-secret-guard.sh`. It needs `python3` (stdlib only) and `${CLAUDE_PLUGIN_ROOT}` expansion, so it **enforces on Claude Code only** (see [Harness support](#harness-support)). It exists because a hook cannot see a command's output, so a secret leak has to be stopped by a rule about which commands may run. Two rules:
+
+1. **Doppler value-printing guard, a whole-command allow list.** `doppler secrets get`, `download`, `substitute` and bare `doppler secrets` print secret values in their default output, which puts them in the session transcript. There is no shell parser: if the raw command text mentions `doppler` in any spelling it can show (case-folded, so `DOPPLER` on a case-insensitive filesystem; ANSI-C escapes decoded (`\x`, `\u`, `\U`, octal, `\c`, `\e`); a backslash-newline joined first, as the shell does; quotes, backslashes, braces, brackets and wildcards stripped, so `$'doppler'`, `{doppler,}`, `doppl[e]r` and `d"o"ppler` all count), or has a command word (the first word of a simple command) holding a shell expansion or glob, or such a character before a bare `secrets`, `configure`, `run` or `me` argument in the same simple command (`${X}pler secrets`, `dop*ler me`, `"$D" run`; the subcommand is looked for with quotes and backslashes removed, in segments split outside quotes, so `dop*ler sec''rets` and `"$D" --scope=';' secrets` count; an `&` beside `>` or `<` is a redirect and does not split, so `dop?ler 2>&1 secrets` and `"$D" >&2 secrets` count), or builds a value-printing doppler phrase around an expansion, then the ENTIRE command must be exactly one single simple command of these forms, or it is denied (no `;` `&` `|` `&&` `||`, newline, backtick, `$(`, `<(`, `<<`, no env prefix, no wrapper; every flag from a per-subcommand allow list with a literal value; an unknown flag denies):
+   1. `doppler secrets --only-names` (bare flag; `-p`/`-c`/`--json` etc. allowed), optionally piped to `wc -l`, `head -n N` or `grep LITERAL`;
+   2. `doppler run [flags] -- <cmd>` or `doppler run --command '<string>'`, where `<cmd>` is one simple command that does not itself mention doppler and has no `$(`, backtick or `<(` (the child decides what prints: a child can print its own environment, so `doppler run -- env`, `printenv` or `doppler run --command 'echo $X'` prints secrets, and the guard cannot see inside the child);
+   3. `doppler secrets get NAME... [flags] > /literal/path`, `secrets download --no-file [flags] > /literal/path` (or `download <path>`), `secrets substitute <template> (> | --output) /literal/path`. The path is `[A-Za-z0-9._/~-]`, with no `.`/`..` segment, not under `/dev`, `/proc` or `/sys` (compared case-folded: `/DEV/stdout` is denied), and a redirect must be the last thing. The file is yours: **reading it back is your responsibility**, and the guard cannot see what you do with it afterwards;
+   4. a bare non-printing subcommand: `login`, `logout`, `setup`, `configs`, `projects`, `environments`, `me`, `update`, `activity`, `changelog`, `open`, `settings`, `flags`, `help`, `--version`, `--help`, `run --help`. Two more narrow forms exist because the plugin's own skills emit them: `doppler secrets get NAME --plain | gh secret set NAME [--repo R ...]` (gh reads the value from stdin and prints none of it), and the `secret_bootstrap` shape `eval "$(doppler secrets download --no-file --format env [-p P] [-c C] [2>/dev/null])"` as the whole command, with nothing after it (no `&&`, `;`, pipe or newline). Each Bash call is a fresh shell, so a follow-up command runs through `doppler run [-p P] [-c C] -- <command>` (form 2) instead of after the eval. The shape is exactly `--no-file --format env` plus `-p`/`-c`: Doppler's default format is json, and `eval` of json, `env-no-quotes` or a `--name-transformer` output prints the values in eval's own error text, so no other format, no transformer and no global flag rides there. `--debug` and `--api-host` (it would send the token to any host) are on no list. Anything that prints credentials (`configure get`, `configure --all`, `--print-config`, `configs tokens`, any other `secrets` form) is not on the list.
+
+   Nothing else is trusted: not `--plain` on its own, not `--silent` (it suppresses info messages, not values), not a pipe into `wc`/`sed`/`grep`/`sha256sum`, not a `$(...)` capture, not `bash -c`/`ssh`/`xargs`/`python -c` strings. Because the trigger is the raw text, **text that merely mentions doppler is denied too** (`git commit -m "... doppler secrets get ..."`, `gh pr create --body '... doppler ...'`, `grep doppler docs/`): put the bypass in front of such a command. A false deny costs a bypass token; a false allow costs a secret in a transcript. The denial names the safe forms.
+2. **Literal credentialed URL guard.** A word embedding `scheme://[user]:password@host` for `postgres(ql)`, `mysql`, `mongodb`, `redis(s)` or `amqp(s)` (case-insensitive, an optional `+driver` suffix such as `postgresql+asyncpg`, an empty user allowed) is denied; pass the value through the environment (`doppler run`) instead of the command line. A password starting with an unquoted `$name`, `${` or `$(` is an environment-variable reference and passes; a single-quoted or escaped `$ecret` is a literal and is denied. The `password=` / `?password=` query forms are not covered.
+
+**Bypass.** Put the variable at the start of the command it applies to, as an unquoted assignment: `SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X` or `SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql ...`. It applies to that command (and the strings it runs) only, and it is visible in the transcript on purpose: the hook never reads its own environment and never matches the token anywhere else in the text, so a bypass cannot be left switched on, and a deliberate override leaves a record of who chose it.
+
+**Failure mode.** If the hook cannot classify an event (empty or malformed input, no command string, `python3` missing, an internal fault) it **fails open and says so** on stderr (exit 1, a non-blocking error Claude Code shows). This is a seatbelt against the accident, not a sandbox. Known limits: aliases and functions; a doppler name produced by a glob or expansion that is not the first word of a simple command, i.e. behind a prefix word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string), or after a detached redirect target (`< in "$D" $S`, `2> out $D $S`): the command-word trigger inspects only the first word (after skipped assignments and redirections), the limit applies only when the subcommand is not spelled literally too (the second trigger still denies `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`, `cat <(dop?ler secrets get X)` and `! $D run`), and the threat model is accidental printing, so these deliberate obfuscations are accepted and pinned as allows in the gate; a command name assembled at run time from pieces the text never spells (printf formatting); symlinked redirect targets; a redirected file that is read back afterwards; a two-step symlink rename (`ln -s /opt/homebrew/bin/dop?ler /tmp/dp`, then `/tmp/dp secrets`: each command text is innocent alone); `doppler run -- env`, `printenv` or `doppler run --command 'echo $X'` print secrets because the child decides; a relative redirect target is resolved against the event's `cwd`, so with no `cwd` it is checked as written; the `password=` URL forms. A false deny also hits a command whose first word is an unresolved expansion or glob (`$HOME/bin/tool`): use the bypass. `scripts/update-plugin-everywhere.sh` compares only skills, agents and scripts, so a machine can run a stale `hooks/` until the plugin is reinstalled ([#642](https://github.com/Sassy-Dog/skills/issues/642)). A PostToolUse tripwire for credentialed URLs in tool results is not shipped. Pinned by `scripts/test-bash-secret-guard.sh`.
 
 ### Review agents
 
@@ -407,7 +425,9 @@ The quoting and the `[ -d ]` guard are not decoration. The quotes are what make 
 
 `scripts/` belongs in that list because of one file: `align-labels.sh` is the only root-`scripts/` path any skill invokes at runtime through `${CLAUDE_PLUGIN_ROOT}` (every other bundled script lives under `skills/` — almost all under `skills/<skill>/scripts/`, plus the two `skills/setup-hooks/references/templates/*.template.sh` renderer inputs — and is already covered by the first directory). One file is enough — a merge touching only it leaves `skills/` and `agents/` identical while changing what a label-writing run actually executes, which is the #167 failure. Most of root `scripts/` is CI gates that never run at plugin runtime, so drift counts there are not evidence about runtime behaviour and are not offered as any.
 
-**Any output at all means the cache is stale, or the comparison did not run** — either way it is not current, so run the update in step 4. Silence across all three directories means it is current. The shapes say different things, and a reader scanning only for the word "differ" skips the one that matters most:
+`hooks/` loads at runtime too but is **not** in this comparison yet ([#642](https://github.com/Sassy-Dog/skills/issues/642)); to check it by hand, run the same `diff -rq "$CLONE/hooks" "$INSTALL_PATH/hooks"` (the plugin cache loads it, so a stale cache keeps the old guard).
+
+**Any output at all means the cache is stale, or the comparison did not run** — either way it is not current, so run the update in step 4. Silence across all three directories means those three are current (`hooks/` is the extra check above until [#642](https://github.com/Sassy-Dog/skills/issues/642) lands). The shapes say different things, and a reader scanning only for the word "differ" skips the one that matters most:
 
 | Output | Meaning |
 | --- | --- |
@@ -442,11 +462,12 @@ This repo is **public**, so install and update clone it over anonymous HTTPS —
 
 ## Repository layout
 
-This repo is a single plugin: skills, agents, and the manifest live at the root.
+This repo is a single plugin: skills, agents, one hook, and the manifest live at the root.
 
 ```
 skills/
 ├── .claude-plugin/plugin.json   # Plugin manifest
+├── hooks/hooks.json             # Plugin hook: PreToolUse(Bash) secret guard (see Bash guard hook)
 ├── agents/                      # Subagents (auto-discovered, namespaced sassy-dog:<name>)
 │   ├── *-reviewer.md            # Nine domain reviewers — audit mode or diff-scoped mode
 │   └── pr-review-orchestrator.md  # Diff-scoped fan-out over those nine

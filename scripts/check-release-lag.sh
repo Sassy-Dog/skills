@@ -171,7 +171,7 @@ def entries(sha):
                 continue
             metadata, path_bytes = row.split(b"\t", 1)
             path = path_bytes.decode("utf-8", "surrogateescape")
-            if (path.startswith(("skills/", "agents/")) or
+            if (path.startswith(("skills/", "agents/", "hooks/")) or
                     path in ("scripts/align-labels.sh", PLUGIN, MARKET)):
                 found[path] = tuple(metadata.decode("ascii").split())
         trees[tree] = found
