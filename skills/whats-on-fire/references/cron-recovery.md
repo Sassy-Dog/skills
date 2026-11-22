@@ -165,8 +165,10 @@ ORG=Sassy-Dog REPO=platform WORKFLOW_FILE=relay-drift-check.yml \
   bash "$PLUGIN_ROOT/skills/whats-on-fire/scripts/check-dispatch-recovery.sh"
 ```
 
-The plugin's Bash guard denies any command whose text mentions the secrets manager, and a
-workflow file named `doppler-audit.yml` does. For such a file, put the per-command bypass in front:
+The plugin's Bash guard denies a command that mentions the secrets manager unless the command is
+exactly one of the allowed forms (README, "Bash guard hook"), and a workflow file named
+`doppler-audit.yml` is such a mention. For such a file, put the per-command bypass in front, before
+the other assignments:
 `SASSYDOG_ALLOW_DOPPLER_PRINT=1 ORG=... REPO=... WORKFLOW_FILE=doppler-audit.yml ... bash ...`. It applies to that one
 command only and is visible in the transcript on purpose (README, Bash guard hook, "Bypass").
 

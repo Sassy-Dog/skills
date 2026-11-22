@@ -107,7 +107,8 @@
 # in the "KNOWN LIMIT" section. No mutant was run for the pin; it asserts current behaviour only.
 # Review 6's bootstrap-tail spellings (`&& {set,}`, `&& FOO=1 set`, `&& let x=API_KEY`,
 # `&& [[ DB -gt 0 ]]`) are pinned as denies; the review-6 mutant (bootstrap accepts text after the
-# eval) is the one that targets them, and was not re-run against these four cases.
+# eval) is the one that targets them. It was re-run in review 8 as BOOTSTRAP_RE.fullmatch -> .match
+# on a scratch copy: all four cases turn red (32 cases fail in all, 535 pass).
 # Documented limits are NOT asserted as caught: aliases and functions, a command name built at
 # run time from pieces the text never spells (printf formatting), symlinked redirect targets,
 # reading a redirected file back, `doppler run -- env` / `printenv` (the child decides),

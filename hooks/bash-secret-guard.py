@@ -31,7 +31,10 @@ disagree with itself about quoting.
    KNOWN LIMIT (accepted, pinned as allows in the gate): that trigger inspects ONLY the first word
    of a simple command. A doppler name produced by a glob or expansion and sitting behind a prefix
    word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string `<<< $(...)`), or after a
-   detached redirect target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is not caught. The
+   detached redirect target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is not caught, but only
+   when the subcommand is not spelled literally too: the second trigger still denies
+   `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`,
+   `cat <(dop?ler secrets get X)` and `! $D run`. The
    threat model is accidental printing; these are deliberate obfuscations, in the same class as
    aliases/functions, printf-assembled names, symlink targets and the two-step symlink rename, and
    a redirected file read back. A future change that closes or reopens them is a conscious decision.

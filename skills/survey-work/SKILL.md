@@ -141,7 +141,7 @@ configured line, then `--`, then the command with its paths written literally). 
 secrets and the plugin's Bash guard allows that form. A presence probe must run its test inside
 the child's own shell: `doppler run -p P -c C -- sh -c 'test -n "$ASC_KEY_ID"'`, because
 `... -- test -n "$ASC_KEY_ID"` expands the variable in the OUTER shell before Doppler loads and
-reports missing on credentials Doppler holds. The wrapped command must be one simple command: a
+reports missing on credentials Doppler holds. The wrapped command must be one simple command (README, Bash guard hook): a
 `| grep` or a `> out` after it is denied. Any other configured line is not guarded:
 run it joined to the command by `&&`. On bootstrap error, continue; the probes then report their
 surfaces per the skip rule above. A denial from the guard (`bash-secret-guard: BLOCKED`) is not a
