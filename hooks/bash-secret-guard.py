@@ -21,7 +21,9 @@ disagree with itself about quoting.
    doppler phrase (`secrets get|download|substitute`, `configure get|--all`, `configs
    tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` argument
    later in the same simple command (`dop*ler secrets`, `"$D" run`; `ls $HOME/secrets` and
-   `gh run view $ID` stay quiet).
+   `gh run view $ID` stay quiet). That search runs on text with quotes and backslashes removed
+   (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`) and on segments split quote-aware, so a
+   quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob.
    A triggered command is allowed only if the ENTIRE command is exactly one of:
      1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
@@ -33,19 +35,25 @@ disagree with itself about quoting.
         `secrets substitute <template> [flags] (> | --output) <literal path>`
      3b. `doppler secrets get NAME --plain | gh secret set NAME [--repo R ...]` (gh reads the
         value from stdin and prints none of it; no `--body`, no other consumer)
-     3c. the secret_bootstrap shape `eval "$(doppler secrets download --no-file [flags]
-        [2>/dev/null])"`, alone or followed by `&& <one command that does not mention doppler>`
-        (the shell consumes the output; both shapes are emitted by this plugin's own skills,
-        and the gate extracts every doppler command under skills/ and requires it to pass)
+     3c. the secret_bootstrap shape `eval "$(doppler secrets download --no-file --format env
+        [-p P] [-c C] [2>/dev/null])"` (exactly that: no other format, no --name-transformer,
+        no global flag), alone or followed by `&& <one command>` that does not mention doppler,
+        expands no variable (`$`) and does not dump the environment (env, printenv, set,
+        declare, typeset, export, compgen, `environ`, /proc, also inside a `-c` string). The
+        eval consumes the output, so the loaded secrets live in the shell: the tail is where
+        they would print. The gate extracts every doppler command under skills/ and requires it
+        to pass)
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
    where "exactly one" means: a single simple command (no ; & | && || newline, backtick, $(,
    <(, >(, <<, <, >& ...), no environment prefix, no wrapper, the command word is the literal
    lower-case `doppler`, every flag is on an explicit per-subcommand allow list with a literal
-   value that does not start with `-`, and an unknown flag denies. A literal path has only
+   value that does not start with `-`, and an unknown flag denies (`--debug` and `--api-host`
+   are on no list: one logs requests, the other would send the token to any host). A literal path has only
    [A-Za-z0-9._/~-], no `.`/`..` segment, is not under /dev, /proc or /sys (case-folded), and a relative
-   path may not start with a device-like segment (fd, stdout, tty, ...).
+   path may not start with a device-like segment (fd, stdout, tty, ...); a relative path is also
+   resolved against the event's `cwd` (a previous call may have done `cd /dev`).
 2. Literal credentialed URL guard. The raw text embeds scheme://[user]:password@host (scheme
    postgres(ql)/mysql/mongodb/redis(s)/amqp(s), optional +driver, case-insensitive). A password
    that starts with an unquoted `$name`, `${` or `$(` is an environment reference and passes;
@@ -59,11 +67,14 @@ substring, never from the hook's own environment.
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
-`printenv` (a child can print its own environment: the child decides), `password=` / `?password=` URL forms, and false denies for any
+`printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
+child decides), a bootstrap tail that runs a script which itself prints the environment, a
+relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
 text that merely mentions doppler (a commit message, a PR body): use the bypass.
 """
 
 import json
+import os
 import re
 import sys
 import unicodedata
@@ -85,7 +96,8 @@ SAFE_FORMS = (
     "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
     "`doppler secrets get NAME --plain | gh secret set NAME`; `eval \"$(doppler secrets download "
-    "--no-file --format env 2>/dev/null)\"`; a bare "
+    "--no-file --format env 2>/dev/null)\"` (alone, or before `&& <command>` that expands no "
+    "variable and dumps no environment); a bare "
     "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
@@ -106,7 +118,7 @@ URL_MSG = (
 EXPANSION_RE = re.compile(r"[$`{*?\[]")
 # Words that make a command that Doppler's CLI would run, for a command NAME the text does not spell.
 SUBCOMMAND_WORDS = ("secrets", "configure", "run", "me")
-SEGMENT_RE = re.compile(r"[;&|\n\r]+")
+QUOTES_RE = re.compile(r"['\"\\]")
 LINE_CONTINUATION_RE = re.compile(r"\\\r?\n")
 
 
@@ -146,20 +158,55 @@ def _mentions(t):
     if "doppler" in re.sub(r"[^a-z0-9\s]", "", t):
         return True
     if EXPANSION_RE.search(t):
-        w = lambda *names: all(re.search(r"\b" + n + r"\b", t) for n in names)  # noqa: E731
-        if (w("secrets") and any(re.search(r"\b" + n + r"\b", t) for n in ("get", "download", "substitute"))) \
-                or (w("configure") and (w("get") or "--all" in t)) \
-                or w("configs", "tokens") or "print-config" in t:
+        n = QUOTES_RE.sub("", t)
+        w = lambda *names: all(re.search(r"\b" + x + r"\b", n) for x in names)  # noqa: E731
+        if (w("secrets") and any(re.search(r"\b" + x + r"\b", n) for x in ("get", "download", "substitute"))) \
+                or (w("configure") and (w("get") or "--all" in n)) \
+                or w("configs", "tokens") or "print-config" in n:
             return True
         # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`):
         # an expansion character, then later in the same simple command a Doppler subcommand as a
         # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
-        for seg in SEGMENT_RE.split(t):
+        for seg in split_segments(t):
+            seg = QUOTES_RE.sub("", seg)  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
             m = EXPANSION_RE.search(seg)
-            if m and any(re.search(r"(?:^|[\s\"'])" + n + r"(?=$|[\s\"'])", seg[m.start():])
+            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s)", seg[m.start():])
                          for n in SUBCOMMAND_WORDS):
                 return True
     return False
+
+
+def split_segments(s):
+    """Split at ; & | newline outside quotes, so `--scope=';' secrets` stays one simple command.
+
+    Quote-aware on purpose: splitting inside a quote hid the later subcommand word from the
+    earlier glob. `$'...'` honours a backslash. An unbalanced quote runs to the end, which keeps
+    more text together and so can only trigger more, never less.
+    """
+    segs, start, quote, i, ansi_c = [], 0, None, 0, False
+    while i < len(s):
+        c = s[i]
+        if quote == "'":
+            if c == "\\" and ansi_c:
+                i += 1
+            elif c == "'":
+                quote = None
+        elif quote == '"':
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quote = None
+        elif c == "\\":
+            i += 1
+        elif c in "'\"":
+            quote = c
+            ansi_c = c == "'" and i > 0 and s[i - 1] == "$"
+        elif c in ";&|\n\r":
+            segs.append(s[start:i])
+            start = i + 1
+        i += 1
+    segs.append(s[start:])
+    return segs
 
 
 # ---- single simple command, quote-aware ------------------------------------------------------
@@ -245,10 +292,11 @@ BOOTSTRAP_RE = re.compile(
 
 # Flags are taken from `doppler --help`, `doppler help secrets [get|download|substitute]` and
 # `doppler run --help` (CLI v3.76). Left out on purpose: -t/--token and --passphrase (a
-# credential on the command line), --copy, --print-config, --no-verify-tls, --mount, --fallback.
-GLOBAL_BOOL = {"--debug", "--json", "--no-check-version", "--no-read-env", "--no-timeout",
+# credential on the command line), --copy, --print-config, --no-verify-tls, --mount, --fallback,
+# --debug (it logs requests) and --api-host (it would send the token to any host).
+GLOBAL_BOOL = {"--json", "--no-check-version", "--no-read-env", "--no-timeout",
                "--enable-dns-resolver", "--silent"}
-GLOBAL_VAL = {"--api-host", "--attempts", "--config-dir", "--dashboard-host",
+GLOBAL_VAL = {"--attempts", "--config-dir", "--dashboard-host",
               "--dns-resolver-address", "--dns-resolver-proto", "--dns-resolver-timeout",
               "--scope", "--timeout"}
 PC_VAL = {"-p", "--project", "-c", "--config"}
@@ -277,8 +325,13 @@ BARE_SUBS = {
 INFO_FLAGS = {"--version", "-v", "--help", "-h"}
 
 
+CWD = None  # the event's working directory, set per command by analyze()
+
+
 def literal_path(p):
     if not PATH_RE.fullmatch(p) or p.startswith("-"):
+        return False
+    if not p.startswith(("/", "~")) and CWD and not _cwd_ok(p):
         return False
     if "~" in p and not (p.startswith("~/") and p.count("~") == 1):
         return False
@@ -291,6 +344,12 @@ def literal_path(p):
     if p.startswith("/"):
         return not any(low == r or low.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
     return segs[0].lower() not in DEVLIKE
+
+
+def _cwd_ok(p):
+    """A relative target resolved against the shell's cwd (a previous call may have done `cd /dev`)."""
+    low = os.path.realpath(os.path.join(CWD, p)).lower()
+    return not any(low == r or low.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
 
 
 def parse_args(toks, i, bools, vals):
@@ -448,22 +507,55 @@ def allowed_strict(cmd):
     return False
 
 
+ENV_DUMPERS = {"set", "declare", "typeset", "export", "readonly", "compgen", "local"}
+WRAPPERS = {"eval", "exec", "command", "builtin", "sudo", "nice", "nohup", "time", "xargs", "then",
+            "do", "else", "!"}
+
+
+def tail_prints_env(rest):
+    """True when the command after a bootstrap's `&&` could print the secrets it just loaded.
+
+    The loaded values live in the environment, so the tail may not expand a variable (`$`) and
+    may not dump the environment: `env`/`printenv`/`environ`/`ENV` anywhere in the text (also
+    inside a `bash -c`, `python -c`, `perl -e` string), or `set`, `declare`, `typeset`, `export`,
+    `readonly`, `compgen`, `local` where a command word stands (first word of a segment, or after
+    a wrapper or a `-c` option). `gh secret set X` is not a command-word `set`.
+    """
+    n = QUOTES_RE.sub("", rest).lower()
+    if "$" in n or "env" in n or "/proc" in n:
+        return True
+    for seg in re.split(r"[;&|(){}`\n\r]+", n):
+        toks = seg.split()
+        for k, tok in enumerate(toks):
+            if tok.rsplit("/", 1)[-1] not in ENV_DUMPERS:
+                continue
+            prev = toks[k - 1] if k else None
+            if prev is None or prev in WRAPPERS or (prev.startswith("-") and prev.endswith("c")):
+                return True
+    return False
+
+
 def allowed_bootstrap(cmd):
-    """`eval "$(doppler secrets download --no-file ...)"`, alone or followed by `&& <one command>`."""
+    """`eval "$(doppler secrets download --no-file --format env ...)"`, alone or before `&& <one command>`.
+
+    Exactly `secrets download --no-file --format env` plus -p/-c. Doppler's default format is
+    json, and eval of json, env-no-quotes or a --name-transformer output prints the values in
+    eval's own error text, so no other format, no transformer, no global flag rides here.
+    """
     m = BOOTSTRAP_RE.match(cmd)
     if not m:
         return False
     after = cmd[m.end():]
     if after.strip():
         mm = re.fullmatch(r"[ \t]+&&[ \t]+(.+)", after, re.S)
-        if not mm or not check_rest(mm.group(1)):
+        if not mm or not check_rest(mm.group(1)) or tail_prints_env(mm.group(1)):
             return False
     toks = m.group(1).split()
-    g = parse_global(toks)
-    if g is None or g[0] >= len(toks) or toks[g[0]] != "secrets":
+    if toks[0] != "doppler":
         return False
-    parsed = parse_args(toks, g[0] + 1, GLOBAL_BOOL | DOWNLOAD_BOOL, GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL)
-    return bool(parsed) and parsed[1] == ["download"] and parsed[0].get("--no-file") is True
+    parsed = parse_args(toks, 1, {"--no-file"}, PC_VAL | {"--format"})
+    return bool(parsed) and parsed[1] == ["secrets", "download"] \
+        and parsed[0].get("--no-file") is True and parsed[0].get("--format") == "env"
 
 
 def allowed_secrets(toks, i, redirect, tail):
@@ -536,7 +628,9 @@ def url_violation(text):
     return False
 
 
-def analyze(command):
+def analyze(command, cwd=None):
+    global CWD
+    CWD = cwd if isinstance(cwd, str) and cwd.startswith("/") else None
     bd, bu, body = split_bypass(command)
     problems = []
     if not bd and triggered(body) and not allowed_strict(body):
@@ -560,7 +654,7 @@ def main():
         return notice("empty hook event on stdin")
     try:
         event = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: a pathologically nested document
         return notice("hook event is not valid JSON")
     if not isinstance(event, dict):
         return notice("hook event is not a JSON object")
@@ -571,7 +665,7 @@ def main():
     if not isinstance(command, str):
         return notice("Bash event carries no command string")
     try:
-        problems = analyze(command)
+        problems = analyze(command, event.get("cwd"))
     except Exception as exc:  # noqa: BLE001 - any classifier fault must be reported, not swallowed
         return notice(f"internal error while classifying ({exc.__class__.__name__})")
     if problems:

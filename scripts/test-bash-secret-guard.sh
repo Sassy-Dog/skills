@@ -66,8 +66,23 @@
 #     redirect target; and the forms the plugin's own skills emit, with their near misses as
 #     denies (the `eval "$(doppler secrets download --no-file ...)"` bootstrap alone or before one
 #     `&&` command, and `get NAME --plain | gh secret set NAME`)
-#   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (fenced
-#     lines and inline code spans) must be allowed by the guard or carry the bypass, so the
+#   - review 5 (four Blocking findings), each with committed cases: the bootstrap's `&&` tail may
+#     not expand a variable or dump the environment (env, printenv, set, declare, export -p,
+#     compgen, `$VAR`, `bash -c`/python/perl/node/awk strings, /proc/self/environ), while
+#     `gh auth status`, a TestFlight pull with a literal path and `gh secret set` stay allowed;
+#     the bootstrap is exactly `--no-file --format env` (no --format json/dotnet-json/
+#     env-no-quotes/docker, no --name-transformer with or without `=`, no global --json/--debug/
+#     --api-host); the subcommand word is found with quotes and backslashes removed and on
+#     segments split outside quotes (`sec''rets`, `s"e"crets`, `\configure`, `r''un`, `\me`,
+#     `--scope=';' secrets`); a relative redirect is resolved against the event's `cwd` (cwd /dev
+#     then `> 1`, `> out.txt`, a symlink to /dev, /DEV, /proc/self); the decoder cases (octal,
+#     `\e`, `\E`, `\c`, NFKC before decoding, NFKC on plain text); RecursionError from
+#     json.loads fails open (injected, since newer Pythons parse any depth); and the sweep below
+#     checks every line of a fenced block that mentions doppler, with a fixture holding the OLD
+#     bulk-sync text that must still be flagged
+#   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (every non-comment
+#     line of a fenced block that mentions doppler at all, and inline code spans holding
+#     `doppler <word>`) must be allowed by the guard or carry the bypass, so the
 #     guard cannot again deny what the plugin tells an agent to run. A prose mention inside a
 #     code span counts: write it without `doppler <word>` in backticks. The extractor must find
 #     commands, and each known site (scope-hierarchy, config-contract, interview, detection)
@@ -75,6 +90,10 @@
 #   - speed: a 0.5-2 MB command (many credential URLs, a leading quote plus many URLs, an
 #     expansion plus 100k words, a plain command) classifies in under 5 s with the expected
 #     exit code; a hook timeout fails open without a word
+# Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
+# cannot spell a letter, so the decoder only matters when the control character is stripped and
+# joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger); a bootstrap tail that runs
+# a script which itself prints the environment (the child decides).
 # Documented limits are NOT asserted as caught: aliases and functions, a command name built at
 # run time from pieces the text never spells (printf formatting), symlinked redirect targets,
 # reading a redirected file back, `doppler run -- env` / `printenv` (the child decides),
@@ -107,6 +126,19 @@
 #              only, which drops the letter after `\e` (1); quote scan restarted per URL match,
 #              i.e. quadratic (2); scope-hierarchy.md's old bulk-sync loop restored (1);
 #              interview.md's prose span `doppler secrets download` restored (1)
+#   review 5 (failing-case count in parentheses): bootstrap tail check off (26); tail `$` allowed
+#              (5); tail env/proc text allowed (12); command-word dumpers (set, declare, export,
+#              compgen) allowed (9); dumper after a wrapper or `-c` allowed (1); bootstrap
+#              `--format` not required to be env (6); `--name-transformer` allowed (2); global
+#              --json/--debug/--api-host allowed in the bootstrap (4); `--debug` back on the
+#              global list (1); `--api-host` back on the global list (1); segment text not
+#              stripped of quotes and backslashes (6); keyword phrases (`secrets get`) matched on
+#              raw text (1); segments split naively on a quoted `;` (5); ANSI-C backslash not
+#              honoured in the splitter (1); octal escapes not decoded (2); `\c` not decoded (1);
+#              `\e` not decoded (1); `\E` not decoded (1); no NFKC on plain text (1); cwd ignored
+#              (8); cwd symlinks not resolved (1); cwd not case-folded (1); RecursionError not
+#              caught (1, the injected case); the sweep matching only `doppler <word>` lines in
+#              fenced blocks (1)
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -125,6 +157,10 @@ bad() { fail_n=$((fail_n + 1)); echo "  FAIL - $1"; }
 
 event() { # <command> -> Bash PreToolUse event JSON
     python3 -I -B -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"
+}
+
+event_cwd() { # <cwd> <command> -> Bash PreToolUse event JSON carrying the harness's cwd
+    python3 -I -B -c 'import json,sys; print(json.dumps({"tool_name":"Bash","cwd":sys.argv[1],"tool_input":{"command":sys.argv[2]}}))' "$1" "$2"
 }
 
 # run_event <json> -> sets rc, err
@@ -443,7 +479,7 @@ allow "--only-names" 'doppler secrets --only-names'
 allow "--only-names with -p and -c" 'doppler secrets -p app -c prd --only-names'
 allow "--only-names with --project and --config=" 'doppler secrets --project app --config=prd --only-names'
 allow "--only-names with a global flag first" 'doppler --json secrets --only-names'
-allow "--only-names with --api-host" 'doppler --api-host https://api.doppler.com secrets --only-names'
+deny "--only-names with --api-host sends the token to any host" 'doppler --api-host https://api.doppler.com secrets --only-names'
 allow "--only-names | wc -l" 'doppler secrets --only-names | wc -l'
 allow "--only-names | head -n 5" 'doppler secrets --only-names | head -n 5'
 allow "--only-names | grep -x NAME" 'doppler secrets --only-names | grep -x DATABASE_URL'
@@ -658,22 +694,138 @@ deny "download piped into gh" 'doppler secrets download --no-file --format env |
 deny "gh secret set with an unknown flag" 'doppler secrets get X --plain | gh secret set X --env-file /dev/stdin'
 allow "download to a literal file, then gh reads it (the github-secrets bulk sync)" 'doppler secrets download --no-file --format env > /tmp/doppler-sync.env'
 
+echo "== review 5: the bootstrap tail runs in a shell that already holds the secrets =="
+BOOT='eval "$(doppler secrets download --no-file --format env)"'
+for tail in 'env' 'printenv' 'printenv API_KEY' 'set' 'declare -p' 'typeset -x' 'export -p' 'export' 'readonly -p' 'compgen -v' \
+    'echo $API_KEY' 'echo "$DATABASE_URL"' 'printf %s "$API_KEY"' 'echo ${API_KEY}' 'echo "${!A*}"' \
+    "bash -c 'printenv'" "bash -c 'echo hi; set'" "sh -c 'declare -p'" 'sudo env' 'command env' '/usr/bin/env' 'cat /proc/self/environ' \
+    "python3 -c 'import os; print(os.environ)'" "perl -e 'print %ENV'" "node -e 'console.log(process.env)'" "awk 'BEGIN{for(k in ENVIRON)print k}'"; do
+    deny "bootstrap tail: && $tail" "$BOOT && $tail"
+done
+allow "bootstrap tail: gh auth status (survey-work section 1)" "$BOOT && gh auth status"
+allow "bootstrap tail: a TestFlight pull with a literal path (survey-work section 3)" "$BOOT && bash /Users/me/.claude/plugins/sassy-dog/skills/testflight/scripts/appstore-connect.sh com.example.app feedback"
+allow "bootstrap tail: gh secret set is not a command-word set" "$BOOT && gh secret set NAME --repo a/b"
+allow "bootstrap tail: the config-contract line, then gh api" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)" && gh api user'
+
+echo "== review 5: the bootstrap shape is exactly --no-file --format env =="
+for v in 'secrets download --no-file' \
+    'secrets download --no-file --format json' 'secrets download --no-file --format dotnet-json' \
+    'secrets download --no-file --format env-no-quotes' 'secrets download --no-file --format docker' \
+    'secrets download --no-file --format env --name-transformer lower-kebab' \
+    'secrets download --no-file --format env --name-transformer=lower-kebab' \
+    'secrets download --no-file --name-transformer lower-kebab' \
+    '--json secrets download --no-file --format env' '--debug secrets download --no-file --format env' \
+    '--api-host https://x secrets download --no-file --format env' '--api-host=https://x secrets download --no-file --format env' \
+    'secrets download --no-file --format env --format json' 'secrets download --no-file --format env --no-cache'; do
+    deny "bootstrap variant: doppler $v" "eval \"\$(doppler $v)\""
+done
+allow "bootstrap with --format=env and project flags" 'eval "$(doppler secrets download --no-file --format=env --project app --config dev)"'
+deny "--debug on an allowed names-only form (it logs requests)" 'doppler --debug secrets --only-names'
+
+echo "== review 5: the subcommand word is found on text with quotes and backslashes removed =="
+deny "glob name, quote-split secrets, get --plain" "/opt/homebrew/bin/dop*ler sec''rets get API_KEY --plain"
+deny "glob name, backslash inside secrets" 'dop*ler s\ecrets get X'
+deny "glob name, quoted letter inside secrets" 'dop*ler s"e"crets'
+deny "glob name, quoted whole subcommand" 'dop*ler "secrets" get X'
+deny "expansion name, quote-split secrets" "\"\$D\" sec''rets get API_KEY --plain"
+deny "expansion name, quoted letter, download" '"$D" s"ecrets" download --no-file'
+deny "expansion name, backslash configure" '$D \configure'
+deny "expansion name, quote-split configure" "\$D con''figure"
+deny "expansion name, quote-split run" "\$D r''un -- printenv"
+deny "expansion name, backslash me" '$D \me'
+deny "expansion name, backslash secrets" '$D \secrets'
+deny "expansion in one segment, quote-split keyword phrase in another" "\${X}pler \"\$A\"; sec''rets get Y"
+deny "unsplit control: expansion name, plain secrets" '"$D" secrets'
+deny "unsplit control: glob name, plain secrets" 'dop*ler secrets'
+echo "== review 5: a quoted separator does not split the command =="
+deny "quoted ; between the expansion name and the subcommand" "\"\$D\" --scope=';' secrets"
+deny "quoted ; after a glob name" "/opt/homebrew/bin/dop*ler --scope=';' secrets"
+deny "quoted & after an expansion name" "\$D --scope='&' secrets"
+deny "double-quoted | after an expansion name" "\$D --scope=\"|\" configure"
+deny "ANSI-C quoted ; with an escaped quote" "\$D --scope=\$'\\';' secrets"
+deny "unsplit control: the same without the quoted separator" '"$D" --scope=x secrets'
+allow "ls with an expansion and a path piece" 'ls $HOME/secrets'
+allow "gh run with an expansion" 'gh run view $ID'
+allow "gh api on the secrets endpoint" 'gh api repos/$R/actions/secrets'
+allow "an unquoted ; really does separate the commands" '"$D" --scope=x; secrets'
+
+echo "== review 5: decoder and fold cases that only the decoder can catch =="
+deny "octal escape, non-keyword subcommand" "\$'\\144oppler' get FOO"
+deny "octal escape, three digits, projects" "\$'\\144\\157ppler' projects"
+deny "\\e between letters (the ESC is stripped, joining the word)" 'dopp\eler projects'
+deny "\\E between letters" 'dopp\Eler projects'
+deny "\\c between letters (the control character is stripped)" 'dopp\cAler projects'
+deny "NFKC on plain text: a full-width d" 'ｄoppler projects'
+deny "NFKC on plain text: a full-width word" 'ｄｏｐｐｌｅｒ projects'
+deny "NFKC before the escape decoder: a full-width backslash" "\$'＼x64oppler' projects"
+
+echo "== review 5: a relative redirect is resolved against the event's cwd =="
+cwd_deny() { # <label> <cwd> <command>
+    run_event "$(event_cwd "$2" "$3")"
+    if [ "$rc" -eq 2 ] && grep -qF 'allowed Doppler forms' <<<"$err"; then ok "denied: $1"; else bad "denied: $1 (rc=$rc err=${err:-<none>})"; fi
+}
+cwd_allow() {
+    run_event "$(event_cwd "$2" "$3")"
+    if [ "$rc" -eq 0 ]; then ok "allowed: $1"; else bad "allowed: $1 (rc=$rc err=${err:-<none>})"; fi
+}
+mkdir -p "$WORK/plain"
+ln -s /dev "$WORK/devlink"
+cwd_deny "cwd /dev, target 1" /dev 'doppler secrets get X --plain > 1'
+cwd_deny "cwd /dev, target out.txt (a name no heuristic knows)" /dev 'doppler secrets get X --plain > out.txt'
+cwd_deny "cwd /dev/fd, target 1" /dev/fd 'doppler secrets get X --plain > 1'
+cwd_deny "cwd /proc/self, target environ" /proc/self 'doppler secrets get X --plain > environ'
+cwd_deny "cwd /DEV (case folded)" /DEV 'doppler secrets get X --plain > 1'
+cwd_deny "cwd is a symlink to /dev" "$WORK/devlink" 'doppler secrets get X --plain > 1'
+cwd_deny "cwd /dev, download to a relative path" /dev 'doppler secrets download --format env 1'
+cwd_deny "cwd /dev, substitute --output" /dev 'doppler secrets substitute t.yaml --output 1'
+cwd_allow "cwd /tmp, relative target" /tmp 'doppler secrets get X --plain > out.txt'
+cwd_allow "an ordinary scratch cwd" "$WORK/plain" 'doppler secrets get X --plain > .env'
+cwd_allow "cwd /dev does not matter to a home-relative target" /dev 'doppler secrets get X --plain > ~/.keys/x'
+cwd_allow "a cwd that is not absolute is ignored" relative/dir 'doppler secrets get X --plain > out.txt'
+cwd_allow "no doppler, cwd /dev" /dev 'ls'
+
+echo "== review 5: a pathologically nested event fails open, loudly =="
+failopen "100000 nested arrays, balanced (json.loads raises RecursionError)" "$(python3 -I -B -c 'print("[" * 100000 + "]" * 100000)')"
+# Newer Pythons parse any depth, so the nested document above cannot reach the RecursionError
+# branch there: inject the error instead (the same shape as the internal-fault case above).
+err="$(printf '%s' "$(event 'ls')" | python3 -I -B -c '
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("g", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+def deep(*a, **k):
+    raise RecursionError("injected")
+json.loads = deep
+sys.exit(m.main())
+' "$PY" 2>&1 >/dev/null)"
+rc=$?
+if [ "$rc" -eq 1 ] && grep -q 'not valid JSON.*fail open' <<<"$err"; then
+    ok "a RecursionError from json.loads fails open and says so"
+else
+    bad "a RecursionError from json.loads fails open and says so (rc=$rc err=${err:-<none>})"
+fi
+
 echo "== review 4: every doppler command under skills/ and agents/ passes the guard =="
 # A tracked skill or reference doc that tells an agent to run a Doppler command the guard denies
 # makes the guard fight the plugin it ships in (review 4). Extracted from fenced code blocks
 # (one command per line, a `secret_bootstrap:` key stripped) and inline code spans in every
 # tracked file whose text mentions `doppler` followed by a lower-case subcommand word.
 extract_out="$WORK/skill-doppler-commands.tsv"
-python3 -I -B - "$REPO_ROOT" >"$extract_out" <<'PYEOF'
+cat >"$WORK/extract.py" <<'PYEOF'
 import re, subprocess, sys
-root = sys.argv[1]
-files = subprocess.run(["git", "-C", root, "ls-files", "skills", "agents"], capture_output=True, text=True, check=True).stdout.split("\n")
+# usage: extract.py --tree <root> | extract.py --file <path>
+mode, arg = sys.argv[1], sys.argv[2]
+if mode == "--tree":
+    files = [(f, f"{arg}/{f}") for f in subprocess.run(["git", "-C", arg, "ls-files", "skills", "agents"], capture_output=True, text=True, check=True).stdout.split("\n")]
+else:
+    files = [(arg, arg)]
 CMD = re.compile(r"\bdoppler[ \t]+[a-z-]")
-for f in files:
+MENTION = re.compile(r"doppler", re.I)
+for f, path in files:
     if not f or f.endswith(".json") or "/fixtures/" in f:
         continue
     try:
-        text = open(f"{root}/{f}", encoding="utf-8").read()
+        text = open(path, encoding="utf-8").read()
     except (OSError, UnicodeDecodeError):
         continue
     fenced = False
@@ -683,8 +835,11 @@ for f in files:
             continue
         found = []
         if fenced:
+            # Every command line of a fenced block that mentions doppler AT ALL (a path such as
+            # /tmp/doppler-sync.env included), not only `doppler <subcommand>` lines: the guard
+            # denies any command that mentions the word, and a full-line comment is not a command.
             l = re.sub(r"^\s*(?:secret_bootstrap:\s*)?", "", line)
-            if CMD.search(l):
+            if l and not l.startswith("#") and MENTION.search(l):
                 found.append(re.sub(r"\s+#\s.*$", "", l))
         else:
             for span in re.findall(r"`([^`]+)`", line):
@@ -693,6 +848,7 @@ for f in files:
         for c in found:
             print(f"{f}:{n}\t{c}")
 PYEOF
+python3 -I -B "$WORK/extract.py" --tree "$REPO_ROOT" >"$extract_out"
 if [ -s "$extract_out" ]; then ok "the extractor found doppler commands in skills/ ($(wc -l <"$extract_out" | tr -d ' '))"; else bad "the extractor found doppler commands in skills/ (none: the extraction is vacuous)"; fi
 while IFS=$'\t' read -r site cmd; do
     [ -n "$site" ] || continue
@@ -708,6 +864,26 @@ while IFS=$'\t' read -r site cmd; do
         fi
     fi
 done <"$extract_out"
+# The widened extractor must catch review 5's finding 4: the old bulk-sync example, whose follow-up
+# lines (`gh secret set -f /tmp/doppler-sync.env`, `rm ...`) the guard denies because the PATH
+# mentions doppler, and which the old `doppler <subcommand>` extractor never looked at.
+mkdir -p "$WORK/oldtext"
+cat >"$WORK/oldtext/scope-hierarchy.md" <<'MDEOF'
+```bash
+umask 077
+doppler secrets download --no-file --format env > /tmp/doppler-sync.env
+gh secret set -f /tmp/doppler-sync.env
+rm /tmp/doppler-sync.env
+```
+MDEOF
+python3 -I -B "$WORK/extract.py" --file "$WORK/oldtext/scope-hierarchy.md" >"$WORK/oldtext.tsv"
+old_denied=0
+while IFS=$'\t' read -r site cmd; do
+    [ -n "$site" ] || continue
+    run_cmd "$cmd"
+    [ "$rc" -eq 2 ] && old_denied=$((old_denied + 1))
+done <"$WORK/oldtext.tsv"
+if [ "$old_denied" -eq 2 ]; then ok "the widened sweep flags the old bulk-sync text (its gh and rm lines are denied)"; else bad "the widened sweep flags the old bulk-sync text (denied lines: $old_denied, wanted 2)"; fi
 for known in 'scope-hierarchy.md' 'config-contract.md' 'interview.md' 'detection.md'; do
     if grep -q "^skills/[^	]*$known:" "$extract_out"; then ok "the extractor reaches a known site: $known"; else bad "the extractor reaches a known site: $known"; fi
 done

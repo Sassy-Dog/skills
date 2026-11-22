@@ -137,7 +137,10 @@ probes then report their surfaces per the skip rule above. A denial from the plu
 allowed Doppler form, so say so on the plate rather than letting every probe read as missing.
 
 Each tool shell starts bare — the bootstrap only loads the shell it runs in. Prefix any later
-env-dependent command (such as the §3 TestFlight pull) with the same bootstrap line. Never
+env-dependent command (such as the §3 TestFlight pull) with the same bootstrap line, joined by `&&`
+and written with literal paths: the plugin's Bash guard denies a `$` or an environment dump
+(`env`, `printenv`, `set`, `declare`, `export`) after that `&&`, because the loaded secrets are in
+that shell. Never
 presence-check an environment variable this skill hasn't loaded yet.
 
 Probe only the surfaces config enables: Sentry by listing projects for the configured org;
