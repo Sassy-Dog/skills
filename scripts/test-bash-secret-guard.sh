@@ -15,9 +15,10 @@
 # case-insensitive filesystem, $'doppler', bash <<<"..."). The shell parser is gone. The rule
 # is now a WHOLE-COMMAND ALLOW LIST matched on the raw string: if the command mentions doppler
 # in any spelling the text can show (case-folded, escapes decoded, quotes/backslashes/braces/
-# brackets/wildcards stripped), the ENTIRE command must be exactly one of four forms
+# brackets/wildcards stripped), the ENTIRE command must be exactly one of the allowed forms
 # (--only-names; `doppler run -- <cmd>`; get/download/substitute redirected to a literal file;
-# a bare non-printing subcommand), or it is denied. A false deny costs a bypass token; a false
+# a bare non-printing subcommand; and the two narrow forms the plugin's own skills emit, the
+# eval bootstrap and `get --plain | gh secret set`), or it is denied. A false deny costs a bypass token; a false
 # allow costs a secret in a transcript.
 #
 # Asserted, by piping the harness's event JSON into the hook exactly as Claude Code does.
@@ -55,6 +56,25 @@
 #   - hooks/hooks.json parses, declares one PreToolUse/Bash command hook, and the command it
 #     declares, with ${CLAUDE_PLUGIN_ROOT} substituted as the harness does, denies a real
 #     printing command (exit 2) and allows a real safe one (exit 0)
+#   - review 4 (five Blocking findings), each with committed cases: a backslash-newline or
+#     backslash-CRLF joining the halves of the command name; `\u` with 1-4 and `\U` with 1-8 hex
+#     digits and `\x` with an upper-case digit, on a subcommand that is NOT a keyword so only the
+#     decoder can catch it; `\e`; a glob or expansion in the command NAME (`dop*ler`, `dopp?er`,
+#     `${X}pler`, `d${X}oppler`, `"$D"`, `$D`) before a bare secrets/configure/run/me argument, with
+#     `ls $HOME/secrets`, `gh run view $ID` and `echo "$HOME" && gh run list` allowed so the rule
+#     cannot grow into a ban on `run`; /DEV, /Dev, /PROC, /Sys and a relative DEV/ or Fd/
+#     redirect target; and the forms the plugin's own skills emit, with their near misses as
+#     denies (the `eval "$(doppler secrets download --no-file ...)"` bootstrap alone or before one
+#     `&&` command, and `get NAME --plain | gh secret set NAME`)
+#   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (fenced
+#     lines and inline code spans) must be allowed by the guard or carry the bypass, so the
+#     guard cannot again deny what the plugin tells an agent to run. A prose mention inside a
+#     code span counts: write it without `doppler <word>` in backticks. The extractor must find
+#     commands, and each known site (scope-hierarchy, config-contract, interview, detection)
+#     must be among them, so a broken extraction cannot pass by finding nothing
+#   - speed: a 0.5-2 MB command (many credential URLs, a leading quote plus many URLs, an
+#     expansion plus 100k words, a plain command) classifies in under 5 s with the expected
+#     exit code; a hook timeout fails open without a word
 # Documented limits are NOT asserted as caught: aliases and functions, a command name built at
 # run time from pieces the text never spells (printf formatting), symlinked redirect targets,
 # reading a redirected file back, `doppler run -- env` / `printenv` (the child decides),
@@ -76,6 +96,17 @@
 #   flags:     unknown flags allowed (5); a value may start with `-` (2)
 #   bypass:    honoured as a substring (4); honoured without the single-command check (7)
 #   URL:       any `$` password exempt (2); case-sensitive scheme (1)
+#   review 4 (each against the review-4 cases; failing-case count in parentheses):
+#              line-continuation strip dropped (3); `\u` four digits only (1); `\u` not decoded
+#              (4); `\U` not decoded (2); `\U` four digits only (2); case folded before decoding,
+#              which turns `\U` into `\u` (1); `\x` lower-case digits only (1); command-name
+#              keyword rule dropped (14); path prefix check not folded (6); relative device
+#              segment not folded (2); bootstrap form not allowed (7); bootstrap `&&` tail
+#              unchecked (4); bootstrap without `--no-file` allowed (1); gh pipe not allowed (4);
+#              gh pipe allows `--body` (1); gh pipe without `--plain` allowed (1); decoded reading
+#              only, which drops the letter after `\e` (1); quote scan restarted per URL match,
+#              i.e. quadratic (2); scope-hierarchy.md's old bulk-sync loop restored (1);
+#              interview.md's prose span `doppler secrets download` restored (1)
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -551,6 +582,159 @@ if [ "$rc" -eq 1 ] && grep -q 'internal error.*fail open' <<<"$err"; then
 else
     bad "an internal classifier fault fails open and says so (rc=$rc err=${err:-<none>})"
 fi
+
+echo "== review 4: line continuations, wide escapes, globs in the command name, folded paths =="
+deny "backslash-newline inside the command name" $'dop\\\npler secrets get X'
+deny "backslash-newline, secrets" $'dop\\\npler secrets'
+deny "backslash-CRLF inside the command name" $'dop\\\r\npler secrets'
+deny "backslash-newline inside a subcommand's host word" $'doppler secrets get \\\nX'
+deny "\\u with one hex digit pair" "\$'\\u64'oppler secrets"
+deny "\\u with four hex digits" "\$'\\u0064'oppler secrets"
+deny "\\U with eight hex digits" "\$'\\U00000064'oppler secrets"
+deny "\\U with two hex digits" "\$'\\U64'oppler secrets"
+deny "\\u escape on a non-keyword subcommand (only the decoder can see it)" "\$'\\u64'oppler projects"
+deny "\\u with four digits, non-keyword subcommand" "\$'\\u0064'oppler projects"
+deny "\\U with eight digits, non-keyword subcommand" "\$'\\U00000064'oppler projects"
+deny "\\U with two digits, non-keyword subcommand" "\$'\\U64'oppler login"
+deny "\\x with an upper-case hex digit, non-keyword subcommand" "d\$'\\x6F'ppler projects"
+deny "\\e in a doppler word" "doppl\\er secrets"
+deny "\\c escape beside a doppler word" "\$'\\cA'doppler secrets"
+deny "glob in the command name: dop*ler" '/opt/homebrew/bin/dop*ler secrets'
+deny "glob in the command name: dopp?er" 'dopp?er secrets'
+deny "glob in the command name: doppl?r" 'doppl?r secrets'
+deny "glob in the command name: bracket class" 'dopp[l]er secrets'
+deny "expansion prefix: \${X}pler secrets" '${X}pler secrets'
+deny "expansion infix: d\${X}oppler secrets" 'd${X}oppler secrets'
+deny "quoted expansion as the command name" '"$D" secrets'
+deny "unquoted expansion as the command name" '$D secrets'
+deny "expansion command name, configure" '"$D" configure'
+deny "expansion command name, run" '"$D" run -- env'
+deny "glob command name, me" 'dop*ler me'
+deny "expansion command name with a global flag first" '"$D" --json secrets'
+deny "expansion command name behind an env assignment" 'A=1 "$D" secrets'
+allow "an expansion after the word is a path, not a doppler command" 'ls $HOME/secrets'
+allow "gh run with an expansion argument" 'gh run view $RUN_ID'
+allow "gh run list" 'gh run list --limit 5'
+allow "a separate command carries the expansion" 'echo "$HOME" && gh run list'
+deny "a different case, the path is folded: /DEV/stdout" 'doppler secrets get X --plain > /DEV/stdout'
+deny "a different case: /Dev/fd/1" 'doppler secrets get X --plain > /Dev/fd/1'
+deny "a different case: /PROC/self/fd/1" 'doppler secrets get X --plain > /PROC/self/fd/1'
+deny "a different case: /Sys/x" 'doppler secrets get X --plain > /Sys/x'
+deny "a different case, relative: DEV/stdout" 'doppler secrets get X --plain > DEV/stdout'
+deny "a different case, relative: Fd/1" 'doppler secrets get X --plain > Fd/1'
+deny "a different case: download to /DEV/stderr" 'doppler secrets download --no-file > /DEV/stderr'
+deny "a different case: substitute --output" 'doppler secrets substitute t.yaml --output /DEV/stdout'
+
+echo "== review 4: the forms this plugin's own skills emit =="
+allow "secret_bootstrap, as written in config-contract.md" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)"'
+allow "secret_bootstrap without the stderr redirect" 'eval "$(doppler secrets download --no-file --format env)"'
+allow "secret_bootstrap with project and config" 'eval "$(doppler secrets download --no-file --format env -p app -c dev)"'
+allow "secret_bootstrap, then one later command" 'eval "$(doppler secrets download --no-file --format env 2>/dev/null)" && gh api user'
+deny "bootstrap without --no-file writes a file the eval then reads as text" 'eval "$(doppler secrets download --format env)"'
+deny "bootstrap that eval-s a printing get" 'eval "$(doppler secrets get X --plain)"'
+deny "bootstrap that eval-s bare secrets" 'eval "$(doppler secrets)"'
+deny "bootstrap with stderr merged into the eval" 'eval "$(doppler secrets download --no-file --format env 2>&1)"'
+deny "bootstrap with a second command inside the substitution" 'eval "$(doppler secrets download --no-file --format env; echo hi)"'
+deny "bootstrap, then a second doppler command" 'eval "$(doppler secrets download --no-file --format env)" && doppler secrets get X'
+deny "bootstrap, then a chain" 'eval "$(doppler secrets download --no-file --format env)" && echo hi; cat x'
+deny "bootstrap, then a capture" 'eval "$(doppler secrets download --no-file --format env)" && echo $(id)'
+deny "bootstrap, then a pipe" 'eval "$(doppler secrets download --no-file --format env)" && env | cat'
+deny "bootstrap with a token flag" 'eval "$(doppler secrets download --no-file --format env --token dp.st.x)"'
+deny "bootstrap, then text after the closing quote" 'eval "$(doppler secrets download --no-file --format env)" x'
+deny "bootstrap with a trailing redirect" 'eval "$(doppler secrets download --no-file --format env)" > /tmp/o'
+deny "eval of an unquoted substitution" 'eval $(doppler secrets download --no-file --format env)'
+allow "get --plain piped into gh secret set" 'doppler secrets get SECRET_NAME --plain | gh secret set SECRET_NAME'
+allow "get --plain piped into gh secret set, repo and project flags" 'doppler secrets get X --plain -p app -c prd | gh secret set X --repo Sassy-Dog/skills'
+allow "get --plain piped into gh secret set, environment secret" 'doppler secrets get X --plain | gh secret set X --env prd --app actions'
+deny "gh secret set with --body" 'doppler secrets get X --plain | gh secret set X --body y'
+deny "gh secret set with -b" 'doppler secrets get X --plain | gh secret set X -b y'
+deny "get without --plain piped into gh" 'doppler secrets get X | gh secret set X'
+deny "get piped into gh secret list" 'doppler secrets get X --plain | gh secret list'
+deny "get piped into gh, then another stage" 'doppler secrets get X --plain | gh secret set X | cat'
+deny "gh secret set name is a flag" 'doppler secrets get X --plain | gh secret set --body y'
+deny "two names into one gh secret set" 'doppler secrets get X Y --plain | gh secret set X'
+deny "gh secret set followed by a redirect" 'doppler secrets get X --plain | gh secret set X > /dev/stdout'
+deny "download piped into gh" 'doppler secrets download --no-file --format env | gh secret set X'
+deny "gh secret set with an unknown flag" 'doppler secrets get X --plain | gh secret set X --env-file /dev/stdin'
+allow "download to a literal file, then gh reads it (the github-secrets bulk sync)" 'doppler secrets download --no-file --format env > /tmp/doppler-sync.env'
+
+echo "== review 4: every doppler command under skills/ and agents/ passes the guard =="
+# A tracked skill or reference doc that tells an agent to run a Doppler command the guard denies
+# makes the guard fight the plugin it ships in (review 4). Extracted from fenced code blocks
+# (one command per line, a `secret_bootstrap:` key stripped) and inline code spans in every
+# tracked file whose text mentions `doppler` followed by a lower-case subcommand word.
+extract_out="$WORK/skill-doppler-commands.tsv"
+python3 -I -B - "$REPO_ROOT" >"$extract_out" <<'PYEOF'
+import re, subprocess, sys
+root = sys.argv[1]
+files = subprocess.run(["git", "-C", root, "ls-files", "skills", "agents"], capture_output=True, text=True, check=True).stdout.split("\n")
+CMD = re.compile(r"\bdoppler[ \t]+[a-z-]")
+for f in files:
+    if not f or f.endswith(".json") or "/fixtures/" in f:
+        continue
+    try:
+        text = open(f"{root}/{f}", encoding="utf-8").read()
+    except (OSError, UnicodeDecodeError):
+        continue
+    fenced = False
+    for n, line in enumerate(text.split("\n"), 1):
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        found = []
+        if fenced:
+            l = re.sub(r"^\s*(?:secret_bootstrap:\s*)?", "", line)
+            if CMD.search(l):
+                found.append(re.sub(r"\s+#\s.*$", "", l))
+        else:
+            for span in re.findall(r"`([^`]+)`", line):
+                if CMD.search(span):
+                    found.append(span)
+        for c in found:
+            print(f"{f}:{n}\t{c}")
+PYEOF
+if [ -s "$extract_out" ]; then ok "the extractor found doppler commands in skills/ ($(wc -l <"$extract_out" | tr -d ' '))"; else bad "the extractor found doppler commands in skills/ (none: the extraction is vacuous)"; fi
+while IFS=$'\t' read -r site cmd; do
+    [ -n "$site" ] || continue
+    run_cmd "$cmd"
+    if [ "$rc" -eq 0 ]; then
+        ok "plugin text allowed by the guard: $site"
+    else
+        run_cmd "SASSYDOG_ALLOW_DOPPLER_PRINT=1 $cmd"
+        if [ "$rc" -eq 0 ] && grep -qF 'SASSYDOG_ALLOW_DOPPLER_PRINT=1' <<<"$cmd"; then
+            ok "plugin text carries the bypass: $site"
+        else
+            bad "plugin text is denied by the guard and carries no bypass: $site: $cmd"
+        fi
+    fi
+done <"$extract_out"
+for known in 'scope-hierarchy.md' 'config-contract.md' 'interview.md' 'detection.md'; do
+    if grep -q "^skills/[^	]*$known:" "$extract_out"; then ok "the extractor reaches a known site: $known"; else bad "the extractor reaches a known site: $known"; fi
+done
+
+echo "== review 4: a very large command stays fast (a hook timeout fails open without a word) =="
+big_time() { # <label> <expected rc> <python expression producing the command>
+    # The event is built and piped inside one python process: a megabyte command does not fit argv.
+    local out
+    out="$(python3 -I -B - "$HOOK" "$2" "$3" <<'PYEOF'
+import json, subprocess, sys, time
+hook, want, expr = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+cmd = eval(expr)
+event = json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+t0 = time.time()
+p = subprocess.run(["bash", hook], input=event, capture_output=True, text=True)
+dt = time.time() - t0
+print(f"{p.returncode} {dt:.1f} {len(cmd)}")
+sys.exit(0 if p.returncode == want and dt < 5 else 1)
+PYEOF
+)"
+    if [ $? -eq 0 ]; then ok "stays fast and classifies (rc $2): $1 [$out]"; else bad "stays fast and classifies (rc $2): $1 [$out]"; fi
+}
+big_time "many literal credential URLs with an env password" 0 '"psql postgres://u:$p@h " * 30000'
+big_time "a quote at the front and many URLs" 0 '"\x27" * 100000 + "postgres://u:$p@h " * 20000'
+big_time "many literal-password URLs" 2 '"psql postgres://u:pw@h " * 30000'
+big_time "an expansion and many words, then secrets" 2 '"x $HOME " * 100000 + "secrets"'
+big_time "a very long plain command" 0 '"echo a " * 300000'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"

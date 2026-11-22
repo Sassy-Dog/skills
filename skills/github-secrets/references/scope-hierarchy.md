@@ -157,10 +157,12 @@ gh secret list --app dependabot
 # Pipe value from Doppler into GH secret
 doppler secrets get SECRET_NAME --plain | gh secret set SECRET_NAME
 
-# Bulk sync (set multiple)
-doppler secrets download --no-file --format env | while IFS='=' read -r key value; do
-  gh secret set "$key" --body "$value"
-done
+# Bulk sync (set multiple): the plugin's Bash guard denies piping a download into a loop, so
+# write the env file (the file holds live values: delete it after), then let gh read it
+umask 077
+doppler secrets download --no-file --format env > /tmp/doppler-sync.env
+gh secret set -f /tmp/doppler-sync.env
+rm /tmp/doppler-sync.env
 ```
 
 ### Setting for GitHub Actions vs GitHub Codespaces

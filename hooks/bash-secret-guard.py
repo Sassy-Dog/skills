@@ -15,10 +15,13 @@ disagree with itself about quoting.
    lower-cased, Unicode-folded and ANSI-C escapes are decoded; then `doppler` is looked for
    both as written and with every character that is not a letter, digit or whitespace removed
    (so `DOPPLER`, `$'\\x64oppler'`, `d"o"ppler`, `dopp\\ler`, `{doppler,}`, `doppl[e]r`,
-   `dop*ler` all trigger). A second trigger covers a command name the text does not spell
-   (`${X}pler secrets get`): a shell expansion character plus a value-printing doppler
-   phrase (`secrets get|download|substitute`, `configure get|--all`, `configs tokens`,
-   `--print-config`).
+   `dop*ler` all trigger; a backslash-newline is removed first, as the shell joins the lines;
+   the ANSI-C escapes x, u, U, octal, c and e are decoded). A second trigger covers a command name the text does not
+   spell (`${X}pler secrets get`): a shell expansion or glob character plus a value-printing
+   doppler phrase (`secrets get|download|substitute`, `configure get|--all`, `configs
+   tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` argument
+   later in the same simple command (`dop*ler secrets`, `"$D" run`; `ls $HOME/secrets` and
+   `gh run view $ID` stay quiet).
    A triggered command is allowed only if the ENTIRE command is exactly one of:
      1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
@@ -28,6 +31,12 @@ disagree with itself about quoting.
      3. `doppler secrets get NAME... [flags] > <literal path>`, `secrets download --no-file
         [flags] > <literal path>`, `secrets download [flags] <literal path>`, and
         `secrets substitute <template> [flags] (> | --output) <literal path>`
+     3b. `doppler secrets get NAME --plain | gh secret set NAME [--repo R ...]` (gh reads the
+        value from stdin and prints none of it; no `--body`, no other consumer)
+     3c. the secret_bootstrap shape `eval "$(doppler secrets download --no-file [flags]
+        [2>/dev/null])"`, alone or followed by `&& <one command that does not mention doppler>`
+        (the shell consumes the output; both shapes are emitted by this plugin's own skills,
+        and the gate extracts every doppler command under skills/ and requires it to pass)
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
@@ -35,7 +44,7 @@ disagree with itself about quoting.
    <(, >(, <<, <, >& ...), no environment prefix, no wrapper, the command word is the literal
    lower-case `doppler`, every flag is on an explicit per-subcommand allow list with a literal
    value that does not start with `-`, and an unknown flag denies. A literal path has only
-   [A-Za-z0-9._/~-], no `.`/`..` segment, is not under /dev, /proc or /sys, and a relative
+   [A-Za-z0-9._/~-], no `.`/`..` segment, is not under /dev, /proc or /sys (case-folded), and a relative
    path may not start with a device-like segment (fd, stdout, tty, ...).
 2. Literal credentialed URL guard. The raw text embeds scheme://[user]:password@host (scheme
    postgres(ql)/mysql/mongodb/redis(s)/amqp(s), optional +driver, case-insensitive). A password
@@ -50,7 +59,7 @@ substring, never from the hook's own environment.
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
-`printenv` (the child decides), `password=` / `?password=` URL forms, and false denies for any
+`printenv` (a child can print its own environment: the child decides), `password=` / `?password=` URL forms, and false denies for any
 text that merely mentions doppler (a commit message, a PR body): use the bypass.
 """
 
@@ -74,7 +83,9 @@ SAFE_FORMS = (
     "Allowed forms (the whole command, nothing else): `doppler secrets --only-names`; "
     "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
     "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
-    "`substitute`; the file is yours, reading it back is your responsibility); a bare "
+    "`substitute`; the file is yours, reading it back is your responsibility); "
+    "`doppler secrets get NAME --plain | gh secret set NAME`; `eval \"$(doppler secrets download "
+    "--no-file --format env 2>/dev/null)\"`; a bare "
     "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
@@ -93,27 +104,61 @@ URL_MSG = (
 # ---- trigger -------------------------------------------------------------------------------
 
 EXPANSION_RE = re.compile(r"[$`{*?\[]")
+# Words that make a command that Doppler's CLI would run, for a command NAME the text does not spell.
+SUBCOMMAND_WORDS = ("secrets", "configure", "run", "me")
+SEGMENT_RE = re.compile(r"[;&|\n\r]+")
+LINE_CONTINUATION_RE = re.compile(r"\\\r?\n")
+
+
+def _chr(code):
+    try:
+        return chr(code)
+    except (ValueError, OverflowError):
+        return "\ufffd"
 
 
 def decode_escapes(s):
-    s = re.sub(r"\\x([0-9a-f]{1,2})", lambda m: chr(int(m.group(1), 16)), s)
-    s = re.sub(r"\\u([0-9a-f]{4})", lambda m: chr(int(m.group(1), 16)), s)
-    s = re.sub(r"\\([0-7]{1,3})", lambda m: chr(int(m.group(1), 8) & 0xFF), s)
+    """Decode the ANSI-C escapes a `$'...'` word can carry (over-applied to the whole text)."""
+    s = re.sub(r"\\x([0-9a-fA-F]{1,2})", lambda m: _chr(int(m.group(1), 16)), s)
+    s = re.sub(r"\\u([0-9a-fA-F]{1,4})", lambda m: _chr(int(m.group(1), 16)), s)
+    s = re.sub(r"\\U([0-9a-fA-F]{1,8})", lambda m: _chr(int(m.group(1), 16)), s)
+    s = re.sub(r"\\([0-7]{1,3})", lambda m: _chr(int(m.group(1), 8) & 0xFF), s)
+    s = re.sub(r"\\c(.)", lambda m: _chr(ord(m.group(1)) & 0x1F), s, flags=re.S)
+    s = s.replace("\\e", "\x1b").replace("\\E", "\x1b")
     return s
 
 
 def triggered(text):
-    t = decode_escapes(unicodedata.normalize("NFKC", text).lower())
+    # A backslash-newline is a line continuation: the shell joins the halves of a word.
+    text = LINE_CONTINUATION_RE.sub("", text)
+    # Decode BEFORE folding case: `\U` and `\u` are different escapes (eight digits and four).
+    plain = unicodedata.normalize("NFKC", text)
+    decoded = unicodedata.normalize("NFKC", decode_escapes(plain)).lower()
+    plain = plain.lower()
+    # Both readings: a backslash before `e` or `c` is a plain letter outside `$'...'`, and the
+    # decoder would turn it into a control character and drop the letter.
+    return _mentions(plain) or (decoded != plain and _mentions(decoded))
+
+
+def _mentions(t):
     if "doppler" in t:
         return True
     if "doppler" in re.sub(r"[^a-z0-9\s]", "", t):
         return True
-    if EXPANSION_RE.search(text):
+    if EXPANSION_RE.search(t):
         w = lambda *names: all(re.search(r"\b" + n + r"\b", t) for n in names)  # noqa: E731
         if (w("secrets") and any(re.search(r"\b" + n + r"\b", t) for n in ("get", "download", "substitute"))) \
                 or (w("configure") and (w("get") or "--all" in t)) \
                 or w("configs", "tokens") or "print-config" in t:
             return True
+        # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`):
+        # an expansion character, then later in the same simple command a Doppler subcommand as a
+        # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
+        for seg in SEGMENT_RE.split(t):
+            m = EXPANSION_RE.search(seg)
+            if m and any(re.search(r"(?:^|[\s\"'])" + n + r"(?=$|[\s\"'])", seg[m.start():])
+                         for n in SUBCOMMAND_WORDS):
+                return True
     return False
 
 
@@ -148,26 +193,31 @@ def single_simple(s):
     return quote is None
 
 
-def in_single_quotes(s, pos):
-    quote = None
-    i = 0
-    while i < pos:
-        c = s[i]
-        if quote == "'":
-            if c == "'":
-                quote = None
-        elif quote == '"':
-            if c == "\\":
-                i += 1
-            elif c == '"':
-                quote = None
-        else:
-            if c == "\\":
-                i += 1
-            elif c in "'\"":
-                quote = c
-        i += 1
-    return quote == "'"
+class QuoteScanner:
+    """Quote state at ascending positions in one pass (one scan per command, not one per match)."""
+
+    def __init__(self, s):
+        self.s, self.i, self.quote = s, 0, None
+
+    def in_single(self, pos):
+        s = self.s
+        while self.i < pos:
+            c = s[self.i]
+            if self.quote == "'":
+                if c == "'":
+                    self.quote = None
+            elif self.quote == '"':
+                if c == "\\":
+                    self.i += 1
+                elif c == '"':
+                    self.quote = None
+            else:
+                if c == "\\":
+                    self.i += 1
+                elif c in "'\"":
+                    self.quote = c
+            self.i += 1
+        return self.quote == "'"
 
 
 # ---- the allow list --------------------------------------------------------------------------
@@ -180,6 +230,17 @@ DEVLIKE = {"fd", "stdin", "stdout", "stderr", "tty", "console", "pts", "ptmx", "
            "proc", "sys", "null"}
 PIPE_OK_RE = re.compile(
     r"wc -l|head -n [0-9]+|grep(?: -[cqxFiwv]+)? [A-Za-z0-9_.-]+"
+)
+# `doppler secrets get NAME --plain | gh secret set NAME [...]`: gh reads the value from its
+# stdin and prints nothing of it. No `-b/--body` (it would replace stdin) and no other consumer.
+GH_SET_RE = re.compile(
+    r"gh secret set [A-Za-z_][A-Za-z0-9_]*"
+    r"(?: (?:-R|--repo|-e|--env|-a|--app|-o|--org|-v|--visibility) [A-Za-z0-9._/@:-]+| --no-store)*"
+)
+# The secret_bootstrap shape: `eval "$(doppler secrets download --no-file ...)"`. The shell
+# consumes the output, nothing prints it. Only `2>/dev/null` may ride inside the substitution.
+BOOTSTRAP_RE = re.compile(
+    r'eval "\$\((doppler[ \t][A-Za-z0-9._/@:=, \t-]*?)(?:[ \t]+2>/dev/null)?\)"'
 )
 
 # Flags are taken from `doppler --help`, `doppler help secrets [get|download|substitute]` and
@@ -225,10 +286,11 @@ def literal_path(p):
     for k, seg in enumerate(segs):
         if seg in (".", "..") or (seg == "" and k != 0):
             return False
+    # Folded: on a case-insensitive filesystem `/DEV/stdout` is `/dev/stdout`.
+    low = p.lower()
     if p.startswith("/"):
-        return not any(p == r or p.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
-    first = segs[0]
-    return first not in DEVLIKE
+        return not any(low == r or low.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
+    return segs[0].lower() not in DEVLIKE
 
 
 def parse_args(toks, i, bools, vals):
@@ -335,6 +397,8 @@ def allowed_strict(cmd):
     cmd = cmd.strip()
     if not cmd:
         return False
+    if cmd.startswith("eval "):
+        return allowed_bootstrap(cmd)
     if cmd.startswith("doppler ") and (" -- " in cmd or " --command " in cmd) and \
             re.match(r"doppler[ \t]+(?:[^ \t]+[ \t]+)*?run\b", cmd):
         return allowed_run(cmd)
@@ -350,7 +414,8 @@ def allowed_strict(cmd):
     if "|" in toks:
         k = toks.index("|")
         toks, tail = toks[:k], toks[k + 1:]
-        if "|" in tail or ">" in tail or not PIPE_OK_RE.fullmatch(" ".join(tail)):
+        joined = " ".join(tail)
+        if "|" in tail or ">" in tail or not (PIPE_OK_RE.fullmatch(joined) or GH_SET_RE.fullmatch(joined)):
             return False
     split = split_redirect(toks)
     if split is None:
@@ -383,6 +448,24 @@ def allowed_strict(cmd):
     return False
 
 
+def allowed_bootstrap(cmd):
+    """`eval "$(doppler secrets download --no-file ...)"`, alone or followed by `&& <one command>`."""
+    m = BOOTSTRAP_RE.match(cmd)
+    if not m:
+        return False
+    after = cmd[m.end():]
+    if after.strip():
+        mm = re.fullmatch(r"[ \t]+&&[ \t]+(.+)", after, re.S)
+        if not mm or not check_rest(mm.group(1)):
+            return False
+    toks = m.group(1).split()
+    g = parse_global(toks)
+    if g is None or g[0] >= len(toks) or toks[g[0]] != "secrets":
+        return False
+    parsed = parse_args(toks, g[0] + 1, GLOBAL_BOOL | DOWNLOAD_BOOL, GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL)
+    return bool(parsed) and parsed[1] == ["download"] and parsed[0].get("--no-file") is True
+
+
 def allowed_secrets(toks, i, redirect, tail):
     probe = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL | GET_BOOL | DOWNLOAD_BOOL | RUN_BOOL,
                        GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL | SUBST_VAL)
@@ -394,13 +477,18 @@ def allowed_secrets(toks, i, redirect, tail):
         parsed = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL, GLOBAL_VAL | PC_VAL)
         return bool(parsed) and parsed[0].get("--only-names") is True and not parsed[1] \
             and redirect is None
-    if tail is not None:
+    if tail is not None and sub != "get":
         return False
     if sub == "get":
         parsed = parse_args(toks, i, GLOBAL_BOOL | GET_BOOL, GLOBAL_VAL | PC_VAL)
         if not parsed or parsed[1][0] != "get" or len(parsed[1]) < 2:
             return False
-        return redirect is not None and all(NAME_RE.fullmatch(n) for n in parsed[1][1:])
+        names_ok = all(NAME_RE.fullmatch(n) for n in parsed[1][1:])
+        if tail is not None:
+            # only the gh pipe reaches here with a tail; one name, --plain, no redirect
+            return GH_SET_RE.fullmatch(" ".join(tail)) is not None and names_ok \
+                and len(parsed[1]) == 2 and parsed[0].get("--plain") is True and redirect is None
+        return redirect is not None and names_ok
     if sub == "download":
         parsed = parse_args(toks, i, GLOBAL_BOOL | DOWNLOAD_BOOL, GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL)
         if not parsed or parsed[1][0] != "download":
@@ -439,9 +527,10 @@ def split_bypass(cmd):
 
 
 def url_violation(text):
+    scan = QuoteScanner(text)
     for m in URL_RE.finditer(text):
         pw = m.group(1)
-        if re.match(r"\$[A-Za-z_{(]", pw) and not in_single_quotes(text, m.start(1)):
+        if re.match(r"\$[A-Za-z_{(]", pw) and not scan.in_single(m.start(1)):
             continue
         return True
     return False

@@ -132,7 +132,9 @@ gh auth status
 **If `secret_bootstrap:` is configured**, run it here — before any presence probe below.
 Non-interactive agent shells never fire direnv, so probing a bare environment false-negatives
 ("missing") on credentials the secret manager actually holds. On bootstrap error, continue; the
-probes then report their surfaces per the skip rule above.
+probes then report their surfaces per the skip rule above. A denial from the plugin's Bash guard
+(`bash-secret-guard: BLOCKED`) is not a bootstrap error to absorb: the configured line is not an
+allowed Doppler form, so say so on the plate rather than letting every probe read as missing.
 
 Each tool shell starts bare — the bootstrap only loads the shell it runs in. Prefix any later
 env-dependent command (such as the §3 TestFlight pull) with the same bootstrap line. Never
