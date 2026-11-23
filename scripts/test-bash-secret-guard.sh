@@ -99,29 +99,58 @@
 #     exit code; a hook timeout fails open without a word
 #   - #647 (sections "override with a redirect", "writing a secret without printing it", "a bare mention
 #     in a message argument or heredoc does not block", "inert text: nothing the sanitizer cannot
-#     classify is stripped"): the override survives a plain redirect (`>/dev/null 2>&1`, `< f`,
-#     `>>f`, `&>f`), each paired with the same command denied WITHOUT the prefix, and stays ignored
-#     after a `cd ... &&`, with a heredoc, `<(`/`>(`, `$(` or a detached `&<`; the write forms
-#     `secrets set NAME < /path` and `set NAME="$(cat /path)"` are allowed only with stdout AND stderr
-#     discarded, a literal path, one name and no value on the command line; a mention inside the quoted
-#     strings or quoted-delimiter heredoc body of `git commit|tag`, `gh issue|pr create|edit|comment|
-#     close|reopen|review|merge` and `gh release create|edit` passes (each verb has a case; also `<<-`
-#     tab-indented, CRLF, two heredoc substitutions on separate lines, an unterminated heredoc), while
-#     everything the sanitizer cannot classify is denied on the raw text: `$(`/backtick/`<(`/`>(`/`(`
-#     outside quotes, `| bash` or `&& sh` after the heredoc operator, an operator inside a quoted
-#     message, a quoted `; git commit` fooling the segment start, `#` comments carrying an apostrophe or
-#     a double quote, a quoted assignment value before the command, two heredocs on one line, an
-#     unquoted delimiter, a heredoc owned by bash -c / eval / bash. The write forms and the sanitizer are
-#     asserted only against the hook's own text rules: no live Doppler CLI is run, so that `set NAME`
-#     really reads its value from stdin is NOT proved here.
-#     Mutants run against hooks/bash-secret-guard.py for #647 (failing-case count): drop the `merge`
-#     verb (1); drop `git tag` (1); drop `gh release` (2); break the `<<-` group (1); drop the `#` rule
-#     (2); heredoc substitution not required to end its line (2); heredoc operator owner not checked
-#     (4); the `&<` override spelling accepted (1); blank strings in every segment (28); drop the
-#     `$(` outside quotes rule (0, EQUIVALENT: the unquoted `(` rule returns raw first, defence in
-#     depth); quote-free assignment regex loosened (0, EQUIVALENT: the inert check runs at the first
-#     quote, before the command word, so a quoted assignment value never sees a match); the
-#     heredoc-substitution owner check not run (2); discard of stdout only accepted for `set` (7).
+#     classify is stripped", "the five reviewer-reproduced bypasses", "write form redirects" and
+#     "differential"): the override survives a plain redirect (`>/dev/null 2>&1`, `< f`, `>>f`,
+#     `&>f`), each paired with the same command denied WITHOUT the prefix, and stays ignored after a
+#     `cd ... &&`, with a heredoc, `<(`/`>(`, `$(`, a detached `&<`, or an ESCAPED `\>&` / `\<&`; the
+#     write form (form 3d) `secrets set NAME < /path` and `set NAME="$(cat /path)"` is allowed only
+#     with stdout AND stderr discarded (a stdout-only `>/dev/null` stays denied, by design), a blank
+#     before the first `>`, a literal path, one name and no value on the command line.
+#     The message-text sanitizer is ONE tokenizer over an allow-listed grammar (see the module
+#     docstring); a mention inside the quoted strings or quoted-delimiter heredoc body of `git
+#     commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release
+#     create|edit` passes (each verb has a case), while everything the tokenizer does not positively
+#     recognise is denied on the raw text: `$(`/backtick/`<(`/`>(`/`(`, `$'..'` and `\$'..'`, `#`,
+#     a CR, `<<-`, an unterminated heredoc, a pipe after an owner, `-e`/`--edit`, EDITOR/PAGER
+#     assignments, a command after a heredoc terminator (the state resets to a new command), a command
+#     inside `"$(cat <<'X'` after the terminator, a heredoc owned by bash -c / eval / bash.
+#     DIFFERENTIAL section: scripts/fixtures/secret-guard-differential.py holds a committed corpus
+#     (accepted-grammar messages AND every reviewer-reproduced bypass) plus a generated matrix of
+#     4 message heads x 7 joiners x 7 printer spellings. Each command goes through the real hook and,
+#     under every shell found among bash, /bin/bash, zsh and dash (de-duplicated; the driver prints
+#     which ones ran, and says so when zsh is missing), against a FAKE secret-printing command with
+#     fake git (runs GIT_EDITOR when real git would; echoes stdin) and gh (echoes stdin and any file
+#     argument) shims on PATH, all inside a mktemp -d scratch directory, no network, no real repo.
+#     Asserted: whenever the hook ALLOWS a command, the marker did not reach stdout or stderr under
+#     any shell; each "bypass" case also PRINTS under at least one shell (so the case has teeth); the
+#     driver's exit status and a minimum check count are asserted (a crashed driver cannot pass).
+#     NOT covered: shells not installed here (zsh and dash are tried when present; fish, csh, pwsh and
+#     Windows shells never), interactive-only behaviour (a pager runs only on a tty; history
+#     expansion), an alias or function named git/gh, hooks a real git would run, the real gh/git/
+#     Doppler CLIs (the shims only echo), and any command the corpus and matrix do not contain: the
+#     differential is a check of the tokenizer against real shells on those inputs, not a proof. The
+#     write form and the sanitizer are asserted only against the hook's own text rules: no live
+#     Doppler CLI is run, so that `set NAME` really reads its value from stdin is NOT proved here.
+#     Mutants run against hooks/bash-secret-guard.py for #647, on the tokenizer (failing-case
+#     count): no reset to "start" after a heredoc terminator (26); `$` accepted in words (1);
+#     CR accepted as a separator (3); backslash accepted in words (6); any assignment name allowed
+#     before an owner (2); the `-e`/`--edit` rule dropped (2); a pipe after an owner allowed (1);
+#     heredoc owner not checked (8); double-quote body not checked for `$`, backtick, backslash (6);
+#     heredoc terminator compared after stripping a CR (3); a redirect target taken as a command word
+#     (1); an unterminated heredoc taken as all body (3); the override `&` honoured after an escaped
+#     `>` (4); the glob splitter splitting at CR (3); drop `merge` (1); drop `git tag` (2); drop `gh
+#     release` (2); the `-m`/`-F` exemption of the editor rule dropped (2); unknown-operator check
+#     dropped AND parens accepted together (5); the blanked text emitted for every command (333);
+#     `#` accepted in words (5); backtick accepted in words (3); discard of stdout only accepted for
+#     `set` (1); the blank before the first `>` of the write form optional (1).
+#     EQUIVALENT mutants (0 failing, no committed case can tell them apart, reasons): the check that
+#     the heredoc substitution is closed by `)"` (the unquoted `)` that must follow is itself
+#     unrecognised, so skipping text past a wrong close ends in a raw return anyway; kept as defence
+#     in depth, no case claims to kill it); the unknown-operator check alone (the char after the
+#     operator is `(`, unrecognised anyway, or a separator that then resets the state), the same check
+#     together with `<<<` handling (a here-string is data to its command, and to a non-owner the
+#     quoted word stays raw), and parens accepted in words alone (a `(`-led word is never an owner and
+#     non-owner text is returned raw).
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -730,7 +759,8 @@ deny "quoted && gh pr create fools the segment start" $'bash -s \'&& gh pr creat
 # 4. comments
 deny "apostrophe in a comment fakes a quote across a newline" $'git commit -m \'a\' # it\'s done\ndoppler secrets get X --plain # won\'t'
 deny "double quote in a comment fakes a quote" $'git commit -m "a" # say "hi\ndoppler secrets get X --plain # bye"'
-allow "a hash inside a word is not a comment" 'git commit -m "fix #647 doppler" --author=a#b'
+allow "a hash inside a quoted message is text" 'git commit -m "fix #647 doppler"'
+deny "an unquoted hash is not recognised, so nothing is stripped" 'git commit -m "doppler" --author=a#b'
 # (a) assignments before the command word
 deny "quoted assignment value before the command" "GIT_EDITOR='doppler\${IFS}secrets\${IFS}get\${IFS}X;:' git commit"
 deny "quoted assignment value before gh" "GH_PAGER=\"doppler secrets get X\" gh issue create --title t"
@@ -749,15 +779,68 @@ deny "gh release delete is not a message command" 'gh release delete v1 "doppler
 deny "gh issue list is not a message command" 'gh issue list --search "doppler"'
 deny "git log --grep is not a message command" 'git log --grep "doppler"'
 deny "git config is not a message command" 'git config alias.x "!doppler secrets get X"'
-allow "tab-indented <<- heredoc" $'gh issue comment 5 --body-file - <<-\'EOF\'\n\tdoppler secrets get X\n\tEOF'
-allow "CRLF heredoc" $'gh issue comment 5 --body-file - <<\'EOF\'\r\ndoppler secrets get X\r\nEOF\r\n'
+deny "<<- is outside the accepted grammar: nothing is stripped" $'gh issue comment 5 --body-file - <<-\'EOF\'\n\tdoppler secrets get X\n\tEOF'
+deny "a CR after the heredoc operator is outside the grammar: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\r\ndoppler secrets get X\r\nEOF\r\n'
 allow "two heredoc substitutions on separate lines" $'git commit -m "$(cat <<\'A\'\ndoppler one\nA\n)" -m "$(cat <<\'B\'\ndoppler two\nB\n)"'
 deny "two heredocs on one line are not classified" $'gh issue comment 5 --body-file - <<\'A\' <<\'B\'\ndoppler secrets get X\nA\nB'
-allow "unterminated quoted heredoc is all body" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X'
-allow "a terminator with a trailing blank is not one: the rest stays body, as the shell reads it" $'gh issue comment 5 --body-file - <<\'EOF\'\nbody\nEOF \ndoppler secrets get X --plain'
+deny "an unterminated heredoc is not classified: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X'
+deny "a terminator with a trailing blank is not one: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\nbody\nEOF \ndoppler secrets get X --plain'
 deny "unquoted delimiter heredoc to gh" $'gh issue comment 5 --body-file - <<EOF\ndoppler secrets get X\nEOF'
 deny "commit message followed by a real printer after a newline" $'git commit -m "doppler"\ndoppler secrets get X --plain'
 deny "here-string to bash after a commit" 'git commit -m x && bash <<< "doppler secrets get X"'
+
+echo "== the five reviewer-reproduced bypasses of #648, each with the message check (#647) =="
+# Each runs against real shells in the differential section below, where it also must print.
+deny "after a quoted heredoc terminator, a sh -c printer" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\nsh -c \'doppler secrets get X --plain\''
+deny "after a git commit -F - heredoc terminator, a sh -c printer" $'git commit -F - <<\'EOF\'\nhi\nEOF\nsh -c \'doppler secrets get X --plain\''
+deny "after a heredoc terminator, a quote-split command word" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\nd\'oppler\' secrets get X --plain'
+deny "double-quote scan after a cat heredoc body" $'git commit -m "$(cat <<\'EOF\'\nEOF\n: "\'"; doppler secrets get X --plain; : "\'")"'
+deny "escaped dollar before an ANSI-C lookalike" "git commit -m \\\$'\\' 'a' ; doppler secrets get X --plain ; : '\\'"
+deny "dollar dollar before an ANSI-C lookalike" "git commit -m \$\$'\\' 'a' ; doppler secrets get X --plain ; : '\\'"
+deny "commands after the cat heredoc terminator, inside the substitution" $'git commit -m "$(cat <<\'EOF\'\nhi\nEOF\n:; sh -c \'doppler secrets get X --plain\'\n)"'
+allow "a CR before the newline is not a terminator: the rest is still body" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\r\nsh -c \'doppler secrets get X --plain\'\nEOF'
+deny "a bare CR does not split a segment for the glob trigger (over-trigger, deliberate)" $'echo $X\rsecrets'
+deny "a bare CR is not a separator (eval)" $'eval : \rgit commit \\; \'doppler secrets get X --plain\''
+deny "a bare CR is not a separator (sh -c)" $'sh -c \'$2\' \rgit commit \'doppler secrets get X --plain\''
+deny "an escaped >& is not a redirect" "git commit -m x \\>& sh -c 'doppler secrets get X --plain'"
+deny "an escaped <& is not a redirect" "git commit -m x \\<& sh -c 'doppler secrets get X --plain'"
+deny "override prefix with an escaped >&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true \>& doppler secrets get X'
+deny "override prefix with an escaped <&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true \<& doppler secrets get X'
+allow "override prefix with a real >&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true >&2'
+deny "GIT_EDITOR with -e runs the editor on the message" "GIT_EDITOR=sh git commit -e -m 'doppler secrets get X --plain'"
+deny "an EDITOR-named assignment is not on the closed list" "GIT_SEQUENCE_EDITOR=sh git commit -m 'doppler'"
+deny "a PAGER-named assignment is not on the closed list" "GIT_PAGER=sh git tag -m 'doppler'"
+deny "-e inside a short flag cluster" "git commit -ae -m 'doppler'"
+deny "--edit" "git commit --edit -m 'doppler'"
+allow "--no-edit is not --edit" "git commit --amend --no-edit -m 'doppler'"
+allow "a message starting with e after -m is not a cluster" "git commit -me 'doppler'"
+deny "a message command's output piped on" "git commit -m 'doppler' | cat"
+deny "a redirect target named git does not make an owner" "> git commit -m 'doppler secrets get X --plain'"
+
+echo "== write form redirects: blanks (#647) =="
+allow "a blank after > is accepted" 'doppler secrets set X < /tmp/f > /dev/null 2>&1'
+deny "no blank before > (glued to the path)" 'doppler secrets set X < /tmp/f>/dev/null 2>&1'
+deny "no blank before 2> (glued)" 'doppler secrets set X < /tmp/f >/dev/null2>&1'
+
+echo "== differential: the hook against real shells and a fake printer (#647) =="
+DIFF_SCRATCH="$(mktemp -d "$WORK/diff.XXXXXX")"
+python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH" >"$WORK/diff.out" 2>&1
+diff_rc=$?
+diff_ok=0
+while IFS= read -r line; do
+    case "$line" in
+        "  ok   - "*) ok "${line#  ok   - }"; diff_ok=$((diff_ok + 1)) ;;
+        "  FAIL - "*) bad "${line#  FAIL - }" ;;
+        "  info - "*) echo "$line" ;;
+        *) echo "  driver: $line" ;;
+    esac
+done <"$WORK/diff.out"
+# A driver that crashed prints no FAIL line: its exit status and a minimum of checks are asserted.
+if [ "$diff_rc" -eq 0 ] && [ "$diff_ok" -ge 80 ]; then
+    ok "the differential driver ran to completion ($diff_ok checks)"
+else
+    bad "the differential driver ran to completion (rc=$diff_rc, ok lines=$diff_ok)"
+fi
 
 echo "== unclassifiable input fails open, loudly =="
 failopen "empty stdin" ''
