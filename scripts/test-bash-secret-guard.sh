@@ -97,6 +97,20 @@
 #   - speed: a 0.5-2 MB command (many credential URLs, a leading quote plus many URLs, an
 #     expansion plus 100k words, a plain command) classifies in under 5 s with the expected
 #     exit code; a hook timeout fails open without a word
+#   - #647 (three defects from a real session; sections "override with a redirect", "writing a secret
+#     without printing it", "a bare mention in a message argument or heredoc does not block"):
+#     the override now survives a plain redirect (`>/dev/null 2>&1`, `< f`), and stays ignored after a
+#     `cd ... &&`, with a heredoc, `<(`/`>(` or `$(`; the write forms `secrets set NAME < /path` and
+#     `set NAME="$(cat /path)"` are allowed only with stdout AND stderr discarded, a literal path, one
+#     name and no value on the command line (a missing, partial or reordered discard, a device or
+#     variable path, a second name or flag, a chained command all deny); a mention inside a `git
+#     commit|tag` / `gh issue|pr|release ...` quoted string or quoted-delimiter heredoc body passes,
+#     while the same words in `echo`, `grep`, `git -c`, `gh api`, `bash <<'EOF'`, `cat <<'EOF' | bash`,
+#     an unquoted heredoc delimiter, a `$(...)` capture, an ANSI-C string and an unbalanced quote
+#     still deny. The write forms are asserted only against the hook's own text rules: no live
+#     Doppler CLI is run, so that `set NAME` really reads its value from stdin is NOT proved here.
+#     No mutant was run for the #647 code beyond the committed deny cases. The two old denies of
+#     a commit message and a PR body that only mention the word became allows.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -393,8 +407,6 @@ deny "ruby -e" "ruby -e 'system(\"doppler secrets get X\")'"
 deny "node -e" "node -e 'execSync(\"doppler secrets get X\")'"
 deny "osascript -e" "osascript -e 'do shell script \"doppler secrets get X\"'"
 deny "python string concatenation" "python3 -c 'import os; os.system(\"dopp\"+\"ler secrets get X\")'"
-deny "a commit message that mentions the phrase" 'git commit -m "doppler secrets get is dangerous"'
-deny "a PR body that mentions doppler" "gh pr create --body 'uses doppler for secrets'"
 deny "grep for the words" 'grep -rn "doppler secrets" docs/'
 
 echo "== command names the text does not spell literally =="
@@ -600,6 +612,86 @@ deny "URL bypass with a pipe" 'SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql postgres://a
 err="$(printf '%s' "$(event 'doppler secrets get X')" | SASSYDOG_ALLOW_DOPPLER_PRINT=1 SASSYDOG_ALLOW_CREDENTIAL_URL=1 bash "$HOOK" 2>&1 >/dev/null)"
 rc=$?
 if [ "$rc" -eq 2 ]; then ok "the hook's own environment is not a bypass"; else bad "the hook's own environment is not a bypass (rc=$rc)"; fi
+
+echo "== override with a redirect (#647) =="
+allow "override before a command with >/dev/null 2>&1" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets set X < /tmp/f >/dev/null 2>&1'
+allow "override before a command with an input redirect" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X > /tmp/f 2>&1'
+deny "override ignored after a cd prefix" 'cd /tmp && SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X'
+deny "override with a heredoc is ignored" $'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X <<EOF\nx\nEOF'
+deny "override with process substitution is ignored" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X > >(cat)'
+deny "override with a capture is ignored" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets set X="$(cat /tmp/f)" >/dev/null'
+deny "the denial message says where the override goes" 'cd /tmp && doppler secrets get X'
+case "$err" in
+    *"very first thing"*"cd ... &&"*"one simple command"*) ok "the denial message states the override position and shape" ;;
+    *) bad "the denial message states the override position and shape (got: $err)" ;;
+esac
+
+echo "== writing a secret without printing it (#647) =="
+allow "set from stdin file" 'doppler secrets set DATABASE_URL < /tmp/neon.txt >/dev/null 2>&1'
+allow "set from stdin file with -p -c" 'doppler secrets set DATABASE_URL -p app -c prd < /tmp/neon.txt >/dev/null 2>&1'
+allow "set from stdin file, global flags first" 'doppler --no-check-version secrets set DATABASE_URL < ~/neon.txt >/dev/null 2>&1'
+allow "set from stdin file, stderr to /dev/null" 'doppler secrets set DATABASE_URL < /tmp/neon.txt >/dev/null 2>/dev/null'
+allow "set NAME from cat of a literal path" 'doppler secrets set DATABASE_URL="$(cat /tmp/neon.txt)" -p app -c prd >/dev/null 2>&1'
+allow "set NAME from cat, flags first" 'doppler secrets set -p app -c prd DATABASE_URL="$(cat /tmp/neon.txt)" >/dev/null 2>&1'
+deny "set with the value on the command line" 'doppler secrets set X=hunter2 >/dev/null 2>&1'
+deny "set with a positional value" 'doppler secrets set X hunter2 < /tmp/f >/dev/null 2>&1'
+deny "set with no discard" 'doppler secrets set X < /tmp/f'
+deny "set discarding stdout only" 'doppler secrets set X < /tmp/f >/dev/null'
+deny "set discarding stderr only" 'doppler secrets set X < /tmp/f 2>/dev/null'
+deny "set with stderr to stdout, stdout kept" 'doppler secrets set X < /tmp/f 2>&1'
+deny "set with the redirect order reversed" 'doppler secrets set X < /tmp/f 2>&1 >/dev/null'
+deny "set with stdout to a real file" 'doppler secrets set X < /tmp/f >/tmp/out 2>&1'
+deny "set with no source at all" 'doppler secrets set X >/dev/null 2>&1'
+deny "set with both a stdin file and a cat" 'doppler secrets set X="$(cat /tmp/a)" < /tmp/b >/dev/null 2>&1'
+deny "set from a device path" 'doppler secrets set X < /dev/stdin >/dev/null 2>&1'
+deny "set from /proc" 'doppler secrets set X < /proc/self/environ >/dev/null 2>&1'
+deny "set from a path with a dot segment" 'doppler secrets set X < /tmp/../dev/tty >/dev/null 2>&1'
+deny "set from a variable path" 'doppler secrets set X < $F >/dev/null 2>&1'
+deny "set from cat of a variable path" 'doppler secrets set X="$(cat $F)" >/dev/null 2>&1'
+deny "set from cat with an extra command" 'doppler secrets set X="$(cat /tmp/f; echo hi)" >/dev/null 2>&1'
+deny "set from cat of two paths" 'doppler secrets set X="$(cat /tmp/a /tmp/b)" >/dev/null 2>&1'
+deny "set with a second name" 'doppler secrets set X Y < /tmp/f >/dev/null 2>&1'
+deny "set with --silent and no discard" 'doppler secrets set X < /tmp/f --silent'
+deny "set with an unknown flag" 'doppler secrets set X --raw < /tmp/f >/dev/null 2>&1'
+deny "set with --token" 'doppler secrets set X --token dp.st.x < /tmp/f >/dev/null 2>&1'
+deny "set after a cd prefix" 'cd /tmp && doppler secrets set X < /tmp/f >/dev/null 2>&1'
+deny "set chained to a get" 'doppler secrets set X < /tmp/f >/dev/null 2>&1; doppler secrets get X'
+deny "set piped on" 'doppler secrets set X < /tmp/f >/dev/null 2>&1 | cat'
+deny "set with a tee value" 'doppler secrets set X="$(cat /tmp/f | tee /dev/stderr)" >/dev/null 2>&1'
+deny "set with a tail after the discard" 'doppler secrets set X < /tmp/f >/dev/null 2>&1 && echo done'
+deny "set without a name" 'doppler secrets set < /tmp/f >/dev/null 2>&1'
+deny "get still denied beside set" 'doppler secrets get X >/dev/null 2>&1'
+
+echo "== a bare mention in a message argument or heredoc does not block (#647) =="
+allow "git commit -m double-quoted mention" 'git commit -m "doppler secrets get is dangerous"'
+allow "git commit -m single-quoted mention" "git commit -m 'fix the doppler guard'"
+allow "gh pr create --body single-quoted mention" "gh pr create --body 'uses doppler for secrets'"
+allow "gh issue create title with the word" 'gh issue create --title "doppler guard blocks sets" --body "see the hook"'
+allow "gh issue create with a quoted heredoc body" $'gh issue create --title "x" --body "$(cat <<\'EOF\'\nrun doppler secrets get X to see it\nEOF\n)"'
+allow "git commit with a quoted heredoc message" $'git commit -m "$(cat <<\'EOF\'\nfix: doppler secrets get is blocked\n\nbody mentions doppler\nEOF\n)"'
+allow "heredoc body via gh --body-file -" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X\nEOF'
+allow "git add then commit with a mention" 'git add -A && git commit -m "doppler guard"'
+allow "cd then gh with a mention" 'cd /tmp && gh pr create --title "doppler" --body "doppler"'
+allow "mention behind a leading assignment" 'GIT_AUTHOR_NAME=x git commit -m "doppler"'
+deny "a double-quoted capture in a commit message still denies" 'git commit -m "$(doppler secrets get X --plain)"'
+deny "a backtick capture in a commit message still denies" 'git commit -m "`doppler secrets get X --plain`"'
+deny "an unquoted real command after a message still denies" 'git commit -m "doppler" && doppler secrets get X'
+deny "an unbalanced quote sanitizes nothing" 'git commit -m "doppler secrets get X'
+deny "git -c with a single-quoted string is not inert" "git -c core.pager='doppler secrets get X' log"
+deny "git log message-less mention" 'git log --grep=doppler'
+deny "echo with a mention" 'echo "uses doppler"'
+deny "grep for the word" 'grep -rn doppler docs/'
+deny "bash heredoc is executed" $'bash <<\'EOF\'\ndoppler secrets get X\nEOF'
+deny "cat heredoc piped to bash" $'cat <<\'EOF\' | bash\ndoppler secrets get X\nEOF'
+deny "commit then cat heredoc piped to bash" $'git commit -m x && cat <<\'EOF\' | bash\ndoppler secrets get X\nEOF'
+deny "heredoc under a non-inert command with an inert one earlier" $'git commit -m x; bash <<\'EOF\'\ndoppler secrets get X\nEOF'
+deny "unquoted heredoc delimiter expands" $'gh issue comment 5 --body-file - <<EOF\n$(doppler secrets get X --plain)\nEOF'
+deny "gh body with a capture inside a double-quoted string" 'gh issue create --body "$(doppler secrets get X --plain)"'
+deny "gh body ANSI-C string is not blanked" "gh issue create --body \$'doppler secrets get X'"
+deny "heredoc opened inside a command substitution of another command" $'git commit -m "$(bash <<\'EOF\'\ndoppler secrets get X\nEOF\n)"'
+deny "git commit heredoc, shell command after the body" $'git commit -F - <<\'EOF\'\nmsg\nEOF\ndoppler secrets get X'
+deny "gh api is not a message command" "gh api repos/o/r/issues -f body='doppler'"
+deny "git commit mention carrying a literal URL password" 'git commit -m "postgres://a:b@h/d"' 'literal password'
 
 echo "== unclassifiable input fails open, loudly =="
 failopen "empty stdin" ''

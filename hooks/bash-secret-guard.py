@@ -56,6 +56,11 @@ disagree with itself about quoting.
         needs the loaded shell inside one call; a follow-up command runs as
         `doppler run [-p P] [-c C] -- <command>` (form 2). The gate extracts every doppler
         command under skills/ and requires it to pass)
+     3d. WRITING a secret: `doppler [global flags] secrets set NAME [-p P] [-c C] < <literal path>`
+        or `... set NAME="$(cat <literal path>)" ...`, in both cases ending in exactly
+        `>/dev/null 2>&1` (or `>/dev/null 2>/dev/null`). `set` prints a table with the values
+        unless its output is discarded, and the value comes from a file, so it never appears in
+        the command text. A value on the command line (`set NAME=value`) is not allowed
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
@@ -73,9 +78,20 @@ disagree with itself about quoting.
    inside single quotes `$` is literal and does not.
 
 Per-command bypass: LEADING, unquoted `SASSYDOG_ALLOW_DOPPLER_PRINT=1` /
-`SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments, honoured only when the rest of the command is a
-single simple command (no ; & | newline, backtick, $(, <(, >( outside single quotes). Never by
-substring, never from the hook's own environment.
+`SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments (the first thing in the command: a `cd x &&` before
+it makes it an ordinary argument), honoured only when the rest of the command is a single simple
+command (no ; & | newline, backtick, $(, <(, >(, << outside quotes; a plain redirect such as
+`>/dev/null 2>&1` or `< file` is fine). Never by substring, never from the hook's own environment.
+
+Inert text (#647): before the trigger runs, the text is sanitized so a command that only CARRIES the
+word does not deny. Two removals, both tied to a command that cannot execute the text: the body of a
+heredoc with a quoted delimiter (`<<'EOF'`), when the line that opens it starts with `git commit|tag` or
+`gh issue|pr create|edit|comment|close|reopen|review|merge` / `gh release create|edit` (directly, or
+through `$(cat <<'EOF'`; no pipe, `;` or `&` between the command and the heredoc); and, in a segment
+that starts with one of those commands, every single-quoted string and every double-quoted string
+holding no `$`, backtick or backslash. `bash <<'EOF'`, `cat <<'EOF' | bash`, `git commit -m "$(...)"`
+and `git -c core.pager='...' log` are not sanitized, so they still deny. An unbalanced quote
+sanitizes nothing.
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -83,7 +99,7 @@ redirect targets, a redirected file that is read back afterwards, `doppler run -
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
 child decides), a two-step symlink rename (`ln -s <doppler> /tmp/dp`, then `/tmp/dp secrets`:
 each command text is innocent alone), a relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
-text that merely mentions doppler (a commit message, a PR body): use the bypass.
+text that mentions doppler outside the sanitized spots above (a `grep doppler docs/`, an `echo`): use the bypass.
 """
 
 import json
@@ -108,15 +124,20 @@ SAFE_FORMS = (
     "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
     "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
-    "`doppler secrets get NAME --plain | gh secret set NAME`; `eval \"$(doppler secrets download "
+    "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
+    "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "
+    "NAME=\"$(cat /literal/path)\" >/dev/null 2>&1` (stdout and stderr must both be discarded); `eval \"$(doppler secrets download "
     "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it); a bare "
     "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
     "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
-    "print secret values to the transcript. " + SAFE_FORMS + " Text that merely mentions the "
-    "word (a commit message, a PR body) is denied too. Deliberate override for one single "
-    "command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
+    "print secret values to the transcript. " + SAFE_FORMS + " Quoted text in the arguments of "
+    "`git commit|tag` and `gh issue|pr|release create|edit|comment...`, and the body of a quoted-delimiter "
+    "heredoc they take, is not scanned; any other text that mentions the word is denied. Deliberate "
+    "override for one single command: put SASSYDOG_ALLOW_DOPPLER_PRINT=1 as the very first thing in the "
+    "command (before any `cd ... &&`); the rest must be one simple command (redirects are fine; no `;`, "
+    "`&&`, pipe, `$(`, backtick or heredoc), or the override is ignored."
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "
@@ -242,11 +263,108 @@ def split_segments(s):
     return segs
 
 
+# ---- inert text (#647) -----------------------------------------------------------------------
+
+INERT_CMD = (r"(?:git[ \t]+(?:commit|tag)|gh[ \t]+(?:issue|pr)[ \t]+"
+             r"(?:create|edit|comment|close|reopen|review|merge)|gh[ \t]+release[ \t]+(?:create|edit))"
+             r"(?=[ \t]|$)")
+INERT_START_RE = re.compile(r"(?:(?:^|&&|;)[ \t]*)(?:[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+)*" + INERT_CMD)
+HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(['\"])([A-Za-z0-9_]+)\2")
+
+
+def _heredoc_owner_inert(prefix):
+    """True when the line text before a heredoc operator is an inert-message command."""
+    starts = list(INERT_START_RE.finditer(prefix))
+    if not starts:
+        return False
+    between = prefix[starts[-1].end():].replace("$(cat ", "")
+    return not any(x in between for x in ("|", ";", "&", "`", "(", "<<"))
+
+
+def strip_heredoc_bodies(text):
+    """Drop the body (and terminator) of every quoted-delimiter heredoc opened by an inert command.
+
+    Returns None when ANY heredoc is opened by something else: then nothing is stripped at all.
+    """
+    lines = text.split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        out.append(line)
+        i += 1
+        ops = list(HEREDOC_RE.finditer(line))
+        for m in ops:
+            if not _heredoc_owner_inert(line[:m.start()]):
+                return None
+        for m in ops:
+            dash, delim = m.group(1), m.group(3)
+            while i < len(lines):
+                cur = lines[i]
+                i += 1
+                if (cur.lstrip("\t") if dash else cur) == delim:
+                    break
+    return "\n".join(out)
+
+
+def strip_inert_strings(seg):
+    """Blank every single-quoted and every plain double-quoted string; unchanged if a quote is unbalanced."""
+    out, i, n = [], 0, len(seg)
+    while i < n:
+        c = seg[i]
+        if c == "\\":
+            out.append(seg[i:i + 2])
+            i += 2
+        elif c == "'" and not (out and out[-1].endswith("$")):
+            j = seg.find("'", i + 1)
+            if j < 0:
+                return seg
+            out.append("''")
+            i = j + 1
+        elif c == "'":  # $'...': ANSI-C, a backslash escapes; keep it verbatim
+            j = i + 1
+            while j < n and seg[j] != "'":
+                j += 2 if seg[j] == "\\" else 1
+            if j >= n:
+                return seg
+            out.append(seg[i:j + 1])
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and seg[j] != '"':
+                j += 2 if seg[j] == "\\" else 1
+            if j >= n:
+                return seg
+            body = seg[i + 1:j]
+            out.append(seg[i:j + 1] if any(x in body for x in ("$", "`", "\\")) else '""')
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def sanitize(text):
+    """The text with the inert regions of message-carrying git/gh commands removed (see docstring)."""
+    stripped = strip_heredoc_bodies(text)
+    if stripped is None:
+        return text
+    segs = []
+    for seg in split_segments(stripped):
+        if INERT_START_RE.match(seg.lstrip()):
+            seg = strip_inert_strings(seg)
+        segs.append(seg)
+    return "\n".join(segs)
+
+
 # ---- single simple command, quote-aware ------------------------------------------------------
 
 
-def single_simple(s):
-    """True when s has no control operator outside single quotes (and no unbalanced quote)."""
+def single_simple(s, redirects=False):
+    """True when s has no control operator outside single quotes (and no unbalanced quote).
+
+    With redirects=True a plain redirect (`>f`, `2>&1`, `< f`, `>>f`) is not an operator; process
+    substitution (`<(`, `>(`) and heredocs / here-strings (`<<`) still are.
+    """
     quote = None
     i = 0
     while i < len(s):
@@ -267,6 +385,10 @@ def single_simple(s):
                 i += 1
             elif c in "'\"":
                 quote = c
+            elif redirects and c in "<>" and nxt != "(" and not (c == "<" and nxt == "<"):
+                pass
+            elif redirects and c == "&" and ((i > 0 and s[i - 1] in "<>") or nxt in ("<", ">")):
+                pass
             elif c in ";&|<>()\n\r`" or (c == "$" and nxt == "("):
                 return False
         i += 1
@@ -494,6 +616,8 @@ def allowed_strict(cmd):
     if cmd.startswith("doppler ") and (" -- " in cmd or " --command " in cmd) and \
             re.match(r"doppler[ \t]+(?:[^ \t]+[ \t]+)*?run\b", cmd):
         return allowed_run(cmd)
+    if cmd.startswith("doppler ") and SECRETS_SET_RE.search(cmd):
+        return allowed_set(cmd)
     if not STRICT_RE.fullmatch(cmd):
         return False
     toks = cmd.split()
@@ -538,6 +662,45 @@ def allowed_strict(cmd):
         parsed = parse_args(toks, i + 1, GLOBAL_BOOL | bools, GLOBAL_VAL | vals)
         return bool(parsed) and not parsed[1]
     return False
+
+
+DISCARD_RE = re.compile(r"[ \t]+>[ \t]*/dev/null[ \t]+(?:2>&1|2>[ \t]*/dev/null)\Z")
+STDIN_RE = re.compile(r"[ \t]+<[ \t]*([A-Za-z0-9._/~-]+)\Z")
+SET_FILE_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="\$\(cat[ \t]+([A-Za-z0-9._/~-]+)\)"')
+SECRETS_SET_RE = re.compile(r"secrets[ \t]+set\b")
+
+
+def allowed_set(cmd):
+    """`doppler secrets set NAME < file` / `set NAME="$(cat file)"`, output discarded (see docstring 3d)."""
+    m = DISCARD_RE.search(cmd)
+    if not m:
+        return False
+    body = cmd[:m.start()]
+    stdin = None
+    m2 = STDIN_RE.search(body)
+    if m2:
+        stdin, body = m2.group(1), body[:m2.start()]
+    subs = list(SET_FILE_RE.finditer(body))
+    if len(subs) > 1 or (subs and stdin is not None) or (not subs and stdin is None):
+        return False
+    path = stdin if stdin is not None else subs[0].group(2)
+    if not literal_path(path):
+        return False
+    if subs:
+        body = body[:subs[0].start()] + subs[0].group(1) + "=@FILE" + body[subs[0].end():]
+    if not STRICT_RE.fullmatch(body) or any(c in body for c in "|>"):
+        return False
+    toks = body.split()
+    if not toks or toks[0] != "doppler":
+        return False
+    g = parse_global(toks)
+    if g is None or g[0] + 1 >= len(toks) or toks[g[0]] != "secrets" or toks[g[0] + 1] != "set":
+        return False
+    parsed = parse_args(toks, g[0] + 2, GLOBAL_BOOL, GLOBAL_VAL | PC_VAL)
+    if not parsed or len(parsed[1]) != 1:
+        return False
+    name = parsed[1][0]
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=@FILE", name) if subs else NAME_RE.fullmatch(name))
 
 
 def allowed_bootstrap(cmd):
@@ -615,7 +778,7 @@ def split_bypass(cmd):
     if not m:
         return False, False, cmd
     body = cmd[m.end():]
-    if not single_simple(body):
+    if not single_simple(body, redirects=True):
         return False, False, cmd
     toks = m.group(1).split()
     return BYPASS_DOPPLER in toks, BYPASS_URL in toks, body
@@ -636,7 +799,7 @@ def analyze(command, cwd=None):
     CWD = cwd if isinstance(cwd, str) and cwd.startswith("/") else None
     bd, bu, body = split_bypass(command)
     problems = []
-    if not bd and triggered(body) and not allowed_strict(body):
+    if not bd and triggered(sanitize(body)) and not allowed_strict(body):
         problems.append(DOPPLER_MSG)
     if not bu and url_violation(body if (bd or bu) else command):
         problems.append(URL_MSG)
