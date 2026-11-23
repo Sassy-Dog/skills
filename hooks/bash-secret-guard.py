@@ -57,15 +57,16 @@ disagree with itself about quoting.
         `doppler run [-p P] [-c C] -- <command>` (form 2). The gate extracts every doppler
         command under skills/ and requires it to pass)
      3d. WRITING a secret: `doppler [global flags] secrets set NAME [-p P] [-c C] < <literal path>`
-        or `... set NAME="$(cat <literal path>)" ...`, in both cases ending in exactly
-        `>/dev/null 2>&1` (or `>/dev/null 2>/dev/null`). `set` prints a table with the values
+        or `... set NAME="$(cat <literal path>)" ...`, in both cases ending in `>/dev/null 2>&1`
+        or `>/dev/null 2>/dev/null` (blanks around `>` optional; nothing after it). `set` prints a table with the values
         unless its output is discarded, and the value comes from a file, so it never appears in
         the command text. A value on the command line (`set NAME=value`) is not allowed
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
    where "exactly one" means: a single simple command (no ; & | && || newline, backtick, $(,
-   <(, >(, <<, <, >& ...), no environment prefix, no wrapper, the command word is the literal
+   <(, >(, <<, <, >& ...; the one exception is the 3d write form, which carries its own `< path`,
+   `$(cat <path>)` and `>/dev/null 2>&1`), no environment prefix, no wrapper, the command word is the literal
    lower-case `doppler`, every flag is on an explicit per-subcommand allow list with a literal
    value that does not start with `-`, and an unknown flag denies (`--debug` and `--api-host`
    are on no list: one logs requests, the other would send the token to any host). A literal path has only
@@ -83,15 +84,18 @@ it makes it an ordinary argument), honoured only when the rest of the command is
 command (no ; & | newline, backtick, $(, <(, >(, << outside quotes; a plain redirect such as
 `>/dev/null 2>&1` or `< file` is fine). Never by substring, never from the hook's own environment.
 
-Inert text (#647): before the trigger runs, the text is sanitized so a command that only CARRIES the
-word does not deny. Two removals, both tied to a command that cannot execute the text: the body of a
-heredoc with a quoted delimiter (`<<'EOF'`), when the line that opens it starts with `git commit|tag` or
-`gh issue|pr create|edit|comment|close|reopen|review|merge` / `gh release create|edit` (directly, or
-through `$(cat <<'EOF'`; no pipe, `;` or `&` between the command and the heredoc); and, in a segment
-that starts with one of those commands, every single-quoted string and every double-quoted string
-holding no `$`, backtick or backslash. `bash <<'EOF'`, `cat <<'EOF' | bash`, `git commit -m "$(...)"`
-and `git -c core.pager='...' log` are not sanitized, so they still deny. An unbalanced quote
-sanitizes nothing.
+Inert text (#647): before the trigger runs, `sanitize()` blanks the text a command only CARRIES, so
+the word in it does not deny. One quote-aware pass, two removals, both only inside a segment (split
+at unquoted ; & | newline) whose raw text starts with `git commit|tag`, `gh issue|pr create|edit|
+comment|close|reopen|review|merge` or `gh release create|edit` (after quote-free `NAME=value`
+words): single-quoted strings and double-quoted strings holding no `$`, backtick or backslash, and
+the body of a heredoc with a quoted delimiter, written `<<'EOF'` at the end of its line or as
+`"$(cat <<'EOF'` ending its line. Anything it cannot classify makes it return the raw text, i.e.
+strip nothing: an unbalanced quote; an unquoted `#` at a word start (an apostrophe in a comment
+would fake a quote); `$(`, a backtick, `<(`, `>(` or `(` outside quotes; any other `$(` inside
+double quotes; a heredoc that is unquoted, not at the end of its line, or owned by any other
+command (`bash <<'EOF'`). So `git commit -m "$(...)"`, `git -c core.pager='...' log` and
+`cat <<'EOF' | bash` still deny.
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -133,8 +137,8 @@ SAFE_FORMS = (
 DOPPLER_MSG = (
     "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
     "print secret values to the transcript. " + SAFE_FORMS + " Quoted text in the arguments of "
-    "`git commit|tag` and `gh issue|pr|release create|edit|comment...`, and the body of a quoted-delimiter "
-    "heredoc they take, is not scanned; any other text that mentions the word is denied. Deliberate "
+    "`git commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release "
+    "create|edit`, and the body of a quoted-delimiter heredoc ending its line, is not scanned; any other text that mentions the word is denied. Deliberate "
     "override for one single command: put SASSYDOG_ALLOW_DOPPLER_PRINT=1 as the very first thing in the "
     "command (before any `cd ... &&`); the rest must be one simple command (redirects are fine; no `;`, "
     "`&&`, pipe, `$(`, backtick or heredoc), or the override is ignored."
@@ -268,92 +272,127 @@ def split_segments(s):
 INERT_CMD = (r"(?:git[ \t]+(?:commit|tag)|gh[ \t]+(?:issue|pr)[ \t]+"
              r"(?:create|edit|comment|close|reopen|review|merge)|gh[ \t]+release[ \t]+(?:create|edit))"
              r"(?=[ \t]|$)")
-INERT_START_RE = re.compile(r"(?:(?:^|&&|;)[ \t]*)(?:[A-Za-z_][A-Za-z0-9_]*=[^ \t]*[ \t]+)*" + INERT_CMD)
-HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(['\"])([A-Za-z0-9_]+)\2")
+# The segment's text so far starts with the inert command word, after quote-free assignments only.
+INERT_START_RE = re.compile(r"[ \t]*(?:[A-Za-z_][A-Za-z0-9_]*=[^ \t'\"\\$`\n]*[ \t]+)*" + INERT_CMD)
+HEREDOC_OP_RE = re.compile(r"<<(-?)[ \t]*(['\"])([A-Za-z0-9_]+)\2[ \t]*\r?(?:\n|\Z)")
+HEREDOC_SUB_RE = re.compile(r"\$\(cat[ \t]+<<(-?)[ \t]*(['\"])([A-Za-z0-9_]+)\2[ \t]*\r?\n")
+_WORD_START_BEFORE = " \t\n\r;&|("
 
 
-def _heredoc_owner_inert(prefix):
-    """True when the line text before a heredoc operator is an inert-message command."""
-    starts = list(INERT_START_RE.finditer(prefix))
-    if not starts:
-        return False
-    between = prefix[starts[-1].end():].replace("$(cat ", "")
-    return not any(x in between for x in ("|", ";", "&", "`", "(", "<<"))
-
-
-def strip_heredoc_bodies(text):
-    """Drop the body (and terminator) of every quoted-delimiter heredoc opened by an inert command.
-
-    Returns None when ANY heredoc is opened by something else: then nothing is stripped at all.
-    """
-    lines = text.split("\n")
-    out, i = [], 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        i += 1
-        ops = list(HEREDOC_RE.finditer(line))
-        for m in ops:
-            if not _heredoc_owner_inert(line[:m.start()]):
-                return None
-        for m in ops:
-            dash, delim = m.group(1), m.group(3)
-            while i < len(lines):
-                cur = lines[i]
-                i += 1
-                if (cur.lstrip("\t") if dash else cur) == delim:
-                    break
-    return "\n".join(out)
-
-
-def strip_inert_strings(seg):
-    """Blank every single-quoted and every plain double-quoted string; unchanged if a quote is unbalanced."""
-    out, i, n = [], 0, len(seg)
+def _skip_heredoc_body(text, i, dash, delim):
+    """Index just past the terminator line of a heredoc whose body starts at text[i] (EOF if none)."""
+    n = len(text)
     while i < n:
-        c = seg[i]
-        if c == "\\":
-            out.append(seg[i:i + 2])
-            i += 2
-        elif c == "'" and not (out and out[-1].endswith("$")):
-            j = seg.find("'", i + 1)
-            if j < 0:
-                return seg
-            out.append("''")
-            i = j + 1
-        elif c == "'":  # $'...': ANSI-C, a backslash escapes; keep it verbatim
-            j = i + 1
-            while j < n and seg[j] != "'":
-                j += 2 if seg[j] == "\\" else 1
-            if j >= n:
-                return seg
-            out.append(seg[i:j + 1])
-            i = j + 1
-        elif c == '"':
-            j = i + 1
-            while j < n and seg[j] != '"':
-                j += 2 if seg[j] == "\\" else 1
-            if j >= n:
-                return seg
-            body = seg[i + 1:j]
-            out.append(seg[i:j + 1] if any(x in body for x in ("$", "`", "\\")) else '""')
-            i = j + 1
-        else:
-            out.append(c)
-            i += 1
-    return "".join(out)
+        j = text.find("\n", i)
+        line = text[i:n if j < 0 else j].rstrip("\r")
+        i = n if j < 0 else j + 1
+        if (line.lstrip("\t") if dash else line) == delim:
+            break
+    return i
 
 
 def sanitize(text):
-    """The text with the inert regions of message-carrying git/gh commands removed (see docstring)."""
-    stripped = strip_heredoc_bodies(text)
-    if stripped is None:
-        return text
-    segs = []
-    for seg in split_segments(stripped):
-        if INERT_START_RE.match(seg.lstrip()):
-            seg = strip_inert_strings(seg)
-        segs.append(seg)
-    return "\n".join(segs)
+    """The text with the inert regions of message-carrying git/gh commands blanked, else the text itself.
+
+    ONE quote-aware pass. It blanks only (1) single-quoted strings and double-quoted strings with no
+    `$`, backtick or backslash, and (2) quoted-delimiter heredoc bodies, and only inside a segment
+    (split at unquoted ; & | newline) whose raw text so far starts with an inert command word. ANYTHING
+    it cannot classify with certainty returns the raw text, i.e. strips nothing: an unbalanced
+    quote, an unquoted `#` at a word start (an apostrophe in a comment would fake a quote), a `$(`,
+    backtick, `<(`, `>(` or `(` outside quotes, a `$(` inside double quotes that is not exactly
+    `$(cat <<'X'` ending its line, a heredoc that is not quoted-delimited, not at the end of its
+    line or not owned by an inert segment, or a here-doc operator that sits inside a quote.
+    """
+    n = len(text)
+    i = 0
+    out = []
+    seg = []          # raw text of the current segment so far
+    inert = [None]    # cached per segment: does its prefix start with an inert command word?
+
+    def is_inert():
+        if inert[0] is None:
+            inert[0] = INERT_START_RE.match("".join(seg)) is not None
+        return inert[0]
+
+    def emit(raw, shown=None):
+        seg.append(raw)
+        out.append(raw if shown is None else shown)
+
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "\\":
+            emit(text[i:i + 2])
+            i += 2
+        elif c == "'":
+            if i > 0 and text[i - 1] == "$":  # ANSI-C: a backslash escapes, kept verbatim
+                j = i + 1
+                while j < n and text[j] != "'":
+                    j += 2 if text[j] == "\\" else 1
+                if j >= n:
+                    return text
+                emit(text[i:j + 1])
+            else:
+                j = text.find("'", i + 1)
+                if j < 0:
+                    return text
+                emit(text[i:j + 1], "''" if is_inert() else None)
+            i = j + 1
+        elif c == '"':
+            j = i + 1
+            plain = True
+            pieces = ['"']
+            while j < n and text[j] != '"':
+                ch = text[j]
+                if ch == "\\":
+                    plain = False
+                    pieces.append(text[j:j + 2])
+                    j += 2
+                elif ch == "`":
+                    return text
+                elif ch == "$" and text[j + 1:j + 2] == "(":
+                    m = HEREDOC_SUB_RE.match(text, j)
+                    if not m or not is_inert():
+                        return text
+                    plain = False
+                    pieces.append(text[j:m.end()])
+                    j = _skip_heredoc_body(text, m.end(), m.group(1), m.group(3))
+                else:
+                    if ch == "$":
+                        plain = False
+                    pieces.append(ch)
+                    j += 1
+            if j >= n:
+                return text
+            pieces.append('"')
+            raw = "".join(pieces)
+            emit(raw, '""' if (plain and is_inert()) else None)
+            i = j + 1
+        elif c == "`" or (c == "$" and nxt == "(") or (c in "<>" and nxt == "(") or c in "()":
+            return text
+        elif c == "#" and (i == 0 or text[i - 1] in _WORD_START_BEFORE):
+            return text
+        elif c == "<" and nxt == "<" and text[i + 2:i + 3] != "<":
+            m = HEREDOC_OP_RE.match(text, i)
+            if not m or not is_inert():
+                return text
+            emit(text[i:m.end()])
+            i = _skip_heredoc_body(text, m.end(), m.group(1), m.group(3))
+        elif c == "<" and nxt == "<":  # here-string: the word after it is quote-scanned as usual
+            emit("<<<")
+            i += 3
+        elif c == "&" and ((i > 0 and text[i - 1] in "<>") or nxt == ">"):
+            emit(c)
+            i += 1
+        elif c in ";&|\n\r":
+            out.append(c)
+            seg.clear()
+            inert[0] = None
+            i += 1
+        else:
+            emit(c)
+            i += 1
+    return "".join(out)
 
 
 # ---- single simple command, quote-aware ------------------------------------------------------
@@ -387,7 +426,7 @@ def single_simple(s, redirects=False):
                 quote = c
             elif redirects and c in "<>" and nxt != "(" and not (c == "<" and nxt == "<"):
                 pass
-            elif redirects and c == "&" and ((i > 0 and s[i - 1] in "<>") or nxt in ("<", ">")):
+            elif redirects and c == "&" and ((i > 0 and s[i - 1] in "<>") or nxt == ">"):
                 pass
             elif c in ";&|<>()\n\r`" or (c == "$" and nxt == "("):
                 return False

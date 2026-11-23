@@ -97,20 +97,31 @@
 #   - speed: a 0.5-2 MB command (many credential URLs, a leading quote plus many URLs, an
 #     expansion plus 100k words, a plain command) classifies in under 5 s with the expected
 #     exit code; a hook timeout fails open without a word
-#   - #647 (three defects from a real session; sections "override with a redirect", "writing a secret
-#     without printing it", "a bare mention in a message argument or heredoc does not block"):
-#     the override now survives a plain redirect (`>/dev/null 2>&1`, `< f`), and stays ignored after a
-#     `cd ... &&`, with a heredoc, `<(`/`>(` or `$(`; the write forms `secrets set NAME < /path` and
-#     `set NAME="$(cat /path)"` are allowed only with stdout AND stderr discarded, a literal path, one
-#     name and no value on the command line (a missing, partial or reordered discard, a device or
-#     variable path, a second name or flag, a chained command all deny); a mention inside a `git
-#     commit|tag` / `gh issue|pr|release ...` quoted string or quoted-delimiter heredoc body passes,
-#     while the same words in `echo`, `grep`, `git -c`, `gh api`, `bash <<'EOF'`, `cat <<'EOF' | bash`,
-#     an unquoted heredoc delimiter, a `$(...)` capture, an ANSI-C string and an unbalanced quote
-#     still deny. The write forms are asserted only against the hook's own text rules: no live
-#     Doppler CLI is run, so that `set NAME` really reads its value from stdin is NOT proved here.
-#     No mutant was run for the #647 code beyond the committed deny cases. The two old denies of
-#     a commit message and a PR body that only mention the word became allows.
+#   - #647 (sections "override with a redirect", "writing a secret without printing it", "a bare mention
+#     in a message argument or heredoc does not block", "inert text: nothing the sanitizer cannot
+#     classify is stripped"): the override survives a plain redirect (`>/dev/null 2>&1`, `< f`,
+#     `>>f`, `&>f`), each paired with the same command denied WITHOUT the prefix, and stays ignored
+#     after a `cd ... &&`, with a heredoc, `<(`/`>(`, `$(` or a detached `&<`; the write forms
+#     `secrets set NAME < /path` and `set NAME="$(cat /path)"` are allowed only with stdout AND stderr
+#     discarded, a literal path, one name and no value on the command line; a mention inside the quoted
+#     strings or quoted-delimiter heredoc body of `git commit|tag`, `gh issue|pr create|edit|comment|
+#     close|reopen|review|merge` and `gh release create|edit` passes (each verb has a case; also `<<-`
+#     tab-indented, CRLF, two heredoc substitutions on separate lines, an unterminated heredoc), while
+#     everything the sanitizer cannot classify is denied on the raw text: `$(`/backtick/`<(`/`>(`/`(`
+#     outside quotes, `| bash` or `&& sh` after the heredoc operator, an operator inside a quoted
+#     message, a quoted `; git commit` fooling the segment start, `#` comments carrying an apostrophe or
+#     a double quote, a quoted assignment value before the command, two heredocs on one line, an
+#     unquoted delimiter, a heredoc owned by bash -c / eval / bash. The write forms and the sanitizer are
+#     asserted only against the hook's own text rules: no live Doppler CLI is run, so that `set NAME`
+#     really reads its value from stdin is NOT proved here.
+#     Mutants run against hooks/bash-secret-guard.py for #647 (failing-case count): drop the `merge`
+#     verb (1); drop `git tag` (1); drop `gh release` (2); break the `<<-` group (1); drop the `#` rule
+#     (2); heredoc substitution not required to end its line (2); heredoc operator owner not checked
+#     (4); the `&<` override spelling accepted (1); blank strings in every segment (28); drop the
+#     `$(` outside quotes rule (0, EQUIVALENT: the unquoted `(` rule returns raw first, defence in
+#     depth); quote-free assignment regex loosened (0, EQUIVALENT: the inert check runs at the first
+#     quote, before the command word, so a quoted assignment value never sees a match); the
+#     heredoc-substitution owner check not run (2); discard of stdout only accepted for `set` (7).
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -614,8 +625,13 @@ rc=$?
 if [ "$rc" -eq 2 ]; then ok "the hook's own environment is not a bypass"; else bad "the hook's own environment is not a bypass (rc=$rc)"; fi
 
 echo "== override with a redirect (#647) =="
-allow "override before a command with >/dev/null 2>&1" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets set X < /tmp/f >/dev/null 2>&1'
-allow "override before a command with an input redirect" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X > /tmp/f 2>&1'
+deny "no prefix: get with an input redirect" 'doppler secrets get X < /tmp/f'
+allow "override before a get with an input redirect" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X < /tmp/f'
+deny "no prefix: get appended with stderr dup" 'doppler secrets get X >>/tmp/f 2>&1'
+allow "override before a get appended with stderr dup" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X >>/tmp/f 2>&1'
+deny "no prefix: get with &> redirect" 'doppler secrets get X &>/tmp/f'
+allow "override before a get with &> redirect" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X &>/tmp/f'
+deny "override does not take a detached &< (an & before <)" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true &<x doppler secrets get X'
 deny "override ignored after a cd prefix" 'cd /tmp && SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X'
 deny "override with a heredoc is ignored" $'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X <<EOF\nx\nEOF'
 deny "override with process substitution is ignored" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X > >(cat)'
@@ -692,6 +708,56 @@ deny "heredoc opened inside a command substitution of another command" $'git com
 deny "git commit heredoc, shell command after the body" $'git commit -F - <<\'EOF\'\nmsg\nEOF\ndoppler secrets get X'
 deny "gh api is not a message command" "gh api repos/o/r/issues -f body='doppler'"
 deny "git commit mention carrying a literal URL password" 'git commit -m "postgres://a:b@h/d"' 'literal password'
+
+echo "== inert text: nothing the sanitizer cannot classify is stripped (#647 coordinator review) =="
+# 1. substitutions outside quotes
+deny 'commit -m with a $(...) substitution running a printer' "git commit -m \$(sh -c 'doppler secrets get X --plain')"
+deny "commit -m with a backtick substitution running a printer" "git commit -m \`sh -c 'doppler secrets get X --plain'\`"
+deny "gh --body-file <(...) running a printer" "gh pr create --title t --body-file <(sh -c 'doppler secrets get X --plain')"
+deny "gh --body-file >(...)" "gh pr create --title t --body-file >(sh -c 'doppler secrets get X --plain')"
+deny "a subshell group after the message" "git commit -m x && (sh -c 'doppler secrets get X --plain')"
+# 2. the rest of the heredoc line
+deny "gh body heredoc substitution piped to bash" $'gh pr create --title t --body "$(cat <<\'EOF\' | bash\ndoppler secrets get X --plain\nEOF\n)"'
+deny "git commit heredoc substitution piped to bash" $'git commit -m "$(cat <<\'EOF\' | bash\ndoppler secrets get X --plain\nEOF\n)"'
+deny "heredoc operator followed by a command on its line" $'gh issue comment 5 --body-file - <<\'EOF\' && sh\ndoppler secrets get X --plain\nEOF'
+# 3. the operator must be real and owned by an inert segment
+deny "heredoc operator inside a quoted message" $'git commit -m "see <<\'EOF\'"\ndoppler secrets get X --plain\nEOF'
+deny "heredoc operator inside a single-quoted message" $'git commit -m \'see <<\'"\'EOF\'"$\'\'\ndoppler secrets get X --plain\nEOF'
+deny "heredoc substitution owned by bash -c" $'bash -c "$(cat <<\'EOF\'\ndoppler secrets get X --plain\nEOF\n)"'
+deny "heredoc substitution owned by eval" $'eval "$(cat <<\'EOF\'\ndoppler secrets get X --plain\nEOF\n)"'
+deny "quoted ; git commit fools the segment start" $'bash -s "; git commit x" <<\'EOF\'\ndoppler secrets get X --plain\nEOF'
+deny "quoted && gh pr create fools the segment start" $'bash -s \'&& gh pr create\' <<\'EOF\'\ndoppler secrets get X --plain\nEOF'
+# 4. comments
+deny "apostrophe in a comment fakes a quote across a newline" $'git commit -m \'a\' # it\'s done\ndoppler secrets get X --plain # won\'t'
+deny "double quote in a comment fakes a quote" $'git commit -m "a" # say "hi\ndoppler secrets get X --plain # bye"'
+allow "a hash inside a word is not a comment" 'git commit -m "fix #647 doppler" --author=a#b'
+# (a) assignments before the command word
+deny "quoted assignment value before the command" "GIT_EDITOR='doppler\${IFS}secrets\${IFS}get\${IFS}X;:' git commit"
+deny "quoted assignment value before gh" "GH_PAGER=\"doppler secrets get X\" gh issue create --title t"
+allow "quote-free assignment before git commit" 'GIT_AUTHOR_NAME=bot git commit -m "doppler"'
+# (d) the other inert verbs, forms and shapes
+allow "git tag -m mention" 'git tag -a v1 -m "doppler guard"'
+allow "gh pr merge mention" 'gh pr merge 5 --squash --body "doppler"'
+allow "gh pr close mention" 'gh pr close 5 --comment "doppler"'
+allow "gh pr review mention" 'gh pr review 5 --comment --body "doppler"'
+allow "gh pr edit mention" 'gh pr edit 5 --body "doppler"'
+allow "gh issue reopen mention" 'gh issue reopen 5 --comment "doppler"'
+allow "gh release edit mention" 'gh release edit v1 --notes "doppler"'
+allow "gh release create mention" 'gh release create v1 --notes "doppler"'
+deny "gh release view is not a message command" 'gh release view v1 --json body --jq ".body" "doppler"'
+deny "gh release delete is not a message command" 'gh release delete v1 "doppler"'
+deny "gh issue list is not a message command" 'gh issue list --search "doppler"'
+deny "git log --grep is not a message command" 'git log --grep "doppler"'
+deny "git config is not a message command" 'git config alias.x "!doppler secrets get X"'
+allow "tab-indented <<- heredoc" $'gh issue comment 5 --body-file - <<-\'EOF\'\n\tdoppler secrets get X\n\tEOF'
+allow "CRLF heredoc" $'gh issue comment 5 --body-file - <<\'EOF\'\r\ndoppler secrets get X\r\nEOF\r\n'
+allow "two heredoc substitutions on separate lines" $'git commit -m "$(cat <<\'A\'\ndoppler one\nA\n)" -m "$(cat <<\'B\'\ndoppler two\nB\n)"'
+deny "two heredocs on one line are not classified" $'gh issue comment 5 --body-file - <<\'A\' <<\'B\'\ndoppler secrets get X\nA\nB'
+allow "unterminated quoted heredoc is all body" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X'
+allow "a terminator with a trailing blank is not one: the rest stays body, as the shell reads it" $'gh issue comment 5 --body-file - <<\'EOF\'\nbody\nEOF \ndoppler secrets get X --plain'
+deny "unquoted delimiter heredoc to gh" $'gh issue comment 5 --body-file - <<EOF\ndoppler secrets get X\nEOF'
+deny "commit message followed by a real printer after a newline" $'git commit -m "doppler"\ndoppler secrets get X --plain'
+deny "here-string to bash after a commit" 'git commit -m x && bash <<< "doppler secrets get X"'
 
 echo "== unclassifiable input fails open, loudly =="
 failopen "empty stdin" ''
