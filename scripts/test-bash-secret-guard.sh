@@ -141,7 +141,7 @@
 #     covers it and CI (ubuntu: bash 5.x and dash) does NOT: there it is pinned only by the hook-side
 #     deny. Proved on synthetic inputs (the driver's self-test: a required shell that is absent skips,
 #     a case with no requirement that prints nowhere still fails, a required shell that is present and
-#     silent fails) and by a CI-shaped second run (SECRET_GUARD_DIFF_HIDE=bash<4 and CI=1 hide the
+#     silent fails) and by a CI-shaped second run (GUARD_DIFF_HIDE_SHELLS=bash<4 and CI=1 hide the
 #     old bash) that must complete green and print the SKIPPED line. Mutant: the skip removed (a
 #     missing required shell counts as failing) fails 5 checks (two self-tests, the driver's
 #     completion check in both runs, the CI-shaped run and the SKIPPED-line check). Which shells a run covered is on its `info` line.
@@ -907,7 +907,7 @@ fi
 # CI-shaped run: the same driver with every bash older than 4 hidden and CI set, as on a runner that
 # has bash 5 and dash only. It must complete, and it must say, visibly, which teeth check it skipped.
 DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
-SECRET_GUARD_DIFF_HIDE='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
+GUARD_DIFF_HIDE_SHELLS='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
 diff2_rc=$?
 if [ "$diff2_rc" -eq 0 ] && ! grep -q '^  FAIL - ' "$WORK/diff2.out" && [ "$(grep -c '^  ok   - ' "$WORK/diff2.out")" -ge 80 ]; then
     ok "the driver completes with no bash older than 4 present (the CI shape)"

@@ -16,7 +16,7 @@ A corpus entry of kind "bypass" must also PRINT under at least one shell, otherw
 nothing (a bypass that no shell executes is not a bypass). A case listed in NEEDS (bash 3.2's
 early end of a heredoc substitution) is checked only against a matching shell and its teeth check is
 SKIPPED, with a visible info line naming the case, where none is installed; the hook-side deny always
-runs. self_test() proves the skip logic on synthetic inputs. SECRET_GUARD_DIFF_HIDE="bash<4" hides
+runs. self_test() proves the skip logic on synthetic inputs. GUARD_DIFF_HIDE_SHELLS="bash<4" hides
 such shells, to simulate a runner that has only bash 5 and dash. Shells tried: every one of bash,
 /bin/bash, zsh, dash found on this machine, de-duplicated by real path and version; the shells
 that ran are printed, a missing zsh is reported. With CI set, at least bash must be present.
@@ -246,7 +246,7 @@ def teeth(printed, need):
 
 def find_shells():
     found, seen = [], set()
-    hide = os.environ.get("SECRET_GUARD_DIFF_HIDE")  # test hook: pretend shells matching a need are absent
+    hide = os.environ.get("GUARD_DIFF_HIDE_SHELLS")  # test hook: pretend shells matching a need are absent
     for cand in ("bash", "/bin/bash", "zsh", "dash"):
         path = shutil.which(cand)
         if not path:
@@ -320,8 +320,8 @@ def main():
         if want not in names:
             print(f"  info - {want} NOT covered on this machine (not installed)")
     fails = self_test()
-    if os.environ.get("SECRET_GUARD_DIFF_HIDE"):
-        print(f"  info - test hook: shells matching {os.environ['SECRET_GUARD_DIFF_HIDE']} are hidden")
+    if os.environ.get("GUARD_DIFF_HIDE_SHELLS"):
+        print("  info - test hook: some shells are hidden")
     if os.environ.get("CI") and "bash" not in names:
         fails += not out(False, "CI is set and no bash is available to run the corpus under")
     if not shells:
