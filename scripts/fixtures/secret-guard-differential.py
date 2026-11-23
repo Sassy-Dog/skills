@@ -5,16 +5,26 @@ usage: secret-guard-differential.py <hook .sh> <scratch dir>
 The hook's sanitizer decides, from text alone, that a quoted string or heredoc body is inert.
 This driver checks that decision against what REAL shells do. For every corpus command it
 (1) pipes the harness event into the real hook and compares the exit code with the corpus
-expectation, and (2) runs the command under each available shell with a FAKE `doppler` on PATH
-that prints a marker to stdout and stderr (fake `git` and `gh` shims, no network, no real repo,
-everything inside the scratch directory), and asserts the invariant:
+expectation, and (2) runs the command under each available shell with a FAKE secret-printing
+command on PATH that prints a marker to stdout and stderr (plus fake `git` and `gh` shims, no
+network, no real repo, everything inside a fresh scratch directory per run), and asserts:
 
-    whenever the hook ALLOWS a command, the marker did not reach stdout or stderr.
+    whenever the hook ALLOWS a command, the marker did not reach stdout or stderr, and no shell
+    run of it timed out.
 
 A corpus entry of kind "bypass" must also PRINT under at least one shell, otherwise it proves
 nothing (a bypass that no shell executes is not a bypass). Shells tried: every one of bash,
-/bin/bash, zsh, dash found on this machine, de-duplicated by real path and version; a missing
-zsh is reported, not hidden. Output: one `  ok   - ` or `  FAIL - ` line per check.
+/bin/bash, zsh, dash found on this machine, de-duplicated by real path and version; the shells
+that ran are printed, a missing zsh is reported. With CI set, at least bash must be present.
+Output: one `  ok   - ` or `  FAIL - ` line per check.
+
+The git shim imitates what real git does with an editor, because that is how message text became
+code: it runs the editor (GIT_EDITOR, else `git config core.editor`, else VISUAL, else EDITOR) on a
+file holding the arguments when the command is a commit or an annotated tag and it has no -m/-F/-C,
+or has -e/--edit or ANY unique long-option prefix of it (--ed, --edi), or -c, --reedit-message,
+--fixup=amend:/reword:; a re-edit reuses the text of earlier messages (it keeps them in a file).
+`git config K V` is recorded and honoured. The gh shim echoes its stdin and every file it is handed.
+It is a model of those behaviours, not real git.
 """
 
 import itertools
@@ -23,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 D = "dop" + "pler"  # the fake command's name, spelled apart so this file is not itself a mention
 MARKER = "SECRET_MARKER_PRINTED_BY_FAKE_" + D.upper()
@@ -43,38 +54,59 @@ CORPUS = [
     ("gh pr create", f"gh pr create --title 'a' --body 'uses {D}'", "allow", "msg"),
     ("gh issue comment body-file heredoc", f"gh issue comment 5 --body-file - {H}\n{PRINT}\nEOF", "allow", "msg"),
     ("commit -F - heredoc", f"git commit -F - {H}\nfix: {D}\nEOF", "allow", "msg"),
-    ("commit heredoc substitution", f"git commit -m \"$(cat {H}\nfix: {PRINT}\nEOF\n)\"", "allow", "msg"),
-    ("two heredoc substitutions", f"git commit -m \"$(cat <<'A'\n{D} one\nA\n)\" -m \"$(cat <<'B'\n{D} two\nB\n)\"", "allow", "msg"),
-    ("heredoc substitution body with parens, quotes, backtick and a nested substitution",
-     f"git commit -m \"$(cat {H}\nfix (#647) it's \"{D}\" `x` $(y) ) ( ' \"\nEOF\n)\"", "allow", "msg"),
-    ("heredoc body with parens, quotes and a stray terminator lookalike",
-     f"gh issue comment 5 --body-file - {H}\n) ( ' \" `{PRINT}` $({PRINT}) EOF2 EOF \nEOF", "allow", "msg"),
+    ("commit allow-empty -F - heredoc", f"git commit --allow-empty -F - {H}\nfix: {PRINT}\nEOF", "allow", "msg"),
+    ("add then commit", f'git add -A && git commit -m "{D} guard"', "allow", "msg"),
+    ("message, then git status after the heredoc", f"gh issue comment 5 --body-file - {H}\n{D} is mentioned\nEOF\ngit status", "allow", "msg"),
     ("a CR before the newline is not a terminator: the rest is still body",
      f"gh issue comment 5 --body-file - {H}\nhi\nEOF\r\nsh -c '{PRINT}'\nEOF", "allow", "msg"),
-    ("add then commit", f'git add -A && git commit -m "{D} guard"', "allow", "msg"),
-    ("message, then an innocent command after the heredoc", f"gh issue comment 5 --body-file - {H}\n{D} is mentioned\nEOF\nls", "allow", "msg"),
     ("allowed assignment prefix", f'GIT_AUTHOR_NAME=bot git commit -m "{D}"', "allow", "msg"),
     ("redirect on a message command", f'git commit -m "{D}" >/dev/null 2>&1', "allow", "msg"),
     ("override with a discarded print", f"SASSYDOG_ALLOW_DOPPLER_PRINT=1 {PRINT} >/dev/null 2>&1", "allow", "msg"),
+    # the "$(cat <<'X'" substitution is NOT in the grammar: shells disagree about where it ends
+    ("heredoc substitution is outside the grammar", f"git commit -m \"$(cat {H}\nfix: {D}\nEOF\n)\"", "deny", "deny-only"),
+    ("heredoc ended by a line EOF) inside the substitution (bash)",
+     f"git commit --allow-empty -m \"$(cat {H}\nEOF)\" ; {PRINT} ; : \"\nEOF\n)\"", "deny", "bypass"),
+    ("heredoc ended by a line EOF) inside gh pr create (bash)",
+     f"gh pr create --title t --body \"$(cat {H}\nEOF)\" ; {PRINT} ; : \"\nEOF\n)\"", "deny", "bypass"),
+    ("bash 3.2 ends the substitution at the first ) in the body",
+     f"git commit --allow-empty -m \"$(cat {H}\nx )\" ; {PRINT} ; : \"(\nEOF\n)\"", "deny", "bypass"),
+    ("commands after the cat heredoc terminator, inside the substitution",
+     f"git commit -m \"$(cat {H}\nhi\nEOF\n:; sh -c '{PRINT}'\n)\"", "deny", "bypass"),
+    ("double quote scan after a cat heredoc body", f"git commit -m \"$(cat {H}\nEOF\n: \"'\"; {PRINT}; : \"'\")\"", "deny", "bypass"),
+    # editor state set by an EARLIER command, and git's unique-prefix long options (coordinator review)
+    ("export GIT_EDITOR then --edi", f"export GIT_EDITOR=sh; git commit --allow-empty --edi -m '{PRINT}'", "deny", "bypass"),
+    ("export GIT_EDITOR then --ed", f"export GIT_EDITOR=sh; git commit --allow-empty --ed -m '{PRINT}'", "deny", "bypass"),
+    ("git config core.editor then --edi", f"git config core.editor sh; git commit --allow-empty --edi -m '{PRINT}'", "deny", "bypass"),
+    ("export VISUAL then --edi", f"export VISUAL=sh; git commit --allow-empty --edi -m '{PRINT}'", "deny", "bypass"),
+    ("export GIT_EDITOR, --edi, heredoc message", f"export GIT_EDITOR=sh; git commit --allow-empty --edi -F - {H}\n{PRINT}\nEOF", "deny", "bypass"),
+    ("export GIT_EDITOR, annotated tag --edi", f"export GIT_EDITOR=sh; git tag -a v9 --edi -m '{PRINT}'", "deny", "bypass"),
+    ("blank, then re-edit with -c HEAD", f"git commit --allow-empty -m '{PRINT}'; export GIT_EDITOR=sh; git commit -c HEAD", "deny", "bypass"),
+    ("blank, then re-edit with --reedit-message", f"git commit --allow-empty -m '{PRINT}'; export GIT_EDITOR=sh; git commit --reedit-message=HEAD", "deny", "bypass"),
+    ("blank, then re-edit with --fixup=amend:", f"git commit --allow-empty -m '{PRINT}'; export GIT_EDITOR=sh; git commit --fixup=amend:HEAD", "deny", "bypass"),
+    ("assignment-only command sets the editor", f"GIT_EDITOR=sh; export GIT_EDITOR; git commit --allow-empty --edi -m '{PRINT}'", "deny", "bypass"),
+    ("an alias in the text (bash does not expand it non-interactively)", f"alias git='sh -c'; git commit -m '{PRINT}'", "deny", "deny-only"),
+    ("commit with no message (an editor could open): positional text is not a message", f"git commit -a '{D} note'", "deny", "deny-only"),
     # reviewer-reproduced bypasses (#648): each must be denied
     ("after a quoted heredoc: sh -c", f"gh issue comment 5 --body-file - {H}\nhi\nEOF\nsh -c '{PRINT}'", "deny", "bypass"),
     ("after a quoted heredoc (git): sh -c", f"git commit -F - {H}\nhi\nEOF\nsh -c '{PRINT}'", "deny", "bypass"),
     ("after a quoted heredoc: split word", f"gh issue comment 5 --body-file - {H}\nhi\nEOF\nd'oppler' secrets get X --plain", "deny", "bypass"),
     ("after a quoted heredoc: plain command", f"gh issue comment 5 --body-file - {H}\nhi\nEOF\n{PRINT}", "deny", "bypass"),
-    ("commands after the cat heredoc terminator, inside the substitution",
-     f"git commit -m \"$(cat {H}\nhi\nEOF\n:; sh -c '{PRINT}'\n)\"", "deny", "bypass"),
-    ("a bare CR does not split a segment for the glob trigger (over-trigger, deliberate)", "echo $X\rsecrets", "deny", "deny-only"),
-    ("double quote scan after a cat heredoc body", f"git commit -m \"$(cat {H}\nEOF\n: \"'\"; {PRINT}; : \"'\")\"", "deny", "bypass"),
     ("escaped dollar then ANSI-C lookalike", f"git commit -m \\$'\\' 'a' ; {PRINT} ; : '\\'", "deny", "bypass"),
     ("dollar dollar ANSI-C lookalike", f"git commit -m $$'\\' 'a' ; {PRINT} ; : '\\'", "deny", "bypass"),
     ("bare CR as a separator (eval)", f"eval : \rgit commit \\; '{PRINT}'", "deny", "bypass"),
     ("bare CR as a separator (sh -c)", f"sh -c '$2' \rgit commit '{PRINT}'", "deny", "bypass"),
+    ("a bare CR does not split a segment for the glob trigger (over-trigger, deliberate)", "echo $X\rsecrets", "deny", "deny-only"),
     ("escaped >& after a commit", f"git commit -m x \\>& sh -c '{PRINT}'", "deny", "bypass"),
+    ("escaped >& then eval as a would-be positional of the commit", f"git commit -m x \\>& eval '{PRINT}'", "deny", "bypass"),
     ("escaped <& after a commit", f"git commit -m x \\<& sh -c '{PRINT}'", "deny", "bypass"),
     ("override prefix with an escaped >&", f"SASSYDOG_ALLOW_DOPPLER_PRINT=1 true \\>& {PRINT}", "deny", "bypass"),
     ("override prefix with a detached &<", f"SASSYDOG_ALLOW_DOPPLER_PRINT=1 true &<x {PRINT}", "deny", "bypass"),
+    ("override prefix with &> (a background job under dash)", f"SASSYDOG_ALLOW_DOPPLER_PRINT=1 {PRINT} &>/dev/null", "deny", "deny-only"),
     # earlier ones that must stay denied
     ("command substitution in a message", f"git commit -m $(sh -c '{PRINT}')", "deny", "bypass"),
+    ("process substitution with eval (no option to trip the allow list)", f"gh pr create --title t --body-file <(eval '{PRINT}')", "deny", "bypass"),
+    ("backtick with eval in a message", f"git commit -m `eval '{PRINT}'`", "deny", "bypass"),
+    ("a mention in a git add argument is not stripped (safe commands are shown raw)", f"git add '{D}.txt'", "deny", "deny-only"),
     ("backtick in a message", f"git commit -m `sh -c '{PRINT}'`", "deny", "bypass"),
     ("process substitution body-file", f"gh pr create --title t --body-file <(sh -c '{PRINT}')", "deny", "bypass"),
     ("cat heredoc piped to bash", f"cat {H} | bash\n{PRINT}\nEOF", "deny", "bypass"),
@@ -99,21 +131,26 @@ HEADS = [
     f"git commit -m '{D} note'",
     f'gh pr create --title t --body "{D} note"',
     f"gh issue comment 5 --body-file - {H}\n{D} note\nEOF",
-    f"git commit -m \"$(cat {H}\n{D} note\nEOF\n)\"",
+    f"git commit -F - {H}\n{D} note\nEOF",
+    f"git tag -a v1 -m '{D} note'",
 ]
 JOINERS = ["\n", "; ", " && ", " || ", " | ", " & ", "\n\n"]
 TAILS = [
     PRINT,
     f"sh -c '{PRINT}'",
-    f"d'oppler' secrets get X --plain",
+    "d'oppler' secrets get X --plain",
     f"\\{D} secrets get X --plain",
     f'bash -c "{PRINT}"',
     f"echo $({PRINT})",
     f"eval '{PRINT}'",
+    f"export GIT_EDITOR=sh; git commit --allow-empty --edi -m '{PRINT}'",
+    f"git config core.editor sh; git tag -a v2 --ed -m '{PRINT}'",
 ]
 MATRIX = [(f"matrix {n}", h + j + t) for n, (h, j, t) in enumerate(itertools.product(HEADS, JOINERS, TAILS))]
 
 # ---- driver -------------------------------------------------------------------------------------
+
+TIMEOUT = "timeout"
 
 
 def out(ok, text):
@@ -121,31 +158,49 @@ def out(ok, text):
     return ok
 
 
+GIT_SHIM = r'''#!/bin/sh
+# model of git's editor behaviour (see the driver docstring)
+cmd="$1"; [ "$#" -gt 0 ] && shift
+store="$HOME/.gitcfg"
+if [ "$cmd" = config ]; then echo "$1=$2" >> "$store"; exit 0; fi
+case "$cmd" in commit|tag) ;; *) cat 2>/dev/null; exit 0 ;; esac
+msg=0; edit=0; annotated=0
+for a in "$@"; do
+  case "$a" in
+    -m*|-F*|--message*|--file*|-C*|--reuse-message*) msg=1 ;;
+  esac
+  case "$a" in
+    -e|--ed|--edi|--edit|--edit=*|-[a-zA-Z]*e*|-c|-c*|--reedit-message*|--fixup=amend:*|--fixup=reword:*) edit=1 ;;
+    -a|-s|--annotate) annotated=1 ;;
+  esac
+done
+[ "$cmd" = tag ] && [ "$annotated" = 0 ] && [ "$edit" = 0 ] && msg=1
+[ "$msg" = 0 ] && edit=1
+printf '%s\n' "$@" >> "$HOME/lastmsg"
+cat 2>/dev/null | tee -a "$HOME/lastmsg"
+if [ "$edit" = 1 ]; then
+  ed="${GIT_EDITOR:-}"
+  [ -z "$ed" ] && [ -f "$store" ] && ed="$(sed -n 's/^core.editor=//p' "$store" | tail -n 1)"
+  [ -z "$ed" ] && ed="${VISUAL:-}"
+  [ -z "$ed" ] && ed="${EDITOR:-}"
+  [ -n "$ed" ] && sh -c "$ed \"\$@\"" sh "$HOME/lastmsg"
+fi
+exit 0
+'''
+GH_SHIM = '''#!/bin/sh
+for a in "$@"; do [ -f "$a" ] || [ -p "$a" ] && cat "$a"; done
+cat 2>/dev/null; exit 0
+'''
+
+
 def make_shims(scratch):
     bindir = os.path.join(scratch, "bin")
     os.makedirs(bindir)
     shims = {
         D: f'#!/bin/sh\necho "{MARKER}"\necho "{MARKER}" >&2\nexit 0\n',
-        # git runs GIT_EDITOR on the message when it has no -m/-F, or with -e/--edit, as real git
-        # does; it echoes stdin (what a pipe after it would carry).
-        "git": (
-            "#!/bin/sh\n"
-            'edit=1; for a in "$@"; do case "$a" in -m*|-F*|--message*|--file*) edit=0 ;; esac; done\n'
-            'for a in "$@"; do case "$a" in -e|--edit|-[a-zA-Z]*e*) edit=1 ;; esac; done\n'
-            'printf "%s\\n" "$@" > msgfile\n'
-            '[ -n "${GIT_EDITOR:-}" ] && [ "$edit" = 1 ] && sh -c "$GIT_EDITOR \\"\\$@\\"" sh msgfile\n'
-            "cat 2>/dev/null; exit 0\n"
-        ),
-        # gh echoes stdin and every readable file it is handed (a --body-file, a process
-        # substitution), standing for what it would post or print.
-        "gh": (
-            "#!/bin/sh\n"
-            'for a in "$@"; do [ -f "$a" ] || [ -p "$a" ] && cat "$a"; done\n'
-            "cat 2>/dev/null; exit 0\n"
-        ),
+        "git": GIT_SHIM,
+        "gh": GH_SHIM,
     }
-    with open(os.path.join(scratch, "x"), "w") as f:
-        f.write("")
     for name, body in shims.items():
         path = os.path.join(bindir, name)
         with open(path, "w") as f:
@@ -179,12 +234,17 @@ def hook_rc(hook, cmd):
 
 
 def run_shell(shell, bindir, scratch, cmd):
-    env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": scratch, "TMPDIR": scratch}
+    """True if the marker printed, False if not, TIMEOUT if the run did not finish."""
+    work = tempfile.mkdtemp(dir=scratch)
+    open(os.path.join(work, "x"), "w").close()
+    env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": work, "TMPDIR": work}
     try:
         p = subprocess.run([shell, "-c", cmd], capture_output=True, text=True, timeout=20,
-                           env=env, cwd=scratch, stdin=subprocess.DEVNULL, errors="replace")
+                           env=env, cwd=work, stdin=subprocess.DEVNULL, errors="replace")
     except subprocess.TimeoutExpired:
-        return False
+        return TIMEOUT
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     return MARKER in (p.stdout or "") + (p.stderr or "")
 
 
@@ -194,29 +254,37 @@ def main():
     shells = find_shells()
     names = [os.path.basename(s) for s in shells]
     print(f"  info - shells under test: {', '.join(shells) or 'none'}")
-    if not any(n == "zsh" for n in names):
-        print("  info - zsh NOT covered on this machine (not installed)")
+    for want in ("zsh", "dash"):
+        if want not in names:
+            print(f"  info - {want} NOT covered on this machine (not installed)")
+    fails = 0
+    if os.environ.get("CI") and "bash" not in names:
+        fails += not out(False, "CI is set and no bash is available to run the corpus under")
     if not shells:
         print("  info - no shell found: only the hook's expectation is checked")
-    fails = 0
     for label, cmd, want, kind in CORPUS:
         rc = hook_rc(hook, cmd)
         got = "allow" if rc == 0 else "deny" if rc == 2 else f"rc={rc}"
         fails += not out(got == want, f"corpus {want}: {label}" + ("" if got == want else f" (hook said {got})"))
         printed = {s: run_shell(s, bindir, scratch, cmd) for s in shells}
         if got == "allow":
-            leaked = [s for s, p in printed.items() if p]
-            fails += not out(not leaked, f"corpus allow prints nothing under any shell: {label}" + (f" (printed under {leaked})" if leaked else ""))
+            bad = [os.path.basename(s) for s, p in printed.items() if p is True]
+            slow = [os.path.basename(s) for s, p in printed.items() if p == TIMEOUT]
+            fails += not out(not bad and not slow, f"corpus allow prints nothing under any shell: {label}"
+                             + (f" (printed under {bad})" if bad else "") + (f" (timed out under {slow})" if slow else ""))
         if kind == "bypass" and shells:
-            fails += not out(any(printed.values()), f"corpus bypass really prints under a shell (the case has teeth): {label}")
+            fails += not out(any(p is True for p in printed.values()),
+                             f"corpus bypass really prints under a shell (the case has teeth): {label}")
     leaks, denied = 0, 0
     for label, cmd in MATRIX:
         rc = hook_rc(hook, cmd)
         if rc == 0:
             for s in shells:
-                if run_shell(s, bindir, scratch, cmd):
+                r = run_shell(s, bindir, scratch, cmd)
+                if r is not False:
                     leaks += 1
-                    out(False, f"{label}: hook allowed and {os.path.basename(s)} printed the marker: {cmd!r}")
+                    out(False, f"{label}: hook allowed and {os.path.basename(s)} "
+                        f"{'timed out' if r == TIMEOUT else 'printed the marker'}: {cmd!r}")
         else:
             denied += 1
     fails += leaks

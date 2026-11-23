@@ -89,16 +89,24 @@ Inert text (#647): before the trigger runs, `sanitize()` blanks the text a comma
 the word in it does not deny. It is ONE left-to-right tokenizer over a tiny allow-listed grammar and
 it fails closed: the whole input must tokenize as words (letters, digits, `_./:=,+@%-`),
 single-quoted strings, double-quoted strings with no `$`, backtick or backslash, the operators
-`; && || | & newline > >> < >& <& &> &>>`, at most one quoted-delimiter heredoc per owner line
-(`<<'X'` as the last thing on its line, body to an exact terminator line), and
-`"$(cat <<'X'` ... `X` newline `)"` as one whole double-quoted word. Per simple command a state says
-whether it is an owner (`git commit|tag`, `gh issue create|edit|comment|close|reopen`, `gh pr
+`; && || | & newline > >> < >& <&`, and at most one quoted-delimiter heredoc per owner line
+(`<<'X'` as the last thing on its line, body to an exact terminator line). EVERY simple command in
+the input must be an owner (`git commit|tag`, `gh issue create|edit|comment|close|reopen`, `gh pr
 create|edit|comment|close|reopen|review|merge`, `gh release create|edit`, after assignments from a
-closed list) and only an owner's own quoted strings and heredoc bodies are blanked. Every separator
-and the end of a heredoc reset the state to "start of a new command". Anything else (`$`, backtick,
-backslash, `#`, parentheses, a CR, `<<-`, `<<<`, `<(`, `>(`, an unterminated heredoc, a pipe after an
-owner, `-e`/`--edit`, an EDITOR/PAGER assignment, ...) makes sanitize() return the raw text, i.e.
-strip nothing, and the trigger then runs on all of it.
+closed list) or one of `git add`, `git status`, `cd`; an owner's options must be on an exact-spelling
+allow list (git accepts any unique prefix of a long option, so `--edi` is `--edit` and no prefix is
+listed; `-e`, `-c`, `-C`, `--amend`, `--fixup`, `--squash` are not listed) and a git owner must carry
+`-m`/`-F` (a commit with no message opens an editor). Only an owner's own quoted strings and heredoc
+bodies are blanked. Every separator and the end of a heredoc reset the state to "start of a new
+command". Anything else (`$`, backtick, backslash, `#`, parentheses, a CR, `<<-`, `<<<`, `<(`, `>(`,
+`"$(cat <<'X'` substitutions, an unterminated heredoc, a pipe after an owner, any other command in
+the input such as `export`, `git config`, `alias`, `eval`, an assignment alone or an assignment
+outside the closed list, ...) makes sanitize() return the raw text for the WHOLE input, i.e. strip
+nothing, and the trigger then runs on all of it. The `"$(cat <<'X'` form is not accepted: bash ends
+such a heredoc at a line `X)` and bash 3.2 at the first `)` in the body, so shells disagree about
+where the text ends; the plain `-F - <<'X'` / `--body-file - <<'X'` form is read identically by every
+shell. Under the override an `&>` is not a redirect (dash reads it as `&` then `>`); only `>&` and
+`<&` are.
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -141,8 +149,9 @@ DOPPLER_MSG = (
     "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
     "print secret values to the transcript. " + SAFE_FORMS + " Quoted text in the arguments of "
     "`git commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release "
-    "create|edit`, and the body of a quoted-delimiter heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes and those heredocs (no `$`, backtick, backslash, `#`, "
-    "parentheses, `-e`); any other text that mentions the word is denied. Deliberate "
+    "create|edit`, and the body of a quoted-delimiter `--body-file - <<'EOF'` / `-F - <<'EOF'` heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes, "
+    "`git add|status`, `cd` and those message commands with plain options (no `$(`, `$`, backtick, backslash, `#`, parentheses, `-e`/`--amend`, no `export` or `git config`); a message "
+    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. Deliberate "
     "override for one single command: put SASSYDOG_ALLOW_DOPPLER_PRINT=1 as the very first thing in the "
     "command (before any `cd ... &&`); the rest must be one simple command (redirects are fine; no `;`, "
     "`&&`, pipe, `$(`, backtick or heredoc), or the override is ignored."
@@ -278,26 +287,44 @@ def split_segments(s):
 # recognised, and an unrecognised character makes sanitize() return the raw text.
 WORD_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:=,+@%-")
 # Assignment prefixes that may precede an owner command. A closed list: an EDITOR, PAGER or
-# command-valued variable (GIT_EDITOR, GIT_SSH_COMMAND, ...) makes git/gh run the text.
+# command-valued variable (GIT_EDITOR, GIT_SSH_COMMAND, ...) makes git/gh run the text. Any other
+# assignment, and an assignment with no command after it, makes sanitize() return the raw text.
 OWNER_ASSIGN_RE = re.compile(
     r"(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE)|GH_REPO|GH_PROMPT_DISABLED|NO_COLOR)=[A-Za-z0-9_./:@+,%-]*\Z"
 )
-# Owners: the commands whose message arguments are text, never run by the command itself.
+# The ONLY commands that may appear in an input whose message text is blanked: an owner (a command
+# whose message arguments are text, never run by the command itself) and three that set no state
+# (`git add`, `git status`, `cd`). Any other simple command (`export`, `git config`, an assignment
+# alone, `alias`, `eval`, `sh`, ...) makes sanitize() return the raw text for the WHOLE input, so
+# editor state or an alias set in an earlier command cannot turn a blanked message into code.
 OWNER_NEXT = {
-    "git": {"commit": "args", "tag": "args"},
-    "gh": {"issue": "gh_verb_i", "pr": "gh_verb_p", "release": "gh_verb_r"},
-    "gh_verb_i": {v: "args" for v in ("create", "edit", "comment", "close", "reopen")},
-    "gh_verb_p": {v: "args" for v in ("create", "edit", "comment", "close", "reopen", "review", "merge")},
-    "gh_verb_r": {"create": "args", "edit": "args"},
+    "git": {"commit": "git_commit", "tag": "git_tag", "add": "safe", "status": "safe"},
+    "gh": {"issue": "gh_issue", "pr": "gh_pr", "release": "gh_release"},
+    "gh_issue": {v: "gh_args" for v in ("create", "edit", "comment", "close", "reopen")},
+    "gh_pr": {v: "gh_args" for v in ("create", "edit", "comment", "close", "reopen", "review", "merge")},
+    "gh_release": {"create": "gh_args", "edit": "gh_args"},
 }
-# git runs an editor on the message with -e/--edit (and gh may); never an owner then.
-EDIT_WORD_RE = re.compile(r"--edit(?:or)?(?:=|\Z)|-[A-Za-z]*e")
+ARGS = frozenset(("git_commit", "git_tag", "gh_args"))
+# Positive allow list of option spellings, exact (git accepts any unique prefix of a long option, so
+# `--edi` is `--edit`: a prefix is NOT listed, and neither is -e, -c, -C, --amend, --fixup, --squash).
+GIT_SHORT_RE = {"git_commit": re.compile(r"-[ansqv]*(?:[mF].*)?\Z"), "git_tag": re.compile(r"-[asf]*(?:[mF].*)?\Z")}
+GIT_LONG = {
+    "git_commit": frozenset(("--message", "--file", "--all", "--no-verify", "--signoff", "--no-edit",
+                             "--allow-empty", "--allow-empty-message", "--quiet", "--author", "--date",
+                             "--no-gpg-sign")),
+    "git_tag": frozenset(("--message", "--file", "--annotate", "--force")),
+}
+GH_SHORT = frozenset(("-t", "-b", "-F", "-R", "-l", "-a", "-m", "-B", "-H", "-d", "-r", "-n"))
+GH_LONG = frozenset(("--title", "--body", "--body-file", "--repo", "--label", "--assignee", "--milestone",
+                     "--base", "--head", "--draft", "--squash", "--merge", "--rebase", "--delete-branch",
+                     "--comment", "--notes", "--notes-file", "--subject", "--auto", "--approve",
+                     "--request-changes", "--reason", "--prerelease", "--latest", "--target"))
+GIT_MSG_RE = re.compile(r"-[a-z]*[mF]|--(?:message|file)(?:=|\Z)")
 # An operator token. `<<` is handled apart (heredoc); `<<<`, `<(`, `>(`, `>|`, `<>` are unknown.
-REDIR_RE = re.compile(r"&>>|&>|>>|>&|<&|>|<")
+# `&>` and `&>>` are deliberately absent: dash reads `&>f` as `&` then `>f`, bash as one redirect.
+REDIR_RE = re.compile(r">>|>&|<&|>|<")
 SEPARATORS = ("&&", "||", "|", ";", "&", "\n")
 HEREDOC_RE = re.compile(r"<<[ \t]*(['\"])([A-Za-z0-9_]+)\1\n")
-DQ_SUB_PREFIX = "$(cat <<"
-DQ_SUB_RE = re.compile(r"\$\(cat <<'([A-Za-z0-9_]+)'\n")
 
 
 def _heredoc_end(text, i, delim):
@@ -326,32 +353,14 @@ def _read_word(text, i):
         if c in WORD_CHARS:
             plain.append(c); raw.append(c); shown.append(c)
             i += 1
-        elif c == "'":
-            j = text.find("'", i + 1)
+        elif c in "'\"":
+            j = text.find(c, i + 1)
             if j < 0:
                 raise ValueError("unbalanced quote")
             body = text[i + 1:j]
-            plain.append(body); raw.append(text[i:j + 1]); shown.append("''")
-            quoted = True
-            i = j + 1
-        elif c == '"':
-            m = DQ_SUB_RE.match(text, i + 1)
-            if m:
-                # exactly "$(cat <<'X' <newline> body <newline> X <newline> )" and nothing else in the quotes
-                end = _heredoc_end(text, m.end(), m.group(1))
-                if end is None or text[end:end + 2] != ')"':
-                    raise ValueError("heredoc substitution not exactly closed")
-                plain.append("\x00"); raw.append(text[i:end + 2]); shown.append('""')
-                quoted = True
-                i = end + 2
-                continue
-            j = text.find('"', i + 1)
-            if j < 0:
-                raise ValueError("unbalanced quote")
-            body = text[i + 1:j]
-            if any(x in body for x in "$`\\"):
+            if c == '"' and any(x in body for x in "$`\\"):
                 raise ValueError("expansion or escape inside double quotes")
-            plain.append(body); raw.append(text[i:j + 1]); shown.append('""')
+            plain.append(body); raw.append(text[i:j + 1]); shown.append(c + c)
             quoted = True
             i = j + 1
         else:
@@ -359,20 +368,31 @@ def _read_word(text, i):
     return i, "".join(plain), "".join(raw), "".join(shown), quoted
 
 
+def _option_ok(owner, w):
+    if not w.startswith("-") or w == "-":
+        return True
+    name = w.split("=", 1)[0] if w.startswith("--") else w
+    if owner == "gh_args":
+        return name in GH_LONG or w in GH_SHORT
+    if w.startswith("--"):
+        return name in GIT_LONG[owner]
+    return GIT_SHORT_RE[owner].match(w) is not None
+
+
 def sanitize(text):
     """The text with the message text of git/gh message commands blanked, else the text itself.
 
     A single left-to-right pass over a tiny grammar, an ALLOW LIST: the input must tokenize
-    completely as words (letters, digits and `_./:=,+@%-`, single-quoted strings, double-quoted
-    strings with no `$`, backtick or backslash), the operators `; && || | & newline > >> < >& <& &> &>>`,
-    and at most one quoted-delimiter heredoc per owner line (`<<'X'` as the last thing on its
-    line, body to an exact terminator line), or `"$(cat <<'X'` ... `X` newline `)"` as one whole
-    double-quoted word. Anything else is NOT recognised, and an unrecognised input returns the
-    raw text unchanged, so the trigger runs on all of it. State is per simple command: `start`,
-    then the owner's own words (`git commit`, `gh issue|pr <verb>`, `gh release create|edit`),
-    then `args`, where quoted strings are blanked, or `other`, where nothing is. Every separator,
-    and the end of a heredoc, goes back to `start`, so the text after a terminator line is a
-    NEW command and is held to the same rules.
+    completely as words (letters, digits and `_./:=,+@%-`), single-quoted strings, double-quoted
+    strings with no `$`, backtick or backslash, the operators `; && || | & newline > >> < >& <&`,
+    and at most one quoted-delimiter heredoc per owner line (`<<'X'` as the last thing on its line,
+    body to an exact terminator line). Every simple command in the input must be an owner or one of
+    `git add`, `git status`, `cd`; an owner's options must be on the exact-spelling allow list and a
+    git owner must carry a message (`-m`/`-F`). Anything else is NOT recognised, and an unrecognised
+    input returns the raw text unchanged, so the trigger runs on all of it. State is per simple
+    command: `start`, then the owner's own words, then an args state where quoted strings are
+    blanked. Every separator, and the end of a heredoc, goes back to `start`, so the text after a
+    terminator line is a NEW command and is held to the same rules.
     """
     try:
         return _sanitize(text)
@@ -385,6 +405,18 @@ def _sanitize(text):
     out = []
     state = "start"
     target = False    # the next word is a redirect target, not part of the command
+    assigned = False  # the current command has had an assignment word
+    has_msg = False   # the current git owner carries -m / -F
+
+    def close():
+        # End of a simple command: it must be complete, then the state resets to a new command.
+        if state in ("git_commit", "git_tag") and not has_msg:
+            raise ValueError("no message: an editor could open")
+        if state not in ARGS and state not in ("start", "safe"):
+            raise ValueError("incomplete command")
+        if state == "start" and assigned:
+            raise ValueError("assignment with no command")
+
     while i < n:
         c = text[i]
         if c in " \t":
@@ -393,13 +425,14 @@ def _sanitize(text):
             continue
         if text.startswith("<<", i):
             m = HEREDOC_RE.match(text, i)
-            if not m or state != "args":
+            if not m or state not in ARGS:
                 raise ValueError("heredoc not allowed here")
             end = _heredoc_end(text, m.end(), m.group(2))
             if end is None:
                 raise ValueError("unterminated heredoc")
             out.append("<<''\n")
-            i, state, target = end, "start", False
+            close()
+            i, state, target, assigned, has_msg = end, "start", False, False, False
             continue
         m = REDIR_RE.match(text, i)
         if m:
@@ -411,34 +444,47 @@ def _sanitize(text):
             continue
         sep = next((s for s in SEPARATORS if text.startswith(s, i)), None)
         if sep:
-            if sep == "|" and state == "args":
+            if sep == "|" and state in ARGS:
                 raise ValueError("a message command's output is piped on")
+            close()
             out.append(sep)
             i += len(sep)
-            state, target = "start", False
+            state, target, assigned, has_msg = "start", False, False, False
             continue
         end, plain, raw, shown, quoted = _read_word(text, i)
         if end == i:
             raise ValueError("character not recognised")
         if target:
-            out.append(shown if state == "args" else raw)
+            out.append(shown if state in ARGS else raw)
             target = False
-        elif state == "args":
-            if EDIT_WORD_RE.match(plain) and not plain.startswith(("-m", "-F")):
-                raise ValueError("editor flag")
+        elif state in ARGS:
+            if not _option_ok(state, plain):
+                raise ValueError("option not on the allow list")
+            if state != "gh_args" and GIT_MSG_RE.match(plain):
+                has_msg = True
             out.append(shown)
         else:
             out.append(raw)
-            if quoted:
-                state = "other"
+            if state == "safe":
+                pass
+            elif quoted:
+                raise ValueError("quoted word where a command word belongs")
             elif state == "start":
                 if OWNER_ASSIGN_RE.match(plain):
-                    pass
+                    assigned = True
+                elif plain in ("git", "gh"):
+                    state = plain
+                elif plain == "cd":
+                    state = "safe"
                 else:
-                    state = plain if plain in ("git", "gh") else "other"
+                    raise ValueError("command not on the allow list")
             else:
-                state = OWNER_NEXT.get(state, {}).get(plain, "other")
+                nxt = OWNER_NEXT.get(state, {}).get(plain)
+                if nxt is None:
+                    raise ValueError("subcommand not on the allow list")
+                state = nxt
         i = end
+    close()
     return "".join(out)
 
 
@@ -476,8 +522,8 @@ def single_simple(s, redirects=False):
                 quote = c
             elif redirects and c in "<>" and nxt != "(" and not (c == "<" and nxt == "<"):
                 last_op = i
-            elif redirects and c == "&" and (last_op == i - 1 or nxt == ">"):
-                pass
+            elif redirects and c == "&" and last_op == i - 1:
+                pass  # `>&2`, `<&0`; a bare `&>` is NOT accepted: dash reads it as `&` then `>`
             elif c in ";&|<>()\n\r`" or (c == "$" and nxt == "("):
                 return False
         i += 1
