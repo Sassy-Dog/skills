@@ -13,7 +13,11 @@ network, no real repo, everything inside a fresh scratch directory per run), and
     run of it timed out.
 
 A corpus entry of kind "bypass" must also PRINT under at least one shell, otherwise it proves
-nothing (a bypass that no shell executes is not a bypass). Shells tried: every one of bash,
+nothing (a bypass that no shell executes is not a bypass). A case listed in NEEDS (bash 3.2's
+early end of a heredoc substitution) is checked only against a matching shell and its teeth check is
+SKIPPED, with a visible info line naming the case, where none is installed; the hook-side deny always
+runs. self_test() proves the skip logic on synthetic inputs. SECRET_GUARD_DIFF_HIDE="bash<4" hides
+such shells, to simulate a runner that has only bash 5 and dash. Shells tried: every one of bash,
 /bin/bash, zsh, dash found on this machine, de-duplicated by real path and version; the shells
 that ran are printed, a missing zsh is reported. With CI set, at least bash must be present.
 Output: one `  ok   - ` or `  FAIL - ` line per check.
@@ -30,6 +34,7 @@ It is a model of those behaviours, not real git.
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -126,6 +131,14 @@ CORPUS = [
     ("unbalanced quote", f'git commit -m "{PRINT}', "deny", "deny-only"),
 ]
 
+# Corpus cases whose teeth check needs a particular shell, keyed by label: "<name><<major>" means a shell
+# called <name> whose major version is below <major>. The hook-side assertion always runs; only the
+# "really prints under a shell" check is skipped, visibly, where no such shell is installed. The one
+# entry: bash 3.2 (macOS /bin/bash) ends a heredoc substitution at the first `)` in the body; bash 4+
+# does not, so a CI runner with bash 5 and dash cannot reproduce that leak. The case stays as the
+# regression pin for it.
+NEEDS = {"bash 3.2 ends the substitution at the first ) in the body": "bash<4"}
+
 # ---- generated invariant-only matrix: head x joiner x tail ------------------------------------
 HEADS = [
     f"git commit -m '{D} note'",
@@ -209,8 +222,31 @@ def make_shims(scratch):
     return bindir
 
 
+MAJORS = {}  # shell path -> major version, or None when the shell has no --version
+
+
+def matches(path, need):
+    """need is "<name><<major>": the shell is called <name> and its major version is below <major>."""
+    name, _, limit = need.partition("<")
+    major = MAJORS.get(path)
+    return os.path.basename(path) == name and major is not None and major < int(limit)
+
+
+def teeth(printed, need):
+    """"ok" | "fail" | "skip" for the check that a bypass case really prints under a shell.
+
+    A case with no requirement needs ANY shell to print. A case with a requirement is checked only
+    against shells that match it, and is skipped only when none is present.
+    """
+    pool = [sh for sh in printed if need is None or matches(sh, need)]
+    if not pool:
+        return "skip"
+    return "ok" if any(printed[sh] is True for sh in pool) else "fail"
+
+
 def find_shells():
     found, seen = [], set()
+    hide = os.environ.get("SECRET_GUARD_DIFF_HIDE")  # test hook: pretend shells matching a need are absent
     for cand in ("bash", "/bin/bash", "zsh", "dash"):
         path = shutil.which(cand)
         if not path:
@@ -219,12 +255,38 @@ def find_shells():
             ver = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout.splitlines()[:1]
         except (OSError, subprocess.SubprocessError):
             ver = []
+        m = re.search(r"version (\d+)", ver[0]) if ver else None
+        MAJORS[path] = int(m.group(1)) if m else None
         key = (os.path.realpath(path), tuple(ver))
-        if key in seen:
+        if key in seen or (hide and matches(path, hide)):
             continue
         seen.add(key)
         found.append(path)
     return found
+
+
+def self_test():
+    """The skip logic, on synthetic inputs: it must skip only a case whose required shell is absent."""
+    fails = 0
+    fake = {"/fake/bash": 3, "/fake/dash": None}
+    saved = dict(MAJORS)
+    MAJORS.update(fake)
+    try:
+        none_print = {"/fake/bash": False, "/fake/dash": False}
+        fails += not out(teeth(none_print, "bash<0") == "skip",
+                         "self-test: a case requiring a shell that is not present is SKIPPED, not failed")
+        fails += not out(teeth(none_print, None) == "fail",
+                         "self-test: a case with no shell requirement that prints nowhere still FAILS")
+        fails += not out(teeth(none_print, "bash<4") == "fail",
+                         "self-test: a required shell that is present and does not print FAILS (skip only when absent)")
+        fails += not out(teeth({"/fake/bash": True, "/fake/dash": False}, "bash<4") == "ok",
+                         "self-test: a required shell that is present and prints passes")
+        fails += not out(teeth({"/fake/dash": True}, "bash<4") == "skip",
+                         "self-test: dash printing does not satisfy a bash<4 requirement; with no bash<4 it is skipped")
+    finally:
+        MAJORS.clear()
+        MAJORS.update(saved)
+    return fails
 
 
 def hook_rc(hook, cmd):
@@ -257,7 +319,9 @@ def main():
     for want in ("zsh", "dash"):
         if want not in names:
             print(f"  info - {want} NOT covered on this machine (not installed)")
-    fails = 0
+    fails = self_test()
+    if os.environ.get("SECRET_GUARD_DIFF_HIDE"):
+        print(f"  info - test hook: shells matching {os.environ['SECRET_GUARD_DIFF_HIDE']} are hidden")
     if os.environ.get("CI") and "bash" not in names:
         fails += not out(False, "CI is set and no bash is available to run the corpus under")
     if not shells:
@@ -273,8 +337,13 @@ def main():
             fails += not out(not bad and not slow, f"corpus allow prints nothing under any shell: {label}"
                              + (f" (printed under {bad})" if bad else "") + (f" (timed out under {slow})" if slow else ""))
         if kind == "bypass" and shells:
-            fails += not out(any(p is True for p in printed.values()),
-                             f"corpus bypass really prints under a shell (the case has teeth): {label}")
+            verdict = teeth(printed, NEEDS.get(label))
+            if verdict == "skip":
+                print(f"  info - SKIPPED the teeth check of '{label}': it needs a shell matching "
+                      f"{NEEDS.get(label)} and none is installed here (the hook-side deny still ran)")
+            else:
+                fails += not out(verdict == "ok",
+                                 f"corpus bypass really prints under a shell (the case has teeth): {label}")
     leaks, denied = 0, 0
     for label, cmd in MATRIX:
         rc = hook_rc(hook, cmd)

@@ -133,10 +133,18 @@
 #     the hook ALLOWS a command, the marker did not reach stdout or stderr under any shell, and no
 #     shell run of it timed out (a timeout on an allowed command is a FAIL); each "bypass" case also
 #     PRINTS under at least one shell (so the case has teeth); the driver's exit status and a minimum
-#     check count are asserted (a crashed driver cannot pass). With CI set the driver requires bash; it
-#     asserts nothing about which other shells exist, so a CI runner may cover fewer shells than the
-#     ones listed above (bash 5.3, /bin/bash 3.2, zsh and dash all ran on the machine that wrote this):
-#     the `info` line of every run names the shells it covered.
+#     check count are asserted (a crashed driver cannot pass). With CI set the driver requires bash.
+#     ONE bypass case needs a particular shell: "bash 3.2 ends the substitution at the first ) in the
+#     body" prints only under bash older than 4 (macOS /bin/bash 3.2). The hook-side deny of that case
+#     always runs; its "really prints" check runs only when a bash older than 4 is installed, and is
+#     SKIPPED otherwise with a visible `info - SKIPPED the teeth check of ...` line. So a macOS run
+#     covers it and CI (ubuntu: bash 5.x and dash) does NOT: there it is pinned only by the hook-side
+#     deny. Proved on synthetic inputs (the driver's self-test: a required shell that is absent skips,
+#     a case with no requirement that prints nowhere still fails, a required shell that is present and
+#     silent fails) and by a CI-shaped second run (SECRET_GUARD_DIFF_HIDE=bash<4 and CI=1 hide the
+#     old bash) that must complete green and print the SKIPPED line. Mutant: the skip removed (a
+#     missing required shell counts as failing) fails 5 checks (two self-tests, the driver's
+#     completion check in both runs, the CI-shaped run and the SKIPPED-line check). Which shells a run covered is on its `info` line.
 #     NOT covered: shells not installed (fish, csh, pwsh and Windows shells never), interactive-only
 #     behaviour (a pager runs only on a tty; history expansion), an alias or function defined OUTSIDE
 #     the command text (aliases written IN the text are denied raw, pinned as deny-only because
@@ -894,6 +902,22 @@ if [ "$diff_rc" -eq 0 ] && [ "$diff_ok" -ge 80 ]; then
     ok "the differential driver ran to completion ($diff_ok checks)"
 else
     bad "the differential driver ran to completion (rc=$diff_rc, ok lines=$diff_ok)"
+fi
+
+# CI-shaped run: the same driver with every bash older than 4 hidden and CI set, as on a runner that
+# has bash 5 and dash only. It must complete, and it must say, visibly, which teeth check it skipped.
+DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
+SECRET_GUARD_DIFF_HIDE='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
+diff2_rc=$?
+if [ "$diff2_rc" -eq 0 ] && ! grep -q '^  FAIL - ' "$WORK/diff2.out" && [ "$(grep -c '^  ok   - ' "$WORK/diff2.out")" -ge 80 ]; then
+    ok "the driver completes with no bash older than 4 present (the CI shape)"
+else
+    bad "the driver completes with no bash older than 4 present (rc=$diff2_rc; $(grep -m3 '^  FAIL - ' "$WORK/diff2.out" | tr '\n' '|'))"
+fi
+if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff2.out"; then
+    ok "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+else
+    bad "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
 fi
 
 echo "== unclassifiable input fails open, loudly =="
