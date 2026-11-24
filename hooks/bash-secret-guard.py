@@ -6,8 +6,8 @@ FAILS OPEN there and says so on stderr (Claude Code shows stderr of any non-0/2 
 non-blocking error). It never prints to stdout.
 
 Two rules, both over the raw command text only (a PreToolUse hook cannot see output). There
-is no general shell parser (the one tokenizer, sanitize(), recognises a tiny allow-listed grammar
-and gives up on anything else): every shell-parsing classifier tried here lost to a new spelling,
+is no general shell parser (the two tokenizers, sanitize() and _inert_view(), each recognise a tiny
+allow-listed grammar and give up on anything else): every shell-parsing classifier tried here lost to a new spelling,
 so the Doppler rule is a WHOLE-COMMAND ALLOW LIST matched on the raw string, which cannot
 disagree with itself about quoting.
 
@@ -108,6 +108,22 @@ where the text ends; the plain `-F - <<'X'` / `--body-file - <<'X'` form is read
 shell. Under the override an `&>` is not a redirect (dash reads it as `&` then `>`); only `>&` and
 `<&` are.
 
+Inert data for the expansion triggers (#649): the second trigger above only GUESSES at a name the text
+does not spell, so it is skipped (a spelled name is not) when the whole input is exactly ONE simple
+command that the allow-list tokenizer _inert_view() recognises completely, and that command is a plain
+`echo` of literals, quoted strings and `$NAME`/`${NAME}` (`echo '*' run`, `echo "$HOME" let me know`). No
+pipe, redirect, fifo or earlier `exec >` can carry an echo's output to a shell when the echo is the whole
+input, so a second command or any operator keeps the old reading; so does anything the tokenizer does
+not recognise (an unbalanced quote, `$(`, a backtick, a backslash, a comment, a glob, `$'..'`, `{fd}>`,
+`<<`, a CR). It never falls back to a weaker reading. Only echo is exempt: `printf -v 'a[$(...)]'`
+runs the subscript, and an interpreter script (python) can build a command at run time from allowed
+pieces, so neither is inert and both keep the old reading. Still denied, named in the README: an echo
+that is not the whole input, any heredoc whose body holds an expansion character beside
+`run`/`me`/`secrets`/`configure` unless the sanitizer blanks it (`git commit -F - <<'EOF'`,
+`gh pr create --body-file - <<'EOF'`; the `-m "$(cat <<'EOF'...)"` form and a python heredoc are not).
+Also a known limit, older than #649: a subcommand word glued to a closing paren or backtick is not a
+whole word (`echo "$($D secrets)" x`), so the expansion rule does not see it.
+
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
@@ -190,25 +206,39 @@ def decode_escapes(s):
     return s
 
 
-def triggered(text):
+def _views(text):
+    """(plain, decoded) readings of a command text: joined lines, NFKC, case-folded, ANSI-C decoded."""
     # A backslash-newline is a line continuation: the shell joins the halves of a word.
     text = LINE_CONTINUATION_RE.sub("", text)
     # Decode BEFORE folding case: `\U` and `\u` are different escapes (eight digits and four).
     plain = unicodedata.normalize("NFKC", text)
     decoded = unicodedata.normalize("NFKC", decode_escapes(plain)).lower()
-    plain = plain.lower()
+    return plain.lower(), decoded
+
+
+def triggered(text):
+    plain, decoded = _views(text)
+    # The inert view is decided on the RAW text, before the line-continuation join: a backslash-newline
+    # inside a quoted-delimiter heredoc body is literal there, and joining it could move the terminator.
+    inert = _inert_view(text)
+    iplain, idecoded = (plain, decoded) if inert == text else _views(inert)
     # Both readings: a backslash before `e` or `c` is a plain letter outside `$'...'`, and the
     # decoder would turn it into a control character and drop the letter.
-    return _mentions(plain) or (decoded != plain and _mentions(decoded))
+    return _mentions(plain, iplain) or (decoded != plain and _mentions(decoded, idecoded))
 
 
-def _mentions(t):
+def _mentions(t, ti):
+    """`t` is the whole text; `ti` is the same text with inert data blanked (see _inert_view).
+
+    The rule that the name is SPELLED runs on all of `t`; the expansion rules, which only guess at a
+    name the text does not spell, run on `ti`.
+    """
     if "doppler" in t:
         return True
     if "doppler" in re.sub(r"[^a-z0-9\s]", "", t):
         return True
-    if EXPANSION_RE.search(t):
-        n = QUOTES_RE.sub("", t)
+    if EXPANSION_RE.search(ti):
+        n = QUOTES_RE.sub("", ti)
         w = lambda *names: all(re.search(r"\b" + x + r"\b", n) for x in names)  # noqa: E731
         if (w("secrets") and any(re.search(r"\b" + x + r"\b", n) for x in ("get", "download", "substitute"))) \
                 or (w("configure") and (w("get") or "--all" in n)) \
@@ -217,7 +247,7 @@ def _mentions(t):
         # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`):
         # an expansion character, then later in the same simple command a Doppler subcommand as a
         # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
-        for seg in split_segments(t):
+        for seg in split_segments(ti):
             seg = QUOTES_RE.sub("", seg)
             if _command_word_expands(seg):
                 return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
@@ -486,6 +516,107 @@ def _sanitize(text):
         i = end
     close()
     return "".join(out)
+
+
+# ---- inert data for the expansion rules (#649): a whole-input tokenizer that fails closed ----------
+#
+# The expansion rules guess at a Doppler name the text does not spell, so they over-trigger on prose
+# (`echo "$HOME" let me know`). _inert_view() blanks the arguments of exactly ONE shape, and only when
+# the WHOLE input is that one simple command: `echo` as the literal first word, with arguments that are
+# literals, quoted strings, or simple `$NAME` / `${NAME}` expansions, and nothing else: no redirect, pipe,
+# separator, heredoc, comment, glob, `$(`, backtick.
+# Why the whole input: a command's output, or a redirect set up by an earlier command
+# (`mkfifo p; sh <p & exec >p; echo '*' secrets`), is read again by a shell, which expands the glob and
+# runs the CLI. With ONE command, no operator and no redirect, nothing can carry the text anywhere.
+# Why only echo: `printf -v NAME` evaluates an array subscript in NAME (`a[$(...)]`) and runs it, and a
+# script handed to an interpreter (python) can build a command at run time from allowed pieces, so
+# neither is inert; echo only prints.
+# Why a tokenizer: the shape is decided on the exact words the shell sees, never on a regex over text.
+# It is the same allow-list stance as sanitize(): a character or construct it does not positively
+# recognise (an unbalanced quote, `$(`, a backslash, `{fd}>`, `<<`, `#`, a CR, `$'..'`, a glob, any
+# operator) raises, and the caller then keeps the whole text, i.e. the old, stricter reading.
+
+
+class _Unrecognised(Exception):
+    pass
+
+
+_VAR_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+DATA_COMMANDS = frozenset(("echo",))
+
+
+def _read_token(text, i):
+    """The word at text[i]: (end, raw text). Raises _Unrecognised on anything not allow-listed."""
+    n, start = len(text), i
+    while i < n:
+        c = text[i]
+        if c in WORD_CHARS:
+            i += 1
+        elif c == "'":
+            j = text.find("'", i + 1)
+            if j < 0:
+                raise _Unrecognised("unbalanced single quote")
+            i = j + 1
+        elif c == '"':
+            i += 1
+            while True:
+                if i >= n:
+                    raise _Unrecognised("unbalanced double quote")
+                d = text[i]
+                if d == '"':
+                    break
+                if d == "$":
+                    m = _VAR_RE.match(text, i)
+                    if not m:
+                        raise _Unrecognised("expansion other than $NAME or ${NAME}")
+                    i = m.end()
+                    continue
+                if d in "`\\":
+                    raise _Unrecognised("backtick or backslash in double quotes")
+                i += 1
+            i += 1
+        elif c == "$":
+            m = _VAR_RE.match(text, i)
+            if not m:
+                raise _Unrecognised("expansion other than $NAME or ${NAME}")
+            i = m.end()
+        else:
+            break
+    if i == start:
+        raise _Unrecognised("character not recognised")
+    return i, text[start:i]
+
+
+def _tokenize_one(text):
+    """The raw words of ONE simple command that is the whole input.
+
+    Only blanks and newlines may follow the last word. Any operator, redirect, heredoc, comment or
+    second command raises.
+    """
+    n, i, words = len(text), 0, []
+    while i < n:
+        c = text[i]
+        if c in " \t":
+            i += 1
+        elif c == "\n":
+            if text[i:].strip(" \t\n"):
+                raise _Unrecognised("a second command")
+            return words
+        else:
+            i, raw = _read_token(text, i)
+            words.append(raw)
+    return words
+
+
+def _inert_view(text):
+    """`text` with the one command it holds reduced to its command word when it is an echo, else `text`."""
+    try:
+        words = _tokenize_one(text)
+    except _Unrecognised:
+        return text
+    if words and words[0] in DATA_COMMANDS:
+        return words[0]
+    return text
 
 
 # ---- single simple command, quote-aware ------------------------------------------------------

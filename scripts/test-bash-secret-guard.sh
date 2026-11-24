@@ -186,6 +186,59 @@
 #     one of them is subsumed by the allow list: after it, the only commands that can be reached are
 #     owners and `git add|status`, `cd`, none of which executes a word, a pipe's input or stdin text,
 #     and the closed assignment names carry no executable value, so the extra guard only adds depth.
+# #649 (section "#649: prose after an expansion character ...", the corpus rows added to
+# scripts/fixtures/secret-guard-differential.py, and the two "limit (pre-existing)" allows): the
+# expansion triggers GUESS at a name the text does not spell and so denied prose (`echo "$HOME" let me
+# know`). The loosening is one allow-list tokenizer, `_inert_view`, that fails closed, and it exempts ONE
+# shape, only when the WHOLE input is that one simple command: `echo` as the literal first word with plain
+# words, quoted strings and `$NAME`/`${NAME}`. Not exempt, each pinned as a must-deny AND a differential
+# "bypass" row that prints under a real shell: `printf` (`printf -v 'a[$(..)]' x` runs the subscript under
+# bash 5.3 and zsh; seven spellings, including a quoted or split `-v`) and a python heredoc (three routes
+# that build `os.system` from allowed modules at run time: operator.attrgetter on typing, get_type_hints
+# evaluating an annotation, string.Formatter().get_field; so the plain python script with `{name:18} me`
+# is denied again, pinned as a deny-only row). The blocked attempt (PR 650) tried to keep splitting words
+# and lost four ways; each is a committed must-deny AND a differential "bypass" row run under bash,
+# /bin/bash 3.2, zsh and dash: (1) an unbalanced quote later in the segment, an apostrophe in a trailing
+# comment, `\$'..'` and `$$'..'` (`env "$D" -p 'a b' secrets # don't`); (2) one word read as two (`$(...)`,
+# `${P:--p app}`, a here-string carrying arguments, `{fd}>`, a variable holding an option); (3) a glob
+# literal re-read by something not on a shell list (sh, bash, env $SHELL, awk system(), perl system(), a
+# dot-source of stdin, write-then-source, write-then-sh, a fifo read by a shell; csh, tcsh, parallel, zsh,
+# dash and python3 -c are hook-side denies only: not installed or not usable everywhere, so no teeth are
+# required of them); (4) a POSIX class that is not the first bracket member (`[x[:alpha:]]oppler
+# projects`, `do[![:digit:]]pler projects`; must-deny gate cases only). The "@glob" rows `cd` into a
+# directory holding copies of the fake CLI. Asserted beyond those: every operator, redirect, fifo, second
+# command, wrapper, assignment, quoted or escaped command word, `$(`, backtick, `$@`, `${X:-..}`,
+# ANSI-C word, unquoted glob, comment, CR, heredoc, unbalanced quote and the CLI's name spelled in an
+# argument defeats the echo exemption; the four acceptance cases and the issue's own deny cases
+# (`${X}pler secrets get`, `dop*ler me`, `"$D" run`) are pinned. How acceptance item 2 (a heredoc commit
+# message or script with backticks or `{` plus run/me) is met: ONLY through `git commit -F - <<'EOF'` and
+# `gh pr create --body-file - <<'EOF'`, which the #647 sanitizer already allowed and which are pinned here
+# and in the differential; the `-m "$(cat <<'EOF'..)"` form and python heredocs stay denied. NAMED false
+# denies, pinned as denies: `echo '*' run; echo hi`, `cd x && echo ...`, `cat <<'EOF'`, any python
+# heredoc. Two older holes found on the way are pinned as ALLOWS in the KNOWN LIMIT section: a
+# subcommand word glued to `)` or a backtick (not fixed here).
+# MUTANTS of #649, in hooks/bash-secret-guard.py, ONE replacement each, run on parallel scratch copies of
+# the tree (a git-initialised copy, so the sweep works), failing-case count, after an unmutated baseline
+# of 0 with the summary line required. The replaced line, then the count:
+#   `_tokenize_one`: the two lines `if text[i:].strip(" \t\n"):` / `raise _Unrecognised("a second
+#   command")` deleted: 1; `if c in " \t":` -> `if c in " \t\r":` (a CR is blank): 5;
+#   `_read_token`: `if d in "`\\":` -> `if d in "`":` (a backslash accepted in double quotes): 1;
+#   -> `if d in "\\":` (a backtick accepted): 6; the double-quote `$` arm (`m = _VAR_RE.match(text, i)`,
+#   `if not m: raise`, `i = m.end()`, `continue`) -> `i += 1` + `continue`: 8; the unquoted `$` arm (the
+#   same lines up to `i = m.end()`) -> `i += 1`: 2; the unquoted `if not m: raise` -> `i = m.end() if m
+#   else i + 1`: 1; the raise on an unbalanced single quote -> `j = n - 1`: 1; the raise on an unbalanced
+#   double quote -> `break`: 1; `if c in WORD_CHARS:` -> `if c in WORD_CHARS or c == "<":`: 2, -> `or c in
+#   ";|&>":`: 46; `_VAR_RE`'s `\{[A-Za-z_][A-Za-z0-9_]*\}` -> `\{[^}]*\}|\(` (a `$(` read as a
+#   variable): 7; `DATA_COMMANDS = frozenset(("echo",))` plus `"eval"`: 2, plus `"sh"`: 2, plus
+#   `"printf"`: 25; `triggered`: `iplain, idecoded = (plain, decoded) if inert == text else
+#   _views(inert)` -> `iplain, idecoded = plain, decoded` (exemption never applied): 14; `_mentions`: the
+#   two spelled-name tests (`if "doppler" in t:` and the `re.sub` one) read `ti` instead of `t`: 4.
+#   `triggered`: `inert = _inert_view(text)` -> `inert = _inert_view(LINE_CONTINUATION_RE.sub("", text))`
+#   (the exemption decided on the line-joined text): 8, the two `echo x\<CR><LF>...` gate rows and their
+#   differential rows; a backslash, CR, LF is not a continuation, so the joined text is one echo while the
+#   shell runs a second command. Every mutant above is killed; none is left equivalent.
+# Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
+# checks is stated because nothing re-derives it.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -1364,6 +1417,147 @@ allow "run wrapping sh -c with a single-quoted test" "doppler run -p P -c C -- s
 deny "run wrapping a command piped onward" 'doppler run -p P -c C -- test -n x | grep a'
 deny "run wrapping a command redirected" 'doppler run -p P -c C -- test -n x > out'
 
+echo "== #649: prose after an expansion character is data only as the whole input of one echo =="
+# Allowed: the whole input is ONE simple command that only prints (echo). Nothing else is blanked, so each deny below is a
+# command the old rule denied and the new rule must still deny.
+allow "a single-quoted glob literal, then run" "echo '*' run"
+allow "a single-quoted glob literal, then me" "echo '?' me"
+allow "a quoted variable, then prose with me" 'echo "$HOME" let me know'
+allow "a quoted variable, then prose with run" 'echo "$X" and then run the tests'
+allow "an unquoted variable, then run" 'echo $HOME run the tests'
+allow "a braced variable, then me" 'echo ${HOME} me'
+allow "echo with an option and secrets as prose" 'echo -n "$HOME" and the secrets of success'
+allow "a trailing newline after the one command" $'echo \'*\' run\n'
+allow "git commit -F heredoc with backticks and run" $'git commit -F - <<\'EOF\'\nfix: `x` a run that never starts, tell me\nEOF'
+allow "gh pr create body-file heredoc with bold and run" $'gh pr create --title t --body-file - <<\'EOF\'\n**Summary** let me know, run it\nEOF'
+# the cases the rule exists for stay denied
+deny "name expansion prefix, secrets get" '${X}pler secrets get'
+deny "name expansion prefix, secrets" '${X}pler secrets'
+deny "name glob, me" 'dop*ler me'
+deny "quoted name expansion, run" '"$D" run'
+deny "name expansion, me" '$D me'
+deny "name glob after a path, run" '/opt/homebrew/bin/dop?ler run -- env'
+# the four classes the blocked attempt reopened (each prints under bash, zsh and dash in the differential)
+deny "class 1: quoted option value with a blank, apostrophe in a trailing comment" $'env "$D" -p \'a b\' secrets # don\'t'
+deny "class 1: quoted redirect target with a blank, apostrophe in a comment" $'env "$D" 2>\'a b\' secrets # don\'t'
+deny "class 1: nohup, quoted option value, apostrophe in a comment" $'nohup "$D" --config-dir \'/tmp/a b\' secrets # it\'s fine'
+deny "class 1: escaped dollar before a quote that looks ANSI-C" $'env "$D" -p \\$\'a b\\\' secrets #\''
+deny "class 1: doubled dollar before a quote that looks ANSI-C" $'env "$D" -p $$\'a b\' secrets'
+deny "class 2: command substitution carrying an option" 'env "$D" -p $(echo app) secrets'
+deny "class 2: parameter default carrying an option" 'env "$D" ${P:--p app} secrets'
+deny "class 2: xargs with a here-string carrying the arguments" 'xargs "$D" <<< "-p app secrets"'
+deny "class 2: a {fd} redirect between the name and the subcommand" 'env "$D" {fd}> /dev/null secrets'
+deny "class 2: a variable that holds an option, word-split" 'F=-p; env "$D" $F app secrets'
+deny "class 3: glob literal piped to sh" "echo '*' secrets | sh"
+deny "class 3: glob literal piped to bash" "echo '*' run | bash"
+deny "class 3: glob literal piped to csh" "echo '*' secrets | csh"
+deny "class 3: glob literal piped to tcsh" "echo '*' secrets | tcsh"
+deny "class 3: glob literal piped to awk system" "echo '*' secrets | awk '{system(\$0)}'"
+deny "class 3: glob literal piped to python3 -c" "echo '*' secrets | python3 -c 'import os,sys;os.system(sys.stdin.read())'"
+deny "class 3: glob literal piped to perl" "echo '*' secrets | perl -e 'system(<STDIN>)'"
+deny "class 3: glob literal piped to parallel" "echo '*' secrets | parallel"
+deny "class 3: glob literal piped to env \$SHELL" "echo '*' secrets | env \$SHELL"
+deny "class 3: glob literal piped to a dot-source of stdin" "echo '*' secrets | . /dev/stdin"
+deny "class 3: glob literal written to a file, then sourced" "echo '*' secrets > f; . ./f"
+deny "class 4: a POSIX class that is not the first bracket member" '[x[:alpha:]]oppler projects'
+deny "class 4: a negated POSIX class in the middle of the name" 'do[![:digit:]]pler projects'
+# echo only when it is the whole input: every operator, redirect and second command is a deny
+deny "echo, a pipe to a consumer" "echo '*' run | cat"
+deny "echo, a pipe to a consumer of the stderr too" "echo '*' run |& cat"
+deny "echo, a redirect to a file" "echo '*' secrets > f"
+deny "echo, an append redirect" "echo '*' secrets >> f"
+deny "echo, a stderr redirect" "echo '*' secrets 2>&1"
+deny "echo, a dup redirect" "echo '*' secrets >&2"
+deny "echo, a stdin redirect" "echo '*' run < f"
+deny "echo, a here-string" "echo '*' run <<< x"
+deny "echo, a heredoc" $'echo \'*\' run <<\'X\'\nbody\nX'
+deny "echo, a {fd} redirect" "echo '*' run {fd}> f"
+deny "echo, backgrounded" "echo '*' run &"
+deny "echo, then a second command (named false deny: use the override)" "echo '*' run; echo hi"
+deny "echo, then a second command after &&" "echo '*' run && true"
+deny "echo, then a second command after ||" "echo '*' run || true"
+deny "echo, then a second command on a new line" $'echo \'*\' run\ntrue'
+deny "echo, preceded by a command that redirects stdout into a fifo read by a shell" "mkfifo p; sh <p & exec >p; echo '*' secrets"
+deny "echo, preceded by a redirect of the shell's own stdout" "exec >p; echo '*' secrets"
+deny "echo, preceded by a cd" "cd /tmp && echo '*' run"
+deny "echo, in a brace group" "{ echo '*' run; }"
+deny "echo, in a subshell" "( echo '*' run )"
+deny "echo, with a command substitution argument" "echo '*' \$(echo x) run"
+deny "echo, with a backtick argument" 'echo "*" `echo x` run'
+deny "echo, with a command substitution inside double quotes" 'echo "$(printf x)" run'
+deny "echo, with a backtick inside double quotes" 'echo "`printf x`" run'
+deny "echo, with a backtick inside double quotes that runs the name, then secrets" 'echo "`$D`" secrets'
+deny "echo, with a command substitution inside double quotes that runs the name, then secrets" 'echo "$($D)" secrets'
+deny "echo, with an escaped dollar inside double quotes (a backslash is not recognised)" 'echo "\$HOME" run'
+deny "echo, with a comment" "echo '*' run # it's"
+deny "echo, with a backslash" "echo '*' run \\; sh"
+deny "echo, with an ANSI-C word" "echo \$'a b' run"
+deny "echo, with an unquoted glob word" "echo * run"
+deny "echo, with \$@ (not a simple name)" 'echo "$@" run'
+deny "echo, with a parameter-default expansion" 'echo "${X:-run}" me'
+deny "echo, with an escaped quote in double quotes" 'echo "a \"$X\"" run'
+deny "echo, unbalanced single quote" "echo '*' run '"
+deny "echo, unbalanced double quote" 'echo "$HOME run'
+deny "echo, a CR" $'echo \'*\' run\r'
+# backslash, CR, LF is NOT a line continuation (the backslash escapes the CR): the LF ends the echo and a
+# second command runs; the line-continuation join would glue the halves into one echo
+deny "echo, backslash CR LF then a second command, run" $'echo x\\\r\n"$D" run'
+deny "echo, backslash CR LF then a second command, secrets get" $'echo x\\\r\n"$D" secrets get X --plain'
+deny "echo, process substitution" 'echo <(echo x) $X run'
+deny "echo, the CLI name spelled in an argument" 'echo "$HOME" doppler me'
+deny "echo, the CLI name spelled with quotes" "echo '*' d\"o\"ppler run"
+# the command word must be the literal echo, with no wrapper, assignment or quoting
+deny "wrapper: env echo" "env echo '*' run"
+deny "wrapper: command echo" "command echo '*' run"
+deny "wrapper: nohup echo" "nohup echo '*' run"
+deny "wrapper: exec echo" "exec echo '*' run"
+deny "wrapper: time echo" "time echo '*' run"
+deny "wrapper: nice echo" "nice echo '*' run"
+deny "wrapper: timeout echo" "timeout 5 echo '*' run"
+deny "wrapper: stdbuf echo" "stdbuf -o0 echo '*' run"
+deny "wrapper: sudo echo" "sudo echo '*' run"
+deny "wrapper: xargs echo" "xargs echo '*' run"
+deny "assignment before echo" "X=1 echo '*' run"
+deny "PATH assignment before echo" "PATH=/tmp echo '*' run"
+deny "quoted command word" "'echo' '*' run"
+deny "double-quoted command word" '"echo" "$HOME" run'
+deny "backslash command word" "\\echo '*' run"
+deny "echo glued to an expansion" 'echo$X "$HOME" run'
+deny "upper-case echo is not the literal word" "Echo '*' run"
+deny "eval of an echo" "eval echo '*' secrets"
+deny "eval of a glob literal" "eval '*' secrets"
+deny "sh -c of an echo" "sh -c 'echo \"\$HOME\" run'"
+deny "bash -c of a glob literal" "bash -c '* secrets'"
+deny "source of a glob literal" "source '*' secrets"
+deny "dot of a glob literal" ". '*' secrets"
+# printf and python are NOT exempt (printf -v runs an array subscript; a python script builds a command
+# at run time from allowed pieces): each is denied as before, and each route is a differential bypass row
+deny "printf -v, quoted subscript with a substitution" $'printf -v \'a[$("$D" secrets get X --plain >&2)]\' x'
+deny "printf -v, a second argument and run" $'printf -v \'a[$("$D" secrets get X --plain 1>&2)]\' \'%s\' run'
+deny "printf -v, backtick subscript" $'printf -v \'a[`"$D" secrets get X --plain >&2`]\' x'
+deny "printf -v, name glued to a quote" $'printf -v a\'[$("$D" secrets get X >&2)]\' x'
+deny "printf with a quoted -v" $'printf \'-v\' \'a[$("$D" secrets get X >&2)]\' x'
+deny "printf with a split-quoted -v" $'printf "-"v \'a[$("$D" secrets get X >&2)]\' x'
+deny "printf with -v glued to the name" $'printf -va\'[$("$D" secrets get X >&2)]\' x'
+deny "printf of a glob literal and me (printf is not exempt)" $'printf \'%s\\n\' \'*\' me'
+deny "python heredoc, route (a): attrgetter on typing, names built from strings" $'python3 -I - <<\'EOF\'\nimport operator, typing; g = operator.attrgetter; o = g(\'s\'+\'ys.mod\'+\'ules\')(typing)[\'o\'+\'s\']; g(\'sy\'+\'stem\')(o)(\'"$D" secrets get X\')\nEOF'
+deny "python heredoc, route (b): get_type_hints evaluating an annotation string" $'python3 -I - <<\'EOF\'\nimport typing\ndef f(x: chr(95)*2+\'imp\'+\'ort\'+chr(95)*2+"(\'o\'+\'s\').sy"+"stem(\'$D secrets get X\')"): pass\ntyping.get_type_hints(f)\nEOF'
+deny "python heredoc, route (c): Formatter.get_field walking to os" $'python3 -I - <<\'EOF\'\nimport string, argparse; u=\'_\'*2; p=u+\'init\'+u+\'.\'+u+\'glob\'+\'als\'+u+\'[\'+\'_\'+\'o\'+\'s\'+\'].\'+\'sy\'+\'stem\'; string.Formatter().get_field(\'0.\'+p,(argparse.ArgumentParser,),{})[0](\'"$D" secrets get X\')\nEOF'
+deny "python heredoc, f-string braces first on a line, and me (denied again: use a script file or the override)" $'python3 -I - <<\'EOF\'\nname = \'x\'\nprint(f"{name:18} me")\nEOF'
+deny "python heredoc, a slice, run, and a json import" $'python3 -I - <<\'EOF\'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], \'then run\')\nEOF'
+deny "python heredoc after a fifo redirect" $'mkfifo p; sh <p & exec >p; python3 -I - <<\'EOF\'\nprint(\'"$D" run\')\nEOF'
+deny "python heredoc, os.system" $'python3 -I - <<\'EOF\'\nimport os\nos.system(\'"$D" run\')\nEOF'
+deny "python heredoc, then a command after the terminator" $'python3 -I - <<\'EOF\'\nprint(1)\nEOF\n"$D" run'
+deny "python heredoc, a backslash-newline before the first EOF line" $'python3 -I - <<\'EOF\'\na\\\nEOF\n"$D" run\nEOF'
+deny "python heredoc, the CLI name spelled in the body" $'python3 -I - <<\'EOF\'\nprint("doppler me")\nEOF'
+deny "python one-liner, not a heredoc" $'python3 -c \'print(1)\' "$HOME" run'
+deny "shell heredoc, bash" $'bash <<\'EOF\'\n"$D" run\nEOF'
+deny "shell heredoc, sh" $'sh <<\'EOF\'\n"$D" run\nEOF'
+deny "cat heredoc piped to a shell" $'cat <<\'EOF\' | sh\n"$D" run\nEOF'
+deny "cat heredoc, a plain command (named false deny)" $'cat <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
+deny "a script path, then run" 'sh ./x.sh "$HOME" run'
+deny "a function body holding the expansion" 'f() { "$D" run; }; f'
+
 echo "== KNOWN LIMIT, pinned allow: a glob/expansion command name that is not the first word =="
 # The command-word trigger inspects only the first word of a simple command. These deliberate
 # obfuscations are an accepted limit (README, Bash guard hook, Known limits). They are pinned as
@@ -1379,6 +1573,10 @@ allow "limit: here-string capture" 'cat <<< $(dop?ler $S)'
 allow "limit: &< detached redirect target" '&< out dop?ler $S'
 allow "limit: < in redirect before a quoted expansion name" '< in "$D" $S'
 allow "limit: 2> out redirect before an expansion name" '2> out $D $S'
+# Found while writing #649 and present on main before it (the whole-word test counts `secrets)` and
+# `secrets`` as no word): a subcommand glued to a closing paren or backtick after an expansion name.
+allow "limit (pre-existing): subcommand glued to the closing paren of a substitution" 'echo "$($D secrets)" x'
+allow "limit (pre-existing): subcommand glued to the closing backtick" 'echo "`$D secrets`" x'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"
