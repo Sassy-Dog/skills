@@ -87,28 +87,48 @@
 #     triggers on its own, past leading assignments and redirections (`dop?ler s?crets`,
 #     `A=1 $D projects`, `>out $D projects`), with `[`, `[[`, `ls $HOME/secrets`, `gh run view $ID`,
 #     `gh api .../actions/secrets` and `2>&1` on ordinary commands allowed
-#   - #649 (section "#649"): ordinary prose after an expansion character no longer counts as a CLI
-#     command. A bare secrets/configure/run/me word triggers only as the FIRST argument after a word
-#     that expands (past option words with their value, and redirections), and a command word triggers
-#     only when it can become the CLI's name (`$`, backtick, brace expansion, an extglob operator, a
-#     POSIX class, or a glob that fnmatch-matches the name). Allowed, pinned: `echo '*' run`, `echo
-#     "$HOME" let me know`, a heredoc commit message with backticks plus run/me, a PR-body heredoc
-#     with **bold**, a python heredoc with `{name:18}` and me, `**bold** note`, `{name:18} done`.
-#     Denied, pinned: `"$D" run`, `$D me`, `dop*ler me`, `${X}pler secrets [get]`, an assignment then
-#     `${x}ler`, `$(echo ...)ler`, a backtick name, option/value words before the subcommand, the
-#     name as an argument of env/sudo (with a redirect or a redirect-with-target between), a quoted,
-#     escaped or quote-split subcommand, `[^x]oppler`, `[[:lower:]]oppler`, an extglob, brace and
-#     range expansion, upper case, a bare `*` path glob, a `'$D'` literal handed to a child shell,
-#     and an unbalanced quote. The differential driver repeats the allows (nothing prints under bash
-#     5, /bin/bash 3.2, zsh or dash) and the denies that a shell turns into a real invocation (each
-#     prints under at least one shell). Pinned as ALLOWS, named limits: `env $D x secrets` and
-#     `echo '*' run | sh`. Mutants run against hooks/bash-secret-guard.py (this section's failing-case
-#     count, then the differential's FAIL lines): the adjacency rule off (37, 19); option skipping off
-#     (7, 4); redirect skipping off (10, 4); a glob never matching the name (4, 2); `[^` not read as
-#     `[!` (2, 2); `$` not a name expansion (7, 2); brace expansion not modelled (2, 2); the literal
-#     glob blanking without its backslash and quote-parity guard (2, 2); the blanking accepting any
-#     single-quoted word, not only `*`/`?` runs (10, 6). Not covered: shells not installed, and any
-#     spelling the corpus does not contain.
+#   - #649 and its review round (section "#649"): ordinary prose after an expansion character no longer
+#     counts as a CLI command. A bare secrets/configure/run/me word triggers only as the FIRST
+#     argument after a word that expands (past option words with their value, redirections and the
+#     here-string operator), and a command word triggers only when it can become the CLI's name (`$`,
+#     backtick, brace expansion, an extglob operator, a full [[:class:]], or a glob that fnmatch-matches
+#     the name). Words are read two ways, strip-then-split and quote-aware (a quoted option value or
+#     redirect target holding a blank is ONE word), and either reading triggers. A shell, eval or
+#     source word anywhere in the input, or a segment starting with an assignment, brings back the old
+#     rule (any subcommand word after an expansion), and a glob-only literal is then not blanked.
+#     Allowed, pinned: `echo '*' run`, `echo "$HOME" let me know`, a heredoc commit message with
+#     backticks plus run/me, a PR-body heredoc with **bold**, a python heredoc with `{name:18}` and
+#     me or `rows[:3] = x`, `**bold** note`, `{name:18} done`, a lone `[`/`[[`/`{` before a prose
+#     word. Denied, pinned: the name-expansion and glob shapes, quoted option values and redirect
+#     targets with blanks behind env/sudo/command/exec/nohup/time, `sh -c` strings, an assignment
+#     holding the name, here-string subcommands (`xargs "$D" <<< secrets`), a glob-only literal handed
+#     to a shell or eval. Over-triggers pinned on purpose: a backslash or an odd quote count in a
+#     segment stops the glob-literal blanking. The differential driver repeats the allows (nothing
+#     prints under bash 5, /bin/bash 3.2, zsh or dash) and the denies that a shell turns into a real
+#     invocation (each prints under at least one shell; the glob-only ones cd into the shim
+#     directory so the glob matches the fake CLI). Pinned as an ALLOW, named limit: `env $D x secrets`
+#     (a non-option word before the subcommand, also when an unquoted $D word-splits to carry an
+#     option value: bash and dash print, zsh does not split).
+#     MUTANTS, each a copy of the tree with ONE replacement in hooks/bash-secret-guard.py, gate run
+#     in the copy; the count is failing checks minus the 5 the copy fails unmutated (its sweep
+#     extractor needs git-tracked files). Replaced text, then count:
+#       `    n = len(words)\n    seen = False\n` plus an early `return False` (adjacency off): 78;
+#       `if not x.startswith("-"):` -> `if True:` (option words not skipped): 31;
+#       `if "=" not in x and j < n and not words[j].startswith("-")` with `False and` in front
+#       (option value not skipped): 30; `if _REDIRECT_WORD_RE.match(x):` -> `if False:` in the
+#       argument scan: 17; the final `return fnmatch.fnmatchcase(...)` -> `return False`: 6;
+#       `.replace("[^", "[!")` deleted: 1; `"$" in w or` deleted from _name_may_expand: 6;
+#       `"`" in w or` deleted there: 1; `_BRACE_EXPANSION_RE.search(w) or ` deleted: 2;
+#       `_EXTGLOB_RE.search(w) or ` deleted: 1; the `[[:class:]]` alternative deleted: 1;
+#       `if QUOTES_RE.search(seg):` -> `if False and ...` (quote-aware reading off): 40;
+#       the guard `if "\\" in seg or seg.count("'") % 2:` -> `if False:`: 2;
+#       `[*?]+` -> `[^']*` in the literal-glob pattern: 1; `blank = not any(...)` -> `blank = True`
+#       (blank even with a shell present): 22; the broad rule's whole condition -> `False`: 12;
+#       only its assignment arm removed: 5; only its shell arm removed: 9;
+#       `if seen and w.lstrip("0123456789&").startswith("<<<"):` -> `if False and ...` (here-string
+#       operand check off): 10; the `if w in _SYNTAX_WORDS: continue` of the argument scan deleted: 2.
+#     These counts are one run on one machine, not a guarantee for other mutants. Not covered:
+#     shells not installed, and any spelling the corpus does not contain.
 #   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (every non-comment
 #     line of a fenced block that mentions doppler at all, and inline code spans holding
 #     `doppler <word>`) must be allowed by the guard or carry the bypass, so the
@@ -1433,9 +1453,64 @@ deny "name glob, upper case" 'DOP*LER me'
 deny "name glob ending the path" '/opt/homebrew/bin/* run'
 deny "name glob, bracket class" 'dopp[k-m]er run'
 deny "name glob after an assignment" 'A=1 dop?ler me'
+# Review round (#650): a quoted option value or redirect target with a space stays ONE word.
+deny "quoted option value with a space (single quotes)" $'env "$D" -p \'my app\' secrets'
+deny "quoted option value with a space (double quotes), glob-free expansion name" 'env ${X}pler -p "my app" -c dev secrets'
+deny "quoted option value holding an expansion and a space" 'env "$D" --config-dir "$HOME/My Docs" secrets'
+deny "escaped blank in an option value" 'env "$D" -p a\ b secrets'
+deny "sudo, quoted value with a space" $'sudo -n "$D" --config-dir \'/tmp/a b\' secrets'
+deny "command, quoted value with a space" $'command "$D" --config-dir \'/tmp/a b\' secrets'
+deny "exec, quoted value with a space" $'exec "$D" --config-dir \'/tmp/a b\' secrets'
+deny "nohup, quoted value with a space" $'nohup "$D" --config-dir \'/tmp/a b\' secrets'
+deny "time, quoted value with a space" $'time "$D" --config-dir \'/tmp/a b\' secrets'
+deny "quoted value with a space, then run" $'env "$D" -p \'a b\' run -- env'
+deny "quoted value with a space, then configure" $'env "$D" -p \'a b\' configure'
+deny "redirect target with a space, glued" $'env "$D" 2>\'a b\' secrets'
+deny "redirect target with a space, separate" $'env "$D" 2> \'a b\' secrets'
+deny "append redirect target with a space" $'env "$D" 2>> \'a b\' secrets'
+deny "exec \"\$@\" with a quoted value" $'sh -c \'exec "$@"\' sh "$D" -p \'a b\' secrets'
+# a shell, eval or an assignment re-reads text: any subcommand word after an expansion counts
+deny "sh -c re-reads its string, expansion then arguments" $'sh -c \'$D "$@"\' sh secrets'
+deny "sh -c with positional parameters" $'sh -c \'"$1" "$3"\' _ "$D" x secrets'
+deny "an assignment holding the name and the subcommand" $'D="$(printf dop%s pler) secrets"; env $D'
+deny "single-quoted expansion run by a child shell, later word" "echo '\$D' x run | sh"
+# a glob-only literal is blanked only when no shell is in the input
+allow "a glob-only literal, then run, in a later command too" "echo '*' run; echo hi"
+deny "a glob-only literal piped to a shell, secrets" "echo '*' secrets | sh"
+deny "a glob-only literal piped to a shell, run" "echo '*' run -- env | sh"
+deny "eval of a glob-only literal" "eval '*' secrets"
+deny "eval of a question-mark glob that matches only the name" "eval '???????' secrets"
+deny "a glob-only literal piped to bash by path" "echo '*' run | /bin/bash"
+# here-string operands
+deny "xargs, here-string subcommand" 'xargs "$D" <<< secrets'
+deny "xargs placeholder, here-string subcommand" 'xargs -I% "$D" % <<< secrets'
+deny "here-string glued to its operand" 'xargs "$D" <<<secrets'
+deny "here-string with a quoted operand" 'xargs "$D" <<< "secrets"'
+allow "a here-string that is prose after an expansion" 'cat <<< "$X is fine"'
+# command-word globs and expansions followed by a word that is NOT a subcommand: only the
+# command-word rule can deny these (no adjacency), so each kills a mutant of it
+deny "negated class name, projects" '[^x]oppler projects'
+deny "POSIX class name, projects" '[[:lower:]]oppler projects'
+deny "brace expansion name, projects" '{dop,x}pler projects'
+deny "range expansion name, projects" 'd{1..2}oppler projects'
+deny "extglob name, projects" '?(dop)pler projects'
+deny "upper case glob name, projects" 'DOP*LER projects'
+deny "path glob name, projects" '/opt/homebrew/bin/* projects'
+deny "quoted expansion name, projects" '"$D" projects'
+deny "name glob, version flag" 'dop?ler --version'
+deny "backtick name, projects" '`x` projects'
+deny "extglob that spells no letter of the name" '+([a-z]) projects'
+deny "a plain quoted expansion is not a glob literal" "echo '\$D' run"
+deny "an escaped quote leaves the segment's quoting unclear: not blanked (deliberate over-trigger)" "echo \\' '*' run"
+deny "a backslash leaves the segment's quoting unclear: not blanked (deliberate over-trigger)" "echo \\\\ '*' run"
+# a lone [ or { is syntax, and a python slice is not a POSIX class
+allow "python slice in a heredoc" $'python3 -I - <<\'EOF\'\nrows[:3] = x\nEOF'
+allow "a lone [ before options and a prose word" '[ -f x ] me'
+allow "a lone { before prose" '{ x } run'
+allow "a lone [ before a prose word" '[ me = x ]'
+allow "a lone [[ before a prose word" '[[ run = x ]]'
 # Named limits of the argument rule (README, Bash guard hook, Known limits): pinned as ALLOWS.
-allow "limit: a non-option word between the expanded name and the subcommand" 'env $D x secrets'
-allow "limit: a glob-only literal piped to a shell (needs a file named for the CLI in the cwd)" "echo '*' run | sh"
+allow "limit: a non-option word between the expanded name and the subcommand (also when the variable word-splits to carry an option value: bash and dash print, zsh does not split)" 'env $D x secrets'
 
 echo "== KNOWN LIMIT, pinned allow: a glob/expansion command name that is not the first word =="
 # The command-word trigger inspects only the first word of a simple command. These deliberate

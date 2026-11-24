@@ -22,23 +22,32 @@ disagree with itself about quoting.
    doppler phrase (`secrets get|download|substitute`, `configure get|--all`, `configs
    tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` as the FIRST
    argument after the word that expands (past option words, `-p app` with its value, and
-   redirections: `env ${X}pler --silent run`). A subcommand word further on is prose: `ls
-   $HOME/secrets`, `gh run view $ID`, `echo "$HOME" let me know` stay quiet, and so does `echo '*'
-   run` (a whole-word single-quoted run of `*`/`?` is blanked first; no shell expands it, and
-   only that shape is, with no backslash and an even number of single quotes in the segment). That
-   search runs on text with quotes and backslashes removed
-   (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`) and on segments split quote-aware, so a
+   redirections and the here-string operator: `env ${X}pler --silent run`, `xargs "$D" <<< secrets`).
+   Words are read two ways and either one triggers: with quotes and backslashes stripped before
+   splitting on blanks (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`, `sh -c '$D run'`), and
+   split quote-aware first, so a quoted option value or redirect target holding a blank stays ONE
+   word (`env "$D" -p 'my app' secrets`, `env "$D" 2> 'a b' secrets`). A subcommand word further on
+   is prose: `ls $HOME/secrets`, `gh run view $ID`, `echo "$HOME" let me know` stay quiet, and so
+   does `echo '*' run` (a whole-word single-quoted run of `*`/`?` is blanked first; no shell
+   expands it. Only that shape is, with no backslash and an even number of single quotes in the
+   segment, and NOT when a shell, `eval` or `source` word appears anywhere in the input: there
+   `echo '*' secrets | sh` and `eval '???????' secrets` glob in a directory that holds the CLI).
+   In the same inputs, and for a segment that starts with a `NAME=value` assignment, the older
+   broader rule applies: any subcommand word after an expansion counts (`sh -c '$D "$@"' sh secrets`,
+   `D="$(printf dop%s pler) secrets"; env $D`). A lone `[`, `{` or similar syntax word is not an
+   expanding word. The search runs on segments split quote-aware, so a
    quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob. An `&`
    next to `>` or `<` (`2>&1`, `>&2`, `&>`, `<&`) is a redirect, not a separator, so it does not
    split a segment either (`dop?ler 2>&1 secrets`). A command word (the first word of a segment,
    after leading `NAME=value` assignments and redirections) that CAN BECOME the CLI's name triggers on
-   its own, whatever follows: `$`, a backtick, brace expansion, an extglob operator or a POSIX
-   class, or a `*`/`?`/`[` pattern that matches the string for the CLI's name (last path component,
+   its own, whatever follows: `$`, a backtick, brace expansion, an extglob operator or a full
+   `[[:class:]]`, or a `*`/`?`/`[` pattern that matches the string for the CLI's name (last path component,
    case-folded, `[^` read as `[!`); the allow list then decides (`"$D" >&2 secrets`,
-   `dop?ler s?crets`). A word with none of those is a literal name: `{name:18}`, `print(f...` and
-   `**bold**` (which cannot match) no longer trigger. Known gaps of the adjacency rule, accepted:
-   a subcommand past a non-option word (`env $D x secrets`), and `echo '*' run | sh` (the child shell
-   globs `*`, which needs a file named for the CLI in the working directory).
+   `dop?ler s?crets`). A word with none of those is a literal name: `{name:18}`, `rows[:3]`,
+   `print(f...` and `**bold**` (which cannot match) no longer trigger. Known gap of the adjacency
+   rule, accepted and pinned as an allow: a subcommand past a non-option word (`env $D x secrets`),
+   including when an unquoted `$D` word-splits at run time to carry an option with a value (bash and
+   dash print; zsh does not split).
    KNOWN LIMIT (accepted, pinned as allows in the gate): that trigger inspects ONLY the first word
    of a simple command. A doppler name produced by a glob or expansion and sitting behind a prefix
    word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string `<<< $(...)`), or after a
@@ -227,13 +236,29 @@ def _mentions(t):
                 or w("configs", "tokens") or "print-config" in n:
             return True
         # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`), or an
-        # expanding word whose very next argument is a Doppler subcommand. Prose after an expansion
+        # expanding word whose first argument is a Doppler subcommand. Prose after an expansion
         # character (`echo "$HOME" let me know`) is not a command; neither is a glob-only quoted
-        # literal (`echo '*' run`), which no shell expands.
-        for seg in split_segments(t):
-            words = QUOTES_RE.sub("", _blank_literal_globs(seg)).split()
-            if _command_word_expands(words) or _expansion_then_subcommand(words):
-                return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
+        # literal (`echo '*' run`) unless a shell is in the input to re-read it.
+        segs = split_segments(t)
+        flats = [QUOTES_RE.sub("", seg).split() for seg in segs]
+        blank = not any(_has_shell_word(w) for w in flats)
+        for seg, flat in zip(segs, flats):
+            if blank:
+                flat = QUOTES_RE.sub("", _blank_literal_globs(seg)).split()
+            views = [flat]
+            if QUOTES_RE.search(seg):
+                # A quoted value with a space stays ONE word: `env "$D" -p 'my app' secrets`.
+                qa = _quote_aware_words(_blank_literal_globs(seg) if blank else seg)
+                if qa is not None and qa != flat:
+                    views.append(qa)
+            for words in views:
+                if _command_word_expands(words) or _expansion_then_subcommand(words):
+                    return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
+            # A shell or eval anywhere in the input re-reads text (a pipe feeds it), and an assignment can
+            # hold a command string: there any subcommand word after an expansion counts, as it always did.
+            if (not blank or (flat and _ASSIGN_RE.match(flat[0]))) \
+                    and _expansion_anywhere_then_subcommand(flat):
+                return True
     return False
 
 
@@ -245,6 +270,69 @@ _SYNTAX_WORDS = {"[", "[[", "{", "}", "(", ")", "]]", "]"}
 _BRACE_EXPANSION_RE = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
 _EXTGLOB_RE = re.compile(r"[?*+@!]\(")
 _LITERAL_GLOB_RE = re.compile(r"(?<!\S)'[*?]+'(?!\S)")
+
+
+SHELL_WORDS = frozenset(("sh", "bash", "zsh", "dash", "ksh", "eval", "source"))
+
+
+def _has_shell_word(words):
+    """True when a word (or the last path component of one) names a shell or eval."""
+    return any(w.rsplit("/", 1)[-1] in SHELL_WORDS for w in words)
+
+
+def _quote_aware_words(seg):
+    """Split a segment into shell words (quotes and backslashes removed per word), or None.
+
+    A quoted string or an escaped blank stays inside its word. An unbalanced quote returns None,
+    and the caller keeps only the strip-then-split reading, which can only trigger more.
+    """
+    words, cur, has, quote, ansi_c, i, n = [], [], False, None, False, 0, len(seg)
+    while i < n:
+        c = seg[i]
+        if quote == "'":
+            if c == "\\" and ansi_c and i + 1 < n:
+                i += 1
+                cur.append(seg[i])
+            elif c == "'":
+                quote = None
+            else:
+                cur.append(c)
+        elif quote == '"':
+            if c == "\\" and i + 1 < n:
+                i += 1
+                cur.append(seg[i])
+            elif c == '"':
+                quote = None
+            else:
+                cur.append(c)
+        elif c == "\\":
+            has = True
+            if i + 1 < n:
+                i += 1
+                cur.append(seg[i])
+        elif c in "'\"":
+            quote, has = c, True
+            ansi_c = c == "'" and i > 0 and seg[i - 1] == "$"
+        elif c.isspace():
+            if cur or has:
+                words.append("".join(cur))
+            cur, has = [], False
+        else:
+            cur.append(c)
+        i += 1
+    if quote is not None:
+        return None
+    if cur or has:
+        words.append("".join(cur))
+    return words
+
+
+def _expansion_anywhere_then_subcommand(words):
+    """True when the first expanding word is followed, anywhere, by a Doppler subcommand word."""
+    for i, w in enumerate(words):
+        if EXPANSION_RE.search(w) and w not in _SYNTAX_WORDS:
+            return any(x in SUBCOMMAND_WORDS for x in words[i + 1:])
+    return False
 
 
 def _blank_literal_globs(seg):
@@ -267,7 +355,7 @@ def _name_may_expand(w):
     component, case-folded: a case-insensitive filesystem). A word with no such character is a
     literal command name, whatever else it holds (`{name:18}`, `print(f...`); `**bold**` cannot match.
     """
-    if "$" in w or "`" in w or _BRACE_EXPANSION_RE.search(w) or _EXTGLOB_RE.search(w) or re.search(r"\[[:=.]", w):
+    if "$" in w or "`" in w or _BRACE_EXPANSION_RE.search(w) or _EXTGLOB_RE.search(w) or re.search(r"\[\[[:=.][^\]]*[:=.]\]", w):
         return True
     if not re.search(r"[*?\[]", w):
         return False
@@ -287,18 +375,29 @@ def _expansion_then_subcommand(words):
     """True when a word holding an expansion character is followed by a Doppler subcommand.
 
     The subcommand must be the first argument after the word, past option words (`-p app` skips
-    the value too), the shape of `env $D --json secrets`; a subcommand word further on is prose.
+    the value too), redirections and the here-string operator, the shape of `env $D --json
+    secrets`; a subcommand word further on is prose. A here-string operand after an expansion
+    (`xargs -I% "$D" % <<< secrets`) is the subcommand's input and counts wherever it sits.
     """
     n = len(words)
+    seen = False
     for i, w in enumerate(words):
+        if w in _SYNTAX_WORDS:
+            continue
+        if seen and w.lstrip("0123456789&").startswith("<<<"):
+            operand = w.lstrip("0123456789&")[3:] or (words[i + 1] if i + 1 < n else "")
+            if operand in SUBCOMMAND_WORDS:
+                return True
         if not EXPANSION_RE.search(w):
             continue
+        seen = True
         j = i + 1
         while j < n:
             x = words[j]
             if x in SUBCOMMAND_WORDS:
                 return True
             if _REDIRECT_WORD_RE.match(x):  # `2>&1`, `&> file` between the name and the subcommand
+                # a here-string operand is checked by the scan above, wherever it sits
                 j += 2 if re.fullmatch(r"[0-9&]*[<>]+&?", x) else 1
                 continue
             if not x.startswith("-"):
