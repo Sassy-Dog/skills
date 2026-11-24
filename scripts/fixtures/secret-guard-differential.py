@@ -202,6 +202,8 @@ CORPUS += [
     ('python heredoc, route (c): Formatter.get_field walking to os', 'python3 -I - <<\'EOF\'\nimport string, argparse; u=\'_\'*2; p=u+\'init\'+u+\'.\'+u+\'glob\'+\'als\'+u+\'[\'+\'_\'+\'o\'+\'s\'+\'].\'+\'sy\'+\'stem\'; string.Formatter().get_field(\'0.\'+p,(argparse.ArgumentParser,),{})[0](\'"$D" secrets get X\')\nEOF', "deny", "bypass"),
     ('python heredoc, f-string braces first on a line, and me (denied again: use a script file or the override)', 'python3 -I - <<\'EOF\'\nname = \'x\'\nprint(f"{name:18} me")\nEOF', "deny", "deny-only"),
     ('python heredoc, a slice, run, and a json import', "python3 -I - <<'EOF'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], 'then run')\nEOF", "deny", "deny-only"),
+    ("echo, backslash CR LF, then a second command that runs (not a line continuation)", "echo x\\\r\n\"$D\" run", "deny", "bypass"),
+    ("echo, backslash CR LF, then a second command, secrets get", "echo x\\\r\n\"$D\" secrets get X --plain", "deny", "bypass"),
     ("a shell reads the heredoc", "sh <<'EOF'\n\"$D\" run\nEOF", "deny", "bypass"),
     ("cat heredoc piped to a shell", "cat <<'EOF' | sh\n\"$D\" run\nEOF", "deny", "bypass"),
 ]

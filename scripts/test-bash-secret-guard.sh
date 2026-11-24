@@ -233,9 +233,10 @@
 #   `"printf"`: 25; `triggered`: `iplain, idecoded = (plain, decoded) if inert == text else
 #   _views(inert)` -> `iplain, idecoded = plain, decoded` (exemption never applied): 14; `_mentions`: the
 #   two spelled-name tests (`if "doppler" in t:` and the `re.sub` one) read `ti` instead of `t`: 4.
-# EQUIVALENT (0 failing, reason stated): `inert = _inert_view(text)` -> `inert =
-# _inert_view(LINE_CONTINUATION_RE.sub("", text))`: with no heredoc left in `_inert_view`, a
-# backslash-newline outside quotes is rejected either way and joining one inside quotes changes no word.
+#   `triggered`: `inert = _inert_view(text)` -> `inert = _inert_view(LINE_CONTINUATION_RE.sub("", text))`
+#   (the exemption decided on the line-joined text): 8, the two `echo x\<CR><LF>...` gate rows and their
+#   differential rows; a backslash, CR, LF is not a continuation, so the joined text is one echo while the
+#   shell runs a second command. Every mutant above is killed; none is left equivalent.
 # Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
 # checks is stated because nothing re-derives it.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
@@ -1498,6 +1499,10 @@ deny "echo, with an escaped quote in double quotes" 'echo "a \"$X\"" run'
 deny "echo, unbalanced single quote" "echo '*' run '"
 deny "echo, unbalanced double quote" 'echo "$HOME run'
 deny "echo, a CR" $'echo \'*\' run\r'
+# backslash, CR, LF is NOT a line continuation (the backslash escapes the CR): the LF ends the echo and a
+# second command runs; the line-continuation join would glue the halves into one echo
+deny "echo, backslash CR LF then a second command, run" $'echo x\\\r\n"$D" run'
+deny "echo, backslash CR LF then a second command, secrets get" $'echo x\\\r\n"$D" secrets get X --plain'
 deny "echo, process substitution" 'echo <(echo x) $X run'
 deny "echo, the CLI name spelled in an argument" 'echo "$HOME" doppler me'
 deny "echo, the CLI name spelled with quotes" "echo '*' d\"o\"ppler run"
