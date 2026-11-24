@@ -129,6 +129,29 @@ CORPUS = [
     ("heredoc operator not last on its line", f"gh issue comment 5 --body-file - {H} | sh\n{PRINT}\nEOF", "deny", "bypass"),
     ("unquoted heredoc delimiter", f"gh issue comment 5 --body-file - <<EOF\n$({PRINT})\nEOF", "deny", "bypass"),
     ("unbalanced quote", f'git commit -m "{PRINT}', "deny", "deny-only"),
+    # #649: prose after an expansion character is not a command (every shell must print nothing) ...
+    ("a quoted glob literal, then run", "echo '*' run", "allow", "msg"),
+    ("an expansion, then prose with me", 'echo "$HOME" let me know', "allow", "msg"),
+    ("commit message heredoc with backticks and run", "git commit -F - " + H + "\nfix: `x` a run that never starts, tell me\nEOF", "allow", "msg"),
+    ("PR body heredoc with bold and run", "gh pr create --title t --body-file - " + H + "\n**Summary** let me know, run it\nEOF", "allow", "msg"),
+    ("python heredoc with an f-string brace line and me", "python3 -I - " + H + '\nprint(f"{name:18} me")\nEOF', "allow", "msg"),
+    ("a glob that cannot match the name as the command word", "**bold** note", "allow", "msg"),
+    # ... and every spelling that a shell turns into the CLI stays denied (and really prints)
+    ("name assembled from variables, run", 'a=dop; b=pler; "$a$b" run', "deny", "bypass"),
+    ("name assembled from a variable, secrets get", f"x=dopp; ${{x}}ler secrets get X --plain", "deny", "bypass"),
+    ("name from a command substitution", "$(echo dopp)ler secrets get X --plain", "deny", "bypass"),
+    ("name from a backtick substitution, secrets", "`echo dopp`ler secrets", "deny", "bypass"),
+    ("wrapper, expanded name, me", "a=dopp; env ${a}ler me", "deny", "bypass"),
+    ("wrapper, expanded name, option value then secrets", "a=dopp; env ${a}ler -p x -c y secrets", "deny", "bypass"),
+    ("wrapper, expanded name, redirect then secrets", "a=dopp; env ${a}ler 2>&1 secrets", "deny", "bypass"),
+    ("wrapper, expanded name, quote-split subcommand", "a=dopp; env ${a}ler sec''rets", "deny", "bypass"),
+    ("wrapper, expanded name, escaped subcommand", "a=dopp; env ${a}ler r\\un", "deny", "bypass"),
+    ("single-quoted expansion run by a child shell", "export a=dop b=pler; echo '$a$b' run | sh", "deny", "bypass"),
+    ("single-quoted command run by a child shell", "export a=dop b=pler; sh -c '$a$b run'", "deny", "bypass"),
+    ("a glob literal beside a real expansion", "a=dopp; echo '*' ; env ${a}ler run", "deny", "bypass"),
+    ("name glob with a negated class (no such file here)", "[^x]oppler me", "deny", "deny-only"),
+    ("name glob (no such file here)", "dop*ler me", "deny", "deny-only"),
+    ("name brace expansion (runs the CLI with the second word as an argument)", "{dop,x}pler me", "deny", "bypass"),
 ]
 
 # Corpus cases whose teeth check needs a particular shell, keyed by label: "<name><<major>" means a shell

@@ -87,6 +87,28 @@
 #     triggers on its own, past leading assignments and redirections (`dop?ler s?crets`,
 #     `A=1 $D projects`, `>out $D projects`), with `[`, `[[`, `ls $HOME/secrets`, `gh run view $ID`,
 #     `gh api .../actions/secrets` and `2>&1` on ordinary commands allowed
+#   - #649 (section "#649"): ordinary prose after an expansion character no longer counts as a CLI
+#     command. A bare secrets/configure/run/me word triggers only as the FIRST argument after a word
+#     that expands (past option words with their value, and redirections), and a command word triggers
+#     only when it can become the CLI's name (`$`, backtick, brace expansion, an extglob operator, a
+#     POSIX class, or a glob that fnmatch-matches the name). Allowed, pinned: `echo '*' run`, `echo
+#     "$HOME" let me know`, a heredoc commit message with backticks plus run/me, a PR-body heredoc
+#     with **bold**, a python heredoc with `{name:18}` and me, `**bold** note`, `{name:18} done`.
+#     Denied, pinned: `"$D" run`, `$D me`, `dop*ler me`, `${X}pler secrets [get]`, an assignment then
+#     `${x}ler`, `$(echo ...)ler`, a backtick name, option/value words before the subcommand, the
+#     name as an argument of env/sudo (with a redirect or a redirect-with-target between), a quoted,
+#     escaped or quote-split subcommand, `[^x]oppler`, `[[:lower:]]oppler`, an extglob, brace and
+#     range expansion, upper case, a bare `*` path glob, a `'$D'` literal handed to a child shell,
+#     and an unbalanced quote. The differential driver repeats the allows (nothing prints under bash
+#     5, /bin/bash 3.2, zsh or dash) and the denies that a shell turns into a real invocation (each
+#     prints under at least one shell). Pinned as ALLOWS, named limits: `env $D x secrets` and
+#     `echo '*' run | sh`. Mutants run against hooks/bash-secret-guard.py (this section's failing-case
+#     count, then the differential's FAIL lines): the adjacency rule off (37, 19); option skipping off
+#     (7, 4); redirect skipping off (10, 4); a glob never matching the name (4, 2); `[^` not read as
+#     `[!` (2, 2); `$` not a name expansion (7, 2); brace expansion not modelled (2, 2); the literal
+#     glob blanking without its backslash and quote-parity guard (2, 2); the blanking accepting any
+#     single-quoted word, not only `*`/`?` runs (10, 6). Not covered: shells not installed, and any
+#     spelling the corpus does not contain.
 #   - a sweep: every `doppler` command in a tracked file under skills/ or agents/ (every non-comment
 #     line of a fenced block that mentions doppler at all, and inline code spans holding
 #     `doppler <word>`) must be allowed by the guard or carry the bypass, so the
@@ -1363,6 +1385,57 @@ echo "== wrapped presence probe (survey-work) =="
 allow "run wrapping sh -c with a single-quoted test" "doppler run -p P -c C -- sh -c 'test -n \"\$ASC_KEY_ID\"'"
 deny "run wrapping a command piped onward" 'doppler run -p P -c C -- test -n x | grep a'
 deny "run wrapping a command redirected" 'doppler run -p P -c C -- test -n x > out'
+
+echo "== #649: prose after an expansion character is not a command; the name-expansion shapes stay denied =="
+# Allowed: nothing here can make a shell run the CLI. A bare subcommand word counts only as the first
+# argument after a word that expands (past option words); a command word counts only when it can become
+# the CLI's name (`$`, backtick, brace expansion, extglob, or a glob that matches it).
+allow "a single-quoted glob literal, then run" "echo '*' run"
+allow "a single-quoted glob literal, then me" "echo '?' me"
+allow "an expansion, then prose containing me" 'echo "$HOME" let me know'
+allow "an expansion, then prose containing run" 'echo "$X" and then run the tests'
+allow "backticks, then prose with run (not adjacent)" 'echo "fix: `x` was a run that never starts"'
+allow "heredoc commit message with backticks and run" $'git commit -F - <<\'EOF\'\nfix: `x` a run that never starts, tell me\nEOF'
+allow "heredoc PR body with bold and run" $'gh pr create --title t --body-file - <<\'EOF\'\n**Summary** let me know, run it\nEOF'
+allow "python heredoc, f-string braces at the start of a line and me" $'python3 -I - <<\'EOF\'\nprint(f"{name:18} me")\nEOF'
+allow "python heredoc, braces and run" $'python3 -I - <<\'EOF\'\n{name:18} = 1\nprint(f"{x} then run")\nEOF'
+allow "a glob that cannot match the name as the command word" '**bold** note'
+allow "braces without a comma or range are literal" '{name:18} done'
+deny "name expansion, run" '"$D" run'
+deny "name expansion, me" '$D me'
+deny "name glob, me" 'dop*ler me'
+deny "name glob, run, behind a path" '/opt/homebrew/bin/dop?ler run -- env'
+deny "name expansion prefix, secrets get" '${X}pler secrets get'
+deny "name expansion prefix, secrets alone" '${X}pler secrets'
+deny "assignment then expansion name" 'x=dop; ${x}ler secrets get X'
+deny "command substitution name" '$(echo dop)ler secrets get X'
+deny "backtick name" '`echo dop`ler secrets'
+deny "name expansion, option then subcommand" '"$D" --silent secrets'
+deny "name expansion, option with a value then subcommand" '"$D" -p app -c dev secrets'
+deny "name expansion as an argument of a wrapper, me" 'env ${X}pler me'
+deny "name expansion as an argument of a wrapper, option first" 'env ${X}pler --silent run -- env'
+deny "name expansion as an argument, redirect between" 'env ${X}pler 2>&1 secrets'
+deny "name expansion as an argument, redirect with a target between" 'env ${X}pler &> out secrets'
+deny "quoted expansion as an argument, run" 'sudo "$D" run'
+deny "quoted run word" 'env ${X}pler "run"'
+deny "escaped subcommand word" 'env ${X}pler r\un'
+deny "quote-split subcommand word" "env \${X}pler sec''rets"
+deny "single-quoted expansion that a child shell expands" "echo '\$D' run | sh"
+deny "single-quoted words with an expansion inside, run" "sh -c '\$D run'"
+deny "a glob literal beside a real expansion" "echo '*' \$D run"
+deny "unbalanced quote keeps the glob live" "echo '*' ' \$D run"
+deny "name glob with a negated class" '[^x]oppler me'
+deny "name glob with a POSIX class" '[[:lower:]]oppler me'
+deny "name glob with an extglob" '?(dop)pler me'
+deny "name brace expansion" '{dop,x}pler me'
+deny "name brace range expansion" 'd{1..2}oppler me'
+deny "name glob, upper case" 'DOP*LER me'
+deny "name glob ending the path" '/opt/homebrew/bin/* run'
+deny "name glob, bracket class" 'dopp[k-m]er run'
+deny "name glob after an assignment" 'A=1 dop?ler me'
+# Named limits of the argument rule (README, Bash guard hook, Known limits): pinned as ALLOWS.
+allow "limit: a non-option word between the expanded name and the subcommand" 'env $D x secrets'
+allow "limit: a glob-only literal piped to a shell (needs a file named for the CLI in the cwd)" "echo '*' run | sh"
 
 echo "== KNOWN LIMIT, pinned allow: a glob/expansion command name that is not the first word =="
 # The command-word trigger inspects only the first word of a simple command. These deliberate

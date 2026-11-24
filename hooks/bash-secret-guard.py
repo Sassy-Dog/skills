@@ -20,20 +20,30 @@ disagree with itself about quoting.
    the ANSI-C escapes x, u, U, octal, c and e are decoded). A second trigger covers a command name the text does not
    spell (`${X}pler secrets get`): a shell expansion or glob character plus a value-printing
    doppler phrase (`secrets get|download|substitute`, `configure get|--all`, `configs
-   tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` argument
-   later in the same simple command (`dop*ler secrets`, `"$D" run`; `ls $HOME/secrets` and
-   `gh run view $ID` stay quiet). That search runs on text with quotes and backslashes removed
+   tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` as the FIRST
+   argument after the word that expands (past option words, `-p app` with its value, and
+   redirections: `env ${X}pler --silent run`). A subcommand word further on is prose: `ls
+   $HOME/secrets`, `gh run view $ID`, `echo "$HOME" let me know` stay quiet, and so does `echo '*'
+   run` (a whole-word single-quoted run of `*`/`?` is blanked first; no shell expands it, and
+   only that shape is, with no backslash and an even number of single quotes in the segment). That
+   search runs on text with quotes and backslashes removed
    (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`) and on segments split quote-aware, so a
    quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob. An `&`
    next to `>` or `<` (`2>&1`, `>&2`, `&>`, `<&`) is a redirect, not a separator, so it does not
    split a segment either (`dop?ler 2>&1 secrets`). A command word (the first word of a segment,
-   after leading `NAME=value` assignments and redirections) that holds an expansion or glob character triggers on
-   its own, whatever follows: the allow list then decides (`"$D" >&2 secrets`, `dop?ler s?crets`).
+   after leading `NAME=value` assignments and redirections) that CAN BECOME the CLI's name triggers on
+   its own, whatever follows: `$`, a backtick, brace expansion, an extglob operator or a POSIX
+   class, or a `*`/`?`/`[` pattern that matches the string for the CLI's name (last path component,
+   case-folded, `[^` read as `[!`); the allow list then decides (`"$D" >&2 secrets`,
+   `dop?ler s?crets`). A word with none of those is a literal name: `{name:18}`, `print(f...` and
+   `**bold**` (which cannot match) no longer trigger. Known gaps of the adjacency rule, accepted:
+   a subcommand past a non-option word (`env $D x secrets`), and `echo '*' run | sh` (the child shell
+   globs `*`, which needs a file named for the CLI in the working directory).
    KNOWN LIMIT (accepted, pinned as allows in the gate): that trigger inspects ONLY the first word
    of a simple command. A doppler name produced by a glob or expansion and sitting behind a prefix
    word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string `<<< $(...)`), or after a
    detached redirect target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is not caught, but only
-   when the subcommand is not spelled literally too: the second trigger still denies
+   when the subcommand is not spelled literally right after it too: the second trigger still denies
    `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`,
    `cat <(dop?ler secrets get X)` and `! $D run`. The
    threat model is accidental printing; these are deliberate obfuscations, in the same class as
@@ -117,6 +127,7 @@ each command text is innocent alone), a relative redirect when the event carries
 text that mentions doppler outside the sanitized spots above (a `grep doppler docs/`, an `echo`): use the bypass.
 """
 
+import fnmatch
 import json
 import os
 import re
@@ -128,6 +139,7 @@ URL_RE = re.compile(
     r"://[^:@/\s]*:([^@/\s]+)@[^/\s]+",
     re.I,
 )
+CLI_NAME = "dop" + "pler"  # the name a glob must be able to match
 BYPASS_DOPPLER = "SASSYDOG_ALLOW_DOPPLER_PRINT=1"
 BYPASS_URL = "SASSYDOG_ALLOW_CREDENTIAL_URL=1"
 BYPASS_PREFIX_RE = re.compile(
@@ -214,17 +226,14 @@ def _mentions(t):
                 or (w("configure") and (w("get") or "--all" in n)) \
                 or w("configs", "tokens") or "print-config" in n:
             return True
-        # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`):
-        # an expansion character, then later in the same simple command a Doppler subcommand as a
-        # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
+        # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`), or an
+        # expanding word whose very next argument is a Doppler subcommand. Prose after an expansion
+        # character (`echo "$HOME" let me know`) is not a command; neither is a glob-only quoted
+        # literal (`echo '*' run`), which no shell expands.
         for seg in split_segments(t):
-            seg = QUOTES_RE.sub("", seg)
-            if _command_word_expands(seg):
+            words = QUOTES_RE.sub("", _blank_literal_globs(seg)).split()
+            if _command_word_expands(words) or _expansion_then_subcommand(words):
                 return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
-            m = EXPANSION_RE.search(seg)
-            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s)", seg[m.start():])
-                         for n in SUBCOMMAND_WORDS):
-                return True
     return False
 
 
@@ -233,15 +242,70 @@ _REDIRECT_WORD_RE = re.compile(r"(?:[0-9]*|&)[<>]")
 _SYNTAX_WORDS = {"[", "[[", "{", "}", "(", ")", "]]", "]"}
 
 
-def _command_word_expands(seg):
-    """True when the first word of a segment (after NAME=value prefixes) holds an expansion or glob.
+_BRACE_EXPANSION_RE = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
+_EXTGLOB_RE = re.compile(r"[?*+@!]\(")
+_LITERAL_GLOB_RE = re.compile(r"(?<!\S)'[*?]+'(?!\S)")
 
-    `[`, `[[` and `{` are shell syntax, not command names, so they stay quiet.
+
+def _blank_literal_globs(seg):
+    """Turn a whole-word single-quoted run of `*`/`?` into `_`: no shell expands it.
+
+    Only that one shape, and only when the segment has no backslash and an even number of single
+    quotes (so no quote can be paired differently by a shell); any other quoted text keeps its
+    characters and is judged as before.
     """
-    for w in seg.split():
+    if "\\" in seg or seg.count("'") % 2:
+        return seg
+    return _LITERAL_GLOB_RE.sub("_", seg)
+
+
+def _name_may_expand(w):
+    """True when a command word could turn into the CLI's name at run time.
+
+    `$` and backtick expand to anything; brace expansion and extglob operators are not modelled;
+    a pattern with `*`, `?` or `[` counts only when it can match the CLI's name (the last path
+    component, case-folded: a case-insensitive filesystem). A word with no such character is a
+    literal command name, whatever else it holds (`{name:18}`, `print(f...`); `**bold**` cannot match.
+    """
+    if "$" in w or "`" in w or _BRACE_EXPANSION_RE.search(w) or _EXTGLOB_RE.search(w) or re.search(r"\[[:=.]", w):
+        return True
+    if not re.search(r"[*?\[]", w):
+        return False
+    return fnmatch.fnmatchcase(CLI_NAME, w.rsplit("/", 1)[-1].replace("[^", "[!"))
+
+
+def _command_word_expands(words):
+    """True when the first word (after NAME=value prefixes and redirections) can become the CLI."""
+    for w in words:
         if _ASSIGN_RE.match(w) or _REDIRECT_WORD_RE.match(w):
             continue
-        return w not in _SYNTAX_WORDS and EXPANSION_RE.search(w) is not None
+        return w not in _SYNTAX_WORDS and _name_may_expand(w)
+    return False
+
+
+def _expansion_then_subcommand(words):
+    """True when a word holding an expansion character is followed by a Doppler subcommand.
+
+    The subcommand must be the first argument after the word, past option words (`-p app` skips
+    the value too), the shape of `env $D --json secrets`; a subcommand word further on is prose.
+    """
+    n = len(words)
+    for i, w in enumerate(words):
+        if not EXPANSION_RE.search(w):
+            continue
+        j = i + 1
+        while j < n:
+            x = words[j]
+            if x in SUBCOMMAND_WORDS:
+                return True
+            if _REDIRECT_WORD_RE.match(x):  # `2>&1`, `&> file` between the name and the subcommand
+                j += 2 if re.fullmatch(r"[0-9&]*[<>]+&?", x) else 1
+                continue
+            if not x.startswith("-"):
+                break
+            j += 1
+            if "=" not in x and j < n and not words[j].startswith("-") and words[j] not in SUBCOMMAND_WORDS:
+                j += 1
     return False
 
 
