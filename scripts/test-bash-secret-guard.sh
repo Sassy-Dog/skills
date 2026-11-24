@@ -142,9 +142,19 @@
 #     deny. Proved on synthetic inputs (the driver's self-test: a required shell that is absent skips,
 #     a case with no requirement that prints nowhere still fails, a required shell that is present and
 #     silent fails) and by a CI-shaped second run (GUARD_DIFF_HIDE_SHELLS=bash<4 and CI=1 hide the
-#     old bash) that must complete green and print the SKIPPED line. Mutant: the skip removed (a
-#     missing required shell counts as failing) fails 5 checks (two self-tests, the driver's
-#     completion check in both runs, the CI-shaped run and the SKIPPED-line check). Which shells a run covered is on its `info` line.
+#     old bash) that must complete green and print the SKIPPED line. That second run needs a bash 4+
+#     left on PATH (hiding the only bash makes the driver fail "no bash is available"), so the gate
+#     probes for one first (probe_bash4) and, where there is none, prints `info - SKIPPED the CI-shaped
+#     differential pass` and says why; a committed case injects an empty PATH to prove that path skips
+#     visibly, runs no driver and fails nothing. When a bash older than 4 IS installed the unhidden run
+#     must NOT carry the SKIPPED line for the 3.2 case (its teeth check ran), and when none is the line
+#     must be there. Mutant, measured with bash 3.2 and 5.3 installed: the skip removed (a missing
+#     required shell counts as failing) fails exactly these five checks: the self-tests "a case
+#     requiring a shell that is not present is SKIPPED" and "dash printing does not satisfy a bash<4
+#     requirement", "the differential driver ran to completion", "the driver completes with no bash
+#     older than 4 present" and "the bash 3.2 case's teeth check is skipped with a visible line". The
+#     count is not asserted anywhere and is not claimed for other machines. Which shells a run covered
+#     is on its `info` line.
 #     NOT covered: shells not installed (fish, csh, pwsh and Windows shells never), interactive-only
 #     behaviour (a pager runs only on a tty; history expansion), an alias or function defined OUTSIDE
 #     the command text (aliases written IN the text are denied raw, pinned as deny-only because
@@ -905,19 +915,84 @@ else
 fi
 
 # CI-shaped run: the same driver with every bash older than 4 hidden and CI set, as on a runner that
-# has bash 5 and dash only. It must complete, and it must say, visibly, which teeth check it skipped.
-DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
-GUARD_DIFF_HIDE_SHELLS='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
-diff2_rc=$?
-if [ "$diff2_rc" -eq 0 ] && ! grep -q '^  FAIL - ' "$WORK/diff2.out" && [ "$(grep -c '^  ok   - ' "$WORK/diff2.out")" -ge 80 ]; then
-    ok "the driver completes with no bash older than 4 present (the CI shape)"
+# has bash 5 and dash only. It hides the only bash on a machine that has just bash 3.2, which would
+# fail the driver for a reason that has nothing to do with the code, so it runs only where a bash 4+
+# is on PATH, and says visibly when it does not.
+bash_major() { # <path to a bash> -> its major version, 0 when it cannot say
+    local v
+    v="$("$1" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" || v=0
+    echo "${v:-0}"
+}
+probe_bash() { # <PATH value> <min|max> <N> <candidate>... : 0 when a candidate bash is >= N (min) or < N (max)
+    local pth="$1" mode="$2" n="$3" c p v
+    shift 3
+    for c in "$@"; do
+        p="$(PATH="$pth" command -v "$c" 2>/dev/null)" || continue
+        v="$(bash_major "$p")"
+        if [ "$mode" = min ] && [ "$v" -ge "$n" ]; then return 0; fi
+        if [ "$mode" = max ] && [ "$v" -lt "$n" ] && [ "$v" -gt 0 ]; then return 0; fi
+    done
+    return 1
+}
+ci_shaped_ran=0
+run_ci_shaped_pass() { # <PATH value for the probe> <candidate>... : runs the hidden pass, or skips it visibly
+    local pth="$1"
+    shift
+    ci_shaped_ran=0
+    if ! probe_bash "$pth" min 4 "$@"; then
+        echo "  info - SKIPPED the CI-shaped differential pass: no bash >= 4 on the probed PATH, and hiding the only bash would fail the driver for an unrelated reason"
+        return 0
+    fi
+    ci_shaped_ran=1
+    DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
+    GUARD_DIFF_HIDE_SHELLS='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
+    diff2_rc=$?
+}
+
+# the guard itself: an empty PATH has no bash, so the pass is skipped, visibly, and runs no driver
+EMPTY_BIN="$(mktemp -d "$WORK/emptybin.XXXXXX")"
+rm -f "$WORK/diff2.out"
+skip_out="$(run_ci_shaped_pass "$EMPTY_BIN" bash)"
+if grep -q '^  info - SKIPPED the CI-shaped differential pass' <<<"$skip_out" && [ ! -e "$WORK/diff2.out" ]; then
+    ok "no bash 4+ on the probed PATH: the CI-shaped pass is skipped visibly and runs no driver"
 else
-    bad "the driver completes with no bash older than 4 present (rc=$diff2_rc; $(grep -m3 '^  FAIL - ' "$WORK/diff2.out" | tr '\n' '|'))"
+    bad "no bash 4+ on the probed PATH: the CI-shaped pass is skipped visibly and runs no driver (got: $skip_out)"
 fi
-if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff2.out"; then
-    ok "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+if probe_bash "$EMPTY_BIN" min 4 bash; then bad "the probe finds no bash in an empty PATH"; else ok "the probe finds no bash in an empty PATH"; fi
+if probe_bash "$PATH" min 0 bash; then ok "the probe finds the bash on the real PATH"; else bad "the probe finds the bash on the real PATH"; fi
+fake_bash_dir="$(mktemp -d "$WORK/fakebash.XXXXXX")"
+printf '#!/bin/sh\necho 3\n' >"$fake_bash_dir/bash"
+chmod +x "$fake_bash_dir/bash"
+if probe_bash "$fake_bash_dir" min 4 bash; then bad "a bash reporting 3 does not satisfy the bash >= 4 probe"; else ok "a bash reporting 3 does not satisfy the bash >= 4 probe"; fi
+if probe_bash "$fake_bash_dir" max 4 bash; then ok "a bash reporting 3 satisfies the bash < 4 probe"; else bad "a bash reporting 3 satisfies the bash < 4 probe"; fi
+
+# the real pass (the same candidates the driver tries)
+run_ci_shaped_pass "$PATH" bash /bin/bash
+if [ "$ci_shaped_ran" -eq 1 ]; then
+    if [ "$diff2_rc" -eq 0 ] && ! grep -q '^  FAIL - ' "$WORK/diff2.out" && [ "$(grep -c '^  ok   - ' "$WORK/diff2.out")" -ge 80 ]; then
+        ok "the driver completes with no bash older than 4 present (the CI shape)"
+    else
+        bad "the driver completes with no bash older than 4 present (rc=$diff2_rc; $(grep -m3 '^  FAIL - ' "$WORK/diff2.out" | tr '\n' '|'))"
+    fi
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff2.out"; then
+        ok "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+    else
+        bad "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+    fi
+fi
+# the unhidden run: the teeth check of the bash 3.2 case ran exactly when a bash older than 4 exists
+if probe_bash "$PATH" max 4 bash /bin/bash; then
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff.out"; then
+        bad "a bash older than 4 is installed and the unhidden run still skipped the bash 3.2 teeth check"
+    else
+        ok "a bash older than 4 is installed and the unhidden run checked the bash 3.2 teeth case"
+    fi
 else
-    bad "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff.out"; then
+        ok "no bash older than 4 is installed and the unhidden run skipped the bash 3.2 teeth check visibly"
+    else
+        bad "no bash older than 4 is installed and the unhidden run skipped the bash 3.2 teeth check visibly"
+    fi
 fi
 
 echo "== unclassifiable input fails open, loudly =="
