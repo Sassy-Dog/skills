@@ -97,6 +97,95 @@
 #   - speed: a 0.5-2 MB command (many credential URLs, a leading quote plus many URLs, an
 #     expansion plus 100k words, a plain command) classifies in under 5 s with the expected
 #     exit code; a hook timeout fails open without a word
+#   - #647 (sections "override with a redirect", "writing a secret without printing it", "a bare mention
+#     in a message argument or heredoc does not block", "inert text: nothing the sanitizer cannot
+#     classify is stripped", "the five reviewer-reproduced bypasses", "coordinator review of 2ff5f7e",
+#     "write form redirects" and "differential"): the override survives a plain redirect
+#     (`>/dev/null 2>&1`, `< f`, `>>f`), each paired with the same command denied WITHOUT the prefix,
+#     and stays ignored after a `cd ... &&`, with a heredoc, `<(`/`>(`, `$(`, a detached `&<`, an
+#     ESCAPED `\>&` / `\<&`, or `&>` (dash reads `&>` as a background job: DENIED under the override
+#     by design, so the override has no bash-only spelling); the write form (form 3d) `secrets set
+#     NAME < /path` and `set NAME="$(cat /path)"` is allowed only with stdout AND stderr discarded (a
+#     stdout-only `>/dev/null` stays denied, by design), a blank before the first `>`, a literal path,
+#     one name and no value on the command line.
+#     The message-text sanitizer is ONE tokenizer over an allow-listed grammar (see the module
+#     docstring). A mention inside the quoted strings or quoted-delimiter heredoc body of `git
+#     commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release
+#     create|edit` passes only when EVERY simple command in the input is such an owner (with options on
+#     an exact-spelling list and, for git, a -m/-F message) or `git add|status`, `cd`; otherwise the
+#     WHOLE input is returned raw and denied: `$(`/backtick/`<(`/`>(`/`(`, `$'..'` and `\$'..'`, `#`,
+#     a CR, `<<-`, an unterminated heredoc, any `"$(cat <<'X'` substitution (bash ends such a heredoc at
+#     a line `X)`, bash 3.2 at the first `)` in the body: both leaked and are committed bypass cases),
+#     an unlisted or prefix-spelled option (`--ed`, `--edi`), `-e`, `-c`, `--amend`, `--fixup`, a commit
+#     with no message, `export`, `git config`, `alias`, an assignment alone or outside the closed list
+#     (editor state set by an EARLIER command), a command after a heredoc terminator (the state resets
+#     to a new command), a heredoc owned by bash -c / eval / bash.
+#     DIFFERENTIAL section: scripts/fixtures/secret-guard-differential.py holds a committed corpus
+#     (accepted-grammar messages AND every reviewer-reproduced bypass) plus a generated matrix of
+#     5 message heads x 7 joiners x 9 printer/editor spellings. Each command goes through the real
+#     hook and, under every shell found among bash, /bin/bash, zsh and dash (de-duplicated; the driver
+#     prints which ones ran and says so when zsh or dash is missing), against a FAKE secret-printing
+#     command with fake git and gh shims on PATH, in a fresh mktemp -d directory per run, no network,
+#     no real repo. The git shim runs the editor the way real git does for: GIT_EDITOR, `git config
+#     core.editor`, VISUAL, EDITOR; a commit or annotated tag with no -m/-F/-C; -e/--edit and the
+#     unique prefixes --ed/--edi; -c, --reedit-message, --fixup=amend:/reword:; and a re-edit sees the
+#     text of earlier messages. It is a model of those behaviours, not real git. Asserted: whenever
+#     the hook ALLOWS a command, the marker did not reach stdout or stderr under any shell, and no
+#     shell run of it timed out (a timeout on an allowed command is a FAIL); each "bypass" case also
+#     PRINTS under at least one shell (so the case has teeth); the driver's exit status and a minimum
+#     check count are asserted (a crashed driver cannot pass). With CI set the driver requires bash.
+#     ONE bypass case needs a particular shell: "bash 3.2 ends the substitution at the first ) in the
+#     body" prints only under bash older than 4 (macOS /bin/bash 3.2). The hook-side deny of that case
+#     always runs; its "really prints" check runs only when a bash older than 4 is installed, and is
+#     SKIPPED otherwise with a visible `info - SKIPPED the teeth check of ...` line. So a macOS run
+#     covers it and CI (ubuntu: bash 5.x and dash) does NOT: there it is pinned only by the hook-side
+#     deny. Proved on synthetic inputs (the driver's self-test: a required shell that is absent skips,
+#     a case with no requirement that prints nowhere still fails, a required shell that is present and
+#     silent fails) and by a CI-shaped second run (GUARD_DIFF_HIDE_SHELLS=bash<4 and CI=1 hide the
+#     old bash) that must complete green and print the SKIPPED line. That second run needs a bash 4+
+#     left on PATH (hiding the only bash makes the driver fail "no bash is available"), so the gate
+#     probes for one first (probe_bash4) and, where there is none, prints `info - SKIPPED the CI-shaped
+#     differential pass` and says why; a committed case injects an empty PATH to prove that path skips
+#     visibly, runs no driver and fails nothing. When a bash older than 4 IS installed the unhidden run
+#     must NOT carry the SKIPPED line for the 3.2 case (its teeth check ran), and when none is the line
+#     must be there. Mutant, measured with bash 3.2 and 5.3 installed: the skip removed (a missing
+#     required shell counts as failing) fails exactly these five checks: the self-tests "a case
+#     requiring a shell that is not present is SKIPPED" and "dash printing does not satisfy a bash<4
+#     requirement", "the differential driver ran to completion", "the driver completes with no bash
+#     older than 4 present" and "the bash 3.2 case's teeth check is skipped with a visible line". The
+#     count is not asserted anywhere and is not claimed for other machines. Which shells a run covered
+#     is on its `info` line.
+#     NOT covered: shells not installed (fish, csh, pwsh and Windows shells never), interactive-only
+#     behaviour (a pager runs only on a tty; history expansion), an alias or function defined OUTSIDE
+#     the command text (aliases written IN the text are denied raw, pinned as deny-only because
+#     non-interactive bash does not expand them), hooks a real git would run, the real gh/git/Doppler
+#     CLIs (the shims only echo), and any command the corpus and matrix do not contain: the
+#     differential is a check of the tokenizer against real shells on those inputs, not a proof. The
+#     write form and the sanitizer are asserted only against the hook's own text rules: no live
+#     Doppler CLI is run, so that `set NAME` really reads its value from stdin is NOT proved here.
+#     KNOWN GAP (dash): the guard's text rules that treat `&>` as a redirect (the glob-trigger
+#     splitter, whose over-reading only triggers more) are bash/zsh readings; dash reads `&>f` as `&`
+#     then `>f`. The override and the sanitizer do not rely on it, as above.
+#     Mutants run against hooks/bash-secret-guard.py for #647, on the tokenizer (failing-case
+#     count): no reset to "start" after a heredoc terminator (10); `$` accepted in words (1);
+#     backslash accepted in words (4); any assignment name before an owner (2); any other command
+#     allowed in the input (5); the option allow list not applied (9); long options matched by unique
+#     prefix (2); -e accepted in the commit short cluster (1); no message required for a git owner
+#     (4); -F not counted as a message (4); the double-quote body not checked (17); heredoc terminator
+#     compared after stripping a CR (3); a redirect target taken as a command word (1); an
+#     unterminated heredoc taken as all body (4); the override `&` honoured after an escaped `>` (8);
+#     the override accepting `&>` (4); the glob splitter splitting at CR (3); drop `merge` (1); drop
+#     `git tag` (3); drop `gh release` (2); unknown-operator check dropped AND parens accepted (4);
+#     blanked text emitted for every command (3); `#` accepted in words (6); backtick accepted in
+#     words (4); discard of stdout only accepted for `set` (1); the blank before the first `>` of the
+#     write form optional (1).
+#     EQUIVALENT mutants (0 failing; no committed case can tell them apart, and the reason is stated,
+#     not assumed): CR accepted as a separator, a bare `git`/`gh` accepted as a complete command, a
+#     pipe after an owner, a heredoc operator under a non-owner, an assignment-only command, and the
+#     unknown-operator check alone or with `<<<` handling or with `&>` accepted as an operator. Every
+#     one of them is subsumed by the allow list: after it, the only commands that can be reached are
+#     owners and `git add|status`, `cd`, none of which executes a word, a pipe's input or stdin text,
+#     and the closed assignment names carry no executable value, so the extra guard only adds depth.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -393,8 +482,6 @@ deny "ruby -e" "ruby -e 'system(\"doppler secrets get X\")'"
 deny "node -e" "node -e 'execSync(\"doppler secrets get X\")'"
 deny "osascript -e" "osascript -e 'do shell script \"doppler secrets get X\"'"
 deny "python string concatenation" "python3 -c 'import os; os.system(\"dopp\"+\"ler secrets get X\")'"
-deny "a commit message that mentions the phrase" 'git commit -m "doppler secrets get is dangerous"'
-deny "a PR body that mentions doppler" "gh pr create --body 'uses doppler for secrets'"
 deny "grep for the words" 'grep -rn "doppler secrets" docs/'
 
 echo "== command names the text does not spell literally =="
@@ -600,6 +687,313 @@ deny "URL bypass with a pipe" 'SASSYDOG_ALLOW_CREDENTIAL_URL=1 psql postgres://a
 err="$(printf '%s' "$(event 'doppler secrets get X')" | SASSYDOG_ALLOW_DOPPLER_PRINT=1 SASSYDOG_ALLOW_CREDENTIAL_URL=1 bash "$HOOK" 2>&1 >/dev/null)"
 rc=$?
 if [ "$rc" -eq 2 ]; then ok "the hook's own environment is not a bypass"; else bad "the hook's own environment is not a bypass (rc=$rc)"; fi
+
+echo "== override with a redirect (#647) =="
+deny "no prefix: get with an input redirect" 'doppler secrets get X < /tmp/f'
+allow "override before a get with an input redirect" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X < /tmp/f'
+deny "no prefix: get appended with stderr dup" 'doppler secrets get X >>/tmp/f 2>&1'
+allow "override before a get appended with stderr dup" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X >>/tmp/f 2>&1'
+deny "no prefix: get with &> redirect" 'doppler secrets get X &>/tmp/f'
+deny "override does not take &> (dash reads it as a background job and a redirect)" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X &>/tmp/f'
+deny "override does not take a detached &< (an & before <)" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true &<x doppler secrets get X'
+deny "override ignored after a cd prefix" 'cd /tmp && SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X'
+deny "override with a heredoc is ignored" $'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X <<EOF\nx\nEOF'
+deny "override with process substitution is ignored" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets get X > >(cat)'
+deny "override with a capture is ignored" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 doppler secrets set X="$(cat /tmp/f)" >/dev/null'
+deny "the denial message says where the override goes" 'cd /tmp && doppler secrets get X'
+case "$err" in
+    *"very first thing"*"cd ... &&"*"one simple command"*) ok "the denial message states the override position and shape" ;;
+    *) bad "the denial message states the override position and shape (got: $err)" ;;
+esac
+
+echo "== writing a secret without printing it (#647) =="
+allow "set from stdin file" 'doppler secrets set DATABASE_URL < /tmp/neon.txt >/dev/null 2>&1'
+allow "set from stdin file with -p -c" 'doppler secrets set DATABASE_URL -p app -c prd < /tmp/neon.txt >/dev/null 2>&1'
+allow "set from stdin file, global flags first" 'doppler --no-check-version secrets set DATABASE_URL < ~/neon.txt >/dev/null 2>&1'
+allow "set from stdin file, stderr to /dev/null" 'doppler secrets set DATABASE_URL < /tmp/neon.txt >/dev/null 2>/dev/null'
+allow "set NAME from cat of a literal path" 'doppler secrets set DATABASE_URL="$(cat /tmp/neon.txt)" -p app -c prd >/dev/null 2>&1'
+allow "set NAME from cat, flags first" 'doppler secrets set -p app -c prd DATABASE_URL="$(cat /tmp/neon.txt)" >/dev/null 2>&1'
+deny "set with the value on the command line" 'doppler secrets set X=hunter2 >/dev/null 2>&1'
+deny "set with a positional value" 'doppler secrets set X hunter2 < /tmp/f >/dev/null 2>&1'
+deny "set with no discard" 'doppler secrets set X < /tmp/f'
+deny "set discarding stdout only" 'doppler secrets set X < /tmp/f >/dev/null'
+deny "set discarding stderr only" 'doppler secrets set X < /tmp/f 2>/dev/null'
+deny "set with stderr to stdout, stdout kept" 'doppler secrets set X < /tmp/f 2>&1'
+deny "set with the redirect order reversed" 'doppler secrets set X < /tmp/f 2>&1 >/dev/null'
+deny "set with stdout to a real file" 'doppler secrets set X < /tmp/f >/tmp/out 2>&1'
+deny "set with no source at all" 'doppler secrets set X >/dev/null 2>&1'
+deny "set with both a stdin file and a cat" 'doppler secrets set X="$(cat /tmp/a)" < /tmp/b >/dev/null 2>&1'
+deny "set from a device path" 'doppler secrets set X < /dev/stdin >/dev/null 2>&1'
+deny "set from /proc" 'doppler secrets set X < /proc/self/environ >/dev/null 2>&1'
+deny "set from a path with a dot segment" 'doppler secrets set X < /tmp/../dev/tty >/dev/null 2>&1'
+deny "set from a variable path" 'doppler secrets set X < $F >/dev/null 2>&1'
+deny "set from cat of a variable path" 'doppler secrets set X="$(cat $F)" >/dev/null 2>&1'
+deny "set from cat with an extra command" 'doppler secrets set X="$(cat /tmp/f; echo hi)" >/dev/null 2>&1'
+deny "set from cat of two paths" 'doppler secrets set X="$(cat /tmp/a /tmp/b)" >/dev/null 2>&1'
+deny "set with a second name" 'doppler secrets set X Y < /tmp/f >/dev/null 2>&1'
+deny "set with --silent and no discard" 'doppler secrets set X < /tmp/f --silent'
+deny "set with an unknown flag" 'doppler secrets set X --raw < /tmp/f >/dev/null 2>&1'
+deny "set with --token" 'doppler secrets set X --token dp.st.x < /tmp/f >/dev/null 2>&1'
+deny "set after a cd prefix" 'cd /tmp && doppler secrets set X < /tmp/f >/dev/null 2>&1'
+deny "set chained to a get" 'doppler secrets set X < /tmp/f >/dev/null 2>&1; doppler secrets get X'
+deny "set piped on" 'doppler secrets set X < /tmp/f >/dev/null 2>&1 | cat'
+deny "set with a tee value" 'doppler secrets set X="$(cat /tmp/f | tee /dev/stderr)" >/dev/null 2>&1'
+deny "set with a tail after the discard" 'doppler secrets set X < /tmp/f >/dev/null 2>&1 && echo done'
+deny "set without a name" 'doppler secrets set < /tmp/f >/dev/null 2>&1'
+deny "get still denied beside set" 'doppler secrets get X >/dev/null 2>&1'
+
+echo "== a bare mention in a message argument or heredoc does not block (#647) =="
+allow "git commit -m double-quoted mention" 'git commit -m "doppler secrets get is dangerous"'
+allow "git commit -m single-quoted mention" "git commit -m 'fix the doppler guard'"
+allow "gh pr create --body single-quoted mention" "gh pr create --body 'uses doppler for secrets'"
+allow "gh issue create title with the word" 'gh issue create --title "doppler guard blocks sets" --body "see the hook"'
+deny "a heredoc substitution body is outside the grammar (shells disagree where it ends)" $'gh issue create --title "x" --body "$(cat <<\'EOF\'\nrun doppler secrets get X to see it\nEOF\n)"'
+deny "git commit -m with a heredoc substitution is outside the grammar" $'git commit -m "$(cat <<\'EOF\'\nfix: doppler secrets get is blocked\nEOF\n)"'
+allow "heredoc body via gh --body-file -" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X\nEOF'
+allow "git add then commit with a mention" 'git add -A && git commit -m "doppler guard"'
+allow "cd then gh with a mention" 'cd /tmp && gh pr create --title "doppler" --body "doppler"'
+allow "mention behind a leading assignment" 'GIT_AUTHOR_NAME=x git commit -m "doppler"'
+deny "a double-quoted capture in a commit message still denies" 'git commit -m "$(doppler secrets get X --plain)"'
+deny "a backtick capture in a commit message still denies" 'git commit -m "`doppler secrets get X --plain`"'
+deny "an unquoted real command after a message still denies" 'git commit -m "doppler" && doppler secrets get X'
+deny "an unbalanced quote sanitizes nothing" 'git commit -m "doppler secrets get X'
+deny "git -c with a single-quoted string is not inert" "git -c core.pager='doppler secrets get X' log"
+deny "git log message-less mention" 'git log --grep=doppler'
+deny "echo with a mention" 'echo "uses doppler"'
+deny "grep for the word" 'grep -rn doppler docs/'
+deny "bash heredoc is executed" $'bash <<\'EOF\'\ndoppler secrets get X\nEOF'
+deny "cat heredoc piped to bash" $'cat <<\'EOF\' | bash\ndoppler secrets get X\nEOF'
+deny "commit then cat heredoc piped to bash" $'git commit -m x && cat <<\'EOF\' | bash\ndoppler secrets get X\nEOF'
+deny "heredoc under a non-inert command with an inert one earlier" $'git commit -m x; bash <<\'EOF\'\ndoppler secrets get X\nEOF'
+deny "unquoted heredoc delimiter expands" $'gh issue comment 5 --body-file - <<EOF\n$(doppler secrets get X --plain)\nEOF'
+deny "gh body with a capture inside a double-quoted string" 'gh issue create --body "$(doppler secrets get X --plain)"'
+deny "gh body ANSI-C string is not blanked" "gh issue create --body \$'doppler secrets get X'"
+deny "heredoc opened inside a command substitution of another command" $'git commit -m "$(bash <<\'EOF\'\ndoppler secrets get X\nEOF\n)"'
+deny "git commit heredoc, shell command after the body" $'git commit -F - <<\'EOF\'\nmsg\nEOF\ndoppler secrets get X'
+deny "gh api is not a message command" "gh api repos/o/r/issues -f body='doppler'"
+deny "git commit mention carrying a literal URL password" 'git commit -m "postgres://a:b@h/d"' 'literal password'
+
+echo "== inert text: nothing the sanitizer cannot classify is stripped (#647 coordinator review) =="
+# 1. substitutions outside quotes
+deny 'commit -m with a $(...) substitution running a printer' "git commit -m \$(sh -c 'doppler secrets get X --plain')"
+deny "commit -m with a backtick substitution running a printer" "git commit -m \`sh -c 'doppler secrets get X --plain'\`"
+deny "gh --body-file <(...) running a printer" "gh pr create --title t --body-file <(sh -c 'doppler secrets get X --plain')"
+deny "gh --body-file >(...)" "gh pr create --title t --body-file >(sh -c 'doppler secrets get X --plain')"
+deny "a subshell group after the message" "git commit -m x && (sh -c 'doppler secrets get X --plain')"
+# 2. the rest of the heredoc line
+deny "gh body heredoc substitution piped to bash" $'gh pr create --title t --body "$(cat <<\'EOF\' | bash\ndoppler secrets get X --plain\nEOF\n)"'
+deny "git commit heredoc substitution piped to bash" $'git commit -m "$(cat <<\'EOF\' | bash\ndoppler secrets get X --plain\nEOF\n)"'
+deny "heredoc operator followed by a command on its line" $'gh issue comment 5 --body-file - <<\'EOF\' && sh\ndoppler secrets get X --plain\nEOF'
+# 3. the operator must be real and owned by an inert segment
+deny "heredoc operator inside a quoted message" $'git commit -m "see <<\'EOF\'"\ndoppler secrets get X --plain\nEOF'
+deny "heredoc operator inside a single-quoted message" $'git commit -m \'see <<\'"\'EOF\'"$\'\'\ndoppler secrets get X --plain\nEOF'
+deny "heredoc substitution owned by bash -c" $'bash -c "$(cat <<\'EOF\'\ndoppler secrets get X --plain\nEOF\n)"'
+deny "heredoc substitution owned by eval" $'eval "$(cat <<\'EOF\'\ndoppler secrets get X --plain\nEOF\n)"'
+deny "quoted ; git commit fools the segment start" $'bash -s "; git commit x" <<\'EOF\'\ndoppler secrets get X --plain\nEOF'
+deny "quoted && gh pr create fools the segment start" $'bash -s \'&& gh pr create\' <<\'EOF\'\ndoppler secrets get X --plain\nEOF'
+# 4. comments
+deny "apostrophe in a comment fakes a quote across a newline" $'git commit -m \'a\' # it\'s done\ndoppler secrets get X --plain # won\'t'
+deny "double quote in a comment fakes a quote" $'git commit -m "a" # say "hi\ndoppler secrets get X --plain # bye"'
+allow "a hash inside a quoted message is text" 'git commit -m "fix #647 doppler"'
+deny "an unquoted hash is not recognised, so nothing is stripped" 'git commit -m "doppler" --author=a#b'
+# (a) assignments before the command word
+deny "quoted assignment value before the command" "GIT_EDITOR='doppler\${IFS}secrets\${IFS}get\${IFS}X;:' git commit"
+deny "quoted assignment value before gh" "GH_PAGER=\"doppler secrets get X\" gh issue create --title t"
+allow "quote-free assignment before git commit" 'GIT_AUTHOR_NAME=bot git commit -m "doppler"'
+# (d) the other inert verbs, forms and shapes
+allow "git tag -m mention" 'git tag -a v1 -m "doppler guard"'
+allow "gh pr merge mention" 'gh pr merge 5 --squash --body "doppler"'
+allow "gh pr close mention" 'gh pr close 5 --comment "doppler"'
+allow "gh pr review mention" 'gh pr review 5 --comment --body "doppler"'
+allow "gh pr edit mention" 'gh pr edit 5 --body "doppler"'
+allow "gh issue reopen mention" 'gh issue reopen 5 --comment "doppler"'
+allow "gh release edit mention" 'gh release edit v1 --notes "doppler"'
+allow "gh release create mention" 'gh release create v1 --notes "doppler"'
+deny "gh release view is not a message command" 'gh release view v1 --json body --jq ".body" "doppler"'
+deny "gh release delete is not a message command" 'gh release delete v1 "doppler"'
+deny "gh issue list is not a message command" 'gh issue list --search "doppler"'
+deny "git log --grep is not a message command" 'git log --grep "doppler"'
+deny "git config is not a message command" 'git config alias.x "!doppler secrets get X"'
+deny "<<- is outside the accepted grammar: nothing is stripped" $'gh issue comment 5 --body-file - <<-\'EOF\'\n\tdoppler secrets get X\n\tEOF'
+deny "a CR after the heredoc operator is outside the grammar: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\r\ndoppler secrets get X\r\nEOF\r\n'
+deny "two heredoc substitutions are outside the grammar" $'git commit -m "$(cat <<\'A\'\ndoppler one\nA\n)" -m "$(cat <<\'B\'\ndoppler two\nB\n)"'
+deny "two heredocs on one line are not classified" $'gh issue comment 5 --body-file - <<\'A\' <<\'B\'\ndoppler secrets get X\nA\nB'
+deny "an unterminated heredoc is not classified: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\ndoppler secrets get X'
+deny "a terminator with a trailing blank is not one: nothing is stripped" $'gh issue comment 5 --body-file - <<\'EOF\'\nbody\nEOF \ndoppler secrets get X --plain'
+deny "unquoted delimiter heredoc to gh" $'gh issue comment 5 --body-file - <<EOF\ndoppler secrets get X\nEOF'
+deny "commit message followed by a real printer after a newline" $'git commit -m "doppler"\ndoppler secrets get X --plain'
+deny "here-string to bash after a commit" 'git commit -m x && bash <<< "doppler secrets get X"'
+
+echo "== the five reviewer-reproduced bypasses of #648, each with the message check (#647) =="
+# Each runs against real shells in the differential section below, where it also must print.
+deny "after a quoted heredoc terminator, a sh -c printer" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\nsh -c \'doppler secrets get X --plain\''
+deny "after a git commit -F - heredoc terminator, a sh -c printer" $'git commit -F - <<\'EOF\'\nhi\nEOF\nsh -c \'doppler secrets get X --plain\''
+deny "after a heredoc terminator, a quote-split command word" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\nd\'oppler\' secrets get X --plain'
+deny "double-quote scan after a cat heredoc body" $'git commit -m "$(cat <<\'EOF\'\nEOF\n: "\'"; doppler secrets get X --plain; : "\'")"'
+deny "escaped dollar before an ANSI-C lookalike" "git commit -m \\\$'\\' 'a' ; doppler secrets get X --plain ; : '\\'"
+deny "dollar dollar before an ANSI-C lookalike" "git commit -m \$\$'\\' 'a' ; doppler secrets get X --plain ; : '\\'"
+deny "commands after the cat heredoc terminator, inside the substitution" $'git commit -m "$(cat <<\'EOF\'\nhi\nEOF\n:; sh -c \'doppler secrets get X --plain\'\n)"'
+allow "a CR before the newline is not a terminator: the rest is still body" $'gh issue comment 5 --body-file - <<\'EOF\'\nhi\nEOF\r\nsh -c \'doppler secrets get X --plain\'\nEOF'
+deny "a bare CR does not split a segment for the glob trigger (over-trigger, deliberate)" $'echo $X\rsecrets'
+deny "a bare CR is not a separator (eval)" $'eval : \rgit commit \\; \'doppler secrets get X --plain\''
+deny "a bare CR is not a separator (sh -c)" $'sh -c \'$2\' \rgit commit \'doppler secrets get X --plain\''
+deny "an escaped >& is not a redirect" "git commit -m x \\>& sh -c 'doppler secrets get X --plain'"
+deny "process substitution with eval, nothing for the option list to trip on" "gh pr create --title t --body-file <(eval 'doppler secrets get X --plain')"
+deny "backtick with eval in a commit message" "git commit -m \`eval 'doppler secrets get X --plain'\`"
+deny "a mention in a git add argument is not stripped" "git add 'doppler.txt'"
+deny "an escaped >& then eval is not a redirect" "git commit -m x \\>& eval 'doppler secrets get X --plain'"
+deny "an escaped <& is not a redirect" "git commit -m x \\<& sh -c 'doppler secrets get X --plain'"
+deny "override prefix with an escaped >&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true \>& doppler secrets get X'
+deny "override prefix with an escaped <&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true \<& doppler secrets get X'
+allow "override prefix with a real >&" 'SASSYDOG_ALLOW_DOPPLER_PRINT=1 true >&2'
+deny "GIT_EDITOR with -e runs the editor on the message" "GIT_EDITOR=sh git commit -e -m 'doppler secrets get X --plain'"
+deny "an EDITOR-named assignment is not on the closed list" "GIT_SEQUENCE_EDITOR=sh git commit -m 'doppler'"
+deny "a PAGER-named assignment is not on the closed list" "GIT_PAGER=sh git tag -m 'doppler'"
+deny "-e inside a short flag cluster" "git commit -ae -m 'doppler'"
+deny "--edit" "git commit --edit -m 'doppler'"
+deny "--amend is not on the option allow list, even with --no-edit" "git commit --amend --no-edit -m 'doppler'"
+allow "a message starting with e after -m is not a cluster" "git commit -me 'doppler'"
+deny "a message command's output piped on" "git commit -m 'doppler' | cat"
+deny "a redirect target named git does not make an owner" "> git commit -m 'doppler secrets get X --plain'"
+
+echo "== coordinator review of 2ff5f7e: editor state, option prefixes, heredoc substitution (#647) =="
+# BLOCKING 1: editor state set by an EARLIER command, git's unique-prefix long options
+deny "export GIT_EDITOR then --edi" "export GIT_EDITOR=sh; git commit --allow-empty --edi -m 'doppler secrets get X --plain'"
+deny "export GIT_EDITOR then --ed" "export GIT_EDITOR=sh; git commit --allow-empty --ed -m 'doppler secrets get X --plain'"
+deny "git config core.editor then --edi" "git config core.editor sh; git commit --allow-empty --edi -m 'doppler secrets get X --plain'"
+deny "export VISUAL then --edi" "export VISUAL=sh; git commit --allow-empty --edi -m 'doppler secrets get X --plain'"
+deny "export GIT_EDITOR, --edi, heredoc message" $'export GIT_EDITOR=sh; git commit --allow-empty --edi -F - <<\'EOF\'\ndoppler secrets get X --plain\nEOF'
+deny "export GIT_EDITOR, annotated tag --edi" "export GIT_EDITOR=sh; git tag -a v9 --edi -m 'doppler secrets get X --plain'"
+deny "blank, then re-edit with -c HEAD" "git commit --allow-empty -m 'doppler secrets get X --plain'; export GIT_EDITOR=sh; git commit -c HEAD"
+deny "blank, then re-edit with --reedit-message" "git commit --allow-empty -m 'doppler secrets get X --plain'; export GIT_EDITOR=sh; git commit --reedit-message=HEAD"
+deny "blank, then re-edit with --fixup=amend:" "git commit --allow-empty -m 'doppler secrets get X --plain'; export GIT_EDITOR=sh; git commit --fixup=amend:HEAD"
+deny "an assignment-only command before the owner" "GIT_EDITOR=sh; git commit -m 'doppler'"
+deny "any other command in the input returns the whole text raw" "echo hi; git commit -m 'doppler'"
+deny "an alias in the text returns the whole text raw" "alias git='sh -c'; git commit -m 'doppler'"
+deny "git config in the input returns the whole text raw" "git config user.name x && git commit -m 'doppler'"
+deny "a long option that is only a prefix of --edit" "git commit --ed -m 'doppler'"
+deny "-c reuses and edits a message" "git commit -c HEAD -m 'doppler'"
+deny "-C is not on the list" "git commit -C HEAD -m 'doppler'"
+deny "--fixup is not on the list" "git commit --fixup HEAD -m 'doppler'"
+deny "--squash is not on the list" "git commit --squash HEAD -m 'doppler'"
+deny "a commit with no message could open an editor" "git commit -a 'doppler'"
+deny "a tag with no message option" "git tag v1 'doppler'"
+deny "an unlisted gh option" "gh pr create --web --title 'doppler'"
+allow "git status beside an owner" "git status && git commit -m 'doppler'"
+allow "cd beside an owner" "cd /tmp && git commit -F - <<'EOF'
+doppler secrets get X
+EOF"
+allow "a plain commit with listed options" "git commit -a -s --allow-empty -m 'doppler'"
+# BLOCKING 2: the substitution form is gone; these leaked under real bash
+deny "heredoc ended by a line EOF) inside the substitution" $'git commit --allow-empty -m "$(cat <<\'EOF\'\nEOF)" ; doppler secrets get X --plain ; : "\nEOF\n)"'
+deny "heredoc ended by a line EOF) inside gh pr create" $'gh pr create --title t --body "$(cat <<\'EOF\'\nEOF)" ; doppler secrets get X --plain ; : "\nEOF\n)"'
+deny "bash 3.2 ends the substitution at the first ) in the body" $'git commit --allow-empty -m "$(cat <<\'EOF\'\nx )" ; doppler secrets get X --plain ; : "(\nEOF\n)"'
+
+echo "== write form redirects: blanks (#647) =="
+allow "a blank after > is accepted" 'doppler secrets set X < /tmp/f > /dev/null 2>&1'
+deny "no blank before > (glued to the path)" 'doppler secrets set X < /tmp/f>/dev/null 2>&1'
+deny "no blank before 2> (glued)" 'doppler secrets set X < /tmp/f >/dev/null2>&1'
+
+echo "== differential: the hook against real shells and a fake printer (#647) =="
+DIFF_SCRATCH="$(mktemp -d "$WORK/diff.XXXXXX")"
+python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH" >"$WORK/diff.out" 2>&1
+diff_rc=$?
+diff_ok=0
+while IFS= read -r line; do
+    case "$line" in
+        "  ok   - "*) ok "${line#  ok   - }"; diff_ok=$((diff_ok + 1)) ;;
+        "  FAIL - "*) bad "${line#  FAIL - }" ;;
+        "  info - "*) echo "$line" ;;
+        *) echo "  driver: $line" ;;
+    esac
+done <"$WORK/diff.out"
+# A driver that crashed prints no FAIL line: its exit status and a minimum of checks are asserted.
+if [ "$diff_rc" -eq 0 ] && [ "$diff_ok" -ge 80 ]; then
+    ok "the differential driver ran to completion ($diff_ok checks)"
+else
+    bad "the differential driver ran to completion (rc=$diff_rc, ok lines=$diff_ok)"
+fi
+
+# CI-shaped run: the same driver with every bash older than 4 hidden and CI set, as on a runner that
+# has bash 5 and dash only. It hides the only bash on a machine that has just bash 3.2, which would
+# fail the driver for a reason that has nothing to do with the code, so it runs only where a bash 4+
+# is on PATH, and says visibly when it does not.
+bash_major() { # <path to a bash> -> its major version, 0 when it cannot say
+    local v
+    v="$("$1" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" || v=0
+    echo "${v:-0}"
+}
+probe_bash() { # <PATH value> <min|max> <N> <candidate>... : 0 when a candidate bash is >= N (min) or < N (max)
+    local pth="$1" mode="$2" n="$3" c p v
+    shift 3
+    for c in "$@"; do
+        p="$(PATH="$pth" command -v "$c" 2>/dev/null)" || continue
+        v="$(bash_major "$p")"
+        if [ "$mode" = min ] && [ "$v" -ge "$n" ]; then return 0; fi
+        if [ "$mode" = max ] && [ "$v" -lt "$n" ] && [ "$v" -gt 0 ]; then return 0; fi
+    done
+    return 1
+}
+ci_shaped_ran=0
+run_ci_shaped_pass() { # <PATH value for the probe> <candidate>... : runs the hidden pass, or skips it visibly
+    local pth="$1"
+    shift
+    ci_shaped_ran=0
+    if ! probe_bash "$pth" min 4 "$@"; then
+        echo "  info - SKIPPED the CI-shaped differential pass: no bash >= 4 on the probed PATH, and hiding the only bash would fail the driver for an unrelated reason"
+        return 0
+    fi
+    ci_shaped_ran=1
+    DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
+    GUARD_DIFF_HIDE_SHELLS='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
+    diff2_rc=$?
+}
+
+# the guard itself: an empty PATH has no bash, so the pass is skipped, visibly, and runs no driver
+EMPTY_BIN="$(mktemp -d "$WORK/emptybin.XXXXXX")"
+rm -f "$WORK/diff2.out"
+skip_out="$(run_ci_shaped_pass "$EMPTY_BIN" bash)"
+if grep -q '^  info - SKIPPED the CI-shaped differential pass' <<<"$skip_out" && [ ! -e "$WORK/diff2.out" ]; then
+    ok "no bash 4+ on the probed PATH: the CI-shaped pass is skipped visibly and runs no driver"
+else
+    bad "no bash 4+ on the probed PATH: the CI-shaped pass is skipped visibly and runs no driver (got: $skip_out)"
+fi
+if probe_bash "$EMPTY_BIN" min 4 bash; then bad "the probe finds no bash in an empty PATH"; else ok "the probe finds no bash in an empty PATH"; fi
+if probe_bash "$PATH" min 0 bash; then ok "the probe finds the bash on the real PATH"; else bad "the probe finds the bash on the real PATH"; fi
+fake_bash_dir="$(mktemp -d "$WORK/fakebash.XXXXXX")"
+printf '#!/bin/sh\necho 3\n' >"$fake_bash_dir/bash"
+chmod +x "$fake_bash_dir/bash"
+if probe_bash "$fake_bash_dir" min 4 bash; then bad "a bash reporting 3 does not satisfy the bash >= 4 probe"; else ok "a bash reporting 3 does not satisfy the bash >= 4 probe"; fi
+if probe_bash "$fake_bash_dir" max 4 bash; then ok "a bash reporting 3 satisfies the bash < 4 probe"; else bad "a bash reporting 3 satisfies the bash < 4 probe"; fi
+
+# the real pass (the same candidates the driver tries)
+run_ci_shaped_pass "$PATH" bash /bin/bash
+if [ "$ci_shaped_ran" -eq 1 ]; then
+    if [ "$diff2_rc" -eq 0 ] && ! grep -q '^  FAIL - ' "$WORK/diff2.out" && [ "$(grep -c '^  ok   - ' "$WORK/diff2.out")" -ge 80 ]; then
+        ok "the driver completes with no bash older than 4 present (the CI shape)"
+    else
+        bad "the driver completes with no bash older than 4 present (rc=$diff2_rc; $(grep -m3 '^  FAIL - ' "$WORK/diff2.out" | tr '\n' '|'))"
+    fi
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff2.out"; then
+        ok "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+    else
+        bad "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
+    fi
+fi
+# the unhidden run: the teeth check of the bash 3.2 case ran exactly when a bash older than 4 exists
+if probe_bash "$PATH" max 4 bash /bin/bash; then
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff.out"; then
+        bad "a bash older than 4 is installed and the unhidden run still skipped the bash 3.2 teeth check"
+    else
+        ok "a bash older than 4 is installed and the unhidden run checked the bash 3.2 teeth case"
+    fi
+else
+    if grep -q "^  info - SKIPPED the teeth check of 'bash 3.2 ends the substitution" "$WORK/diff.out"; then
+        ok "no bash older than 4 is installed and the unhidden run skipped the bash 3.2 teeth check visibly"
+    else
+        bad "no bash older than 4 is installed and the unhidden run skipped the bash 3.2 teeth check visibly"
+    fi
+fi
 
 echo "== unclassifiable input fails open, loudly =="
 failopen "empty stdin" ''

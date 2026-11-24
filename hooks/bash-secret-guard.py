@@ -6,7 +6,8 @@ FAILS OPEN there and says so on stderr (Claude Code shows stderr of any non-0/2 
 non-blocking error). It never prints to stdout.
 
 Two rules, both over the raw command text only (a PreToolUse hook cannot see output). There
-is no shell parser anywhere: every shell-parsing classifier tried here lost to a new spelling,
+is no general shell parser (the one tokenizer, sanitize(), recognises a tiny allow-listed grammar
+and gives up on anything else): every shell-parsing classifier tried here lost to a new spelling,
 so the Doppler rule is a WHOLE-COMMAND ALLOW LIST matched on the raw string, which cannot
 disagree with itself about quoting.
 
@@ -56,11 +57,17 @@ disagree with itself about quoting.
         needs the loaded shell inside one call; a follow-up command runs as
         `doppler run [-p P] [-c C] -- <command>` (form 2). The gate extracts every doppler
         command under skills/ and requires it to pass)
+     3d. WRITING a secret: `doppler [global flags] secrets set NAME [-p P] [-c C] < <literal path>`
+        or `... set NAME="$(cat <literal path>)" ...`, in both cases ending in `>/dev/null 2>&1`
+        or `>/dev/null 2>/dev/null` (a blank before the first `>` is required, after it optional; nothing after it). `set` prints a table with the values
+        unless its output is discarded, and the value comes from a file, so it never appears in
+        the command text. A value on the command line (`set NAME=value`) is not allowed
      4. a bare non-printing subcommand: login, logout, setup, configs, projects,
         environments, me, update, activity, changelog, open, settings, flags, help,
         --version, --help
    where "exactly one" means: a single simple command (no ; & | && || newline, backtick, $(,
-   <(, >(, <<, <, >& ...), no environment prefix, no wrapper, the command word is the literal
+   <(, >(, <<, <, >& ...; the one exception is the 3d write form, which carries its own `< path`,
+   `$(cat <path>)` and `>/dev/null 2>&1`), no environment prefix, no wrapper, the command word is the literal
    lower-case `doppler`, every flag is on an explicit per-subcommand allow list with a literal
    value that does not start with `-`, and an unknown flag denies (`--debug` and `--api-host`
    are on no list: one logs requests, the other would send the token to any host). A literal path has only
@@ -73,9 +80,33 @@ disagree with itself about quoting.
    inside single quotes `$` is literal and does not.
 
 Per-command bypass: LEADING, unquoted `SASSYDOG_ALLOW_DOPPLER_PRINT=1` /
-`SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments, honoured only when the rest of the command is a
-single simple command (no ; & | newline, backtick, $(, <(, >( outside single quotes). Never by
-substring, never from the hook's own environment.
+`SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments (the first thing in the command: a `cd x &&` before
+it makes it an ordinary argument), honoured only when the rest of the command is a single simple
+command (no ; & | newline, backtick, $(, <(, >(, << outside quotes; a plain redirect such as
+`>/dev/null 2>&1` or `< file` is fine). Never by substring, never from the hook's own environment.
+
+Inert text (#647): before the trigger runs, `sanitize()` blanks the text a command only CARRIES, so
+the word in it does not deny. It is ONE left-to-right tokenizer over a tiny allow-listed grammar and
+it fails closed: the whole input must tokenize as words (letters, digits, `_./:=,+@%-`),
+single-quoted strings, double-quoted strings with no `$`, backtick or backslash, the operators
+`; && || | & newline > >> < >& <&`, and at most one quoted-delimiter heredoc per owner line
+(`<<'X'` as the last thing on its line, body to an exact terminator line). EVERY simple command in
+the input must be an owner (`git commit|tag`, `gh issue create|edit|comment|close|reopen`, `gh pr
+create|edit|comment|close|reopen|review|merge`, `gh release create|edit`, after assignments from a
+closed list) or one of `git add`, `git status`, `cd`; an owner's options must be on an exact-spelling
+allow list (git accepts any unique prefix of a long option, so `--edi` is `--edit` and no prefix is
+listed; `-e`, `-c`, `-C`, `--amend`, `--fixup`, `--squash` are not listed) and a git owner must carry
+`-m`/`-F` (a commit with no message opens an editor). Only an owner's own quoted strings and heredoc
+bodies are blanked. Every separator and the end of a heredoc reset the state to "start of a new
+command". Anything else (`$`, backtick, backslash, `#`, parentheses, a CR, `<<-`, `<<<`, `<(`, `>(`,
+`"$(cat <<'X'` substitutions, an unterminated heredoc, a pipe after an owner, any other command in
+the input such as `export`, `git config`, `alias`, `eval`, an assignment alone or an assignment
+outside the closed list, ...) makes sanitize() return the raw text for the WHOLE input, i.e. strip
+nothing, and the trigger then runs on all of it. The `"$(cat <<'X'` form is not accepted: bash ends
+such a heredoc at a line `X)` and bash 3.2 at the first `)` in the body, so shells disagree about
+where the text ends; the plain `-F - <<'X'` / `--body-file - <<'X'` form is read identically by every
+shell. Under the override an `&>` is not a redirect (dash reads it as `&` then `>`); only `>&` and
+`<&` are.
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -83,7 +114,7 @@ redirect targets, a redirected file that is read back afterwards, `doppler run -
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
 child decides), a two-step symlink rename (`ln -s <doppler> /tmp/dp`, then `/tmp/dp secrets`:
 each command text is innocent alone), a relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
-text that merely mentions doppler (a commit message, a PR body): use the bypass.
+text that mentions doppler outside the sanitized spots above (a `grep doppler docs/`, an `echo`): use the bypass.
 """
 
 import json
@@ -108,15 +139,22 @@ SAFE_FORMS = (
     "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
     "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
-    "`doppler secrets get NAME --plain | gh secret set NAME`; `eval \"$(doppler secrets download "
+    "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
+    "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "
+    "NAME=\"$(cat /literal/path)\" >/dev/null 2>&1` (stdout and stderr must both be discarded); `eval \"$(doppler secrets download "
     "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it); a bare "
     "non-printing subcommand such as `doppler setup` or `doppler configs`."
 )
 DOPPLER_MSG = (
     "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
-    "print secret values to the transcript. " + SAFE_FORMS + " Text that merely mentions the "
-    "word (a commit message, a PR body) is denied too. Deliberate override for one single "
-    "command: prefix it with SASSYDOG_ALLOW_DOPPLER_PRINT=1."
+    "print secret values to the transcript. " + SAFE_FORMS + " Quoted text in the arguments of "
+    "`git commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release "
+    "create|edit`, and the body of a quoted-delimiter `--body-file - <<'EOF'` / `-F - <<'EOF'` heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes, "
+    "`git add|status`, `cd` and those message commands with plain options (no `$(`, `$`, backtick, backslash, `#`, parentheses, `-e`/`--amend`, no `export` or `git config`); a message "
+    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. Deliberate "
+    "override for one single command: put SASSYDOG_ALLOW_DOPPLER_PRINT=1 as the very first thing in the "
+    "command (before any `cd ... &&`); the rest must be one simple command (redirects are fine; no `;`, "
+    "`&&`, pipe, `$(`, backtick or heredoc), or the override is ignored."
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "
@@ -234,7 +272,7 @@ def split_segments(s):
             ansi_c = c == "'" and i > 0 and s[i - 1] == "$"
         elif c == "&" and ((i > 0 and s[i - 1] in "<>") or (i + 1 < len(s) and s[i + 1] in "<>")):
             pass  # a redirect (`2>&1`, `>&2`, `&>`, `<&`), not a separator
-        elif c in ";&|\n\r":
+        elif c in ";&|\n":  # not \r: the shell does not split there, and splitting hides words
             segs.append(s[start:i])
             start = i + 1
         i += 1
@@ -242,13 +280,228 @@ def split_segments(s):
     return segs
 
 
+# ---- inert text (#647): ONE tokenizer, an allow list ------------------------------------------
+
+# What an unquoted word may hold. Everything else outside quotes (`$`, backtick, backslash, `#`,
+# parentheses, braces, globs, `!`, `\r`, any other whitespace or non-ASCII character) is not
+# recognised, and an unrecognised character makes sanitize() return the raw text.
+WORD_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_./:=,+@%-")
+# Assignment prefixes that may precede an owner command. A closed list: an EDITOR, PAGER or
+# command-valued variable (GIT_EDITOR, GIT_SSH_COMMAND, ...) makes git/gh run the text. Any other
+# assignment, and an assignment with no command after it, makes sanitize() return the raw text.
+OWNER_ASSIGN_RE = re.compile(
+    r"(?:GIT_(?:AUTHOR|COMMITTER)_(?:NAME|EMAIL|DATE)|GH_REPO|GH_PROMPT_DISABLED|NO_COLOR)=[A-Za-z0-9_./:@+,%-]*\Z"
+)
+# The ONLY commands that may appear in an input whose message text is blanked: an owner (a command
+# whose message arguments are text, never run by the command itself) and three that set no state
+# (`git add`, `git status`, `cd`). Any other simple command (`export`, `git config`, an assignment
+# alone, `alias`, `eval`, `sh`, ...) makes sanitize() return the raw text for the WHOLE input, so
+# editor state or an alias set in an earlier command cannot turn a blanked message into code.
+OWNER_NEXT = {
+    "git": {"commit": "git_commit", "tag": "git_tag", "add": "safe", "status": "safe"},
+    "gh": {"issue": "gh_issue", "pr": "gh_pr", "release": "gh_release"},
+    "gh_issue": {v: "gh_args" for v in ("create", "edit", "comment", "close", "reopen")},
+    "gh_pr": {v: "gh_args" for v in ("create", "edit", "comment", "close", "reopen", "review", "merge")},
+    "gh_release": {"create": "gh_args", "edit": "gh_args"},
+}
+ARGS = frozenset(("git_commit", "git_tag", "gh_args"))
+# Positive allow list of option spellings, exact (git accepts any unique prefix of a long option, so
+# `--edi` is `--edit`: a prefix is NOT listed, and neither is -e, -c, -C, --amend, --fixup, --squash).
+GIT_SHORT_RE = {"git_commit": re.compile(r"-[ansqv]*(?:[mF].*)?\Z"), "git_tag": re.compile(r"-[asf]*(?:[mF].*)?\Z")}
+GIT_LONG = {
+    "git_commit": frozenset(("--message", "--file", "--all", "--no-verify", "--signoff", "--no-edit",
+                             "--allow-empty", "--allow-empty-message", "--quiet", "--author", "--date",
+                             "--no-gpg-sign")),
+    "git_tag": frozenset(("--message", "--file", "--annotate", "--force")),
+}
+GH_SHORT = frozenset(("-t", "-b", "-F", "-R", "-l", "-a", "-m", "-B", "-H", "-d", "-r", "-n"))
+GH_LONG = frozenset(("--title", "--body", "--body-file", "--repo", "--label", "--assignee", "--milestone",
+                     "--base", "--head", "--draft", "--squash", "--merge", "--rebase", "--delete-branch",
+                     "--comment", "--notes", "--notes-file", "--subject", "--auto", "--approve",
+                     "--request-changes", "--reason", "--prerelease", "--latest", "--target"))
+GIT_MSG_RE = re.compile(r"-[a-z]*[mF]|--(?:message|file)(?:=|\Z)")
+# An operator token. `<<` is handled apart (heredoc); `<<<`, `<(`, `>(`, `>|`, `<>` are unknown.
+# `&>` and `&>>` are deliberately absent: dash reads `&>f` as `&` then `>f`, bash as one redirect.
+REDIR_RE = re.compile(r">>|>&|<&|>|<")
+SEPARATORS = ("&&", "||", "|", ";", "&", "\n")
+HEREDOC_RE = re.compile(r"<<[ \t]*(['\"])([A-Za-z0-9_]+)\1\n")
+
+
+def _heredoc_end(text, i, delim):
+    """Index just past the terminator line (exactly `delim`) of a body starting at text[i]; None if unterminated."""
+    n = len(text)
+    while i < n:
+        j = text.find("\n", i)
+        end = n if j < 0 else j
+        nxt = n if j < 0 else j + 1
+        if text[i:end] == delim:
+            return nxt
+        i = nxt
+    return None
+
+
+def _read_word(text, i):
+    """Parse the word starting at text[i]: (end index, plain text, raw text, shown text, has_quote).
+
+    Raises ValueError on anything not positively recognised. `shown` is the word with every quoted
+    string blanked to an empty pair of quotes; the caller shows it only for an owner's arguments.
+    """
+    n = len(text)
+    plain, raw, shown, quoted = [], [], [], False
+    while i < n:
+        c = text[i]
+        if c in WORD_CHARS:
+            plain.append(c); raw.append(c); shown.append(c)
+            i += 1
+        elif c in "'\"":
+            j = text.find(c, i + 1)
+            if j < 0:
+                raise ValueError("unbalanced quote")
+            body = text[i + 1:j]
+            if c == '"' and any(x in body for x in "$`\\"):
+                raise ValueError("expansion or escape inside double quotes")
+            plain.append(body); raw.append(text[i:j + 1]); shown.append(c + c)
+            quoted = True
+            i = j + 1
+        else:
+            break
+    return i, "".join(plain), "".join(raw), "".join(shown), quoted
+
+
+def _option_ok(owner, w):
+    if not w.startswith("-") or w == "-":
+        return True
+    name = w.split("=", 1)[0] if w.startswith("--") else w
+    if owner == "gh_args":
+        return name in GH_LONG or w in GH_SHORT
+    if w.startswith("--"):
+        return name in GIT_LONG[owner]
+    return GIT_SHORT_RE[owner].match(w) is not None
+
+
+def sanitize(text):
+    """The text with the message text of git/gh message commands blanked, else the text itself.
+
+    A single left-to-right pass over a tiny grammar, an ALLOW LIST: the input must tokenize
+    completely as words (letters, digits and `_./:=,+@%-`), single-quoted strings, double-quoted
+    strings with no `$`, backtick or backslash, the operators `; && || | & newline > >> < >& <&`,
+    and at most one quoted-delimiter heredoc per owner line (`<<'X'` as the last thing on its line,
+    body to an exact terminator line). Every simple command in the input must be an owner or one of
+    `git add`, `git status`, `cd`; an owner's options must be on the exact-spelling allow list and a
+    git owner must carry a message (`-m`/`-F`). Anything else is NOT recognised, and an unrecognised
+    input returns the raw text unchanged, so the trigger runs on all of it. State is per simple
+    command: `start`, then the owner's own words, then an args state where quoted strings are
+    blanked. Every separator, and the end of a heredoc, goes back to `start`, so the text after a
+    terminator line is a NEW command and is held to the same rules.
+    """
+    try:
+        return _sanitize(text)
+    except ValueError:
+        return text
+
+
+def _sanitize(text):
+    n, i = len(text), 0
+    out = []
+    state = "start"
+    target = False    # the next word is a redirect target, not part of the command
+    assigned = False  # the current command has had an assignment word
+    has_msg = False   # the current git owner carries -m / -F
+
+    def close():
+        # End of a simple command: it must be complete, then the state resets to a new command.
+        if state in ("git_commit", "git_tag") and not has_msg:
+            raise ValueError("no message: an editor could open")
+        if state not in ARGS and state not in ("start", "safe"):
+            raise ValueError("incomplete command")
+        if state == "start" and assigned:
+            raise ValueError("assignment with no command")
+
+    while i < n:
+        c = text[i]
+        if c in " \t":
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("<<", i):
+            m = HEREDOC_RE.match(text, i)
+            if not m or state not in ARGS:
+                raise ValueError("heredoc not allowed here")
+            end = _heredoc_end(text, m.end(), m.group(2))
+            if end is None:
+                raise ValueError("unterminated heredoc")
+            out.append("<<''\n")
+            close()
+            i, state, target, assigned, has_msg = end, "start", False, False, False
+            continue
+        m = REDIR_RE.match(text, i)
+        if m:
+            if text[m.end():m.end() + 1] in ("<", ">", "(", "|", "&"):
+                raise ValueError("unknown operator")
+            out.append(m.group())
+            i = m.end()
+            target = True
+            continue
+        sep = next((s for s in SEPARATORS if text.startswith(s, i)), None)
+        if sep:
+            if sep == "|" and state in ARGS:
+                raise ValueError("a message command's output is piped on")
+            close()
+            out.append(sep)
+            i += len(sep)
+            state, target, assigned, has_msg = "start", False, False, False
+            continue
+        end, plain, raw, shown, quoted = _read_word(text, i)
+        if end == i:
+            raise ValueError("character not recognised")
+        if target:
+            out.append(shown if state in ARGS else raw)
+            target = False
+        elif state in ARGS:
+            if not _option_ok(state, plain):
+                raise ValueError("option not on the allow list")
+            if state != "gh_args" and GIT_MSG_RE.match(plain):
+                has_msg = True
+            out.append(shown)
+        else:
+            out.append(raw)
+            if state == "safe":
+                pass
+            elif quoted:
+                raise ValueError("quoted word where a command word belongs")
+            elif state == "start":
+                if OWNER_ASSIGN_RE.match(plain):
+                    assigned = True
+                elif plain in ("git", "gh"):
+                    state = plain
+                elif plain == "cd":
+                    state = "safe"
+                else:
+                    raise ValueError("command not on the allow list")
+            else:
+                nxt = OWNER_NEXT.get(state, {}).get(plain)
+                if nxt is None:
+                    raise ValueError("subcommand not on the allow list")
+                state = nxt
+        i = end
+    close()
+    return "".join(out)
+
+
 # ---- single simple command, quote-aware ------------------------------------------------------
 
 
-def single_simple(s):
-    """True when s has no control operator outside single quotes (and no unbalanced quote)."""
+def single_simple(s, redirects=False):
+    """True when s has no control operator outside single quotes (and no unbalanced quote).
+
+    With redirects=True a plain redirect (`>f`, `2>&1`, `< f`, `>>f`) is not an operator; process
+    substitution (`<(`, `>(`) and heredocs / here-strings (`<<`) still are. Only an UNESCAPED,
+    unquoted `<` or `>` makes the `&` after it a redirect: a backslash-escaped `>` is a literal
+    character, and the `&` after it is a background operator.
+    """
     quote = None
     i = 0
+    last_op = -2  # index of the last unescaped, unquoted `<` or `>` taken as a redirect
     while i < len(s):
         c = s[i]
         nxt = s[i + 1] if i + 1 < len(s) else ""
@@ -267,6 +520,10 @@ def single_simple(s):
                 i += 1
             elif c in "'\"":
                 quote = c
+            elif redirects and c in "<>" and nxt != "(" and not (c == "<" and nxt == "<"):
+                last_op = i
+            elif redirects and c == "&" and last_op == i - 1:
+                pass  # `>&2`, `<&0`; a bare `&>` is NOT accepted: dash reads it as `&` then `>`
             elif c in ";&|<>()\n\r`" or (c == "$" and nxt == "("):
                 return False
         i += 1
@@ -494,6 +751,8 @@ def allowed_strict(cmd):
     if cmd.startswith("doppler ") and (" -- " in cmd or " --command " in cmd) and \
             re.match(r"doppler[ \t]+(?:[^ \t]+[ \t]+)*?run\b", cmd):
         return allowed_run(cmd)
+    if cmd.startswith("doppler ") and SECRETS_SET_RE.search(cmd):
+        return allowed_set(cmd)
     if not STRICT_RE.fullmatch(cmd):
         return False
     toks = cmd.split()
@@ -538,6 +797,45 @@ def allowed_strict(cmd):
         parsed = parse_args(toks, i + 1, GLOBAL_BOOL | bools, GLOBAL_VAL | vals)
         return bool(parsed) and not parsed[1]
     return False
+
+
+DISCARD_RE = re.compile(r"[ \t]+>[ \t]*/dev/null[ \t]+(?:2>&1|2>[ \t]*/dev/null)\Z")
+STDIN_RE = re.compile(r"[ \t]+<[ \t]*([A-Za-z0-9._/~-]+)\Z")
+SET_FILE_RE = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)="\$\(cat[ \t]+([A-Za-z0-9._/~-]+)\)"')
+SECRETS_SET_RE = re.compile(r"secrets[ \t]+set\b")
+
+
+def allowed_set(cmd):
+    """`doppler secrets set NAME < file` / `set NAME="$(cat file)"`, output discarded (see docstring 3d)."""
+    m = DISCARD_RE.search(cmd)
+    if not m:
+        return False
+    body = cmd[:m.start()]
+    stdin = None
+    m2 = STDIN_RE.search(body)
+    if m2:
+        stdin, body = m2.group(1), body[:m2.start()]
+    subs = list(SET_FILE_RE.finditer(body))
+    if len(subs) > 1 or (subs and stdin is not None) or (not subs and stdin is None):
+        return False
+    path = stdin if stdin is not None else subs[0].group(2)
+    if not literal_path(path):
+        return False
+    if subs:
+        body = body[:subs[0].start()] + subs[0].group(1) + "=@FILE" + body[subs[0].end():]
+    if not STRICT_RE.fullmatch(body) or any(c in body for c in "|>"):
+        return False
+    toks = body.split()
+    if not toks or toks[0] != "doppler":
+        return False
+    g = parse_global(toks)
+    if g is None or g[0] + 1 >= len(toks) or toks[g[0]] != "secrets" or toks[g[0] + 1] != "set":
+        return False
+    parsed = parse_args(toks, g[0] + 2, GLOBAL_BOOL, GLOBAL_VAL | PC_VAL)
+    if not parsed or len(parsed[1]) != 1:
+        return False
+    name = parsed[1][0]
+    return bool(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=@FILE", name) if subs else NAME_RE.fullmatch(name))
 
 
 def allowed_bootstrap(cmd):
@@ -615,7 +913,7 @@ def split_bypass(cmd):
     if not m:
         return False, False, cmd
     body = cmd[m.end():]
-    if not single_simple(body):
+    if not single_simple(body, redirects=True):
         return False, False, cmd
     toks = m.group(1).split()
     return BYPASS_DOPPLER in toks, BYPASS_URL in toks, body
@@ -636,7 +934,7 @@ def analyze(command, cwd=None):
     CWD = cwd if isinstance(cwd, str) and cwd.startswith("/") else None
     bd, bu, body = split_bypass(command)
     problems = []
-    if not bd and triggered(body) and not allowed_strict(body):
+    if not bd and triggered(sanitize(body)) and not allowed_strict(body):
         problems.append(DOPPLER_MSG)
     if not bu and url_violation(body if (bd or bu) else command):
         problems.append(URL_MSG)
