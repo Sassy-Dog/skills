@@ -110,16 +110,17 @@ shell. Under the override an `&>` is not a redirect (dash reads it as `&` then `
 
 Inert data for the expansion triggers (#649): the second trigger above only GUESSES at a name the text
 does not spell, so it is skipped (a spelled name is not) when the whole input is exactly ONE simple
-command that the allow-list tokenizer _inert_view() recognises completely, of one of two shapes:
-`echo`/`printf` whose arguments are plain words, quoted strings or `$NAME`/`${NAME}`, or `python3`
-(options `-I -u -B -E -s -S -` only) reading a quoted-delimiter heredoc that ends the input, whose body
-passes _python_body_inert(). A pipe, redirect, fifo or earlier `exec >` carries an echo's output to a
-shell that expands a glob and runs the CLI, so a second command or any operator keeps the old reading;
-so does anything the tokenizer does not recognise (an unbalanced quote, `$(`, a backtick, a
-backslash, a comment, a glob, `$'..'`, `{fd}>`, `<<<`, a CR). It never falls back to a weaker reading.
-Still denied, named in the README: an echo that is not the whole input, `cat`/`bash` heredocs, and the
-`-m "$(cat <<'EOF'...)"` form with an expansion character beside `run`/`me`/`secrets`/`configure`.
-The python scan is a text heuristic against accidents, not a sandbox (printf-assembled-name class).
+command that the allow-list tokenizer _inert_view() recognises completely, and that command is a plain
+`echo` of literals, quoted strings and `$NAME`/`${NAME}` (`echo '*' run`, `echo "$HOME" let me know`). No
+pipe, redirect, fifo or earlier `exec >` can carry an echo's output to a shell when the echo is the whole
+input, so a second command or any operator keeps the old reading; so does anything the tokenizer does
+not recognise (an unbalanced quote, `$(`, a backtick, a backslash, a comment, a glob, `$'..'`, `{fd}>`,
+`<<`, a CR). It never falls back to a weaker reading. Only echo is exempt: `printf -v 'a[$(...)]'`
+runs the subscript, and an interpreter script (python) can build a command at run time from allowed
+pieces, so neither is inert and both keep the old reading. Still denied, named in the README: an echo
+that is not the whole input, any heredoc whose body holds an expansion character beside
+`run`/`me`/`secrets`/`configure` unless the sanitizer blanks it (`git commit -F - <<'EOF'`,
+`gh pr create --body-file - <<'EOF'`; the `-m "$(cat <<'EOF'...)"` form and a python heredoc are not).
 Also a known limit, older than #649: a subcommand word glued to a closing paren or backtick is not a
 whole word (`echo "$($D secrets)" x`), so the expansion rule does not see it.
 
@@ -520,18 +521,19 @@ def _sanitize(text):
 # ---- inert data for the expansion rules (#649): a whole-input tokenizer that fails closed ----------
 #
 # The expansion rules guess at a Doppler name the text does not spell, so they over-trigger on prose
-# (`echo "$HOME" let me know`) and on script lines (`print(f"{name:18} me")`). _inert_view() blanks the
-# arguments of exactly two shapes, and only when the WHOLE input is that one simple command:
-#   1. `echo` / `printf` with words that are literals, quoted strings, or simple `$NAME` / `${NAME}`
-#      expansions, and nothing else: no redirect, pipe, separator, heredoc, comment, glob, `$(`, backtick.
-#   2. `python3 [-I|-u|-B|-E|-s|-S] [-] <<'EOF'` with a quoted-delimiter heredoc ending the input and a
-#      body that passes _python_body_inert().
-# Why the whole input and nothing else: a command's output, or a redirect set up by an earlier command
+# (`echo "$HOME" let me know`). _inert_view() blanks the arguments of exactly ONE shape, and only when
+# the WHOLE input is that one simple command: `echo` as the literal first word, with arguments that are
+# literals, quoted strings, or simple `$NAME` / `${NAME}` expansions, and nothing else: no redirect, pipe,
+# separator, heredoc, comment, glob, `$(`, backtick.
+# Why the whole input: a command's output, or a redirect set up by an earlier command
 # (`mkfifo p; sh <p & exec >p; echo '*' secrets`), is read again by a shell, which expands the glob and
 # runs the CLI. With ONE command, no operator and no redirect, nothing can carry the text anywhere.
+# Why only echo: `printf -v NAME` evaluates an array subscript in NAME (`a[$(...)]`) and runs it, and a
+# script handed to an interpreter (python) can build a command at run time from allowed pieces, so
+# neither is inert; echo only prints.
 # Why a tokenizer: the shape is decided on the exact words the shell sees, never on a regex over text.
 # It is the same allow-list stance as sanitize(): a character or construct it does not positively
-# recognise (an unbalanced quote, `$(`, a backslash, `{fd}>`, `<<<`, `#`, a CR, `$'..'`, a glob, any
+# recognise (an unbalanced quote, `$(`, a backslash, `{fd}>`, `<<`, `#`, a CR, `$'..'`, a glob, any
 # operator) raises, and the caller then keeps the whole text, i.e. the old, stricter reading.
 
 
@@ -540,9 +542,7 @@ class _Unrecognised(Exception):
 
 
 _VAR_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
-DATA_COMMANDS = frozenset(("echo", "printf"))
-PYTHON_RE = re.compile(r"python3?(?:\.[0-9]+)?\Z")
-PYTHON_OPTS = frozenset(("-I", "-u", "-B", "-E", "-s", "-S", "-"))
+DATA_COMMANDS = frozenset(("echo",))
 
 
 def _read_token(text, i):
@@ -588,10 +588,10 @@ def _read_token(text, i):
 
 
 def _tokenize_one(text):
-    """(raw words, heredoc body or None) of ONE simple command that is the whole input.
+    """The raw words of ONE simple command that is the whole input.
 
-    Only blanks and newlines may follow the last word (or the heredoc terminator line). Any operator,
-    redirect, comment or second command raises.
+    Only blanks and newlines may follow the last word. Any operator, redirect, heredoc, comment or
+    second command raises.
     """
     n, i, words = len(text), 0, []
     while i < n:
@@ -601,74 +601,20 @@ def _tokenize_one(text):
         elif c == "\n":
             if text[i:].strip(" \t\n"):
                 raise _Unrecognised("a second command")
-            return words, None
-        elif text.startswith("<<", i):
-            m = HEREDOC_RE.match(text, i)
-            if not m or not words:
-                raise _Unrecognised("heredoc form not recognised")
-            end = _heredoc_end(text, m.end(), m.group(2))
-            if end is None or text[end:].strip(" \t\n"):
-                raise _Unrecognised("heredoc unterminated or followed by more text")
-            return words, text[m.end():end]
+            return words
         else:
             i, raw = _read_token(text, i)
             words.append(raw)
-    return words, None
-
-
-# Python names a one-shot script uses to run a program, reach a module that does, or build code.
-PY_BAD_RE = re.compile(
-    r"\b(?:os|posix|nt|subprocess|builtins|importlib|ctypes|cffi|pty|eval|exec\w*|compile|getattr|setattr|"
-    r"delattr|globals|locals|vars|open|breakpoint|input|system|popen|spawn\w*|fork\w*|modules|meta_path|"
-    r"types|code|codeop|runpy|pickle|marshal|socket|signal|inspect|gc|shutil|tempfile|webbrowser|timeit|"
-    r"pdb|trace|traceback|frame|f_\w+|tb_\w+|gi_\w+|cr_\w+|ag_\w+|help|license|credits|copyright|exit_code)\b"
-)
-PY_UNDERSCORE_RE = re.compile(r"(?<![A-Za-z0-9_])_+[A-Za-z0-9]\w*")
-PY_IMPORT_RE = re.compile(r"^[ \t]*(?:import[ \t]+(?P<mods>.+?)|from[ \t]+(?P<mod>\S+)[ \t]+import[ \t]+(?P<names>.+?))[ \t]*$", re.M)
-PY_MODULES = frozenset((
-    "json", "re", "math", "datetime", "time", "collections", "itertools", "functools", "textwrap", "string",
-    "csv", "statistics", "decimal", "fractions", "typing", "dataclasses", "enum", "hashlib", "base64",
-    "operator", "copy", "random", "unicodedata", "pprint", "difflib", "html", "argparse", "sys"))
-PY_SYS_BAD_RE = re.compile(r"\bsys\b(?!\.(?:argv|stdin|stdout|stderr|exit|version_info|version|platform|maxsize)\b)")
-PY_NAMES_RE = re.compile(r"\*|[A-Za-z_]\w*(?:[ \t]*,[ \t]*[A-Za-z_]\w*)*")
-PY_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z")
-
-
-def _python_body_inert(body):
-    """True when a python script read from stdin cannot run a program, by a conservative text scan.
-
-    A heuristic against ACCIDENTS (a script that prints `{name:18}` and the word `run`), not a sandbox:
-    imports only from a short list with no alias, `sys` only for argv/stdin/stdout/stderr/exit/version
-    members, no identifier that starts with an underscore (except `__name__`/`__main__`), none of the
-    names in PY_BAD_RE. A script built to shell out under a spelling this scan misses is the printf-
-    assembled-name class (README, Bash guard hook, known limits).
-    """
-    for m in PY_IMPORT_RE.finditer(body):
-        mods = [x.strip() for x in (m.group("mods") or m.group("mod")).split(",")]
-        if m.group("mod") == "sys" or not all(PY_NAME_RE.match(x) and x.split(".")[0] in PY_MODULES for x in mods):
-            return False  # an alias, a `;`, a module off the list, `from sys import ...`
-        if m.group("names") is not None and not PY_NAMES_RE.fullmatch(m.group("names")):
-            return False
-    rest = PY_IMPORT_RE.sub("", body)
-    if re.search(r"\bimport\b", rest) or PY_BAD_RE.search(body):
-        return False
-    if any(u not in ("__name__", "__main__") for u in PY_UNDERSCORE_RE.findall(body)):
-        return False
-    return not PY_SYS_BAD_RE.search(rest)
+    return words
 
 
 def _inert_view(text):
-    """`text` with the one command it holds reduced to its command word when its data is inert, else `text`."""
+    """`text` with the one command it holds reduced to its command word when it is an echo, else `text`."""
     try:
-        words, body = _tokenize_one(text)
+        words = _tokenize_one(text)
     except _Unrecognised:
         return text
-    if not words:
-        return text
-    if words[0] in DATA_COMMANDS and body is None:
-        return words[0]
-    if PYTHON_RE.match(words[0]) and body is not None and all(w in PYTHON_OPTS for w in words[1:]) \
-            and _python_body_inert(body):
+    if words and words[0] in DATA_COMMANDS:
         return words[0]
     return text
 

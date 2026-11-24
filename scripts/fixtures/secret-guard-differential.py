@@ -138,20 +138,15 @@ CORPUS = [
 ]
 
 # #649: text that merely carries an expansion character and a common word is data, but ONLY as the
-# whole input of a single `echo`/`printf` or a `python3 -I - <<'EOF'` script with no shell-out. The
+# whole input of a single plain `echo` (printf and python heredocs are NOT exempt; see the rows). The
 # name is not spelled in any of these ($D, a glob, a variable), so only the expansion rules see it.
 # Suffix "@glob" on a kind runs the shell with its cwd holding copies of the fake CLI (so `*` matches
 # it) and the environment variables D (the CLI's name), X (its first three letters) and SHELL (sh).
-PYBODY = "name = 'x'\nprint(f\"{name:18} me\")\n"
 CORPUS += [
     ("echo of a glob literal, then run", "echo '*' run", "allow", "msg"),
     ("echo of a glob literal, then secrets (glob dir)", "echo '*' secrets", "allow", "msg@glob"),
     ("echo of a variable, then prose", 'echo "$HOME" let me know', "allow", "msg"),
-    ("printf of a glob literal, then me", "printf '%s\\n' '*' me", "allow", "msg"),
     ("echo of an unquoted variable, then run", "echo $HOME run the tests", "allow", "msg"),
-    ("python heredoc: f-string braces first on a line, and me", f"python3 -I - <<'EOF'\n{PYBODY}EOF", "allow", "msg"),
-    ("python heredoc: json from stdin, a slice, and run",
-     "python3 -I - <<'EOF'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], 'then run')\nEOF", "allow", "msg"),
     ("commit -F heredoc with backticks and run", "git commit -F - <<'EOF'\nfix: `x` a run that never starts, tell me\nEOF", "allow", "msg"),
     ("gh pr create body-file heredoc with bold and run", "gh pr create --title t --body-file - <<'EOF'\n**Summary** let me know, run it\nEOF", "allow", "msg"),
     # --- class 1 of the blocked attempt: an unbalanced quote later (an apostrophe in a comment), quoted values
@@ -194,6 +189,19 @@ CORPUS += [
     ("python heredoc, a backslash-newline before the first EOF line", "python3 -I - <<'EOF'\na\\\nEOF\n\"$D\" run\nEOF", "deny", "bypass"),
     ("echo with a backtick substitution that runs the name, then secrets", 'echo "`$D`" secrets', "deny", "bypass"),
     ("echo with a $( substitution that runs the name, then secrets", 'echo "$($D)" secrets', "deny", "bypass"),
+    ('printf -v, quoted subscript with a substitution', 'printf -v \'a[$("$D" secrets get X --plain >&2)]\' x', "deny", "bypass"),
+    ('printf -v, a second argument and run', 'printf -v \'a[$("$D" secrets get X --plain 1>&2)]\' \'%s\' run', "deny", "bypass"),
+    ('printf -v, backtick subscript', 'printf -v \'a[`"$D" secrets get X --plain >&2`]\' x', "deny", "bypass"),
+    ('printf -v, name glued to a quote', 'printf -v a\'[$("$D" secrets get X >&2)]\' x', "deny", "bypass"),
+    ('printf with a quoted -v', 'printf \'-v\' \'a[$("$D" secrets get X >&2)]\' x', "deny", "bypass"),
+    ('printf with a split-quoted -v', 'printf "-"v \'a[$("$D" secrets get X >&2)]\' x', "deny", "bypass"),
+    ('printf with -v glued to the name', 'printf -va\'[$("$D" secrets get X >&2)]\' x', "deny", "bypass"),
+    ('printf of a glob literal and me (printf is not exempt)', "printf '%s\\n' '*' me", "deny", "deny-only"),
+    ('python heredoc, route (a): attrgetter on typing, names built from strings', 'python3 -I - <<\'EOF\'\nimport operator, typing; g = operator.attrgetter; o = g(\'s\'+\'ys.mod\'+\'ules\')(typing)[\'o\'+\'s\']; g(\'sy\'+\'stem\')(o)(\'"$D" secrets get X\')\nEOF', "deny", "bypass"),
+    ('python heredoc, route (b): get_type_hints evaluating an annotation string', 'python3 -I - <<\'EOF\'\nimport typing\ndef f(x: chr(95)*2+\'imp\'+\'ort\'+chr(95)*2+"(\'o\'+\'s\').sy"+"stem(\'$D secrets get X\')"): pass\ntyping.get_type_hints(f)\nEOF', "deny", "bypass"),
+    ('python heredoc, route (c): Formatter.get_field walking to os', 'python3 -I - <<\'EOF\'\nimport string, argparse; u=\'_\'*2; p=u+\'init\'+u+\'.\'+u+\'glob\'+\'als\'+u+\'[\'+\'_\'+\'o\'+\'s\'+\'].\'+\'sy\'+\'stem\'; string.Formatter().get_field(\'0.\'+p,(argparse.ArgumentParser,),{})[0](\'"$D" secrets get X\')\nEOF', "deny", "bypass"),
+    ('python heredoc, f-string braces first on a line, and me (denied again: use a script file or the override)', 'python3 -I - <<\'EOF\'\nname = \'x\'\nprint(f"{name:18} me")\nEOF', "deny", "deny-only"),
+    ('python heredoc, a slice, run, and a json import', "python3 -I - <<'EOF'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], 'then run')\nEOF", "deny", "deny-only"),
     ("a shell reads the heredoc", "sh <<'EOF'\n\"$D\" run\nEOF", "deny", "bypass"),
     ("cat heredoc piped to a shell", "cat <<'EOF' | sh\n\"$D\" run\nEOF", "deny", "bypass"),
 ]

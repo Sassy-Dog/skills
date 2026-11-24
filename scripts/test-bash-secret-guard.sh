@@ -189,63 +189,55 @@
 # #649 (section "#649: prose after an expansion character ...", the corpus rows added to
 # scripts/fixtures/secret-guard-differential.py, and the two "limit (pre-existing)" allows): the
 # expansion triggers GUESS at a name the text does not spell and so denied prose (`echo "$HOME" let me
-# know`, a python script printing `{name:18}` and the word `run`). The loosening is one allow-list
-# tokenizer, `_inert_view`, that fails closed, and it exempts only two shapes, only when the WHOLE input
-# is that one simple command: `echo`/`printf` with plain words, quoted strings and `$NAME`/`${NAME}`,
-# and `python3 [-I -u -B -E -s -S -]` reading a quoted heredoc that ends the input whose body passes
-# `_python_body_inert`. The blocked attempt (PR 650) tried to keep splitting words and lost four ways;
-# each is a committed must-deny AND a differential "bypass" row that prints under bash, /bin/bash 3.2,
-# zsh and dash: (1) an unbalanced quote later in the segment, an apostrophe in a trailing comment,
-# `\$'..'` and `$$'..'` (`env "$D" -p 'a b' secrets # don't`); (2) one word read as two (`$(...)`,
+# know`). The loosening is one allow-list tokenizer, `_inert_view`, that fails closed, and it exempts ONE
+# shape, only when the WHOLE input is that one simple command: `echo` as the literal first word with plain
+# words, quoted strings and `$NAME`/`${NAME}`. Not exempt, each pinned as a must-deny AND a differential
+# "bypass" row that prints under a real shell: `printf` (`printf -v 'a[$(..)]' x` runs the subscript under
+# bash 5.3 and zsh; seven spellings, including a quoted or split `-v`) and a python heredoc (three routes
+# that build `os.system` from allowed modules at run time: operator.attrgetter on typing, get_type_hints
+# evaluating an annotation, string.Formatter().get_field; so the plain python script with `{name:18} me`
+# is denied again, pinned as a deny-only row). The blocked attempt (PR 650) tried to keep splitting words
+# and lost four ways; each is a committed must-deny AND a differential "bypass" row run under bash,
+# /bin/bash 3.2, zsh and dash: (1) an unbalanced quote later in the segment, an apostrophe in a trailing
+# comment, `\$'..'` and `$$'..'` (`env "$D" -p 'a b' secrets # don't`); (2) one word read as two (`$(...)`,
 # `${P:--p app}`, a here-string carrying arguments, `{fd}>`, a variable holding an option); (3) a glob
-# literal re-read by something not on a shell list (sh, bash, env $SHELL, awk system(), perl system(),
-# a dot-source of stdin, write-then-source, write-then-sh, a fifo read by a shell, plus csh, tcsh,
-# parallel, zsh, dash and python3 -c as hook-side denies: not installed or not usable everywhere, so no
-# teeth are required of them); (4) a POSIX class that is not the first bracket member. Those rows `cd`
-# into a directory holding copies of the fake CLI (kind suffix "@glob"). Asserted beyond the
-# four: every operator, redirect, fifo, second command, wrapper, assignment, quoted or escaped command
-# word, `$(`, backtick, `$@`, `${X:-..}`, ANSI-C word, unquoted glob, comment, CR, unbalanced quote and
-# the CLI's name spelled in an argument defeats the echo exemption; each python-body rule (shell-out
-# names, imports off the list or aliased or after a `;`, `from sys import`, sys attributes off the
-# list, underscore identifiers, options, reader name, text after the terminator, a backslash-newline
-# before the first terminator line, a CR terminator, an unquoted delimiter, a pipe or redirect on the
-# command, a script path, -m, -c) denies; the four acceptance cases and the issue's own deny cases
-# (`${X}pler secrets get`, `dop*ler me`, `"$D" run`) are pinned. NAMED false denies, pinned as denies
-# so nobody mistakes them for fixed: `echo '*' run; echo hi`, `cd x && echo ...`, `cat <<'EOF'` and the
-# `-m "$(cat <<'EOF'..)"` form. Two older holes found on the way are pinned as ALLOWS in the KNOWN LIMIT
-# section: a subcommand word glued to `)` or a backtick.
-# MUTANTS of #649, in hooks/bash-secret-guard.py, ONE replacement each, run on parallel scratch copies
-# of the tree (a git-initialised copy, so the sweep works), failing-case count out of the 1129 checks,
-# after an unmutated baseline of 0 and with the summary line required. The replaced line, then the count:
-#   `_tokenize_one`: the two lines `if text[i:].strip(" \t\n"):` / `raise _Unrecognised("a second command")`
-#   deleted: 1; `if end is None or text[end:].strip(" \t\n"):` -> `if end is None:`: 8;
+# literal re-read by something not on a shell list (sh, bash, env $SHELL, awk system(), perl system(), a
+# dot-source of stdin, write-then-source, write-then-sh, a fifo read by a shell; csh, tcsh, parallel, zsh,
+# dash and python3 -c are hook-side denies only: not installed or not usable everywhere, so no teeth are
+# required of them); (4) a POSIX class that is not the first bracket member (`[x[:alpha:]]oppler
+# projects`, `do[![:digit:]]pler projects`; must-deny gate cases only). The "@glob" rows `cd` into a
+# directory holding copies of the fake CLI. Asserted beyond those: every operator, redirect, fifo, second
+# command, wrapper, assignment, quoted or escaped command word, `$(`, backtick, `$@`, `${X:-..}`,
+# ANSI-C word, unquoted glob, comment, CR, heredoc, unbalanced quote and the CLI's name spelled in an
+# argument defeats the echo exemption; the four acceptance cases and the issue's own deny cases
+# (`${X}pler secrets get`, `dop*ler me`, `"$D" run`) are pinned. How acceptance item 2 (a heredoc commit
+# message or script with backticks or `{` plus run/me) is met: ONLY through `git commit -F - <<'EOF'` and
+# `gh pr create --body-file - <<'EOF'`, which the #647 sanitizer already allowed and which are pinned here
+# and in the differential; the `-m "$(cat <<'EOF'..)"` form and python heredocs stay denied. NAMED false
+# denies, pinned as denies: `echo '*' run; echo hi`, `cd x && echo ...`, `cat <<'EOF'`, any python
+# heredoc. Two older holes found on the way are pinned as ALLOWS in the KNOWN LIMIT section: a
+# subcommand word glued to `)` or a backtick (not fixed here).
+# MUTANTS of #649, in hooks/bash-secret-guard.py, ONE replacement each, run on parallel scratch copies of
+# the tree (a git-initialised copy, so the sweep works), failing-case count, after an unmutated baseline
+# of 0 with the summary line required. The replaced line, then the count:
+#   `_tokenize_one`: the two lines `if text[i:].strip(" \t\n"):` / `raise _Unrecognised("a second
+#   command")` deleted: 1; `if c in " \t":` -> `if c in " \t\r":` (a CR is blank): 5;
 #   `_read_token`: `if d in "`\\":` -> `if d in "`":` (a backslash accepted in double quotes): 1;
 #   -> `if d in "\\":` (a backtick accepted): 6; the double-quote `$` arm (`m = _VAR_RE.match(text, i)`,
-#   `if not m: raise`, `i = m.end()`, `continue`) -> `i += 1` + `continue`: 8; the unquoted `$` arm
-#   (the same four lines up to `i = m.end()`) -> `i += 1`: 2; the unquoted `if not m: raise` ->
-#   `i = m.end() if m else i + 1`: 1; `if j < 0: raise _Unrecognised("unbalanced single quote")` raise ->
-#   `j = n - 1`: 1; `if i >= n: raise _Unrecognised("unbalanced double quote")` raise -> `break`: 1;
-#   `_VAR_RE`'s `\{[A-Za-z_][A-Za-z0-9_]*\}` -> `\{[^}]*\}|\(` (a `$(` read as a variable): 7;
-#   `DATA_COMMANDS = frozenset(("echo", "printf"))` + `"eval"`: 2;
-#   `if words[0] in DATA_COMMANDS and body is None:` -> `if words[0] in DATA_COMMANDS:`: 1;
-#   `if PYTHON_RE.match(words[0]) and body` -> `if body`: 8;
-#   `all(w in PYTHON_OPTS for w in words[1:])` -> `True`: 3;
-#   `_python_body_inert`: a `return True` first in the function: 32;
-#   `if re.search(r"\bimport\b", rest) or PY_BAD_RE.search(body):` -> `if re.search(r"\bimport\b", rest):`: 4,
-#   -> `if PY_BAD_RE.search(body):`: 1; the underscore `if any(u not in ...)` -> `if False:`: 1;
-#   `x.split(".")[0] in PY_MODULES for x in mods)` -> `True for x in mods)`: 1;
-#   `if m.group("mod") == "sys" or not all` -> `if not all`: 1;
-#   `return not PY_SYS_BAD_RE.search(rest)` -> `return True`: 1;
-#   `triggered`: `inert = _inert_view(text)` -> `inert = _inert_view(LINE_CONTINUATION_RE.sub("", text))`: 5;
-#   `iplain, idecoded = (plain, decoded) if inert == text else _views(inert)` -> `iplain, idecoded =
-#   plain, decoded` (exemption never applied): 21; `_mentions`: the two spelled-name tests
-#   (`if "doppler" in t:` and the `re.sub` one) read `ti` instead of `t`: 6;
-#   `_tokenize_one`: `if c in " \t":` -> `if c in " \t\r":` (a CR is blank): 5.
-# EQUIVALENT (0 failing, reason stated): `if not m or not words:` -> `if not m:` in the heredoc arm,
-# because `_inert_view` returns the text for an empty word list anyway. Mutants that first scored 0
-# (backslash and backtick in double quotes, the bare-import search, the module list, `from sys`, the sys
-# attribute scan, the underscore scan) are why those cases exist. These counts are one run on one
-# machine, not a guarantee for other mutants or other cases.
+#   `if not m: raise`, `i = m.end()`, `continue`) -> `i += 1` + `continue`: 8; the unquoted `$` arm (the
+#   same lines up to `i = m.end()`) -> `i += 1`: 2; the unquoted `if not m: raise` -> `i = m.end() if m
+#   else i + 1`: 1; the raise on an unbalanced single quote -> `j = n - 1`: 1; the raise on an unbalanced
+#   double quote -> `break`: 1; `if c in WORD_CHARS:` -> `if c in WORD_CHARS or c == "<":`: 2, -> `or c in
+#   ";|&>":`: 46; `_VAR_RE`'s `\{[A-Za-z_][A-Za-z0-9_]*\}` -> `\{[^}]*\}|\(` (a `$(` read as a
+#   variable): 7; `DATA_COMMANDS = frozenset(("echo",))` plus `"eval"`: 2, plus `"sh"`: 2, plus
+#   `"printf"`: 25; `triggered`: `iplain, idecoded = (plain, decoded) if inert == text else
+#   _views(inert)` -> `iplain, idecoded = plain, decoded` (exemption never applied): 14; `_mentions`: the
+#   two spelled-name tests (`if "doppler" in t:` and the `re.sub` one) read `ti` instead of `t`: 4.
+# EQUIVALENT (0 failing, reason stated): `inert = _inert_view(text)` -> `inert =
+# _inert_view(LINE_CONTINUATION_RE.sub("", text))`: with no heredoc left in `_inert_view`, a
+# backslash-newline outside quotes is rejected either way and joining one inside quotes changes no word.
+# Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
+# checks is stated because nothing re-derives it.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -1424,9 +1416,8 @@ allow "run wrapping sh -c with a single-quoted test" "doppler run -p P -c C -- s
 deny "run wrapping a command piped onward" 'doppler run -p P -c C -- test -n x | grep a'
 deny "run wrapping a command redirected" 'doppler run -p P -c C -- test -n x > out'
 
-echo "== #649: prose after an expansion character is data only as the whole input of one echo/printf or python heredoc =="
-# Allowed: the whole input is ONE simple command that only prints (echo, printf) or a python3 script
-# read from a quoted heredoc with no shell-out. Nothing else is blanked, so each deny below is a
+echo "== #649: prose after an expansion character is data only as the whole input of one echo =="
+# Allowed: the whole input is ONE simple command that only prints (echo). Nothing else is blanked, so each deny below is a
 # command the old rule denied and the new rule must still deny.
 allow "a single-quoted glob literal, then run" "echo '*' run"
 allow "a single-quoted glob literal, then me" "echo '?' me"
@@ -1434,12 +1425,8 @@ allow "a quoted variable, then prose with me" 'echo "$HOME" let me know'
 allow "a quoted variable, then prose with run" 'echo "$X" and then run the tests'
 allow "an unquoted variable, then run" 'echo $HOME run the tests'
 allow "a braced variable, then me" 'echo ${HOME} me'
-allow "printf with a format, a glob literal and me" "printf '%s\\n' '*' me"
 allow "echo with an option and secrets as prose" 'echo -n "$HOME" and the secrets of success'
 allow "a trailing newline after the one command" $'echo \'*\' run\n'
-allow "python heredoc: f-string braces first on a line, and me" $'python3 -I - <<\'EOF\'\nname = "x"\nprint(f"{name:18} me")\nEOF'
-allow "python heredoc: a slice, run, and a json import" $'python3 -I - <<\'EOF\'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], "then run")\nEOF'
-allow "python heredoc with no option and no dash" $'python3 <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
 allow "git commit -F heredoc with backticks and run" $'git commit -F - <<\'EOF\'\nfix: `x` a run that never starts, tell me\nEOF'
 allow "gh pr create body-file heredoc with bold and run" $'gh pr create --title t --body-file - <<\'EOF\'\n**Summary** let me know, run it\nEOF'
 # the cases the rule exists for stay denied
@@ -1473,7 +1460,7 @@ deny "class 3: glob literal piped to a dot-source of stdin" "echo '*' secrets | 
 deny "class 3: glob literal written to a file, then sourced" "echo '*' secrets > f; . ./f"
 deny "class 4: a POSIX class that is not the first bracket member" '[x[:alpha:]]oppler projects'
 deny "class 4: a negated POSIX class in the middle of the name" 'do[![:digit:]]pler projects'
-# echo/printf only when it is the whole input: every operator, redirect and second command is a deny
+# echo only when it is the whole input: every operator, redirect and second command is a deny
 deny "echo, a pipe to a consumer" "echo '*' run | cat"
 deny "echo, a pipe to a consumer of the stderr too" "echo '*' run |& cat"
 deny "echo, a redirect to a file" "echo '*' secrets > f"
@@ -1514,7 +1501,7 @@ deny "echo, a CR" $'echo \'*\' run\r'
 deny "echo, process substitution" 'echo <(echo x) $X run'
 deny "echo, the CLI name spelled in an argument" 'echo "$HOME" doppler me'
 deny "echo, the CLI name spelled with quotes" "echo '*' d\"o\"ppler run"
-# the command word must be the literal echo or printf, with no wrapper, assignment or quoting
+# the command word must be the literal echo, with no wrapper, assignment or quoting
 deny "wrapper: env echo" "env echo '*' run"
 deny "wrapper: command echo" "command echo '*' run"
 deny "wrapper: nohup echo" "nohup echo '*' run"
@@ -1538,45 +1525,27 @@ deny "sh -c of an echo" "sh -c 'echo \"\$HOME\" run'"
 deny "bash -c of a glob literal" "bash -c '* secrets'"
 deny "source of a glob literal" "source '*' secrets"
 deny "dot of a glob literal" ". '*' secrets"
-# python only for the whole input, a quoted heredoc and a body with no shell-out
+# printf and python are NOT exempt (printf -v runs an array subscript; a python script builds a command
+# at run time from allowed pieces): each is denied as before, and each route is a differential bypass row
+deny "printf -v, quoted subscript with a substitution" $'printf -v \'a[$("$D" secrets get X --plain >&2)]\' x'
+deny "printf -v, a second argument and run" $'printf -v \'a[$("$D" secrets get X --plain 1>&2)]\' \'%s\' run'
+deny "printf -v, backtick subscript" $'printf -v \'a[`"$D" secrets get X --plain >&2`]\' x'
+deny "printf -v, name glued to a quote" $'printf -v a\'[$("$D" secrets get X >&2)]\' x'
+deny "printf with a quoted -v" $'printf \'-v\' \'a[$("$D" secrets get X >&2)]\' x'
+deny "printf with a split-quoted -v" $'printf "-"v \'a[$("$D" secrets get X >&2)]\' x'
+deny "printf with -v glued to the name" $'printf -va\'[$("$D" secrets get X >&2)]\' x'
+deny "printf of a glob literal and me (printf is not exempt)" $'printf \'%s\\n\' \'*\' me'
+deny "python heredoc, route (a): attrgetter on typing, names built from strings" $'python3 -I - <<\'EOF\'\nimport operator, typing; g = operator.attrgetter; o = g(\'s\'+\'ys.mod\'+\'ules\')(typing)[\'o\'+\'s\']; g(\'sy\'+\'stem\')(o)(\'"$D" secrets get X\')\nEOF'
+deny "python heredoc, route (b): get_type_hints evaluating an annotation string" $'python3 -I - <<\'EOF\'\nimport typing\ndef f(x: chr(95)*2+\'imp\'+\'ort\'+chr(95)*2+"(\'o\'+\'s\').sy"+"stem(\'$D secrets get X\')"): pass\ntyping.get_type_hints(f)\nEOF'
+deny "python heredoc, route (c): Formatter.get_field walking to os" $'python3 -I - <<\'EOF\'\nimport string, argparse; u=\'_\'*2; p=u+\'init\'+u+\'.\'+u+\'glob\'+\'als\'+u+\'[\'+\'_\'+\'o\'+\'s\'+\'].\'+\'sy\'+\'stem\'; string.Formatter().get_field(\'0.\'+p,(argparse.ArgumentParser,),{})[0](\'"$D" secrets get X\')\nEOF'
+deny "python heredoc, f-string braces first on a line, and me (denied again: use a script file or the override)" $'python3 -I - <<\'EOF\'\nname = \'x\'\nprint(f"{name:18} me")\nEOF'
+deny "python heredoc, a slice, run, and a json import" $'python3 -I - <<\'EOF\'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], \'then run\')\nEOF'
 deny "python heredoc after a fifo redirect" $'mkfifo p; sh <p & exec >p; python3 -I - <<\'EOF\'\nprint(\'"$D" run\')\nEOF'
-deny "python heredoc after a cd" $'cd /tmp && python3 -I - <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
+deny "python heredoc, os.system" $'python3 -I - <<\'EOF\'\nimport os\nos.system(\'"$D" run\')\nEOF'
 deny "python heredoc, then a command after the terminator" $'python3 -I - <<\'EOF\'\nprint(1)\nEOF\n"$D" run'
 deny "python heredoc, a backslash-newline before the first EOF line" $'python3 -I - <<\'EOF\'\na\\\nEOF\n"$D" run\nEOF'
-deny "python heredoc, a CR after the terminator is not a terminator" $'python3 -I - <<\'EOF\'\nprint(f"{1:3} run")\nEOF\r'
-deny "python heredoc, unterminated" $'python3 -I - <<\'EOF\'\nprint(f"{1:3} run")'
-deny "python heredoc, unquoted delimiter" $'python3 -I - <<EOF\nprint(f"{1:3} run $(echo x)")\nEOF'
-deny "python heredoc, piped onward" $'python3 -I - <<\'EOF\' | sh\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, a redirect on the command" $'python3 -I - > out <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, a script path instead of stdin" $'python3 x.py <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, -m" $'python3 -m http.server <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, -c" $'python3 -c \'print(1)\' <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, an assignment prefix" $'X=1 python3 -I - <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, a wrapper" $'env python3 -I - <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python heredoc, a quoted command word" $'"python3" -I - <<\'EOF\'\nprint(f"{1:3} run")\nEOF'
-deny "python one-liner, not a heredoc" "python3 -c 'print(1)' \"\$HOME\" run"
-deny "python heredoc, os.system" $'python3 -I - <<\'EOF\'\nimport os\nos.system(\'"$D" run\')\nEOF'
-deny "python heredoc, os spelled via from-import" $'python3 -I - <<\'EOF\'\nfrom os import system\nsystem(\'"$D" run\')\nEOF'
-deny "python heredoc, subprocess" $'python3 -I - <<\'EOF\'\nimport subprocess\nsubprocess.run(\'"$D" run\', shell=True)\nEOF'
-deny "python heredoc, __import__" $'python3 -I - <<\'EOF\'\n__import__(\'os\').system(\'"$D" run\')\nEOF'
-deny "python heredoc, sys.modules" $'python3 -I - <<\'EOF\'\nimport sys\nsys.modules[\'os\'].system(\'"$D" run\')\nEOF'
-deny "python heredoc, getattr" $'python3 -I - <<\'EOF\'\nimport json\ngetattr(json, \'x\')(1)\n"$D" run\nEOF'
-deny "python heredoc, eval" $'python3 -I - <<\'EOF\'\neval(\'1\')\nprint("$D run")\nEOF'
-deny "python heredoc, exec" $'python3 -I - <<\'EOF\'\nexec(\'1\')\nprint("$D run")\nEOF'
-deny "python heredoc, open" $'python3 -I - <<\'EOF\'\nopen(\'f\', \'w\').write(1)\n"$D" run\nEOF'
-deny "python heredoc, an import with an alias" $'python3 -I - <<\'EOF\'\nimport json as j\nprint("$D run")\nEOF'
-deny "python heredoc, an import after a semicolon" $'python3 -I - <<\'EOF\'\nx = 1; import os\nprint("$D run")\nEOF'
-deny "python heredoc, an import of a module off the list (urllib.request)" $'python3 -I - <<\'EOF\'\nimport urllib.request\nprint("$D run")\nEOF'
-deny "python heredoc, an import of a module off the list, after a semicolon" $'python3 -I - <<\'EOF\'\nx = 1; import xmlrpc\nprint("$D run")\nEOF'
-deny "python heredoc, from sys import path (no sys word left to scan)" $'python3 -I - <<\'EOF\'\nfrom sys import path\nprint("$D run")\nEOF'
-deny "python heredoc, sys.path (an attribute off the list)" $'python3 -I - <<\'EOF\'\nimport sys\nsys.path.insert(0, "x")\nprint("$D run")\nEOF'
-deny "python heredoc, importlib" $'python3 -I - <<\'EOF\'\nimport importlib\nprint("$D run")\nEOF'
-deny "python heredoc, a module off the list" $'python3 -I - <<\'EOF\'\nimport pty\nprint("$D run")\nEOF'
-deny "python heredoc, from sys import" $'python3 -I - <<\'EOF\'\nfrom sys import modules\nprint("$D run")\nEOF'
-deny "python heredoc, an underscore identifier" $'python3 -I - <<\'EOF\'\nx = _private\nprint("$D run")\nEOF'
-deny "python heredoc, a sys attribute off the list" $'python3 -I - <<\'EOF\'\nimport sys\nprint(sys.meta_path)\n"$D" run\nEOF'
 deny "python heredoc, the CLI name spelled in the body" $'python3 -I - <<\'EOF\'\nprint("doppler me")\nEOF'
-deny "python heredoc, the CLI name spelled with a quote in the body" $'python3 -I - <<\'EOF\'\nprint("dop" "pler me", "d\'o\'ppler secrets get")\nEOF'
+deny "python one-liner, not a heredoc" $'python3 -c \'print(1)\' "$HOME" run'
 deny "shell heredoc, bash" $'bash <<\'EOF\'\n"$D" run\nEOF'
 deny "shell heredoc, sh" $'sh <<\'EOF\'\n"$D" run\nEOF'
 deny "cat heredoc piped to a shell" $'cat <<\'EOF\' | sh\n"$D" run\nEOF'
