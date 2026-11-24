@@ -22,6 +22,12 @@ such shells, to simulate a runner that has only bash 5 and dash. Shells tried: e
 that ran are printed, a missing zsh is reported. With CI set, at least bash must be present.
 Output: one `  ok   - ` or `  FAIL - ` line per check.
 
+#649 rows (the expansion rules' prose exemption, see the hook docstring) spell the CLI by an expansion
+or glob, so the shell environment carries D (its name), X (its first three letters) and SHELL (/bin/sh),
+and a kind suffixed "@glob" runs with the working directory holding copies of the fake CLI, so a `*`
+there matches it. Rows that need csh, tcsh, parallel, zsh or dash piping are "deny-only": those
+programs are not on every machine, so the hook-side deny is asserted and no teeth are required.
+
 The git shim imitates what real git does with an editor, because that is how message text became
 code: it runs the editor (GIT_EDITOR, else `git config core.editor`, else VISUAL, else EDITOR) on a
 file holding the arguments when the command is a commit or an annotated tag and it has no -m/-F/-C,
@@ -129,6 +135,67 @@ CORPUS = [
     ("heredoc operator not last on its line", f"gh issue comment 5 --body-file - {H} | sh\n{PRINT}\nEOF", "deny", "bypass"),
     ("unquoted heredoc delimiter", f"gh issue comment 5 --body-file - <<EOF\n$({PRINT})\nEOF", "deny", "bypass"),
     ("unbalanced quote", f'git commit -m "{PRINT}', "deny", "deny-only"),
+]
+
+# #649: text that merely carries an expansion character and a common word is data, but ONLY as the
+# whole input of a single `echo`/`printf` or a `python3 -I - <<'EOF'` script with no shell-out. The
+# name is not spelled in any of these ($D, a glob, a variable), so only the expansion rules see it.
+# Suffix "@glob" on a kind runs the shell with its cwd holding copies of the fake CLI (so `*` matches
+# it) and the environment variables D (the CLI's name), X (its first three letters) and SHELL (sh).
+PYBODY = "name = 'x'\nprint(f\"{name:18} me\")\n"
+CORPUS += [
+    ("echo of a glob literal, then run", "echo '*' run", "allow", "msg"),
+    ("echo of a glob literal, then secrets (glob dir)", "echo '*' secrets", "allow", "msg@glob"),
+    ("echo of a variable, then prose", 'echo "$HOME" let me know', "allow", "msg"),
+    ("printf of a glob literal, then me", "printf '%s\\n' '*' me", "allow", "msg"),
+    ("echo of an unquoted variable, then run", "echo $HOME run the tests", "allow", "msg"),
+    ("python heredoc: f-string braces first on a line, and me", f"python3 -I - <<'EOF'\n{PYBODY}EOF", "allow", "msg"),
+    ("python heredoc: json from stdin, a slice, and run",
+     "python3 -I - <<'EOF'\nimport json, sys\nrows = [1, 2, 3, 4]\nprint(rows[:3], 'then run')\nEOF", "allow", "msg"),
+    ("commit -F heredoc with backticks and run", "git commit -F - <<'EOF'\nfix: `x` a run that never starts, tell me\nEOF", "allow", "msg"),
+    ("gh pr create body-file heredoc with bold and run", "gh pr create --title t --body-file - <<'EOF'\n**Summary** let me know, run it\nEOF", "allow", "msg"),
+    # --- class 1 of the blocked attempt: an unbalanced quote later (an apostrophe in a comment), quoted values
+    ("env, quoted option value with a blank, apostrophe in a trailing comment", "env \"$D\" -p 'a b' secrets # don't", "deny", "bypass"),
+    ("env, quoted redirect target with a blank, apostrophe in a comment", "env \"$D\" 2>'a b' secrets # don't", "deny", "bypass"),
+    ("nohup, quoted option value with a blank, apostrophe in a comment", "nohup \"$D\" --config-dir '/tmp/a b' secrets # it's fine", "deny", "bypass"),
+    ("an escaped dollar before a quote that looks ANSI-C", "env \"$D\" -p \\$'a b\\' secrets #'", "deny", "bypass"),
+    ("a doubled dollar before a quote that looks ANSI-C", "env \"$D\" -p $$'a b' secrets", "deny", "bypass"),
+    # --- class 2: one shell word that reads as two
+    ("command substitution carrying an option", 'env "$D" -p $(echo app) secrets', "deny", "bypass"),
+    ("parameter default carrying an option", 'env "$D" ${P:--p app} secrets', "deny", "bypass"),
+    ("xargs with a here-string that carries the arguments", 'xargs "$D" <<< "-p app secrets"', "deny", "bypass"),
+    ("a {fd} redirect between the name and the subcommand", 'env "$D" {fd}> /dev/null secrets', "deny", "bypass"),
+    ("a variable that holds an option, word-split", 'F=-p; env "$D" $F app secrets', "deny", "bypass"),
+    # --- class 3: a glob literal re-read by something that is not on a shell list (the shim dir is the cwd)
+    ("echo glob literal piped to sh", "echo '*' secrets | sh", "deny", "bypass@glob"),
+    ("echo glob literal piped to bash", "echo '*' run | bash", "deny", "bypass@glob"),
+    ("echo glob literal piped to env $SHELL", "echo '*' secrets | env $SHELL", "deny", "bypass@glob"),
+    ("echo glob literal piped to awk system()", "echo '*' secrets | awk '{system($0)}'", "deny", "bypass@glob"),
+    ("echo glob literal piped to perl system()", "echo '*' secrets | perl -e 'system(<STDIN>)'", "deny", "bypass@glob"),
+    ("echo glob literal piped to python3 -c (python3 may be a shim that changes directory: no teeth required)",
+     "echo '*' secrets | python3 -c 'import os,sys;os.system(sys.stdin.read())'", "deny", "deny-only"),
+    ("echo glob literal piped to a dot-source of stdin", "echo '*' secrets | . /dev/stdin", "deny", "bypass@glob"),
+    ("echo glob literal written to a file, then sourced", "echo '*' secrets > f; . ./f", "deny", "bypass@glob"),
+    ("echo glob literal written to a file, then run by sh", "echo '*' secrets > f && sh f", "deny", "bypass@glob"),
+    ("a fifo read by a shell, stdout redirected into it, then echo", "mkfifo p; sh <p & exec >p; echo '*' secrets", "deny", "bypass@glob"),
+    ("echo glob literal piped to csh (not installed everywhere)", "echo '*' secrets | csh", "deny", "deny-only"),
+    ("echo glob literal piped to tcsh (not installed everywhere)", "echo '*' secrets | tcsh", "deny", "deny-only"),
+    ("echo glob literal piped to parallel (not installed everywhere)", "echo '*' secrets | parallel", "deny", "deny-only"),
+    ("echo glob literal piped to zsh (not installed everywhere)", "echo '*' secrets | zsh", "deny", "deny-only"),
+    ("echo glob literal piped to dash (not installed everywhere)", "echo '*' secrets | dash", "deny", "deny-only"),
+    # --- the python exemption is the whole input, with no shell-out
+    ("python heredoc after a fifo redirect", "mkfifo p; sh <p & exec >p; python3 -I - <<'EOF'\nprint('\"$D\" run')\nEOF", "deny", "bypass"),
+    ("python heredoc, os.system", "python3 -I - <<'EOF'\nimport os\nos.system('\"$D\" run')\nEOF", "deny", "bypass"),
+    ("python heredoc, subprocess shell=True", "python3 -I - <<'EOF'\nimport subprocess\nsubprocess.run('\"$D\" run', shell=True)\nEOF", "deny", "bypass"),
+    ("python heredoc, __import__", "python3 -I - <<'EOF'\n__import__('os').system('\"$D\" run')\nEOF", "deny", "bypass"),
+    ("python heredoc, from os import system", "python3 -I - <<'EOF'\nfrom os import system\nsystem('\"$D\" run')\nEOF", "deny", "bypass"),
+    ("python heredoc, sys.modules", "python3 -I - <<'EOF'\nimport sys\nsys.modules['os'].system('\"$D\" run')\nEOF", "deny", "bypass"),
+    ("python heredoc, then a command after the terminator", "python3 -I - <<'EOF'\nprint(1)\nEOF\n\"$D\" run", "deny", "bypass"),
+    ("python heredoc, a backslash-newline before the first EOF line", "python3 -I - <<'EOF'\na\\\nEOF\n\"$D\" run\nEOF", "deny", "bypass"),
+    ("echo with a backtick substitution that runs the name, then secrets", 'echo "`$D`" secrets', "deny", "bypass"),
+    ("echo with a $( substitution that runs the name, then secrets", 'echo "$($D)" secrets', "deny", "bypass"),
+    ("a shell reads the heredoc", "sh <<'EOF'\n\"$D\" run\nEOF", "deny", "bypass"),
+    ("cat heredoc piped to a shell", "cat <<'EOF' | sh\n\"$D\" run\nEOF", "deny", "bypass"),
 ]
 
 # Corpus cases whose teeth check needs a particular shell, keyed by label: "<name><<major>" means a shell
@@ -295,11 +362,19 @@ def hook_rc(hook, cmd):
     return p.returncode
 
 
-def run_shell(shell, bindir, scratch, cmd):
-    """True if the marker printed, False if not, TIMEOUT if the run did not finish."""
+def run_shell(shell, bindir, scratch, cmd, glob=False):
+    """True if the marker printed, False if not, TIMEOUT if the run did not finish.
+
+    With glob=True the working directory holds copies of the shims, so a `*` there matches the fake
+    CLI (the case a real glob would hit when a directory holds the real one).
+    """
     work = tempfile.mkdtemp(dir=scratch)
     open(os.path.join(work, "x"), "w").close()
-    env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": work, "TMPDIR": work}
+    if glob:
+        for name in os.listdir(bindir):
+            shutil.copy2(os.path.join(bindir, name), os.path.join(work, name))
+    env = {"PATH": bindir + ":/usr/bin:/bin", "HOME": work, "TMPDIR": work,
+           "D": D, "X": D[:3], "SHELL": "/bin/sh"}
     try:
         p = subprocess.run([shell, "-c", cmd], capture_output=True, text=True, timeout=20,
                            env=env, cwd=work, stdin=subprocess.DEVNULL, errors="replace")
@@ -327,10 +402,12 @@ def main():
     if not shells:
         print("  info - no shell found: only the hook's expectation is checked")
     for label, cmd, want, kind in CORPUS:
+        glob = kind.endswith("@glob")
+        kind = kind[:-len("@glob")] if glob else kind
         rc = hook_rc(hook, cmd)
         got = "allow" if rc == 0 else "deny" if rc == 2 else f"rc={rc}"
         fails += not out(got == want, f"corpus {want}: {label}" + ("" if got == want else f" (hook said {got})"))
-        printed = {s: run_shell(s, bindir, scratch, cmd) for s in shells}
+        printed = {s: run_shell(s, bindir, scratch, cmd, glob) for s in shells}
         if got == "allow":
             bad = [os.path.basename(s) for s, p in printed.items() if p is True]
             slow = [os.path.basename(s) for s, p in printed.items() if p == TIMEOUT]
