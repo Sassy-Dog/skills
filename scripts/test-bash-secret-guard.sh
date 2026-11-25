@@ -240,10 +240,13 @@
 # GLUED CLOSER (sections "a subcommand glued to a closing ) backtick or } is a whole word" and the
 # redirect/separator cases after it, plus their bypass rows in the differential): the whole-word lookahead in
 # `triggered`, now `(?=$|[\s)`};|&<>])`. ONE replacement each, count of failing checks, unmutated baseline 0:
-# -> `(?=$|\s)` (the original text): 47 failing; -> `(?=$|[\s)`;|&<>])` (only `}` dropped): 1 (the
-# `ls "$D secrets}"` case); -> `(?=$|[\s)`}])` (only the `;|&<>` additions dropped): 34. All killed; none
-# equivalent. Newly denied by the widening, pinned as known false denies: `echo "$x" run>out` and
-# `echo "$(date)" secrets>notes.txt`. `echo "$(date)" me` and `echo "$(pwd)" run` were already denied on main
+# -> `(?=$|\s)` (the original text): 48 failing; -> `(?=$|[\s)`;|&<>])` (only `}` dropped): 1 (the
+# `ls "$D secrets}"` case); -> `(?=$|[\s)`}])` (only the `;|&<>` additions dropped): 35. All killed; none
+# equivalent. Newly denied by the widening, pinned as known false denies: `echo "$x" run>out`,
+# `echo "$(date)" secrets>notes.txt` and a backtick commit message ending `run;` (the latter is quoted
+# prose after an expansion character; so are `rg -n "$PAT" -e "secrets|token" docs`, `awk '{print $1,
+# "run;"}' f`, `echo "${PWD}" me>>log` and a `gh pr comment --body "..., then run|tee"` holding a backtick,
+# all allowed on main and denied now, verified by hand, not pinned). `echo "$(date)" me` and `echo "$(pwd)" run` were already denied on main
 # (the `me`/`run` after `$(` pairing) and are pinned as denies.
 # Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
 # checks is stated because nothing re-derives it.
@@ -1608,6 +1611,13 @@ deny "process substitution, subcommand then >&2" 'cat <($D secrets>&2)'
 # Known false denies this widening adds (use the bypass): prose followed by a redirect.
 deny "known false deny: run then a redirect" 'echo "$x" run>out'
 deny "known false deny: secrets then a redirect after a substitution" 'echo "$(date)" secrets>notes.txt'
+# Quoted prose after an expansion character is denied too (allowed on main): a backtick commit message
+# ending `run;`. The override is ignored when the command holds a backtick, so the workaround is the
+# message on stdin (`-F - <<'EOF'`), pinned as an allow; the word before the substitution also passes.
+deny "known false deny: a backtick commit message ending run;" 'git commit -m "fix: `x` then run;"'
+allow "workaround: commit message on stdin with a backtick and run;" $'git commit -F - <<\'EOF\'\nfix: `x` then run;\nEOF'
+allow "workaround: the word before the substitution" 'echo me "$(date)"'
+allow "workaround: the word before the substitution, then a redirect" 'echo secrets "$(date)" >notes.txt'
 # Prose after a substitution. `echo "$(date)" me` and `echo "$(pwd)" run` are denied, and were denied on
 # main before the lookahead change: an expansion character followed by `me`/`run` as a whole word is
 # the expansion rule's guess at a name the text does not spell (#649 exempts only `$NAME`/`${NAME}`
