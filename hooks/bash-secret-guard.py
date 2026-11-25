@@ -121,8 +121,8 @@ pieces, so neither is inert and both keep the old reading. Still denied, named i
 that is not the whole input, any heredoc whose body holds an expansion character beside
 `run`/`me`/`secrets`/`configure` unless the sanitizer blanks it (`git commit -F - <<'EOF'`,
 `gh pr create --body-file - <<'EOF'`; the `-m "$(cat <<'EOF'...)"` form and a python heredoc are not).
-Also a known limit, older than #649: a subcommand word glued to a closing paren or backtick is not a
-whole word (`echo "$($D secrets)" x`), so the expansion rule does not see it.
+A subcommand word glued to a closing `)`, backtick or `}` (`echo "$($D secrets)" x`) counts as a whole
+word for the expansion rule; `echo "$(date)" me` and `echo "$(pwd)" run` stay quiet (no CLI name, no match).
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -252,7 +252,7 @@ def _mentions(t, ti):
             if _command_word_expands(seg):
                 return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
             m = EXPANSION_RE.search(seg)
-            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s)", seg[m.start():])
+            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s|[)`}])", seg[m.start():])
                          for n in SUBCOMMAND_WORDS):
                 return True
     return False

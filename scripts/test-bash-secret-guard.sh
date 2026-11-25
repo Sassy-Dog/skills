@@ -215,8 +215,8 @@
 # `gh pr create --body-file - <<'EOF'`, which the #647 sanitizer already allowed and which are pinned here
 # and in the differential; the `-m "$(cat <<'EOF'..)"` form and python heredocs stay denied. NAMED false
 # denies, pinned as denies: `echo '*' run; echo hi`, `cd x && echo ...`, `cat <<'EOF'`, any python
-# heredoc. Two older holes found on the way are pinned as ALLOWS in the KNOWN LIMIT section: a
-# subcommand word glued to `)` or a backtick (not fixed here).
+# heredoc. The older hole found on the way (a subcommand word glued to `)` or a backtick) is fixed
+# below, see the glued-closer mutants.
 # MUTANTS of #649, in hooks/bash-secret-guard.py, ONE replacement each, run on parallel scratch copies of
 # the tree (a git-initialised copy, so the sweep works), failing-case count, after an unmutated baseline
 # of 0 with the summary line required. The replaced line, then the count:
@@ -237,6 +237,12 @@
 #   (the exemption decided on the line-joined text): 8, the two `echo x\<CR><LF>...` gate rows and their
 #   differential rows; a backslash, CR, LF is not a continuation, so the joined text is one echo while the
 #   shell runs a second command. Every mutant above is killed; none is left equivalent.
+# GLUED CLOSER (section "a subcommand glued to a closing ) backtick or } is a whole word", and the five
+# "subcommand glued ..." bypass rows in the differential): the whole-word lookahead in `triggered`,
+# `(?=$|\s|[)`}])` -> `(?=$|\s)` (the old text): 15 failing (five gate deny cases, ten differential
+# checks: four of the five bypass rows fail twice (the `get --plain` row is also denied by another rule), plus the driver-completion pair); -> `(?=$|\s|[)`])` (`}`
+# dropped): 1 (the `ls "$D secrets}"` case). Killed; none left equivalent. Nothing is newly denied: `echo "$(date)" me` and
+# `echo "$(pwd)" run` were already denied on main (the `me`/`run` after `$(` pairing), and are pinned.
 # Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
 # checks is stated because nothing re-derives it.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
@@ -1573,10 +1579,22 @@ allow "limit: here-string capture" 'cat <<< $(dop?ler $S)'
 allow "limit: &< detached redirect target" '&< out dop?ler $S'
 allow "limit: < in redirect before a quoted expansion name" '< in "$D" $S'
 allow "limit: 2> out redirect before an expansion name" '2> out $D $S'
-# Found while writing #649 and present on main before it (the whole-word test counts `secrets)` and
-# `secrets`` as no word): a subcommand glued to a closing paren or backtick after an expansion name.
-allow "limit (pre-existing): subcommand glued to the closing paren of a substitution" 'echo "$($D secrets)" x'
-allow "limit (pre-existing): subcommand glued to the closing backtick" 'echo "`$D secrets`" x'
+echo "== a subcommand glued to a closing ) backtick or } is a whole word =="
+# Present on main before #649 (the whole-word lookahead was `(?=$|\s)`, so `secrets)` and `secrets``
+# counted as no word); the lookahead now also accepts `)`, a backtick and `}`.
+deny "subcommand glued to the closing paren of a substitution" 'echo "$($D secrets)" x'
+deny "subcommand glued to the closing backtick" 'echo "`$D secrets`" x'
+deny "subcommand glued to the closing paren, no echo" 'ls "$($D secrets)"'
+deny "glued subcommand with arguments after the name" 'echo "$($D secrets get X --plain)" x'
+deny "subcommand glued to a closing brace" 'echo "${X:-$($D me)}" x'
+deny "a subcommand glued to a closing brace, no substitution (fail closed)" 'ls "$D secrets}"'
+# Prose after a substitution. `echo "$(date)" me` and `echo "$(pwd)" run` are denied, and were denied on
+# main before the lookahead change: an expansion character followed by `me`/`run` as a whole word is
+# the expansion rule's guess at a name the text does not spell (#649 exempts only `$NAME`/`${NAME}`
+# echoes). Pinned as denies so a later change shows up; the fix newly denies nothing.
+deny "prose: a substitution of date, then me (pre-existing false deny)" 'echo "$(date)" me'
+deny "prose: a substitution of pwd, then run (pre-existing false deny)" 'echo "$(pwd)" run'
+allow "prose: a substitution, then a word that is no subcommand" 'echo "$(date)" hello'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"
