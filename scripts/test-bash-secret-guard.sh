@@ -260,15 +260,20 @@
 # target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is allowed. Those spellings carry allow cases
 # in the "KNOWN LIMIT" section. No mutant was run for the pin; it asserts current behaviour only.
 # NON-LITERAL SUBCOMMAND SPELLINGS, pinned as allows (#654, the issue's second acceptance branch: named, not
-# matched). The subcommand rule recognises `secrets`/`configure`/`run`/`me` only as a whole word. An independent
-# review judged every matcher for the shell's other spellings of that word a treadmill (each pass of a scanner
-# found another differential), so none is shipped; the classes are named in README (Known limits) and the hook
-# docstring, and the 18 rows in section "KNOWN LIMIT, pinned allow (#654)" pin that the guard allows each class
-# today: ANSI-C and locale quoting, brace expansion, an expansion or quote glued to the word, glob forms, a
-# subcommand held in a variable or a default, and indirect invocation (xargs on stdin, printf, a stdin-reading
-# wrapper, eval). Every row printed under at least one shell on main. These are pins of CURRENT behaviour, not
-# mutation-proven rules: no mutant is claimed for them; a later change that denies one turns the row red, which
-# is the point. A stricter layer is planned separately.
+# matched; the third bullet, the `echo "$(date)" me` false denies, stays with #652 because no tokenizer changed).
+# The subcommand rule recognises `secrets`/`configure`/`run`/`me` only as a whole word. An independent review
+# judged every matcher for the shell's other spellings of that word a treadmill (each pass of a scanner found
+# another differential), so none is shipped; the classes are named in README (Known limits) and the hook
+# docstring, and the rows in section "KNOWN LIMIT, pinned allow (#654)" pin that the guard allows each class today:
+# ANSI-C and locale quoting, brace expansion, an expansion glued before or after the word, glob forms, a subcommand
+# held in a variable or a default, indirect invocation (stdin-fed xargs or env), a subcommand assembled by printf,
+# and eval of the above. The condition is the OUTER first word: it must not itself expand (echo, printf, env, time,
+# eval); a top-level expanding command word, or any spelled name, still denies. The xargs rows have no substitution.
+# The three glob rows print only when the working directory holds a matching entry (bash passes the pattern
+# literally otherwise, zsh errors); the differential check ran them with such a directory. Every row printed under at
+# least one real shell on main. These are pins of CURRENT behaviour, not mutation-proven rules: no mutant is
+# claimed for them; a later change that denies one turns the row red, which is the point. Verified DENIED on main and
+# therefore NOT in the limit list: a bare quote or backslash inside the word (`sec''rets`, `"secrets"`, `\secrets`).
 # Review 6's bootstrap-tail spellings (`&& {set,}`, `&& FOO=1 set`, `&& let x=API_KEY`,
 # `&& [[ DB -gt 0 ]]`) are pinned as denies; the review-6 mutant (bootstrap accepts text after the
 # eval) is the one that targets them. It was re-run in review 8 as BOOTSTRAP_RE.fullmatch -> .match
@@ -1747,8 +1752,7 @@ echo "== KNOWN LIMIT, pinned allow (#654): a subcommand the text does not spell 
 # printer in bash 5, /bin/bash 3.2, zsh and dash). They are a known limit, NOT a feature: the guard is a text
 # matcher and cannot model the shell's expansion of a word. They are pinned so that a future change which
 # starts denying one is a deliberate edit that updates README and the hook docstring in the same change.
-# The first word of each substitution below does not itself expand to a spelled name in the text, so only the
-# subcommand rule could see the subcommand.
+# The outer first word (echo, printf, env, time, eval) does not itself expand, so only the subcommand rule could see it.
 allow "limit: ANSI-C quoted subcommand" 'echo $($D $'"'"'secrets'"'"')'
 allow "limit: locale-quoted subcommand" 'echo $($D $"secrets")'
 allow "limit: brace list holding the subcommand" 'echo $($D {secrets,x})'
@@ -1757,6 +1761,19 @@ allow "limit: brace list inside the word" 'echo $($D s{e,}crets)'
 allow "limit: braced variable glued in front of the word" 'echo $($D ${x}secrets)'
 allow "limit: dollar-at glued in front of the word" 'echo $($D $@secrets)'
 allow "limit: quoted variable glued in front of the word" 'echo $($D "$x"secrets)'
+allow "limit: expansion glued after the word" 'echo $($D secrets$x)'
+allow "limit: braced expansion glued after the word" 'echo $($D secrets${x})'
+allow "limit: quoted word with an expansion glued after it" 'echo $($D "secrets"$x)'
+allow "limit: ANSI-C quote glued inside the word" 'echo $($D se$'"'"'c'"'"'rets)'
+allow "limit: prefix form, ANSI-C quoted subcommand" 'env $D $'"'"'secrets'"'"
+allow "limit: prefix form, brace list" 'time $D {secrets,x}'
+allow "limit: on-disk script holding the command" 'mkdir -p d; printf '"'"'#!/bin/sh\n%s secrets\n'"'"' "$D" > d/s.sh; sh d/s.sh'
+allow "limit: encoded payload piped to a shell" 'echo ZG9wcGxlcg== | base64 -d | sh'
+allow "limit: name split by concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" "pler secrets")'"'"''
+# Verified DENIED on main (not limits): a bare quote or backslash inside the word.
+deny "bare quotes inside the word are removed first" 'echo $($D sec'"''"'rets)'
+deny "a fully quoted subcommand" 'echo $($D "secrets")'
+deny "a backslash inside the word" 'echo $($D \secrets)'
 allow "limit: glob, star after the word" 'echo $($D secrets*)'
 allow "limit: glob, question mark" 'echo $($D secret?)'
 allow "limit: glob, bracket class" 'echo $($D [s]ecrets)'
