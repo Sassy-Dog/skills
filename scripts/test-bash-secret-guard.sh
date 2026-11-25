@@ -237,12 +237,14 @@
 #   (the exemption decided on the line-joined text): 8, the two `echo x\<CR><LF>...` gate rows and their
 #   differential rows; a backslash, CR, LF is not a continuation, so the joined text is one echo while the
 #   shell runs a second command. Every mutant above is killed; none is left equivalent.
-# GLUED CLOSER (section "a subcommand glued to a closing ) backtick or } is a whole word", and the five
-# "subcommand glued ..." bypass rows in the differential): the whole-word lookahead in `triggered`,
-# `(?=$|\s|[)`}])` -> `(?=$|\s)` (the old text): 15 failing (five gate deny cases, ten differential
-# checks: four of the five bypass rows fail twice (the `get --plain` row is also denied by another rule), plus the driver-completion pair); -> `(?=$|\s|[)`])` (`}`
-# dropped): 1 (the `ls "$D secrets}"` case). Killed; none left equivalent. Nothing is newly denied: `echo "$(date)" me` and
-# `echo "$(pwd)" run` were already denied on main (the `me`/`run` after `$(` pairing), and are pinned.
+# GLUED CLOSER (sections "a subcommand glued to a closing ) backtick or } is a whole word" and the
+# redirect/separator cases after it, plus their bypass rows in the differential): the whole-word lookahead in
+# `triggered`, now `(?=$|[\s)`};|&<>])`. ONE replacement each, count of failing checks, unmutated baseline 0:
+# -> `(?=$|\s)` (the original text): 47 failing; -> `(?=$|[\s)`;|&<>])` (only `}` dropped): 1 (the
+# `ls "$D secrets}"` case); -> `(?=$|[\s)`}])` (only the `;|&<>` additions dropped): 34. All killed; none
+# equivalent. Newly denied by the widening, pinned as known false denies: `echo "$x" run>out` and
+# `echo "$(date)" secrets>notes.txt`. `echo "$(date)" me` and `echo "$(pwd)" run` were already denied on main
+# (the `me`/`run` after `$(` pairing) and are pinned as denies.
 # Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
 # checks is stated because nothing re-derives it.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
@@ -1588,6 +1590,24 @@ deny "subcommand glued to the closing paren, no echo" 'ls "$($D secrets)"'
 deny "glued subcommand with arguments after the name" 'echo "$($D secrets get X --plain)" x'
 deny "subcommand glued to a closing brace" 'echo "${X:-$($D me)}" x'
 deny "a subcommand glued to a closing brace, no substitution (fail closed)" 'ls "$D secrets}"'
+# The subcommand followed by a redirect or separator character is a whole word as well.
+deny "subcommand then >&2 inside a quoted substitution" 'echo "$($D secrets>&2)" x'
+deny "subcommand then <&- inside a substitution" 'echo $($D secrets<&-)'
+deny "subcommand then a pipe inside a substitution" 'echo "$($D secrets|cat)" x'
+deny "subcommand then ; inside a substitution" 'echo "$($D secrets;)" x'
+deny "subcommand then & inside a substitution" 'echo "$($D secrets&)" x'
+deny "subcommand then >&2 inside backticks" 'echo `$D secrets>&2` x'
+deny "subcommand then ; inside quoted backticks" 'echo "`$D secrets;`" x'
+deny "assignment of a substitution, subcommand then >&2" 'x=$($D secrets>&2)'
+deny "colon with a substitution, subcommand then >&2" ': "$($D secrets>&2)"'
+deny "eval of a string, subcommand then >&2" 'eval "$D secrets>&2"'
+deny "sh -c string, subcommand then >&2" 'sh -c "$D secrets>&2"'
+deny "bash -c string, subcommand then >&2" "bash -c '\$D secrets>&2'"
+deny "me then >&2 inside a substitution" 'echo "$($D me>&2)" x'
+deny "process substitution, subcommand then >&2" 'cat <($D secrets>&2)'
+# Known false denies this widening adds (use the bypass): prose followed by a redirect.
+deny "known false deny: run then a redirect" 'echo "$x" run>out'
+deny "known false deny: secrets then a redirect after a substitution" 'echo "$(date)" secrets>notes.txt'
 # Prose after a substitution. `echo "$(date)" me` and `echo "$(pwd)" run` are denied, and were denied on
 # main before the lookahead change: an expansion character followed by `me`/`run` as a whole word is
 # the expansion rule's guess at a name the text does not spell (#649 exempts only `$NAME`/`${NAME}`
