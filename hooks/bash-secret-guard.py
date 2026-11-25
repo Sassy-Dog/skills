@@ -143,7 +143,13 @@ them. Under `Bash|Monitor` (or `.*`, or no matcher) the call arrives with `tool_
 `tool_name != "Bash"` exit 0 below would leave Monitor commands unguarded unless this classifier gained
 a reviewed Monitor branch. See the README.
 
-Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
+Known limits (a seatbelt against the accident, not a sandbox): a subcommand word the text does not spell
+literally, behind a first word that does not itself expand (#654): ANSI-C or locale quoting, brace expansion, an
+expansion or quote glued before or after the word, glob forms, a subcommand held in a variable or a default, and
+indirect invocation (xargs or a stdin-reading wrapper, printf, eval). Deliberately NOT matched: a text matcher
+cannot model the shell's expansion and each matcher tried lost to a new spelling; the gate pins each class as an
+allow. The override is printed in the deny message, so it is a speed bump for a careless agent, not protection
+against an injected one. Also: aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the

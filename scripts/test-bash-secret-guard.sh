@@ -259,6 +259,16 @@
 # prefix word (`time`, `!`, `{`), inside `<(...)` or a here-string, or after a detached redirect
 # target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is allowed. Those spellings carry allow cases
 # in the "KNOWN LIMIT" section. No mutant was run for the pin; it asserts current behaviour only.
+# NON-LITERAL SUBCOMMAND SPELLINGS, pinned as allows (#654, the issue's second acceptance branch: named, not
+# matched). The subcommand rule recognises `secrets`/`configure`/`run`/`me` only as a whole word. An independent
+# review judged every matcher for the shell's other spellings of that word a treadmill (each pass of a scanner
+# found another differential), so none is shipped; the classes are named in README (Known limits) and the hook
+# docstring, and the 18 rows in section "KNOWN LIMIT, pinned allow (#654)" pin that the guard allows each class
+# today: ANSI-C and locale quoting, brace expansion, an expansion or quote glued to the word, glob forms, a
+# subcommand held in a variable or a default, and indirect invocation (xargs on stdin, printf, a stdin-reading
+# wrapper, eval). Every row printed under at least one shell on main. These are pins of CURRENT behaviour, not
+# mutation-proven rules: no mutant is claimed for them; a later change that denies one turns the row red, which
+# is the point. A stricter layer is planned separately.
 # Review 6's bootstrap-tail spellings (`&& {set,}`, `&& FOO=1 set`, `&& let x=API_KEY`,
 # `&& [[ DB -gt 0 ]]`) are pinned as denies; the review-6 mutant (bootstrap accepts text after the
 # eval) is the one that targets them. It was re-run in review 8 as BOOTSTRAP_RE.fullmatch -> .match
@@ -1731,6 +1741,32 @@ deny "a stray word before the run word" "doppler secrets run -- ./cmd"
 deny "a stray word after the run word" "doppler run secrets --no-fallback -- ./cmd"
 allow "secrets download --no-file --no-fallback to a literal path (as before)" "doppler secrets download --no-file --no-fallback -p app -c prd > /tmp/out.env"
 deny "--no-fallback does not make a get printable" "doppler secrets get X --plain --no-fallback"
+
+echo "== KNOWN LIMIT, pinned allow (#654): a subcommand the text does not spell literally =="
+# Each row below is ALLOWED by the guard today and PRINTS under at least one real shell (checked with a fake
+# printer in bash 5, /bin/bash 3.2, zsh and dash). They are a known limit, NOT a feature: the guard is a text
+# matcher and cannot model the shell's expansion of a word. They are pinned so that a future change which
+# starts denying one is a deliberate edit that updates README and the hook docstring in the same change.
+# The first word of each substitution below does not itself expand to a spelled name in the text, so only the
+# subcommand rule could see the subcommand.
+allow "limit: ANSI-C quoted subcommand" 'echo $($D $'"'"'secrets'"'"')'
+allow "limit: locale-quoted subcommand" 'echo $($D $"secrets")'
+allow "limit: brace list holding the subcommand" 'echo $($D {secrets,x})'
+allow "limit: brace list, empty alternative after the word" 'echo $($D secrets{,})'
+allow "limit: brace list inside the word" 'echo $($D s{e,}crets)'
+allow "limit: braced variable glued in front of the word" 'echo $($D ${x}secrets)'
+allow "limit: dollar-at glued in front of the word" 'echo $($D $@secrets)'
+allow "limit: quoted variable glued in front of the word" 'echo $($D "$x"secrets)'
+allow "limit: glob, star after the word" 'echo $($D secrets*)'
+allow "limit: glob, question mark" 'echo $($D secret?)'
+allow "limit: glob, bracket class" 'echo $($D [s]ecrets)'
+allow "limit: subcommand held in a variable" 'echo $($D $s)'
+allow "limit: subcommand held in a parameter default" 'echo $($D ${s:-secrets})'
+allow "limit: subcommand fed to xargs on stdin" 'echo secrets | xargs $D'
+allow "limit: subcommand fed to xargs by printf" "printf '%s\\n' secrets | xargs \$D"
+allow "limit: subcommand assembled by printf" "printf 'sec%s' rets | xargs \$D"
+allow "limit: subcommand read from stdin by a wrapper" 'echo secrets | env $D $(cat)'
+allow "limit: the whole substitution run by eval" 'eval "echo \$($D \$'"'"'secrets'"'"')"'
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"
