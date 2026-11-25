@@ -44,7 +44,11 @@ disagree with itself about quoting.
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
      2. `doppler [global flags] run [flags] -- <rest>` or `run --command '<string>'`, where
         <rest> is a single simple command line that does not itself trigger and has no
-        `$(`, backtick, `<(`, `>(`
+        `$(`, backtick, `<(`, `>(`. (#655: `--no-fallback` and `--only-secrets A,B` or
+        `--only-secrets=A,B` are accepted on `run` only. The value is a comma list of upper-case
+        names, `[A-Z_][A-Z0-9_]*(?:,[A-Z_][A-Z0-9_]*)*`, checked by ONLY_SECRETS_RE; VALUE_RE is
+        unchanged for every other flag. Both only narrow the child and print nothing; on a read
+        subcommand `--only-secrets` stays denied.)
      3. `doppler secrets get NAME... [flags] > <literal path>`, `secrets download --no-file
         [flags] > <literal path>`, `secrets download [flags] <literal path>`, and
         `secrets substitute <template> [flags] (> | --output) <literal path>`
@@ -160,7 +164,8 @@ BYPASS_PREFIX_RE = re.compile(
 SAFE_FORMS = (
     "Allowed forms (the whole command, nothing else): `doppler secrets --only-names`; "
     "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
-    "mention doppler); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
+    "mention doppler; `--no-fallback` and `--only-secrets NAME,NAME` (upper-case names only) are "
+    "accepted on `run` and narrow it); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
     "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
     "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "
@@ -733,8 +738,13 @@ GET_BOOL = {"--plain", "--raw", "--type", "--visibility", "--no-exit-on-missing-
 DOWNLOAD_BOOL = {"--no-file", "--no-cache", "--no-fallback", "--no-exit-on-write-failure"}
 DOWNLOAD_VAL = {"--format", "--name-transformer", "--dynamic-ttl"}
 SUBST_VAL = {"--use-env", "--dynamic-ttl", "--output"}
-RUN_BOOL = {"--no-cache"}
-RUN_VAL = {"--name-transformer", "--format", "--dynamic-ttl"}
+RUN_BOOL = {"--no-cache", "--no-fallback"}
+RUN_VAL = {"--name-transformer", "--format", "--dynamic-ttl", "--only-secrets"}
+# `--only-secrets A,B` narrows the child's environment to the named secrets. Its value is a
+# comma-separated list of upper-case names, a pattern of its own: VALUE_RE has no comma and
+# stays as it is for every other flag. Only `run` passes it (RUN_VAL); no other call site does.
+ONLY_SECRETS_RE = re.compile(r"[A-Z_][A-Z0-9_]*(?:,[A-Z_][A-Z0-9_]*)*")
+RUN_VAL_PATTERNS = {"--only-secrets": ONLY_SECRETS_RE}
 BARE_SUBS = {
     "login": (set(), set()),
     "logout": (set(), set()),
@@ -780,8 +790,10 @@ def _cwd_ok(p):
     return not any(low == r or low.startswith(r + "/") for r in ("/dev", "/proc", "/sys"))
 
 
-def parse_args(toks, i, bools, vals):
-    """Flags (from the given sets) and positionals starting at toks[i]; None on anything else."""
+def parse_args(toks, i, bools, vals, patterns=None):
+    """Flags (from the given sets) and positionals starting at toks[i]; None on anything else.
+
+    A flag named in `patterns` is checked against its own value pattern instead of VALUE_RE."""
     flags = {}
     pos = []
     while i < len(toks):
@@ -800,7 +812,7 @@ def parse_args(toks, i, bools, vals):
                     i += 2
                 else:
                     return None
-                if not VALUE_RE.fullmatch(v) or v.startswith("-"):
+                if not (patterns or {}).get(name, VALUE_RE).fullmatch(v) or v.startswith("-"):
                     return None
                 flags[name] = v
             else:
@@ -871,7 +883,8 @@ def allowed_run(cmd):
     toks = head.split()
     if not toks or toks[0] != "doppler":
         return False
-    parsed = parse_args(toks, 1, GLOBAL_BOOL | RUN_BOOL, GLOBAL_VAL | PC_VAL | RUN_VAL)
+    parsed = parse_args(toks, 1, GLOBAL_BOOL | RUN_BOOL, GLOBAL_VAL | PC_VAL | RUN_VAL,
+                        RUN_VAL_PATTERNS)
     return bool(parsed) and parsed[1] == ["run"]
 
 

@@ -219,6 +219,14 @@ CORPUS += [
     ("subcommand glued to a closing paren inside a brace default", 'echo "${Y:-$($D secrets)}" x', "deny", "bypass"),
     ("a shell reads the heredoc", "sh <<'EOF'\n\"$D\" run\nEOF", "deny", "bypass"),
     ("cat heredoc piped to a shell", "cat <<'EOF' | sh\n\"$D\" run\nEOF", "deny", "bypass"),
+    # #655: the narrowing flags on the run subcommand never enable a printing flag. The fake prints
+    # on every call, so these show the denied spellings really would print; the ALLOWED spellings
+    # cannot be shown silent by the fake (it prints whatever its arguments) and are pinned in the
+    # gate only.
+    ("run --only-secrets then --print-config", f"{D} run --only-secrets A,B --print-config -- ./cmd", "deny", "bypass"),
+    ("run --only-secrets with --print-config as its value", f"{D} run --only-secrets --print-config -- ./cmd", "deny", "bypass"),
+    ("run --no-fallback with --debug", f"{D} run --no-fallback --only-secrets A,B --debug -- ./cmd", "deny", "bypass"),
+    ("secrets get with --only-secrets", f"{D} secrets get X --plain --only-secrets A,B", "deny", "bypass"),
 ]
 
 # Corpus cases whose teeth check needs a particular shell, keyed by label: "<name><<major>" means a shell

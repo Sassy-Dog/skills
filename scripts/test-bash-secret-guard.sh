@@ -314,6 +314,23 @@
 #              The deleted tail code's mutants (tail check off, `$`, env/proc text, dumpers) went
 #              with it.
 #
+# #655 (section "#655: --no-fallback and --only-secrets on run, and only there"; four denied rows in the
+# differential corpus): the two narrowing flags on the run form. `--only-secrets` takes its OWN value
+# pattern, ONLY_SECRETS_RE (a comma list of upper-case names); VALUE_RE is unchanged for every other flag.
+# The section pins the issue's three allows (both spellings, bash -c child) and its thirteen denies, plus
+# anchor, position and wrong-subcommand cases. Allowed spellings are NOT shown silent by the differential
+# (its fake prints on every call); only the denied print-capable spellings are, as "bypass" rows.
+# `--only-secrets` is also accepted before the run word (parse is position-insensitive, as `--no-cache`
+# was): pinned as an allow, because the CLI would refuse it but it prints nothing.
+# Mutants, ONE replacement each in hooks/bash-secret-guard.py, run against the section alone on scratch
+# copies (failing-case count, unmutated baseline 0 of 39): pattern -> VALUE_RE (11); pattern -> `[^ ]+`
+# (9); pattern with a trailing `.*` (6); lower case and repeated commas allowed (2); single name only,
+# no comma (5); allowed_run not passing the pattern table (11); parse_args ignoring it (11);
+# `--no-fallback` off RUN_BOOL (4); `--only-secrets` off RUN_VAL (6); `--only-secrets` on GLOBAL_VAL (4),
+# on DOWNLOAD_VAL (1), on GET_BOOL (1) or as a bare bool on run (5); `--no-fallback` off DOWNLOAD_BOOL
+# (1). EQUIVALENT, measured 0 failing: adding RUN_VAL and the pattern to the download parse alone,
+# because allowed_secrets' probe parse (which has no RUN_VAL) denies the flag first.
+#
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
 
@@ -1625,6 +1642,51 @@ allow "workaround: the word before the substitution, then a redirect" 'echo secr
 deny "prose: a substitution of date, then me (pre-existing false deny)" 'echo "$(date)" me'
 deny "prose: a substitution of pwd, then run (pre-existing false deny)" 'echo "$(pwd)" run'
 allow "prose: a substitution, then a word that is no subcommand" 'echo "$(date)" hello'
+
+echo "== #655: --no-fallback and --only-secrets on run, and only there =="
+R="doppler run -p app -c prd"
+allow "run --no-fallback --only-secrets A,B" "$R --no-fallback --only-secrets A,B -- ./cmd"
+allow "run --only-secrets=A,B spelling" "$R --no-fallback --only-secrets=A,B -- ./cmd"
+allow "run --no-fallback --only-secrets A,B, bash -c child" "$R --no-fallback --only-secrets A,B -- bash -c 'cd x && ./cmd'"
+allow "run --no-fallback alone" "$R --no-fallback -- ./cmd"
+allow "run --only-secrets alone, one name" "$R --only-secrets API_KEY -- ./cmd"
+allow "run --only-secrets with _ and digits" "$R --only-secrets _A1,B_2 -- ./cmd"
+deny "--only-secrets \$X" "$R --only-secrets \$X -- ./cmd"
+deny "--only-secrets --print-config (flag as its value)" "$R --only-secrets --print-config -- ./cmd"
+deny "--only-secrets A,,B" "$R --only-secrets A,,B -- ./cmd"
+deny "--only-secrets trailing comma" "$R --only-secrets A,B, -- ./cmd"
+deny "--only-secrets leading comma" "$R --only-secrets ,A -- ./cmd"
+deny "--only-secrets lower case" "$R --only-secrets secrets -- ./cmd"
+deny "--only-secrets leading digit" "$R --only-secrets 1A -- ./cmd"
+deny "--only-secrets= empty" "$R --only-secrets= -- ./cmd"
+deny "--only-secrets with a slash (VALUE_RE would take it)" "$R --only-secrets A/B -- ./cmd"
+deny "--only-secrets with a dot (VALUE_RE would take it)" "$R --only-secrets A.B -- ./cmd"
+deny "--only-secrets with a colon (VALUE_RE would take it)" "$R --only-secrets A:B -- ./cmd"
+deny "--only-secrets with a hyphen (VALUE_RE would take it)" "$R --only-secrets A-B -- ./cmd"
+deny "--only-secrets with a quoted space list" "$R --only-secrets 'A B' -- ./cmd"
+deny "--no-fallback with --print-config" "$R --no-fallback --print-config -- ./cmd"
+deny "--no-fallback with --debug" "$R --no-fallback --debug -- ./cmd"
+deny "--no-fallback with --api-host" "$R --no-fallback --api-host evil.example -- ./cmd"
+deny "--only-secrets A,B with --print-config after it" "$R --only-secrets A,B --print-config -- ./cmd"
+deny "--fallback <path>" "$R --no-fallback --fallback /tmp/f -- ./cmd"
+deny "--mount" "$R --no-fallback --mount /tmp/m -- ./cmd"
+deny "narrowed run then a second command" "$R --no-fallback --only-secrets A,B -- ./cmd; ./other"
+deny "narrowed run, child names the CLI" "$R --no-fallback --only-secrets A,B -- doppler secrets get X"
+deny "plain secrets get still denied" "doppler secrets get X --plain"
+deny "--only-secrets on a read (secrets)" "doppler secrets --only-secrets A,B"
+deny "--only-secrets on secrets get" "doppler secrets get X --plain --only-secrets A,B > /tmp/f"
+deny "--only-secrets on secrets download" "doppler secrets download --no-file --only-secrets A,B > /tmp/f"
+# Single-name values pass VALUE_RE, so these cases tell a wrongly placed flag from a comma refusal.
+deny "--only-secrets A on secrets get (value passes VALUE_RE)" "doppler secrets get X --plain --only-secrets A > /tmp/f"
+deny "--only-secrets A on secrets download" "doppler secrets download --no-file --only-secrets A > /tmp/f"
+deny "--only-secrets A as a global flag on a names-only read" "doppler --only-secrets A secrets --only-names"
+deny "--only-secrets A on a bare names-only read" "doppler secrets --only-names --only-secrets A"
+deny "--only-secrets on secrets substitute" "doppler secrets substitute t.yaml --only-secrets A,B > /tmp/f"
+# Known, pinned: the run flags are position-insensitive inside the run command (as --no-cache and
+# --format already were), so the CLI would refuse this spelling; it is still the run form and prints nothing.
+allow "run flags before the run word (position-insensitive, as --no-cache)" "doppler --only-secrets A,B run -- ./cmd"
+allow "secrets download --no-file --no-fallback to a literal path (as before)" "doppler secrets download --no-file --no-fallback -p app -c prd > /tmp/out.env"
+deny "--no-fallback does not make a get printable" "doppler secrets get X --plain --no-fallback"
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"
