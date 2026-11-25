@@ -164,9 +164,10 @@ BYPASS_PREFIX_RE = re.compile(
 
 SAFE_FORMS = (
     "Allowed forms (the whole command, nothing else): `doppler secrets --only-names`; "
-    "`doppler run -- <cmd>` (the child reads values from its environment; the child may not "
+    "`doppler run [flags] -- <cmd>` (the child reads values from its environment; the child may not "
     "mention doppler; `--no-fallback` and `--only-secrets NAME,NAME` (upper-case names only) are "
-    "accepted on `run` and narrow it); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
+    "accepted on `run` and narrow it; run flags go AFTER the `run` word, only global flags and "
+    "-p/-c before it);`doppler secrets get NAME --plain > /literal/path` (also `download` and "
     "`substitute`; the file is yours, reading it back is your responsibility); "
     "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
     "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "

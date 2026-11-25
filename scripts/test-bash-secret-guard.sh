@@ -325,18 +325,19 @@
 # main accepted `--no-cache` before it, closed here: the guard and the CLI may read different words
 # before the subcommand as flag values, so a run flag there could hide a read subcommand.
 # `fullmatch` on the STRICT_RE head is load-bearing only together with STRICT_RE keeping newlines out
-# of head tokens: a `.match`+`$` mutant survives and is equivalent today.
+# of head tokens (see the mutant list below for the measurement).
 # Mutants, ONE replacement each in hooks/bash-secret-guard.py, run against the section alone on scratch
-# copies (failing-case count, unmutated baseline 0 of 51): pattern -> VALUE_RE (11); pattern -> `[^ ]+`
+# copies (failing-case count, unmutated baseline 0 of 56): pattern -> VALUE_RE (11); pattern -> `[^ ]+`
 # (9); pattern with a trailing `.*` (6); lower case and repeated commas allowed (2); single name only,
 # no comma (5); allowed_run not passing the pattern table (11); parse_args ignoring it (11);
 # `--no-fallback` off RUN_BOOL (6); `--only-secrets` off RUN_VAL (6); `--only-secrets` on GLOBAL_VAL (5),
 # on DOWNLOAD_VAL (1), on GET_BOOL (1) or as a bare bool on run (5); `--no-fallback` off DOWNLOAD_BOOL
-# (1). The before-run restriction: prefix parse widened to the run flags (9); the old single-pass parse
-# restored (9); prefix not required to parse (10); prefix positionals ignored (1); tail positionals
+# (1). The before-run restriction: prefix parse widened to the run flags (11); the old single-pass parse
+# restored (11); prefix not required to parse (12); prefix positionals ignored (1); tail positionals
 # allowed (1); -p/-c dropped from the prefix (2). EQUIVALENT, measured 0 failing: adding RUN_VAL and the
 # pattern to the download parse alone, because allowed_secrets' probe parse (which has no RUN_VAL) denies
-# the flag first. Not measured here: a `.match`+`$` swap for `fullmatch` (no case tells it apart today).
+# the flag first; and `fullmatch` swapped for `.match` plus `$` on the head (0 failing): equivalent only
+# together with STRICT_RE keeping newlines out of head tokens, which is why `fullmatch` is not the sole guard.
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -1702,6 +1703,11 @@ deny "value-eating shape with --no-cache" "doppler --no-cache --scope secrets --
 allow "global and -p/-c flags before run, run flags after" "doppler --json --scope / -p app -c prd run --no-fallback --only-secrets A,B -- ./cmd"
 allow "-p run: a flag value spelled run is not the subcommand" "doppler -p run run --no-fallback -- ./cmd"
 deny "-p run, then run flags before the real run word" "doppler -p run --no-fallback run -- ./cmd"
+allow "run --no-cache after the run word" "doppler run --no-cache -- ./cmd"
+allow "run --format after the run word" "doppler run --format json -- ./cmd"
+allow "--scope run run: a flag value spelled run is not the subcommand" "doppler --scope run run -- ./cmd"
+deny "--scope run, then a run flag before the real run word" "doppler --scope run --no-cache run -- ./cmd"
+deny "the deny message says run flags go after the run word" "doppler --no-cache run -- ./cmd" "AFTER the \`run\` word"
 deny "a stray word before the run word" "doppler secrets run -- ./cmd"
 deny "a stray word after the run word" "doppler run secrets --no-fallback -- ./cmd"
 allow "secrets download --no-file --no-fallback to a literal path (as before)" "doppler secrets download --no-file --no-fallback -p app -c prd > /tmp/out.env"
