@@ -320,16 +320,23 @@
 # The section pins the issue's three allows (both spellings, bash -c child) and its thirteen denies, plus
 # anchor, position and wrong-subcommand cases. Allowed spellings are NOT shown silent by the differential
 # (its fake prints on every call); only the denied print-capable spellings are, as "bypass" rows.
-# `--only-secrets` is also accepted before the run word (parse is position-insensitive, as `--no-cache`
-# was): pinned as an allow, because the CLI would refuse it but it prints nothing.
+# Run flags (`--no-cache`, `--no-fallback`, `--only-secrets`, `--format`, ...) are accepted only AFTER the
+# run word; before it only global flags and -p/-c (allowed_run parses the prefix and the tail apart).
+# main accepted `--no-cache` before it, closed here: the guard and the CLI may read different words
+# before the subcommand as flag values, so a run flag there could hide a read subcommand.
+# `fullmatch` on the STRICT_RE head is load-bearing only together with STRICT_RE keeping newlines out
+# of head tokens: a `.match`+`$` mutant survives and is equivalent today.
 # Mutants, ONE replacement each in hooks/bash-secret-guard.py, run against the section alone on scratch
-# copies (failing-case count, unmutated baseline 0 of 39): pattern -> VALUE_RE (11); pattern -> `[^ ]+`
+# copies (failing-case count, unmutated baseline 0 of 51): pattern -> VALUE_RE (11); pattern -> `[^ ]+`
 # (9); pattern with a trailing `.*` (6); lower case and repeated commas allowed (2); single name only,
 # no comma (5); allowed_run not passing the pattern table (11); parse_args ignoring it (11);
-# `--no-fallback` off RUN_BOOL (4); `--only-secrets` off RUN_VAL (6); `--only-secrets` on GLOBAL_VAL (4),
+# `--no-fallback` off RUN_BOOL (6); `--only-secrets` off RUN_VAL (6); `--only-secrets` on GLOBAL_VAL (5),
 # on DOWNLOAD_VAL (1), on GET_BOOL (1) or as a bare bool on run (5); `--no-fallback` off DOWNLOAD_BOOL
-# (1). EQUIVALENT, measured 0 failing: adding RUN_VAL and the pattern to the download parse alone,
-# because allowed_secrets' probe parse (which has no RUN_VAL) denies the flag first.
+# (1). The before-run restriction: prefix parse widened to the run flags (9); the old single-pass parse
+# restored (9); prefix not required to parse (10); prefix positionals ignored (1); tail positionals
+# allowed (1); -p/-c dropped from the prefix (2). EQUIVALENT, measured 0 failing: adding RUN_VAL and the
+# pattern to the download parse alone, because allowed_secrets' probe parse (which has no RUN_VAL) denies
+# the flag first. Not measured here: a `.match`+`$` swap for `fullmatch` (no case tells it apart today).
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -1682,9 +1689,21 @@ deny "--only-secrets A on secrets download" "doppler secrets download --no-file 
 deny "--only-secrets A as a global flag on a names-only read" "doppler --only-secrets A secrets --only-names"
 deny "--only-secrets A on a bare names-only read" "doppler secrets --only-names --only-secrets A"
 deny "--only-secrets on secrets substitute" "doppler secrets substitute t.yaml --only-secrets A,B > /tmp/f"
-# Known, pinned: the run flags are position-insensitive inside the run command (as --no-cache and
-# --format already were), so the CLI would refuse this spelling; it is still the run form and prints nothing.
-allow "run flags before the run word (position-insensitive, as --no-cache)" "doppler --only-secrets A,B run -- ./cmd"
+# Run-local flags are accepted only AFTER the run word; the CLI and the guard could disagree about which
+# words before it are flag values, so none are accepted there (--no-cache too, which main allowed).
+deny "--only-secrets before the run word" "doppler --only-secrets A,B run -- ./cmd"
+deny "--only-secrets A before the run word" "doppler --only-secrets A run -- ./cmd"
+deny "--no-fallback before the run word" "doppler --no-fallback run -- ./cmd"
+deny "--no-cache before the run word" "doppler --no-cache run -- ./cmd"
+deny "--format before the run word" "doppler --format json run -- ./cmd"
+deny "--no-fallback before run, after -p/-c" "doppler -p app -c prd --no-fallback run -- ./cmd"
+deny "value-eating shape: run flags before, a read subcommand as a value" "doppler --no-fallback --scope secrets --no-fallback --scope download run -- /dev/stdout"
+deny "value-eating shape with --no-cache" "doppler --no-cache --scope secrets --no-cache --scope download run -- /dev/stdout"
+allow "global and -p/-c flags before run, run flags after" "doppler --json --scope / -p app -c prd run --no-fallback --only-secrets A,B -- ./cmd"
+allow "-p run: a flag value spelled run is not the subcommand" "doppler -p run run --no-fallback -- ./cmd"
+deny "-p run, then run flags before the real run word" "doppler -p run --no-fallback run -- ./cmd"
+deny "a stray word before the run word" "doppler secrets run -- ./cmd"
+deny "a stray word after the run word" "doppler run secrets --no-fallback -- ./cmd"
 allow "secrets download --no-file --no-fallback to a literal path (as before)" "doppler secrets download --no-file --no-fallback -p app -c prd > /tmp/out.env"
 deny "--no-fallback does not make a get printable" "doppler secrets get X --plain --no-fallback"
 

@@ -45,7 +45,8 @@ disagree with itself about quoting.
      2. `doppler [global flags] run [flags] -- <rest>` or `run --command '<string>'`, where
         <rest> is a single simple command line that does not itself trigger and has no
         `$(`, backtick, `<(`, `>(`. (#655: `--no-fallback` and `--only-secrets A,B` or
-        `--only-secrets=A,B` are accepted on `run` only. The value is a comma list of upper-case
+        `--only-secrets=A,B` are accepted on `run` only, and run flags (these two and `--no-cache`, `--format`,
+        ...) only AFTER the `run` word; before it only global flags and -p/-c. The value is a comma list of upper-case
         names, `[A-Z_][A-Z0-9_]*(?:,[A-Z_][A-Z0-9_]*)*`, checked by ONLY_SECRETS_RE; VALUE_RE is
         unchanged for every other flag. Both only narrow the child and print nothing; on a read
         subcommand `--only-secrets` stays denied.)
@@ -883,9 +884,19 @@ def allowed_run(cmd):
     toks = head.split()
     if not toks or toks[0] != "doppler":
         return False
-    parsed = parse_args(toks, 1, GLOBAL_BOOL | RUN_BOOL, GLOBAL_VAL | PC_VAL | RUN_VAL,
-                        RUN_VAL_PATTERNS)
-    return bool(parsed) and parsed[1] == ["run"]
+    # Run-local flags (`--no-cache`, `--no-fallback`, `--only-secrets`, ...) are accepted only AFTER
+    # the `run` word. Before it only global flags and -p/-c may stand: the first `run` token the
+    # prefix leaves over as the subcommand (a flag value spelled `run` is consumed by its flag).
+    for k in range(1, len(toks)):
+        if toks[k] != "run":
+            continue
+        pre = parse_args(toks[:k], 1, GLOBAL_BOOL, GLOBAL_VAL | PC_VAL)
+        if pre is None or pre[1]:
+            continue
+        post = parse_args(toks, k + 1, GLOBAL_BOOL | RUN_BOOL, GLOBAL_VAL | PC_VAL | RUN_VAL,
+                          RUN_VAL_PATTERNS)
+        return bool(post) and not post[1]
+    return False
 
 
 def check_string(s):
