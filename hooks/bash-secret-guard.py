@@ -121,8 +121,15 @@ pieces, so neither is inert and both keep the old reading. Still denied, named i
 that is not the whole input, any heredoc whose body holds an expansion character beside
 `run`/`me`/`secrets`/`configure` unless the sanitizer blanks it (`git commit -F - <<'EOF'`,
 `gh pr create --body-file - <<'EOF'`; the `-m "$(cat <<'EOF'...)"` form and a python heredoc are not).
-Also a known limit, older than #649: a subcommand word glued to a closing paren or backtick is not a
-whole word (`echo "$($D secrets)" x`), so the expansion rule does not see it.
+A subcommand word followed by a closing `)`, backtick or `}`, or by a `;`, `|`, `&`, `<` or `>` (`echo
+"$($D secrets)" x`, `echo "$($D secrets>&2)" x`), counts as a whole word for the expansion rule. False denies
+that already existed: `echo "$(date)" me` and `echo "$(pwd)" run` (an expansion character, then `me`/`run`).
+False denies this change adds: `echo "$x" run>out`, `echo "$(date)" secrets>notes.txt`, and quoted prose
+after an expansion character such as a backtick commit message ending `run;`, `rg -n "$PAT" -e
+"secrets|token" docs` or `echo "${PWD}" me>>log`. The override covers only a command without `$(` or a
+backtick (`echo "$x" run>out`, the `rg` and `echo "${PWD}"` forms); for the rest put the word before the
+substitution (`echo me "$(date)"`, `echo secrets "$(date)" >notes.txt`) or send a commit message or PR
+body on stdin (`git commit -F - <<'EOF'`, `gh pr create --body-file - <<'EOF'`).
 
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
@@ -252,7 +259,7 @@ def _mentions(t, ti):
             if _command_word_expands(seg):
                 return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
             m = EXPANSION_RE.search(seg)
-            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|\s)", seg[m.start():])
+            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|[\s)`};|&<>])", seg[m.start():])
                          for n in SUBCOMMAND_WORDS):
                 return True
     return False
