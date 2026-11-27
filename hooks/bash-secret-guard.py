@@ -136,6 +136,11 @@ backtick (`echo "$x" run>out`, the `rg` and `echo "${PWD}"` forms); for the rest
 substitution (`echo me "$(date)"`, `echo secrets "$(date)" >notes.txt`) or send a commit message or PR
 body on stdin (`git commit -F - <<'EOF'`, `gh pr create --body-file - <<'EOF'`).
 
+Tools (#661): hooks.json matches `Bash` only. Per the hooks documentation, a `Bash` matcher also runs on
+Monitor commands (Claude Code v2.1.314+), delivered as a Bash call, and a deny is honoured, so the
+`tool_name != "Bash"` exit 0 below is correct and Monitor is not named here. A `Bash|Monitor` matcher
+would deliver the Monitor call's own input, whose command field is undocumented. See the README.
+
 Known limits (a seatbelt against the accident, not a sandbox): aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /

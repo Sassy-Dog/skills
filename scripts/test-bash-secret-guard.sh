@@ -52,7 +52,8 @@
 #   - every unclassifiable input fails open WITH a stderr message and exit 1 (never 0, never
 #     2): empty stdin, whitespace, malformed JSON, a non-object, a Bash event with no command,
 #     a non-string command, python3 missing from PATH, and an internal classifier fault
-#     (injected by importing the module and making analyze raise). A non-Bash tool is exit 0
+#     (injected by importing the module and making analyze raise). A non-Bash tool is exit 0; so are Monitor- and PowerShell-named events (#661: a `Bash`
+#     matcher already delivers Monitor commands as Bash calls per the hooks docs; README 'Tools the hook sees')
 #   - hooks/hooks.json parses, declares one PreToolUse/Bash command hook, and the command it
 #     declares, with ${CLAUDE_PLUGIN_ROOT} substituted as the harness does, denies a real
 #     printing command (exit 2) and allows a real safe one (exit 0)
@@ -338,6 +339,13 @@
 # pattern to the download parse alone, because allowed_secrets' probe parse (which has no RUN_VAL) denies
 # the flag first; and `fullmatch` swapped for `.match` plus `$` on the head (0 failing): equivalent only
 # together with STRICT_RE keeping newlines out of head tokens, which is why `fullmatch` is not the sole guard.
+#
+# #661 (section "unclassifiable input fails open", three cases: a Monitor-named and a PowerShell-named event
+# carrying a printing command, and a Monitor WebSocket-shaped event, each exit 0 and silent): the Monitor tool
+# reaches the hook under the `Bash` matcher as a Bash call (hooks docs, "Match Monitor commands"), so no code
+# changed. Mutants, ONE replacement each in the classifier's tool_name check, replayed on scratch copies
+# (failing cases of 3, baseline 0): Monitor also read (2); PowerShell also read (1); both also read (3);
+# check dropped (3). None left equivalent. Harness dispatch itself is NOT pinned (documentation claim only).
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -1095,6 +1103,16 @@ failopen "Bash event without a command" '{"tool_name":"Bash","tool_input":{}}'
 failopen "Bash event with a non-string command" '{"tool_name":"Bash","tool_input":{"command":["doppler","secrets","get","X"]}}'
 run_event '{"tool_name":"Read","tool_input":{"file_path":"/x"}}'
 if [ "$rc" -eq 0 ]; then ok "a non-Bash tool is allowed without comment"; else bad "a non-Bash tool is allowed without comment (rc=$rc)"; fi
+# #661: the harness delivers a Monitor command under a `Bash` matcher as a Bash call, so the guard
+# needs no Monitor branch. These pin that the classifier does NOT grow one unreviewed: a Monitor-named
+# or PowerShell-named event, even carrying a printing command, is exit 0 and silent (the documented
+# dispatch itself cannot be exercised here).
+for t in Monitor PowerShell; do
+    run_event "{\"tool_name\":\"$t\",\"tool_input\":{\"command\":\"doppler secrets get X\"}}"
+    if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "a $t-named event is exit 0 and silent (classifier reads Bash events only)"; else bad "a $t-named event is exit 0 and silent (rc=$rc err=${err:-<none>})"; fi
+done
+run_event '{"tool_name":"Monitor","tool_input":{"ws":"wss://example.invalid/x"}}'
+if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "a Monitor WebSocket-shaped event is exit 0 and silent"; else bad "a Monitor WebSocket-shaped event is exit 0 and silent (rc=$rc err=${err:-<none>})"; fi
 
 mkdir -p "$WORK/nopython"
 ln -s "$(command -v dirname)" "$WORK/nopython/dirname"
