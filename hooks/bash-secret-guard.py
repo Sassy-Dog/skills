@@ -1135,6 +1135,8 @@ def notice(msg):
 def main():
     try:
         raw = sys.stdin.read()
+    # The wrapper runs this under `-X utf8`, which decodes stdin with surrogateescape, so the
+    # UnicodeDecodeError arm cannot fire there; it stays for a direct run. Only an OSError is left.
     except (OSError, UnicodeDecodeError) as exc:
         return notice(f"cannot read the hook event ({exc.__class__.__name__})")
     if not raw.strip():
