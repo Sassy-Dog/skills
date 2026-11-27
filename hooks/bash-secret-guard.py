@@ -144,15 +144,21 @@ them. Under `Bash|Monitor` (or `.*`, or no matcher) the call arrives with `tool_
 a reviewed Monitor branch. See the README.
 
 Known limits (a seatbelt against the accident, not a sandbox): a subcommand word the text does not spell
-literally, behind a first word that does not itself expand (#654): ANSI-C or locale quoting, brace expansion, an
-expansion glued before or after the word (quoted or not: `${x}secrets`, `"$x"secrets`, `secrets$x`), glob forms
-(only when the working directory holds a match), a subcommand held in a variable or a default, indirect invocation
-(xargs or env fed by echo or printf), a subcommand assembled by printf, and any of these run through eval. A bare
-quote or backslash inside the word is removed before matching and still denies. Deliberately NOT matched: a text
-matcher cannot model the shell's expansion and each matcher tried lost to a new spelling; the gate pins each class
-as an allow. Out of scope too: on-disk scripts and Makefiles, an encoded payload piped to a shell, string
-concatenation inside an interpreter string, credential-file reads (.env, the CLI token file), non-Bash tools. The override is printed in the deny message, so it is a speed bump for a careless agent, not protection
-against an injected one. Also: aliases and functions, a command
+literally, where the command word is built by an expansion and sits behind a first word that does not itself
+expand (#654); a top-level `$D ...` and any command that spells the name still deny. The examples are the bare
+forms the gate pins: a following get/download word can still deny some of them, not others. The classes: ANSI-C
+or locale quoting, brace expansion, an expansion glued before or after the word (quoted or not: `${x}secrets`,
+`"$x"secrets`, `secrets$x`), glob forms (only when the working directory holds a match), a subcommand held in a
+variable or a default, indirect invocation (xargs, or env with a $(cat) argument, fed by echo or printf), a
+subcommand assembled by printf, and any of these run through eval. A bare quote or backslash inside the word is
+removed before matching and still denies. Deliberately NOT matched: a text matcher cannot model the shell's
+expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
+on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
+(implicit or spaced concatenation passes, unspaced `"a"+"b"` denies), credential-file reads (.env, the CLI token
+file), non-Bash tools.
+The override is printed in the deny message, so it is a speed bump for a careless agent, not protection
+against an injected one.
+Also: aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
