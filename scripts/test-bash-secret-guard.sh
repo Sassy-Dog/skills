@@ -365,6 +365,41 @@
 # (failing cases of 3, baseline 0): Monitor also read (2); PowerShell also read (1); both also read (3);
 # check dropped (3). None left equivalent. The harness dispatch (verified live on Claude Code 2.1.332) is NOT pinned: this gate cannot exercise the harness.
 #
+# #660 (section "#660: every way the classifier fails to give a verdict ..."): the wrapper checks the
+# classifier file is a readable regular file BEFORE running it, and runs it with its stderr captured
+# instead of `exec`. DECISION: a missing or unreadable classifier FAILS OPEN (exit 1, notice), not closed.
+# The README states the policy ("fails open and says so"), and a partial plugin-cache sync must not
+# brick every Bash call; python3's own exit 2 for a missing script would be read as a DENY. Only a 0, or
+# a 2 whose stderr starts `bash-secret-guard: BLOCKED.`, passes through; a 1 passes through only when
+# it carries the classifier's own `(fail open)` notice; every other outcome (an import or syntax error,
+# a signal, a stray 2, any other code) prints `classifier crashed (exit N)` plus the last 5 lines of its
+# error, and exits 1. Scratch copies of hooks/ per case, never the real files. Also pinned: UTF-8 BOM and
+# empty stdin (fail open), non-UTF-8 bytes (classified, NOT a fail-open, in three locales), stdout or stderr closed (a deny stays 2:
+# under `exec` it was 120, a non-blocking error, so a deny silently became an allow), and hooks.json
+# setting no `timeout`. NOT pinned (a harness behaviour, no case can drive it): that a timed-out
+# PreToolUse hook is let through; the README cites the Claude Code hooks documentation for it.
+# The wrapper runs the classifier as `python3 -I -X utf8`: without `-X utf8`, an older Python (3.9, 3.14)
+# under en_US.UTF-8 raises UnicodeDecodeError on one stray non-UTF-8 byte and the guard fails open for a
+# printing command; only Python 3.15 (UTF-8 mode by default) or a C locale hid it. The non-UTF-8 cases
+# therefore run under the host locale, LC_ALL=C and LC_ALL=en_US.UTF-8 (skipped visibly if not installed).
+# The classifier's stdout is dropped (`>/dev/null`), so a closed stdout cannot stop it running. A BLOCKED
+# banner is accepted at byte 0 of its stderr or at the start of a later line, so an interpreter warning
+# before it cannot turn a deny into a fail open; command text cannot forge it (only the one exit-2 path
+# writes it, and the notices are constants plus exception class names).
+# Mutants against the wrapper, each ONE edit, run on the #660 section alone (34 cases, unmutated 0 failing)
+# with /usr/bin/python3 3.9.6 first on PATH (failing-case count; the Python 3.15 count where it differs):
+#   the `if [ ! -f ... ]` readability block deleted (4); `python3 -I "$py"` run by `exec`, no capture or
+#   case (15; 11 on 3.15, where the non-UTF-8 cases pass anyway); the exit-2 pattern (banner at byte 0 or
+#   at a line start) replaced by a bare `*)`, so any exit 2 is a deny (3); the exit-1 pattern
+#   (`(fail open)` notice) replaced by a bare `*)`, so any exit 1 passes through (3); `[ ! -f ]` dropped
+#   (1, the directory case); `[ ! -r ]` dropped (1, the mode 000 case; 0 as root); the crash notice's
+#   `tail -n 5` error text line deleted (1); `-X utf8` removed (4 on 3.9; 0 on 3.15, so the 3.15 count is
+#   NOT evidence for that line); the line-anchored alternative `| *$'\n'"...BLOCKED."*` deleted (1);
+#   the capture put back to `{ err="$(python3 ... 2>&1 1>&3)"; } 3>&1` (2, the closed-stdout cases); the
+#   closed-stdin block (`{ exec 3<&0; } ... exec 3<&-`) deleted (1: the watchdog case kills the hung wrapper).
+#   No EQUIVALENT mutant among these. An earlier draft guarded the deny's stderr write with
+#   `2>/dev/null || :`; removing that guard failed 0 cases, so it was equivalent and is not in the wrapper.
+#
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
 
@@ -1158,6 +1193,132 @@ if [ "$rc" -eq 1 ] && grep -q 'internal error.*fail open' <<<"$err"; then
     ok "an internal classifier fault fails open and says so"
 else
     bad "an internal classifier fault fails open and says so (rc=$rc err=${err:-<none>})"
+fi
+
+echo "== #660: every way the classifier fails to give a verdict is named, and exits 1 =="
+# Each case runs a SCRATCH copy of the plugin's hooks/ directory (own mktemp -d), never the real files.
+plug_n=0
+mkplug() { # -> sets PLUG to a fresh copy of hooks/ with a hook entry point inside
+    plug_n=$((plug_n + 1))
+    PLUG="$WORK/plug$plug_n"
+    mkdir -p "$PLUG"
+    cp "$REPO_ROOT/hooks/bash-secret-guard.sh" "$REPO_ROOT/hooks/bash-secret-guard.py" "$PLUG/"
+}
+run_plug() { # <stdin text> -> rc, err, from the scratch copy's wrapper
+    err="$(printf '%s' "$1" | bash "$PLUG/bash-secret-guard.sh" 2>&1 >/dev/null)"
+    rc=$?
+}
+expect() { # <label> <rc> <err fragment>
+    if [ "$rc" -eq "$2" ] && grep -q -- "$3" <<<"$err"; then
+        ok "$1"
+    else
+        bad "$1 (rc=$rc, wanted $2 and /$3/, err=${err:-<none>})"
+    fi
+}
+SAFE_EVENT="$(event 'ls')"
+PRINT_EVENT="$(event 'doppler secrets get X')"
+
+mkplug; rm "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "classifier missing: exit 1 (not python's exit 2, which the harness reads as a deny), fail-open notice" 1 'classifier.*missing or unreadable.*fail open'
+mkplug; rm "$PLUG/bash-secret-guard.py"; run_plug "$PRINT_EVENT"
+expect "classifier missing: even a printing command is NOT denied, since there is no classifier (fail open, said so)" 1 'missing or unreadable.*fail open'
+mkplug; rm "$PLUG/bash-secret-guard.py"; mkdir "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "classifier path is a directory: same notice" 1 'missing or unreadable.*fail open'
+mkplug; chmod 000 "$PLUG/bash-secret-guard.py"
+if [ -r "$PLUG/bash-secret-guard.py" ]; then
+    echo "  info - SKIPPED the unreadable-classifier case: this user can read a mode 000 file (running as root)"
+else
+    run_plug "$SAFE_EVENT"
+    expect "classifier unreadable (mode 000): exit 1, fail-open notice" 1 'missing or unreadable.*fail open'
+fi
+chmod 600 "$PLUG/bash-secret-guard.py" 2>/dev/null
+
+mkplug; printf 'def (:\n' >> "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "syntax error in the classifier: exit 1 and the crash notice says fail open" 1 'classifier crashed (exit 1).*fail open'
+mkplug; { printf 'import no_such_module_for_gate_660\n'; cat "$REPO_ROOT/hooks/bash-secret-guard.py"; } > "$PLUG/bash-secret-guard.py"; run_plug "$PRINT_EVENT"
+expect "import error in the classifier: exit 1, fail-open notice" 1 'crashed.*fail open'
+if grep -q 'no_such_module_for_gate_660' <<<"$err"; then ok "import error: the Python error text is carried after the notice"; else bad "import error: the Python error text is carried after the notice (err=${err:-<none>})"; fi
+mkplug; printf 'import sys\nsys.exit(2)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$PRINT_EVENT"
+expect "a stray exit 2 without the BLOCKED banner is a crash, not a deny: exit 1, fail open" 1 'crashed (exit 2).*fail open'
+mkplug; printf 'import sys\nsys.stderr.write("BLOCKED. but not ours\\n")\nsys.exit(2)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "exit 2 with other text than the banner is still a crash" 1 'crashed (exit 2).*fail open'
+mkplug; printf 'import os, signal\nos.kill(os.getpid(), signal.SIGKILL)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "the classifier killed by a signal: exit 1, fail open (the crash notice names the exit code)" 1 'crashed (exit 137).*fail open'
+mkplug; printf 'import sys\nsys.exit(3)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "any other nonzero exit is a crash too" 1 'crashed (exit 3).*fail open'
+mkplug; printf 'import sys\nsys.exit(0)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "a classifier that exits 0 is an allow with no output"; else bad "a classifier that exits 0 is an allow with no output (rc=$rc err=$err)"; fi
+mkplug; printf 'import sys\nsys.stderr.write("something unrelated\\n")\nsys.exit(1)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "exit 1 that did not come from the classifier's own notice is a crash, so it still says fail open" 1 'crashed (exit 1).*fail open'
+mkplug; run_plug "$PRINT_EVENT"
+expect "an intact scratch copy still denies (the copy is faithful)" 2 'BLOCKED'
+
+# Input shapes the harness could deliver.
+mkplug; run_plug "$(printf '\357\273\277')$SAFE_EVENT"
+expect "a UTF-8 BOM before the JSON fails open as not valid JSON" 1 'not valid JSON.*fail open'
+run_plug ''
+expect "empty stdin fails open" 1 'empty hook event.*fail open'
+# The wrapper runs the classifier with `-X utf8`, so these do not depend on the host locale: older
+# Pythons under en_US.UTF-8 otherwise raise on one stray byte and fail open. Run under the host's own
+# locale, LC_ALL=C and, where installed, LC_ALL=en_US.UTF-8 (a missing locale is skipped visibly).
+installed_locales="$(locale -a 2>/dev/null)"
+for loc in host C en_US.UTF-8; do
+    if [ "$loc" = host ]; then
+        lenv=(env)
+    elif [ "$loc" = C ] || grep -qix "$loc\|en_US.utf8" <<<"$installed_locales"; then
+        lenv=(env "LC_ALL=$loc")
+    else
+        echo "  info - SKIPPED the LC_ALL=$loc non-UTF-8 cases: locale not installed"
+        continue
+    fi
+    err="$(printf '{"tool_name":"Bash","tool_input":{"command":"echo \377\376"}}' | "${lenv[@]}" bash "$PLUG/bash-secret-guard.sh" 2>&1 >/dev/null)"; rc=$?
+    if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "[$loc] non-UTF-8 bytes inside a command are classified, not a crash: a harmless one is allowed"; else bad "[$loc] non-UTF-8 bytes inside a command are classified: a harmless one is allowed (rc=$rc err=${err:-<none>})"; fi
+    err="$(printf '{"tool_name":"Bash","tool_input":{"command":"doppler secrets get \377"}}' | "${lenv[@]}" bash "$PLUG/bash-secret-guard.sh" 2>&1 >/dev/null)"; rc=$?
+    expect "[$loc] non-UTF-8 bytes beside a printing command are still denied" 2 'BLOCKED'
+    err="$(printf '\377\376' | "${lenv[@]}" bash "$PLUG/bash-secret-guard.sh" 2>&1 >/dev/null)"; rc=$?
+    expect "[$loc] stdin that is not JSON at all (non-UTF-8 bytes only) fails open" 1 'fail open'
+done
+# stdout closed: the classifier's stdout is always empty and is dropped, so a deny still holds.
+printf '%s' "$PRINT_EVENT" | bash "$PLUG/bash-secret-guard.sh" >&- 2>/dev/null; rc=$?
+if [ "$rc" -eq 2 ]; then ok "stdout closed: a deny is still exit 2"; else bad "stdout closed: a deny is still exit 2 (rc=$rc)"; fi
+printf '%s' "$SAFE_EVENT" | bash "$PLUG/bash-secret-guard.sh" >&- 2>/dev/null; rc=$?
+if [ "$rc" -eq 0 ]; then ok "stdout closed: an allow is still exit 0"; else bad "stdout closed: an allow is still exit 0 (rc=$rc)"; fi
+# stdin closed: without the wrapper's check the capture hands the classifier its own pipe and it
+# blocks until the harness timeout. A watchdog (no `timeout` binary needed) bounds the case at 20 s.
+bash "$PLUG/bash-secret-guard.sh" <&- >"$WORK/stdin-closed.out" 2>&1 &
+sc_pid=$!
+for _ in $(seq 1 100); do kill -0 "$sc_pid" 2>/dev/null || break; sleep 0.2; done
+if kill -0 "$sc_pid" 2>/dev/null; then
+    kill -9 "$sc_pid" 2>/dev/null; pkill -9 -P "$sc_pid" 2>/dev/null
+    wait "$sc_pid" 2>/dev/null
+    bad "stdin closed: the wrapper hung (killed by the watchdog)"
+else
+    wait "$sc_pid"; rc=$?
+    err="$(cat "$WORK/stdin-closed.out")"
+    expect "stdin closed: fails open at once with a notice instead of hanging" 1 'stdin is closed.*fail open'
+fi
+# An interpreter warning before the banner must not turn a deny into a fail open; a banner that is
+# not at the start of a line is not a verdict.
+mkplug; printf 'import sys\nsys.stderr.write("some warning\\nbash-secret-guard: BLOCKED.\\n- x\\n")\nsys.exit(2)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "a warning line before the BLOCKED banner still denies" 2 'BLOCKED'
+mkplug; printf 'import sys\nsys.stderr.write("see bash-secret-guard: BLOCKED. here\\n")\nsys.exit(2)\n' > "$PLUG/bash-secret-guard.py"; run_plug "$SAFE_EVENT"
+expect "the banner mid-line is not a verdict: exit 2 stays a crash" 1 'crashed (exit 2).*fail open'
+
+# stderr closed by the harness: the verdict is the exit code and must survive.
+mkplug
+printf '%s' "$PRINT_EVENT" | bash "$PLUG/bash-secret-guard.sh" >/dev/null 2>&-; rc=$?
+if [ "$rc" -eq 2 ]; then ok "stderr closed: a deny is still exit 2 (not a write-failure exit that reads as fail open)"; else bad "stderr closed: a deny is still exit 2 (rc=$rc)"; fi
+printf '%s' '' | bash "$PLUG/bash-secret-guard.sh" >/dev/null 2>&-; rc=$?
+if [ "$rc" -eq 1 ]; then ok "stderr closed: a fail-open stays exit 1"; else bad "stderr closed: a fail-open stays exit 1 (rc=$rc)"; fi
+printf '%s' "$SAFE_EVENT" | bash "$PLUG/bash-secret-guard.sh" >/dev/null 2>&-; rc=$?
+if [ "$rc" -eq 0 ]; then ok "stderr closed: an allow stays exit 0"; else bad "stderr closed: an allow stays exit 0 (rc=$rc)"; fi
+
+# Timeout: the harness fails open on a PreToolUse timeout and the plugin sets none, so the 600 s
+# default of the harness applies. Only the second half is checkable here.
+if python3 -I -B -c 'import json,sys; h=json.load(open(sys.argv[1]))["hooks"]["PreToolUse"][0]["hooks"][0]; sys.exit("timeout" in h)' "$HOOKS_JSON"; then
+    ok "hooks.json sets no timeout (the README says so; a timeout would only make the guard fail open sooner)"
+else
+    bad "hooks.json sets no timeout (the README says so; a timeout would only make the guard fail open sooner)"
 fi
 
 echo "== review 4: line continuations, wide escapes, globs in the command name, folded paths =="
