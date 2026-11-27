@@ -13,11 +13,14 @@ network, no real repo, everything inside a fresh scratch directory per run), and
     run of it timed out.
 
 A corpus entry of kind "bypass" must also PRINT under at least one shell, otherwise it proves
-nothing (a bypass that no shell executes is not a bypass). A case listed in NEEDS (bash 3.2's
-early end of a heredoc substitution) is checked only against a matching shell and its teeth check is
-SKIPPED, with a visible info line naming the case, where none is installed; the hook-side deny always
-runs. self_test() proves the skip logic on synthetic inputs. GUARD_DIFF_HIDE_SHELLS="bash<4" hides
-such shells, to simulate a runner that has only bash 5 and dash. Shells tried: every one of bash,
+nothing (a bypass that no shell executes is not a bypass). A bypass row may DECLARE the shells it
+prints under, in brackets after its kind: "bypass[zsh]", "bypass[bash,dash]", "bypass[bash<4]",
+"bypass[bash>=5.3]" (comma-separated; a spec is a shell name, optionally followed by <MAJOR or
+>=MAJOR[.MINOR]). Its teeth check then needs a print under at least one declared shell that is
+PRESENT, and is SKIPPED, with a visible info line naming the row, where none is installed; it never
+passes silently and never fails on a shell's absence. The hook-side deny runs for every row, on every
+machine. self_test() proves the skip logic on synthetic inputs. GUARD_DIFF_HIDE_SHELLS="bash<4,zsh"
+(comma-separated specs) hides such shells, to simulate a runner that has only bash 5 and dash. Shells tried: every one of bash,
 /bin/bash, zsh, dash found on this machine, de-duplicated by real path and version; the shells
 that ran are printed, a missing zsh is reported. With CI set, at least bash must be present.
 Output: one `  ok   - ` or `  FAIL - ` line per check.
@@ -51,9 +54,11 @@ MARKER = "SECRET_MARKER_PRINTED_BY_FAKE_" + D.upper()
 
 # ---- corpus: (label, command, expectation, kind) ----------------------------------------------
 # expectation: "allow" | "deny". kind: "msg" (a benign message that merely mentions the word),
-# "bypass" (a command the hook must deny AND that really prints under a shell), or "deny-only"
-# (denied for safety, but no shell executes it, so there is nothing to print).
+# "bypass" (a command the hook must deny AND that really prints under a shell; "bypass[spec,...]"
+# declares which shells it prints under, see the docstring), or "deny-only" (denied for safety, but
+# no shell executes it, so there is nothing to print).
 PRINT = f"{D} secrets get X --plain"
+OV = "SASSYDOG_ALLOW_" + D.upper() + "_PRINT=1"  # the one-command override prefix
 H = "<<'EOF'"
 
 CORPUS = [
@@ -80,7 +85,7 @@ CORPUS = [
     ("heredoc ended by a line EOF) inside gh pr create (bash)",
      f"gh pr create --title t --body \"$(cat {H}\nEOF)\" ; {PRINT} ; : \"\nEOF\n)\"", "deny", "bypass"),
     ("bash 3.2 ends the substitution at the first ) in the body",
-     f"git commit --allow-empty -m \"$(cat {H}\nx )\" ; {PRINT} ; : \"(\nEOF\n)\"", "deny", "bypass"),
+     f"git commit --allow-empty -m \"$(cat {H}\nx )\" ; {PRINT} ; : \"(\nEOF\n)\"", "deny", "bypass[bash<4]"),
     ("commands after the cat heredoc terminator, inside the substitution",
      f"git commit -m \"$(cat {H}\nhi\nEOF\n:; sh -c '{PRINT}'\n)\"", "deny", "bypass"),
     ("double quote scan after a cat heredoc body", f"git commit -m \"$(cat {H}\nEOF\n: \"'\"; {PRINT}; : \"'\")\"", "deny", "bypass"),
@@ -227,15 +232,96 @@ CORPUS += [
     ("run --only-secrets with --print-config as its value", f"{D} run --only-secrets --print-config -- ./cmd", "deny", "bypass"),
     ("run --no-fallback with --debug", f"{D} run --no-fallback --only-secrets A,B --debug -- ./cmd", "deny", "bypass"),
     ("secrets get with --only-secrets", f"{D} secrets get X --plain --only-secrets A,B", "deny", "bypass"),
+    # #659: the one-command override reads the command as ONE simple command through single_simple().
+    # Before the fix these were ALLOWED on main and printed under bash 5, bash 3.2 and zsh (dash reads
+    # `$'` as `$` then a quote and does not print, so it is not the shell that gives them teeth; the
+    # comment rows print under dash too).
+    ("override, ANSI-C quote hides a second command", f"{OV} echo $'\\'' ; {PRINT} ; echo \\'", "deny", "bypass"),
+    ("override, ANSI-C quote glued to a word", f"{OV} echo a$'\\'' ; {PRINT} ; echo \\'", "deny", "bypass"),
+    ("override, ANSI-C quote, a redirect on the tail", f"{OV} echo $'\\'' | cat ; {PRINT} ; echo \\' >/dev/null", "deny", "bypass"),
+    # a comment ends at the newline but a quote opened inside it runs on, so the next line looked quoted
+    ("override, a quote opened in a comment hides the next line", f"{OV} echo a #'\n{PRINT} #'", "deny", "bypass"),
+    ("override, a double quote opened in a comment hides the next line", f'{OV} echo a #"\n{PRINT} #"', "deny", "bypass"),
+    ("override, a spaced comment quote hides the next line", f"{OV} echo a # '\n{PRINT} # '", "deny", "bypass"),
+    # a `#` that some shell reads as text, not as a comment: the shell side of the comment rule
+    ("override, a hash after an escaped blank is text", f"{OV} echo a\\ #;{PRINT}", "deny", "bypass"),
+    ("override, a hash after an escaped tab is text", f"{OV} echo a\\\t#;{PRINT}", "deny", "bypass"),
+    ("override, a hash after an escaped blank, redirect target", f"{OV} {PRINT} > /tmp/f\\ #;{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter default", f"{OV} echo ${{x:- #}};{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter alternative", f"{OV} echo ${{x:+ #}};{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter strip", f"{OV} echo ${{x%% #}};{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter default after text", f"{OV} echo ${{x:-a #b}};{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter default, then a background operator", f"{OV} echo ${{x:- #}}&{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter default, then a pipe", f"{OV} echo ${{x:- #}}|{PRINT}", "deny", "bypass"),
+    ("override, a hash inside a parameter default in the child of run", f"{OV} {D} run -- echo ${{x:- #}};{PRINT}", "deny", "bypass"),
+    ("override, a hash inside an array subscript (bash only)", f"{OV} x[ #]=1 echo hi;{PRINT}", "deny", "bypass"),
+    ("override, a backslash-newline before a hash", f"{OV} echo a\\\n#;{PRINT}", "deny", "bypass"),
+    # a quote nested in a parameter expansion inside double quotes swaps the scan's quote state
+    ("override, nested quote in a parameter default, two copies rebalance",
+     f"{OV} echo \"${{x:-\"'\"}}\" ; {PRINT} ; echo \"${{x:-\"'\"}}\"", "deny", "bypass"),
+    ("override, a quote in a parameter strip, two copies rebalance",
+     f"{OV} echo \"${{x#'\"'}}\" ; {PRINT} ; echo \"${{x#'\"'}}\"", "deny", "bypass"),
+    # arithmetic expansion `$[..]` is not modelled by the scan: a `}` or a quote inside it fools the brace and
+    # quote counts (zsh also reads an unquoted quote inside it as part of the expression)
+    ("override, arithmetic expansion hides a brace in a double-quoted parameter, background form",
+     OV + ' echo "${x:-$[}"]}" & ' + PRINT + ' & echo "${x:-$[}"]}"', "deny", "bypass[zsh]"),
+    ("override, arithmetic expansion under a parameter alternative",
+     OV + ' echo "${x:+$[}"]}" & ' + PRINT + ' & echo "${x:+$[}"]}"', "deny", "bypass[zsh]"),
+    ("override, arithmetic expansion nested in a second parameter",
+     OV + ' echo "${x:-${z:-$[}"]}}" & ' + PRINT + ' & echo "${x:-${z:-$[}"]}}"', "deny", "bypass[zsh]"),
+    ("override, arithmetic expansion in the child of run",
+     f"{OV} {D} run -- " + 'echo "${x:-$[}"]}" & ' + PRINT + ' & echo "${x:-$[}"]}"', "deny", "bypass[zsh,dash]"),
+    ("override, unquoted arithmetic expansion with a quote inside (zsh)",
+     OV + ' echo $["] ; ' + PRINT + ' ; echo $["]', "deny", "bypass[zsh]"),
+    # the same class with a quote after the closing brace, which bash 5 (not only zsh) reads as the shell
+    # does, so these carry teeth on a runner with bash 5 and no zsh
+    ("override, arithmetic expansion hides a brace and a quote, background form",
+     OV + ' echo "${x:-$[}"\'"]}" & ' + PRINT + ' & echo "${x:-$[}"\'"]}"', "deny", "bypass[bash>=5,zsh]"),
+    ("override, arithmetic expansion hides a brace and a quote, newline form",
+     OV + ' echo "${x:-$[}"\'"]}"\n' + PRINT + '\necho "${x:-$[}"\'"]}"', "deny", "bypass[bash>=5]"),
+    ("override, arithmetic expansion hides a brace and a quote under a parameter alternative",
+     OV + ' echo "${x:+$[}"\'"]}" & ' + PRINT + ' & echo "${x:+$[}"\'"]}"', "deny", "bypass[bash>=5,zsh]"),
+    ("override, arithmetic expansion hides a brace and a quote in the child of run",
+     f"{OV} {D} run -- " + 'echo "${x:-$[}"\'"]}" & ' + PRINT + ' & echo "${x:-$[}"\'"]}"', "deny", "bypass[bash>=5,zsh,dash]"),
+    # bash 5.3 runs the text of `${ cmd; }` and `${| cmd; }` as a command: inside double quotes the scan
+    # sees a quoted string, so the `;` there hid a second command
+    ("override, bash 5.3 command substitution `${ cmd; }` in double quotes",
+     OV + ' echo "${ ' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 command substitution with a newline as its terminator",
+     OV + ' echo "${ ' + PRINT + '\n}"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 command substitution opened by a tab",
+     OV + ' echo "${\t' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 command substitution opened by a newline",
+     OV + ' echo "${\n' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 value substitution `${| cmd; }` in double quotes",
+     OV + ' echo "${| ' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 command substitution as an assignment value",
+     OV + ' x="${ ' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    ("override, bash 5.3 command substitution in the child of run",
+     f"{OV} {D} run -- " + 'echo "${ ' + PRINT + '; }"', "deny", "bypass[bash>=5.3]"),
+    # a backslash-newline pair is deleted by the shell before it parses, so it can hide an opener from the scan
+    ("override, backslash-newline hides an ANSI-C opener",
+     OV + " echo $\\\n'\\'' ; " + PRINT + " ; echo \\'", "deny", "bypass[bash,zsh]"),
+    ("override, backslash-newline hides an arithmetic opener (zsh)",
+     OV + ' echo $\\\n["] ; ' + PRINT + ' ; echo $\\\n["]', "deny", "bypass[zsh]"),
+    ("override, backslash-newline hides a nested quote in a parameter",
+     OV + ' echo "$\\\n{x:-"\'"}" ; ' + PRINT + ' ; echo "$\\\n{x:-"\'"}"', "deny", "bypass[bash,dash]"),
+    ("override, a comment holding a separator is refused", f"{OV} echo a # x;{PRINT}", "deny", "deny-only"),
+    ("override, a parameter in double quotes and a comment with an apostrophe", f"{OV} {PRINT} >/dev/null 2>&1 \"${{PWD}}\" # it's why, see x", "allow", "msg"),
+    # locale quoting: no shell here reads it differently from a plain double quote (no teeth), refused anyway
+    ("override, a locale-quoted target (refused, no differential found)", f'{OV} {PRINT} > $"/tmp/f"', "deny", "deny-only"),
+    # the override still covers the ordinary single command: nothing prints under a shell here
+    ("override, a discarded print, stdout and stderr", f"{OV} {PRINT} >/dev/null 2>&1", "allow", "msg"),
+    ("override, a discarded print, a trailing comment with an apostrophe", f"{OV} {PRINT} >/dev/null 2>&1 # it's why", "allow", "msg"),
+    ("override, a discarded print, a comment mark inside a word", f"{OV} {PRINT} >/dev/null 2>&1 a#b", "allow", "msg"),
 ]
 
-# Corpus cases whose teeth check needs a particular shell, keyed by label: "<name><<major>" means a shell
-# called <name> whose major version is below <major>. The hook-side assertion always runs; only the
-# "really prints under a shell" check is skipped, visibly, where no such shell is installed. The one
-# entry: bash 3.2 (macOS /bin/bash) ends a heredoc substitution at the first `)` in the body; bash 4+
-# does not, so a CI runner with bash 5 and dash cannot reproduce that leak. The case stays as the
-# regression pin for it.
-NEEDS = {"bash 3.2 ends the substitution at the first ) in the body": "bash<4"}
+# A bypass row declares the shells it prints under in its kind ("bypass[bash<4]"). The hook-side
+# assertion always runs; only the "really prints under a shell" check is skipped, visibly, where no
+# declared shell is installed. The one pre-existing declaration: bash 3.2 (macOS /bin/bash) ends a
+# heredoc substitution at the first `)` in the body; bash 4+ does not, so a CI runner with bash 5 and
+# dash cannot reproduce that leak. The case stays as the regression pin for it. The #659 rows declare
+# zsh where only zsh runs the second command, and a CI-available shell where one does.
 
 # ---- generated invariant-only matrix: head x joiner x tail ------------------------------------
 HEADS = [
@@ -320,23 +406,49 @@ def make_shims(scratch):
     return bindir
 
 
-MAJORS = {}  # shell path -> major version, or None when the shell has no --version
+VERSIONS = {}  # shell path -> (major, minor), or None when the shell has no `version N.M` in --version
+SPEC = re.compile(r"^([A-Za-z0-9_.+-]+)(?:<(\d+)|>=(\d+)(?:\.(\d+))?)?$")
 
 
-def matches(path, need):
-    """need is "<name><<major>": the shell is called <name> and its major version is below <major>."""
-    name, _, limit = need.partition("<")
-    major = MAJORS.get(path)
-    return os.path.basename(path) == name and major is not None and major < int(limit)
+def matches(path, spec):
+    """spec is "<name>", "<name><MAJOR" or "<name>>=MAJOR[.MINOR]": the shell is called <name> and,
+    when a bound is given, its version is below MAJOR / at least MAJOR.MINOR (a shell with no known
+    version never satisfies a bound)."""
+    m = SPEC.match(spec)
+    if not m:
+        raise ValueError(f"bad shell spec {spec!r}")
+    if os.path.basename(path) != m.group(1):
+        return False
+    version = VERSIONS.get(path)
+    if m.group(2) is not None:
+        return version is not None and version[0] < int(m.group(2))
+    if m.group(3) is not None:
+        return version is not None and version >= (int(m.group(3)), int(m.group(4) or 0))
+    return True
+
+
+def matches_any(path, specs):
+    """specs is a comma-separated list of specs: the shell matches at least one of them."""
+    return any(matches(path, sp) for sp in specs.split(","))
+
+
+def parse_kind(kind):
+    """"bypass[bash,zsh]@glob" -> ("bypass", "bash,zsh" or None, True)."""
+    m = re.match(r"^([a-z-]+)(?:\[([^\]]+)\])?(@glob)?$", kind)
+    if not m:
+        raise ValueError(f"bad corpus kind {kind!r}")
+    for sp in (m.group(2) or "").split(",") if m.group(2) else []:
+        matches("", sp)  # validates the spec's syntax
+    return m.group(1), m.group(2), bool(m.group(3))
 
 
 def teeth(printed, need):
     """"ok" | "fail" | "skip" for the check that a bypass case really prints under a shell.
 
-    A case with no requirement needs ANY shell to print. A case with a requirement is checked only
-    against shells that match it, and is skipped only when none is present.
+    A case with no declaration needs ANY shell to print. A case that declares shells is checked
+    only against the present shells that match a declaration, and is skipped only when none is present.
     """
-    pool = [sh for sh in printed if need is None or matches(sh, need)]
+    pool = [sh for sh in printed if need is None or matches_any(sh, need)]
     if not pool:
         return "skip"
     return "ok" if any(printed[sh] is True for sh in pool) else "fail"
@@ -353,10 +465,10 @@ def find_shells():
             ver = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout.splitlines()[:1]
         except (OSError, subprocess.SubprocessError):
             ver = []
-        m = re.search(r"version (\d+)", ver[0]) if ver else None
-        MAJORS[path] = int(m.group(1)) if m else None
+        m = re.search(r"version (\d+)\.(\d+)", ver[0]) if ver else None
+        VERSIONS[path] = (int(m.group(1)), int(m.group(2))) if m else None
         key = (os.path.realpath(path), tuple(ver))
-        if key in seen or (hide and matches(path, hide)):
+        if key in seen or (hide and matches_any(path, hide)):
             continue
         seen.add(key)
         found.append(path)
@@ -364,26 +476,41 @@ def find_shells():
 
 
 def self_test():
-    """The skip logic, on synthetic inputs: it must skip only a case whose required shell is absent."""
+    """The skip logic, on synthetic inputs: it must skip only a case whose declared shells are all absent."""
     fails = 0
-    fake = {"/fake/bash": 3, "/fake/dash": None}
-    saved = dict(MAJORS)
-    MAJORS.update(fake)
+    fake = {"/fake/bash": (3, 2), "/fake5/bash": (5, 3), "/fake/dash": None, "/fake/zsh": None}
+    saved = dict(VERSIONS)
+    VERSIONS.update(fake)
     try:
-        none_print = {"/fake/bash": False, "/fake/dash": False}
-        fails += not out(teeth(none_print, "bash<0") == "skip",
+        silent = {"/fake/bash": False, "/fake/dash": False}
+        fails += not out(teeth(silent, "bash<0") == "skip",
                          "self-test: a case requiring a shell that is not present is SKIPPED, not failed")
-        fails += not out(teeth(none_print, None) == "fail",
+        fails += not out(teeth(silent, None) == "fail",
                          "self-test: a case with no shell requirement that prints nowhere still FAILS")
-        fails += not out(teeth(none_print, "bash<4") == "fail",
+        fails += not out(teeth(silent, "bash<4") == "fail",
                          "self-test: a required shell that is present and does not print FAILS (skip only when absent)")
         fails += not out(teeth({"/fake/bash": True, "/fake/dash": False}, "bash<4") == "ok",
                          "self-test: a required shell that is present and prints passes")
         fails += not out(teeth({"/fake/dash": True}, "bash<4") == "skip",
                          "self-test: dash printing does not satisfy a bash<4 requirement; with no bash<4 it is skipped")
+        fails += not out(teeth(silent, "zsh") == "skip",
+                         "self-test: a zsh-only case on a machine with no zsh is SKIPPED")
+        fails += not out(teeth({"/fake/dash": True, "/fake/zsh": False}, "zsh") == "fail",
+                         "self-test: a zsh-only case with zsh present and silent FAILS even though dash printed")
+        fails += not out(teeth({"/fake/dash": False, "/fake/zsh": True}, "zsh") == "ok",
+                         "self-test: a zsh-only case with zsh present and printing passes")
+        fails += not out(teeth({"/fake/dash": True, "/fake/zsh": False}, "zsh,dash") == "ok",
+                         "self-test: a case declaring two shells passes when either present one prints")
+        fails += not out(teeth({"/fake/bash": False, "/fake5/bash": False}, "bash>=5.3") == "fail",
+                         "self-test: a bash>=5.3 case with a bash 5.3 present and silent FAILS")
+        fails += not out(teeth({"/fake/bash": True}, "bash>=5.3") == "skip",
+                         "self-test: a bash 3.2 that prints does not satisfy bash>=5.3; with no newer bash it is SKIPPED")
+        fails += not out(not matches("/fake5/bash", "bash>=5.4") and matches("/fake5/bash", "bash>=5.3")
+                         and matches("/fake5/bash", "bash>=5") and not matches("/fake/dash", "dash>=0"),
+                         "self-test: version bounds compare major and minor, and an unversioned shell never meets a bound")
     finally:
-        MAJORS.clear()
-        MAJORS.update(saved)
+        VERSIONS.clear()
+        VERSIONS.update(saved)
     return fails
 
 
@@ -432,9 +559,9 @@ def main():
         fails += not out(False, "CI is set and no bash is available to run the corpus under")
     if not shells:
         print("  info - no shell found: only the hook's expectation is checked")
-    for label, cmd, want, kind in CORPUS:
-        glob = kind.endswith("@glob")
-        kind = kind[:-len("@glob")] if glob else kind
+    skipped = 0
+    for label, cmd, want, rowkind in CORPUS:
+        kind, need, glob = parse_kind(rowkind)
         rc = hook_rc(hook, cmd)
         got = "allow" if rc == 0 else "deny" if rc == 2 else f"rc={rc}"
         fails += not out(got == want, f"corpus {want}: {label}" + ("" if got == want else f" (hook said {got})"))
@@ -445,13 +572,16 @@ def main():
             fails += not out(not bad and not slow, f"corpus allow prints nothing under any shell: {label}"
                              + (f" (printed under {bad})" if bad else "") + (f" (timed out under {slow})" if slow else ""))
         if kind == "bypass" and shells:
-            verdict = teeth(printed, NEEDS.get(label))
+            verdict = teeth(printed, need)
             if verdict == "skip":
+                skipped += 1
                 print(f"  info - SKIPPED the teeth check of '{label}': it needs a shell matching "
-                      f"{NEEDS.get(label)} and none is installed here (the hook-side deny still ran)")
+                      f"{need} and none is installed here (the hook-side deny still ran)")
             else:
                 fails += not out(verdict == "ok",
                                  f"corpus bypass really prints under a shell (the case has teeth): {label}")
+    if skipped:
+        print(f"  info - {skipped} bypass row(s) had their teeth check skipped on this machine (listed above)")
     leaks, denied = 0, 0
     for label, cmd in MATRIX:
         rc = hook_rc(hook, cmd)

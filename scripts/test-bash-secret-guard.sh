@@ -135,27 +135,36 @@
 #     shell run of it timed out (a timeout on an allowed command is a FAIL); each "bypass" case also
 #     PRINTS under at least one shell (so the case has teeth); the driver's exit status and a minimum
 #     check count are asserted (a crashed driver cannot pass). With CI set the driver requires bash.
-#     ONE bypass case needs a particular shell: "bash 3.2 ends the substitution at the first ) in the
-#     body" prints only under bash older than 4 (macOS /bin/bash 3.2). The hook-side deny of that case
-#     always runs; its "really prints" check runs only when a bash older than 4 is installed, and is
-#     SKIPPED otherwise with a visible `info - SKIPPED the teeth check of ...` line. So a macOS run
-#     covers it and CI (ubuntu: bash 5.x and dash) does NOT: there it is pinned only by the hook-side
-#     deny. Proved on synthetic inputs (the driver's self-test: a required shell that is absent skips,
-#     a case with no requirement that prints nowhere still fails, a required shell that is present and
-#     silent fails) and by a CI-shaped second run (GUARD_DIFF_HIDE_SHELLS=bash<4 and CI=1 hide the
-#     old bash) that must complete green and print the SKIPPED line. That second run needs a bash 4+
-#     left on PATH (hiding the only bash makes the driver fail "no bash is available"), so the gate
-#     probes for one first (probe_bash4) and, where there is none, prints `info - SKIPPED the CI-shaped
-#     differential pass` and says why; a committed case injects an empty PATH to prove that path skips
-#     visibly, runs no driver and fails nothing. When a bash older than 4 IS installed the unhidden run
-#     must NOT carry the SKIPPED line for the 3.2 case (its teeth check ran), and when none is the line
-#     must be there. Mutant, measured with bash 3.2 and 5.3 installed: the skip removed (a missing
-#     required shell counts as failing) fails exactly these five checks: the self-tests "a case
-#     requiring a shell that is not present is SKIPPED" and "dash printing does not satisfy a bash<4
-#     requirement", "the differential driver ran to completion", "the driver completes with no bash
-#     older than 4 present" and "the bash 3.2 case's teeth check is skipped with a visible line". The
-#     count is not asserted anywhere and is not claimed for other machines. Which shells a run covered
-#     is on its `info` line.
+#     A bypass row may DECLARE the shells it prints under, in brackets after its kind ("bypass[zsh]",
+#     "bypass[bash>=5,zsh]", "bypass[bash<4]", "bypass[bash>=5.3]": comma-separated specs, each a shell name
+#     with an optional <MAJOR or >=MAJOR[.MINOR] bound). The hook-side deny of every row always runs, on every
+#     machine. The "really prints" check of a declaring row needs a print under at least one declared shell
+#     that is PRESENT; where none is present it is SKIPPED with a visible `info - SKIPPED the teeth check
+#     of ...` line (and a count line), so it never passes silently and never fails on a shell's absence.
+#     A declared shell that is present and does not print FAILS. Declarations: the bash 3.2 heredoc case
+#     (bash<4); the zsh-only `$[` and backslash-newline rows (zsh); rows that also print under bash 5 or
+#     dash name them; the `${ cmd; }` rows need bash>=5.3. A macOS run with all four shells covers every
+#     row; CI (ubuntu: bash 5.x and dash, no zsh, no bash 3) skips the bash 3.2 row and the five zsh-only
+#     rows (listed on its log) and carries teeth for the rest, pinned by the hook-side deny alone where it
+#     skips. Proved on synthetic inputs (the driver's self-test: an absent declared shell skips, a case
+#     with no declaration that prints nowhere fails, a declared shell that is present and silent fails
+#     even when another shell printed, either of two declared shells may satisfy a row, version bounds
+#     compare major and minor and an unversioned shell never meets one) and by a CI-shaped second run
+#     (GUARD_DIFF_HIDE_SHELLS="bash<4,zsh" and CI=1 hide the old bash and zsh) that must complete green,
+#     print the SKIPPED line of a zsh-only row without passing it, and carry teeth for the arithmetic rows
+#     (bash >= 5) and the `${ cmd; }` row (bash >= 5.3) where that bash is on PATH, skipping them visibly
+#     where it is not. That second run needs a bash 4+ left on PATH (hiding the only bash makes the
+#     driver fail "no bash is available"), so the gate probes for one first (probe_bash) and, where
+#     there is none, prints `info - SKIPPED the CI-shaped differential pass` and says why; a committed
+#     case injects an empty PATH to prove that path skips visibly, runs no driver and fails nothing. When a
+#     bash older than 4 IS installed the unhidden run must NOT carry the SKIPPED line for the 3.2 case
+#     (its teeth check ran), and when none is the line must be there. Mutants of the skip logic, one
+#     replacement each in the driver, full gate, bash 5.3, 3.2, zsh and dash installed, baseline 1503 pass
+#     / 0 fail (failing checks): a declared shell that is present and silent skipped instead of failing
+#     (6); the SKIPPED line not printed (2); an empty pool passing (8) or failing (8) instead of skipping;
+#     declarations ignored so any shell satisfies a check (9); a version bound ignored (4); and a row
+#     declaring a present shell that does not print (the newline-form arithmetic row declared zsh) (3).
+#     The count is not claimed for other machines. Which shells a run covered is on its `info` line.
 #     NOT covered: shells not installed (fish, csh, pwsh and Windows shells never), interactive-only
 #     behaviour (a pager runs only on a tty; history expansion), an alias or function defined OUTSIDE
 #     the command text (aliases written IN the text are denied raw, pinned as deny-only because
@@ -364,6 +373,55 @@
 # changed. Mutants, ONE replacement each in the classifier's tool_name check, replayed on scratch copies
 # (failing cases of 3, baseline 0): Monitor also read (2); PowerShell also read (1); both also read (3);
 # check dropped (3). None left equivalent. The harness dispatch (verified live on Claude Code 2.1.332) is NOT pinned: this gate cannot exercise the harness.
+# #659 (section "#659: the override is ignored where single_simple cannot read the quoting"; 45
+# "override, ..." rows in the differential corpus): the one-command override trusts single_simple(), which
+# did not model ANSI-C `$'..'` quoting (`\'` does not end the string there, but this scan closed it), so
+# `OV echo $'\'' ; <printer> ; echo \'` read as one command and the override covered two. A second shape
+# found while checking the other quote forms: a `#` comment ends at the newline but a quote opened inside
+# it ran on, so the next line (a printer) looked quoted. Before the fix both ALLOWED and PRINTED on main
+# under bash 5.3, /bin/bash 3.2 and zsh (the comment shapes under dash too; dash reads `$'` as `$` then a
+# quote, so it is not where the ANSI-C rows get their teeth).
+# RECOVERY ROUND (review of the first head): modelling a comment at all was itself a hole. A `#` after a
+# blank is a comment only when the shell reads it as one; after an ESCAPED blank, inside `${...}` and inside
+# `x[...]` some shell reads it as text, so a separator in its "text" ran a second command that the scan had
+# skipped (and the URL override had the same hole). A second class, present on main too: a quote nested in
+# `${...}` inside double quotes swaps the scan's quote state, so two quoted copies rebalance around a second
+# command. A third class, also on main: arithmetic expansion `$[...]` is not modelled, so a `}` or a quote
+# inside it fools the `${` count or the quote state (bash 5 reads a quote after the brace as the shell does,
+# zsh also unquoted). A fourth: a backslash-newline pair is deleted by the shell before it parses, so it
+# splits `$` from the quote, bracket or brace it opens and hides that opener from the checks. A fifth:
+# bash 5.3 runs the text of `${ cmd; }` and `${| cmd; }` as a command, and inside double quotes the `;` was
+# invisible. Run on the first head's hook, 24 of the recovery cases fail and 14 differential rows are
+# allowed (and print). Now: `$[`, a backslash-newline pair and `${` followed by a blank, tab, newline or `|`
+# are refused anywhere (next to `$'` and `$"`); a quote character inside `${...}` is refused, in or out of
+# double quotes (plain `"${PWD}"` still passes); a comment is modelled only when certain (a real unescaped
+# blank, outside `${...}` and `[...]`, its text free of `; & | < > ( )`, a backtick and a CR); every other
+# `#` that is not mid-word is refused. KNOWN FALSE DENIES, wider than the text they stop, each pinned:
+# `'$'` in single quotes, an unquoted `$#`, `${#x}`, `${x#y}`, `"${x:-'a'}"`, a comment such as `# see (x)`,
+# a hash after an escaped blank (`a\ #foo`, which no shell reads as a comment), any backslash-newline
+# continuation, `${ ` outside double quotes or in single quotes, and the same for the child of `doppler
+# run -- <child>` (the same scan decides it). Not shown, so not claimed: other shells, and quote forms
+# beyond those in the section: heredoc markers, `$((`, `((..))` and `[[ ]]` were tried and already deny or
+# print nothing; a bare `{` inside `${...}` was probed by brute force and no allowed spelling printed, so
+# it is neither modelled nor claimed; the `;` and newline spellings of the zsh-only `$[` shapes did not
+# print on any shell and are gate cases only. KNOWN LIMITS, not modelled and not pinned as allows: `${x@P}`
+# (bash) and `${(e)x}` (zsh) evaluate a variable's text as code.
+# Mutants, ONE replacement each in hooks/bash-secret-guard.py, run against the section and its corpus rows
+# alone on scratch copies with bash 5.3, bash 3.2, zsh and dash all present (failing gate cases / failing
+# differential checks, unmutated baseline 0 / 0): the four-way `$'`/`$"`/`$[`/backslash-newline refusal
+# deleted (24/30); `$'` dropped from it (6/6); `$"` dropped (1/2); `$[` dropped (13/16); the
+# backslash-newline refusal dropped (4/6); the `${`-blank refusal deleted (10/14), with the blank dropped
+# from its set (7/8), the tab (1/2), the newline (1/2), the `|` (1/2); the comment not modelled, so a `#`
+# after a blank is refused (2/2); the comment skipped to the END of the text (3/6); the comment skip also
+# consuming its newline (3/6); a `#` after an operator or quote accepted (4/0); the comment text check
+# deleted (10/1); only `;` checked in it (9/0); `<`, `)` or the CR dropped from it (1/0 each); the `#`
+# refusal inside `${...}` and `[...]` deleted (3/0), kept for `${...}` only (1/0); `[` not counted (1/0);
+# `${` not counted, double-quoted or unquoted state (3/4 and 3/0); the quote-in-`${...}` refusal deleted
+# from the unquoted branch (1/0), from the double-quoted branch (1/0), both (4/4); the escaped-blank check
+# (`esc != i - 1`) deleted (1/0), its tracking deleted (1/0), both (1/0): all three fail only the KNOWN
+# FALSE DENY row for `a\ #foo`. An earlier head of this block called those three EQUIVALENT (0/0); they
+# change decisions (without the check `a\ #foo` is read as a comment and allowed), nothing prints under
+# any shell, and the row pins the false deny. Counts are one run on one machine.
 #
 # #660 (section "#660: every way the classifier fails to give a verdict ..."): the wrapper checks the
 # classifier file is a readable regular file BEFORE running it, and runs it with its stderr captured
@@ -1064,8 +1122,8 @@ else
     bad "the differential driver ran to completion (rc=$diff_rc, ok lines=$diff_ok)"
 fi
 
-# CI-shaped run: the same driver with every bash older than 4 hidden and CI set, as on a runner that
-# has bash 5 and dash only. It hides the only bash on a machine that has just bash 3.2, which would
+# CI-shaped run: the same driver with every bash older than 4 and zsh hidden and CI set, as on a runner
+# that has bash 5 and dash only. It hides the only bash on a machine that has just bash 3.2, which would
 # fail the driver for a reason that has nothing to do with the code, so it runs only where a bash 4+
 # is on PATH, and says visibly when it does not.
 bash_major() { # <path to a bash> -> its major version, 0 when it cannot say
@@ -1084,6 +1142,12 @@ probe_bash() { # <PATH value> <min|max> <N> <candidate>... : 0 when a candidate 
     done
     return 1
 }
+bash_at_least() { # <MAJOR.MINOR> : 0 when the bash first on PATH is at least that version
+    local want="$1" p v
+    p="$(command -v bash 2>/dev/null)" || return 1
+    v="$("$p" -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)" || return 1
+    [ "$(printf '%s\n%s\n' "$want" "$v" | sort -t. -k1,1n -k2,2n | head -n1)" = "$want" ]
+}
 ci_shaped_ran=0
 run_ci_shaped_pass() { # <PATH value for the probe> <candidate>... : runs the hidden pass, or skips it visibly
     local pth="$1"
@@ -1095,7 +1159,7 @@ run_ci_shaped_pass() { # <PATH value for the probe> <candidate>... : runs the hi
     fi
     ci_shaped_ran=1
     DIFF_SCRATCH2="$(mktemp -d "$WORK/diff.XXXXXX")"
-    GUARD_DIFF_HIDE_SHELLS='bash<4' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
+    GUARD_DIFF_HIDE_SHELLS='bash<4,zsh' CI=1 python3 -I -B "$REPO_ROOT/scripts/fixtures/secret-guard-differential.py" "$HOOK" "$DIFF_SCRATCH2" >"$WORK/diff2.out" 2>&1
     diff2_rc=$?
 }
 
@@ -1129,6 +1193,34 @@ if [ "$ci_shaped_ran" -eq 1 ]; then
     else
         bad "the bash 3.2 case's teeth check is skipped with a visible line when no bash older than 4 exists"
     fi
+    # a row declaring only zsh cannot be checked without zsh: it must be skipped visibly, never passed
+    if grep -q "^  info - SKIPPED the teeth check of 'override, unquoted arithmetic expansion with a quote inside (zsh)'" "$WORK/diff2.out" \
+        && ! grep -q "^  ok   - corpus bypass really prints under a shell (the case has teeth): override, unquoted arithmetic expansion with a quote inside (zsh)" "$WORK/diff2.out"; then
+        ok "a zsh-only row is skipped with a visible line, and not passed, when zsh is hidden (the CI shape)"
+    else
+        bad "a zsh-only row is skipped with a visible line, and not passed, when zsh is hidden (the CI shape)"
+    fi
+    # the rows that CAN carry teeth on a bash-and-dash runner must carry them there (bash >= 5 for the
+    # arithmetic rows, bash >= 5.3 for the `${ cmd; }` rows), and are skipped visibly where that bash is absent
+    for ci_row in "override, arithmetic expansion hides a brace and a quote, background form:5.0" \
+                  "override, arithmetic expansion hides a brace and a quote, newline form:5.0" \
+                  "override, bash 5.3 command substitution \`\${ cmd; }\` in double quotes:5.3"; do
+        ci_label="${ci_row%:*}"
+        ci_min="${ci_row##*:}"
+        if bash_at_least "$ci_min"; then
+            if grep -qF "  ok   - corpus bypass really prints under a shell (the case has teeth): $ci_label" "$WORK/diff2.out"; then
+                ok "the CI shape carries teeth for '$ci_label' (bash >= $ci_min on PATH)"
+            else
+                bad "the CI shape carries teeth for '$ci_label' (bash >= $ci_min on PATH)"
+            fi
+        else
+            if grep -qF "  info - SKIPPED the teeth check of '$ci_label'" "$WORK/diff2.out"; then
+                ok "no bash >= $ci_min on PATH: '$ci_label' is skipped with a visible line"
+            else
+                bad "no bash >= $ci_min on PATH: '$ci_label' is skipped with a visible line"
+            fi
+        fi
+    done
 fi
 # the unhidden run: the teeth check of the bash 3.2 case ran exactly when a bash older than 4 exists
 if probe_bash "$PATH" max 4 bash /bin/bash; then
@@ -1955,6 +2047,103 @@ allow "limit: name split by concatenation inside an interpreter string" 'python3
 allow "limit: name split by spaced concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" + "pler secrets")'"'"''
 allow "limit: name split by half-spaced concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" +"pler secrets")'"'"''
 deny "unspaced concatenation inside an interpreter string is denied (the spaced row minus its spaces)" 'python3 -c '"'"'import os; os.system("dop"+"pler secrets")'"'"''
+echo "== #659: the override is ignored where single_simple cannot read the quoting =="
+OV='SASSYDOG_ALLOW_DOPPLER_PRINT=1'
+PR='doppler secrets get X --plain'
+deny "ANSI-C quote hides a second command from the override" "$OV echo \$'\\'' ; $PR ; echo \\'"
+deny "ANSI-C quote glued to a word" "$OV echo a\$'\\'' ; $PR ; echo \\'"
+deny "ANSI-C quote with a redirect on the tail" "$OV echo \$'\\'' | cat ; $PR ; echo \\' >/dev/null"
+deny "ANSI-C quote alone is refused (a single command the old scan accepted)" "$OV $PR > \$'/tmp/f'"
+deny "locale quote is refused (a single command the old scan accepted)" "$OV $PR > \$\"/tmp/f\""
+deny "a quote opened in a comment hides the next line" "$OV echo a #'"$'\n'"$PR #'"
+deny "a double quote opened in a comment hides the next line" "$OV echo a #\""$'\n'"$PR #\""
+deny "a spaced comment quote hides the next line" "$OV echo a # '"$'\n'"$PR # '"
+deny "a comment mark right after a redirect operator is refused (shells may read it as text)" "$OV $PR >#f"
+deny "a comment mark right after a quote is refused" "$OV $PR >/dev/null 2>&1 'a'#b"
+allow "a trailing comment is only text, even with an apostrophe in it" "$OV $PR > /tmp/f # it's why"
+deny "KNOWN FALSE DENY: a dollar in single quotes holds the two-character text \$' and is refused" "$OV echo '\$' $PR >/dev/null 2>&1"
+deny "KNOWN FALSE DENY: an ANSI-C word in the child of run is refused" "doppler run -- echo \$'x'"
+deny "a hash after an escaped blank is text to some shells, not a comment" "$OV echo a\\ #;$PR"
+deny "a hash after an escaped tab" "$OV echo a\\"$'\t'"#;$PR"
+deny "a hash after an escaped blank, redirect target" "$OV $PR > /tmp/f\\ #;$PR"
+deny "a hash inside \${..:-..}" "$OV echo \${x:- #};$PR"
+deny "a hash inside \${..:+..}" "$OV echo \${x:+ #};$PR"
+deny "a hash inside \${..%%..}" "$OV echo \${x%% #};$PR"
+deny "a hash inside \${..} after text" "$OV echo \${x:-a #b};$PR"
+deny "a hash inside \${..}, then a background operator" "$OV echo \${x:- #}&$PR"
+deny "a hash inside \${..}, then a pipe" "$OV echo \${x:- #}|$PR"
+deny "a hash inside \${..} in the child of run" "$OV doppler run -- echo \${x:- #};$PR"
+deny "a hash inside an array subscript" "$OV x[ #]=1 echo hi;$PR"
+deny "a hash inside \${..} with no second command is still refused" "$OV echo \${x:- #} $PR"
+deny "a hash inside [ ] with no second command is still refused" "$OV echo a[ #] $PR"
+deny "a hash inside [[ ]]" "$OV [[ a #]] ;$PR"
+deny "a backslash-newline before a hash" "$OV echo a\\"$'\n'"#;$PR"
+deny "the URL override has the same hole: a hash inside \${..}" 'SASSYDOG_ALLOW_CREDENTIAL_URL=1 echo ${x:- #};psql postgres://u:pw@h/db'
+deny "a comment holding a semicolon is refused (no shell may read it as a command separator)" "$OV echo a # x;$PR"
+deny "a comment holding a pipe" "$OV echo a # x|$PR"
+deny "a comment holding an ampersand" "$OV echo a # x&$PR"
+deny "a comment holding a redirect" "$OV echo a # x>$PR"
+deny "a comment holding a parenthesis" "$OV $PR >/dev/null 2>&1 # (x"
+deny "a comment holding a closing parenthesis" "$OV $PR >/dev/null 2>&1 # x)"
+deny "a comment holding an input redirect" "$OV $PR >/dev/null 2>&1 # x<y"
+deny "a comment holding a carriage return" "$OV $PR >/dev/null 2>&1 # x"$'\r'"y"
+deny "arithmetic expansion \$[ in double-quoted \${..}, the scan closes \${ at a } the shell keeps" "$OV echo \"\${x:-\$[}\"]}\" & $PR & echo \"\${x:-\$[}\"]}\""
+deny "the same with a semicolon" "$OV echo \"\${x:-\$[}\"]}\" ; $PR ; echo \"\${x:-\$[}\"]}\""
+deny "the same with a newline" "$OV echo \"\${x:-\$[}\"]}\""$'\n'"$PR"$'\n'"echo \"\${x:-\$[}\"]}\""
+deny "the same under \${..:+..}" "$OV echo \"\${x:+\$[}\"]}\" & $PR & echo \"\${x:+\$[}\"]}\""
+deny "the same nested in a second expansion" "$OV echo \"\${x:-\${z:-\$[}\"]}}\" & $PR & echo \"\${x:-\${z:-\$[}\"]}}\""
+deny "the same in the child of run" "$OV doppler run -- echo \"\${x:-\$[}\"]}\" & $PR & echo \"\${x:-\$[}\"]}\""
+deny "the same under the URL override" 'SASSYDOG_ALLOW_CREDENTIAL_URL=1 echo "${x:-$[}"]}" & psql postgres://u:pw@h/db & echo "${x:-$[}"]}"'
+deny "unquoted \$[ with a quote inside (zsh)" "$OV echo \$[\"] ; $PR ; echo \$[\"]"
+deny "unquoted \$[ with a single quote inside (zsh)" "$OV echo \$['] & $PR & echo \$[']"
+deny "\$[ inside [[ ]]" "$OV [[ \$[1] == 1 ]] ; $PR"
+deny "\$[ alone is refused (a single command the old scan accepted)" "$OV $PR >/dev/null 2>&1 \$[1+2]"
+deny "arithmetic expansion \$(( is an operator" "$OV echo \$((1+2)) ; $PR"
+deny "KNOWN FALSE DENY: unquoted \$# is refused" "$OV $PR >/dev/null 2>&1 \$#"
+deny "KNOWN FALSE DENY: \${#x} is refused" "$OV $PR >/dev/null 2>&1 \${#x}"
+deny "KNOWN FALSE DENY: \${x#y} is refused" "$OV $PR >/dev/null 2>&1 \${x#y}"
+deny "KNOWN FALSE DENY: a quote in \${x:-'a'} inside double quotes is refused" "$OV $PR >/dev/null 2>&1 \"\${x:-'a'}\""
+deny "KNOWN FALSE DENY: a comment with a parenthesis is refused" "$OV $PR >/dev/null 2>&1 # see (x)"
+BSNL='\'$'\n'   # a backslash-newline pair, which the shell deletes before it parses
+deny "backslash-newline between \$ and a quote hides an ANSI-C opener" "$OV echo \$${BSNL}'\\'' ; $PR ; echo \\'"
+deny "backslash-newline between \$ and a double quote (locale)" "$OV echo \$${BSNL}\"x\" ; $PR"
+deny "backslash-newline between \$ and [ (zsh arithmetic)" "$OV echo \$${BSNL}[\"] ; $PR ; echo \$${BSNL}[\"]"
+deny "backslash-newline between \$ and { hides a nested quote" "$OV echo \"\$${BSNL}{x:-\"'\"}\" ; $PR ; echo \"\$${BSNL}{x:-\"'\"}\""
+deny "backslash-newline between \$ and ( (command substitution)" "$OV echo \$${BSNL}($PR)"
+deny "KNOWN FALSE DENY: any backslash-newline continuation is refused" "$OV $PR ${BSNL}>/dev/null"
+SQ="'"
+DQ='"'
+ARB="${DQ}\${x:-\$[}${DQ}${SQ}${DQ}]}${DQ}"   # "${x:-$[}"'"]}" : a quote after the brace the scan thinks closed it
+deny "arithmetic expansion hides a brace and a quote, background form" "$OV echo $ARB & $PR & echo $ARB"
+deny "arithmetic expansion hides a brace and a quote, newline form" "$OV echo $ARB"$'\n'"$PR"$'\n'"echo $ARB"
+deny "arithmetic expansion hides a brace and a quote under a parameter alternative" "$OV echo ${ARB/:-/:+} & $PR & echo ${ARB/:-/:+}"
+deny "arithmetic expansion hides a brace and a quote in the child of run" "$OV doppler run -- echo $ARB & $PR & echo $ARB"
+FS="\"\${ $PR; }\""   # "${ cmd; }" : bash 5.3 runs the text as a command
+deny "bash 5.3 command substitution \${ cmd; } in double quotes" "$OV echo $FS"
+deny "bash 5.3 command substitution with a newline as its terminator" "$OV echo \"\${ $PR"$'\n'"}\""
+deny "bash 5.3 command substitution opened by a tab" "$OV echo \"\${"$'\t'"$PR; }\""
+deny "bash 5.3 command substitution opened by a newline" "$OV echo \"\${"$'\n'"$PR; }\""
+deny "bash 5.3 value substitution \${| cmd; } in double quotes" "$OV echo \"\${| $PR; }\""
+deny "bash 5.3 command substitution as an assignment value" "$OV x=$FS"
+deny "bash 5.3 command substitution in the child of run" "$OV doppler run -- echo $FS"
+deny "bash 5.3 command substitution under the URL override" 'SASSYDOG_ALLOW_CREDENTIAL_URL=1 echo "${ psql postgres://u:pw@h/db; }"'
+deny "KNOWN FALSE DENY: \${ and a blank outside quotes is refused" "$OV $PR >/dev/null 2>&1 \${ x }"
+deny "KNOWN FALSE DENY: \${ and a blank in single quotes is refused" "$OV $PR >/dev/null 2>&1 '\${ x }'"
+allow "a parameter with no blank after \${ keeps the override" "$OV $PR >/dev/null 2>&1 \"\${PWD}\" \"\${HOME}\""
+deny "KNOWN FALSE DENY: a hash after an escaped blank is refused though no shell reads a comment there" "$OV $PR >/dev/null 2>&1 a\\ #foo"
+deny "a comment holding a backtick" "$OV $PR >/dev/null 2>&1 # \`x"
+deny "a quote nested in \${..} inside double quotes, two copies rebalance" "$OV echo \"\${x:-\"'\"}\" ; $PR ; echo \"\${x:-\"'\"}\""
+deny "a single quote inside \${..} inside double quotes, two copies rebalance" "$OV echo \"\${x#'\"'}\" ; $PR ; echo \"\${x#'\"'}\""
+deny "a quote inside \${..} outside double quotes" "$OV echo \${x:-'a'} $PR"
+allow "plain \${PWD} in double quotes still passes the override" "$OV $PR >/dev/null 2>&1 \"\${PWD}\""
+allow "a comment with an apostrophe and no operator still passes" "$OV $PR >/dev/null 2>&1 # it's why, see x"
+allow "override, get to a literal path" "$OV $PR > /literal/path"
+allow "override, get --plain to a literal path, stdout and stderr" "$OV $PR >/dev/null 2>&1"
+allow "override, a quoted hash in a message" "$OV git commit -m 'doppler secrets get is fixed in #12'"
+allow "override, a hash inside a word" "$OV $PR >/dev/null 2>&1 a#b"
+allow "override, a double-quoted dollar-hash" "$OV echo \"\$#\" doppler"
+allow "run with a quoted hash in the child" "doppler run -- bash -c 'echo hi # note'"
+unset OV PR
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"

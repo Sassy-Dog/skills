@@ -16,3 +16,7 @@ tmp/
 # Local environment files. Secrets never belong in the repo, and this repo has none to track.
 .env
 .env.*
+
+# Python bytecode (the differential driver is imported by a scratch probe)
+__pycache__/
+*.pyc
