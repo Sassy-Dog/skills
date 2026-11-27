@@ -345,7 +345,7 @@
 # reaches the hook under the `Bash` matcher as a Bash call (hooks docs, "Match Monitor commands"), so no code
 # changed. Mutants, ONE replacement each in the classifier's tool_name check, replayed on scratch copies
 # (failing cases of 3, baseline 0): Monitor also read (2); PowerShell also read (1); both also read (3);
-# check dropped (3). None left equivalent. Harness dispatch itself is NOT pinned (documentation claim only).
+# check dropped (3). None left equivalent. The harness dispatch (verified live on Claude Code 2.1.332) is NOT pinned: this gate cannot exercise the harness.
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -1104,14 +1104,15 @@ failopen "Bash event with a non-string command" '{"tool_name":"Bash","tool_input
 run_event '{"tool_name":"Read","tool_input":{"file_path":"/x"}}'
 if [ "$rc" -eq 0 ]; then ok "a non-Bash tool is allowed without comment"; else bad "a non-Bash tool is allowed without comment (rc=$rc)"; fi
 # #661: the harness delivers a Monitor command under a `Bash` matcher as a Bash call, so the guard
-# needs no Monitor branch. These pin that the classifier does NOT grow one unreviewed: a Monitor-named
-# or PowerShell-named event, even carrying a printing command, is exit 0 and silent (the documented
-# dispatch itself cannot be exercised here).
+# needs no Monitor branch. A Monitor-named event only arrives if the matcher is widened, and then this
+# classifier exits 0 for it: these cases pin that, so a widening cannot pass as "covered". A Monitor-named
+# or PowerShell-named event, even carrying a printing command, is exit 0 and silent. This gate cannot
+# exercise the harness's dispatch.
 for t in Monitor PowerShell; do
     run_event "{\"tool_name\":\"$t\",\"tool_input\":{\"command\":\"doppler secrets get X\"}}"
     if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "a $t-named event is exit 0 and silent (classifier reads Bash events only)"; else bad "a $t-named event is exit 0 and silent (rc=$rc err=${err:-<none>})"; fi
 done
-run_event '{"tool_name":"Monitor","tool_input":{"ws":"wss://example.invalid/x"}}'
+run_event '{"tool_name":"Monitor","tool_input":{"ws":{"url":"wss://example.invalid/x"}}}'
 if [ "$rc" -eq 0 ] && [ -z "$err" ]; then ok "a Monitor WebSocket-shaped event is exit 0 and silent"; else bad "a Monitor WebSocket-shaped event is exit 0 and silent (rc=$rc err=${err:-<none>})"; fi
 
 mkdir -p "$WORK/nopython"
