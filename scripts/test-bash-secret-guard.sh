@@ -266,10 +266,11 @@
 # another differential), so none is shipped; the classes are named in README (Known limits) and the hook
 # docstring, and the rows in section "KNOWN LIMIT, pinned allow (#654)" pin that the guard allows each class today:
 # ANSI-C and locale quoting, brace expansion, an expansion glued before or after the word, glob forms, a subcommand
-# held in a variable or a default, indirect invocation (stdin-fed xargs or env), a subcommand assembled by printf,
-# and eval of the above. Three further rows (an on-disk script, a base64 payload piped to a shell, python string
-# concatenation) are not spelling classes: they are OUT-OF-SCOPE pins, in their own sub-block at the end of the
-# section. The condition is the OUTER first word: it must not itself expand (echo, printf, env, time,
+# held in a variable or a default, indirect invocation (xargs, or env with a $(cat) argument), a subcommand assembled by printf,
+# and eval of the above. The rows after the eval row are not spelling classes but OUT-OF-SCOPE pins, in their own
+# sub-block at the end of the section: allow rows for an on-disk script, a base64 payload piped to a shell and
+# python string concatenation (implicit, spaced, half-spaced), plus one DENY row for the unspaced concatenation,
+# which the matcher does read. The condition is the OUTER first word: it must not itself expand (echo, printf, env, time,
 # eval); a top-level expanding command word, or any spelled name, still denies. The xargs rows have no substitution.
 # The three glob rows print only when the working directory holds a matching entry (bash passes the pattern
 # literally otherwise, zsh errors); the differential check ran them with such a directory. Every allow row printed under at
@@ -1784,13 +1785,15 @@ allow "limit: subcommand fed to xargs by printf" "printf '%s\\n' secrets | xargs
 allow "limit: subcommand assembled by printf" "printf 'sec%s' rets | xargs \$D"
 allow "limit: subcommand read from stdin by a wrapper" 'echo secrets | env $D $(cat)'
 allow "limit: the whole substitution run by eval" 'eval "echo \$($D \$'"'"'secrets'"'"')"'
-# Out-of-scope pins (not spelling classes): the command text never carries the name and subcommand together in a
-# form this text matcher reads. Each prints under a real shell; README and the docstring list them as out of scope.
+# Out-of-scope pins (not spelling classes). The allow rows here are allowed because the command text never carries
+# the name and subcommand together in a form this text matcher reads, and each prints under a real shell; README
+# and the docstring list them as out of scope. The last row is a DENY: unspaced concatenation is read and denied.
 allow "limit: on-disk script holding the command" 'mkdir -p d; printf '"'"'#!/bin/sh\n%s secrets\n'"'"' "$D" > d/s.sh; sh d/s.sh'
 allow "limit: encoded payload piped to a shell" 'echo ZG9wcGxlciBzZWNyZXRz | base64 -d | sh'
 allow "limit: name split by concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" "pler secrets")'"'"''
 allow "limit: name split by spaced concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" + "pler secrets")'"'"''
-deny "unspaced concatenation inside an interpreter string is denied" 'python3 -c '"'"'import os; os.system("dopp"+"ler secrets get X")'"'"''
+allow "limit: name split by half-spaced concatenation inside an interpreter string" 'python3 -c '"'"'import os; os.system("dop" +"pler secrets")'"'"''
+deny "unspaced concatenation inside an interpreter string is denied (the spaced row minus its spaces)" 'python3 -c '"'"'import os; os.system("dop"+"pler secrets")'"'"''
 
 echo "== hooks.json wiring, run as the harness runs it =="
 python3 -I -B - "$HOOKS_JSON" <<'EOF' && ok "hooks.json declares exactly one PreToolUse Bash command hook" || bad "hooks.json declares exactly one PreToolUse Bash command hook"

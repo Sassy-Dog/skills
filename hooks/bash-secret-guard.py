@@ -155,7 +155,8 @@ removed before matching and still denies. Deliberately NOT matched: a text match
 expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
 on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
 (implicit or spaced concatenation passes, unspaced `"a"+"b"` denies), credential-file reads (.env, the CLI token
-file), non-Bash tools.
+file), tools other than Bash and Monitor (Monitor is covered via the Bash matcher, see Tools above; Read, Grep,
+PowerShell and MCP shell tools are not).
 The override is printed in the deny message, so it is a speed bump for a careless agent, not protection
 against an injected one.
 Also: aliases and functions, a command
