@@ -154,19 +154,29 @@
 #      or a comment (every refresh of either is refused), a field or
 #      dependency entry REMOVED from a workspace (the loop walks the head's
 #      fields only, and a removal fetches nothing new), bun's lockfileVersion
-#      and configVersion decreasing, and two false refusals that fail closed
-#      (an npm `npm:name` alias with no version, and a package-lock entry that
-#      moved); every hostile case asserts a reason, but about twenty assert
+#      and configVersion decreasing; every hostile case asserts a reason, but many assert
 #      the generic "a refresh does not write", so a case can be refused by a
 #      different guard than the one it targets, which the mutants then catch
-#      guard by guard; the backslash and host classes of the npm `resolved`
-#      shape have no mutant of their own, because the base-prefix test
-#      refuses the same URL; and branches with no
+#      guard by guard; the host and registry-path backslash exclusions of the
+#      npm `resolved` shape have no mutant of their own, because the
+#      base-prefix test refuses the same URL (only for a base with no
+#      backslash in a `resolved`: with one, the registry-path mutant would
+#      accept a new package); the registry-tuple check
+#      `(.[2] | type) == "object"` has no mutant or killing case either;
+#      a trailing C0 control escape in a package-lock `resolved` file segment
+#      (`..\u0001`, `..\u001f`) gets past the `.`/`..` refusal, because `\s`
+#      does not match it (npm strips it and fetches under the same base
+#      prefix, and the integrity hash must still match); and branches with no
 #      committed case because they need a tool or the machine to fail: diff
 #      exiting above 1 (now serving only pub and Cargo), awk failing in
 #      pub_shape, read-tree failing, and the post-apply re-check (a second
 #      copy of rules the path loop already enforces, which cannot fire when
 #      that loop works, and runs only before the App token exists).
+#      Falsely refused (fails closed, not a missed attack): an npm `npm:name`
+#      alias with no version, and a package-lock entry that moved while
+#      carrying a non-range value in a dependency map that the base already
+#      holds (a base `github:x/y`, say), which that check refuses; a moved
+#      entry with plain ranges, or with a git `resolved`, is accepted.
 #      The unreachable "no content check exists" arm is killed only through the
 #      Cargo.toml mutant.
 #  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
