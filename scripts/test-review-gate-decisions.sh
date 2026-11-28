@@ -172,7 +172,13 @@
 #          arbitration is a counted, held root, never an eternal tick, while an
 #          infra failure keeps the base retry-then-blocked path; and arbitration
 #          inputs are untrusted data on a PUBLIC repo. A security finding is never
-#          auto-filed publicly, and the standing filing approval is narrow.
+#          auto-filed publicly, and the standing filing approval is narrow. THE
+#          NUMERIC-CAP BAN (ROUND_CAP_RE) IS BEST-EFFORT OVER SPELLINGS: it is a
+#          family of forbids that reddens on the spellings seen so far (a number
+#          or ordinal beside "rounds", "capped at", "give up / stop after N
+#          rounds", "after round N ... blocked") and a new phrasing can walk past
+#          it. The PRIMARY guard is the positive pins of the no-cap sentences
+#          above: a rewrite that reintroduces a cap has to delete one of those.
 #      #581's coordinator-site NIT ROLL-IN is unchanged and still sits OUTSIDE
 #      the allowance: at most one per PR, capped by its own author-checked cap
 #      record, never counted in `recovery_used`, no reservation. Do not "tidy" it
@@ -1344,7 +1350,7 @@ count_pin() {
 }
 ROUNDS_START='### Review rounds and arbitration (the one definition'
 # One family for every "the loop is capped" spelling; see the N1 note in section 8.
-ROUND_CAP_RE='([Aa]t most|[Mm]ax(imum)?( of)?|[Uu]p to|[Nn]o more than|capped (at|to)|limited to) [A-Za-z0-9]+ (fix |review )?rounds?|rounds? (is|are) (capped|limited)|[Rr]ound (cap|limit|ceiling)|[^o] (cap|limit|ceiling) (on|of) [A-Za-z0-9 ]{0,12}rounds?|[A-Za-z0-9]+ (fix |review )?rounds? (at most|maximum|max)|[Aa]fter (round|[A-Za-z0-9]+ (fix |review )?rounds?)[^.]{0,100}blocked'
+ROUND_CAP_RE='([Aa]t most|[Mm]ax(imum)?( of)?|[Uu]p to|[Nn]o more than|capped (at|to)|limited to) [A-Za-z0-9]+ (fix |review )?rounds?|rounds? (is|are) (capped|limited)|[Rr]ound (cap|limit|ceiling)|[^o] (cap|limit|ceiling) (on|of) [A-Za-z0-9 ]{0,12}rounds?|[A-Za-z0-9]+ (fix |review )?rounds? (at most|maximum|max)|[Aa]fter (round|[A-Za-z0-9]+ (fix |review )?rounds?)[^.]{0,100}blocked|([Gg]ive|[Gg]ives) up after (the )?(first|second|third|fourth|fifth|sixth|seventh|[0-9]+(st|nd|rd|th)|one|two|three|four|five|six|[0-9]+)( [A-Za-z]+)? rounds?|([Ss]top|[Ss]tops|[Hh]alt|[Hh]alts|[Ee]scalate|[Ee]scalates|[Bb]lock|[Bb]locks|[Aa]bandon) after (the )?(first|second|third|fourth|fifth|sixth|seventh|[0-9]+(st|nd|rd|th)|one|two|three|four|five|six|[0-9]+)( [A-Za-z]+)? rounds?|[Aa]fter (the )?(first|second|third|fourth|fifth|sixth|seventh|[0-9]+(st|nd|rd|th)|one|two|three|four|five|six|[0-9]+)( [A-Za-z]+)? rounds?[^.]{0,100}(block|escalat|give up|stop|halt|abandon)|(the |a )?(first|second|third|fourth|fifth|sixth|seventh|[0-9]+(st|nd|rd|th)|one|two|three|four|five|six|[0-9]+)( [A-Za-z]+)? rounds? (blocks|stops|escalates|ends)'
 ROUNDS_END='### Review gate on the coordinator site'
 anchor_pin "$takeit_flat" "$ROUNDS_START" "take-it's Review rounds and arbitration start anchor is present"
 anchor_pin "$takeit_flat" "$ROUNDS_END" "take-it's coordinator-site heading anchor follows the rounds section"
@@ -1606,7 +1612,7 @@ mutant_pin "$retry_review_dr" 'first read the .take-it-arbitration. records for 
     "dispatch-ready: a tick finding a verdict for the round and trigger reads it, never dispatches again"
 
 # B2: a delta review carries the round's open findings, and only an explicit resolved clears one.
-mutant_pin "$rounds_take" 'The delta-review brief carries the round record.s open findings.{0,3} .each file:line and claim. as .carried_findings.' \
+mutant_pin "$rounds_take" 'The delta-review brief carries the round record.s open findings.{0,3} .each .id., file:line and claim. as .carried_findings.' \
     's/as .carried_findings.//' \
     "take-it: the delta-review brief carries the round's open findings"
 mutant_pin "$rounds_take" 'A carried finding clears only on an explicit .resolved.' \
@@ -1624,12 +1630,15 @@ mutant_pin "$orch_flat" 'Optional: caller-supplied .carried_findings. \(override
 mutant_pin "$orch_flat" 'exempt from Step 5.s changed-hunk drop and its confidence floor' \
     's/exempt from Step 5.s changed-hunk drop and its confidence floor//' \
     "the orchestrator exempts carried findings from the changed-hunk drop"
-mutant_pin "$orch_flat" 'answer .resolved. \(the cited code no longer has the problem, or the claim no longer holds\) or .unresolved.' \
+mutant_pin "$orch_flat" 'answer .resolved. \(the code no longer has the problem, or the claim no longer holds\) or .unresolved.' \
     's/or .unresolved.//' \
     "the orchestrator answers each carried finding resolved or unresolved"
-mutant_pin "$orch_flat" 'Never answer .resolved. on the strength of the diff alone, and a carried finding you did not answer counts as .unresolved.' \
-    's/and a carried finding you did not answer counts as .unresolved.//' \
-    "the orchestrator never calls a carried finding resolved from the diff alone, and an unanswered one is unresolved"
+mutant_pin "$orch_flat" 'Never answer .resolved. on the strength of the diff alone' \
+    's/on the strength of the diff alone//' \
+    "the orchestrator never calls a carried finding resolved from the diff alone"
+mutant_pin "$orch_flat" 'A carried finding that cannot be located or checked is .unresolved., never dropped by Step 5.{1,3}, and so is one you did not answer' \
+    's/never dropped by Step 5//' \
+    "the orchestrator treats a carried finding it cannot locate, check or answer as unresolved, never dropped"
 mutant_pin "$orch_flat" 'The caller clears a carried finding only on an explicit .resolved.' \
     's/only on an explicit .resolved.//' \
     "the orchestrator's carried-finding contract matches take-it's clearing rule"
@@ -1725,7 +1734,7 @@ mutant_pin "$rounds_take" 'a .DESCOPE. verdict on a security Blocking finding is
 mutant_pin "$rounds_take" 'clears only by a fix, an .ACCEPT. documented as a known limit in the repo.s docs .{1,120}, or a .REJECT. from a .deep. arbitration, never from the .light. check-in' \
     's/never from the .light. check-in//' \
     "take-it: a security Blocking finding clears only by a fix, a documented ACCEPT or a deep REJECT"
-mutant_pin "$rollin_take" 'a high-impact security nit is listed for the operator in the §7 report instead, and is not filed' \
+mutant_pin "$rollin_take" 'every security nit that is not rolled in, at any impact, is listed for the operator in the §7 report instead, and is not filed' \
     's/is listed for the operator in the §7 report instead, and is not filed//' \
     "take-it: a high-impact security nit is listed for the operator, never filed"
 
@@ -1742,18 +1751,121 @@ mutant_pin "$rollin_take" 'only the bins above .high / medium and medium / high,
 mutant_pin "$rollin_take" 'carries the marker .take-it-followup-source: #<N>/<file>:<hash of the claim>.' \
     's/take-it-followup-source/x/' \
     "take-it: an auto-filed follow-up carries an idempotency marker"
-mutant_pin "$rollin_take" 'exits 2, or the batch would pass its burst rail .more than 5 new issues in one run., an unattended tick files nothing, records the refusal in the PR body, names it in the report and continues' \
-    's/an unattended tick files nothing, records the refusal in the PR body, names it in the report and continues//' \
-    "take-it: on exit 2 or the burst rail an unattended tick files nothing, records it and continues"
+mutant_pin "$rollin_take" 'exits 2, or the batch would pass its burst rail .more than 5 new issues in one run., an unattended tick files no nit, records the refusal in the PR body, names it in the report and continues' \
+    's/an unattended tick files no nit, records the refusal in the PR body, names it in the report and continues//' \
+    "take-it: on exit 2 or the burst rail an unattended tick files no nit, records it and continues"
 mutant_pin "$(flatten "$AGENTSMD")" 'it is narrow: .take-it. and .dispatch-ready. file, in the claimed issue.s own repo only, a .DESCOPE. follow-up and a high/medium or medium/high nit through .file-or-link-issue.sh. under the marker .take-it-followup-source:.' \
     's/in the claimed issue.s own repo only, //' \
     "AGENTS.md states the narrow standing approval"
 mutant_pin "$ghi_flat" 'The one standing exception is .take-it.{1,2}s and .dispatch-ready.{1,2}s .{1,4}#667.{1,80}: in the claimed issue.s own repo only' \
     's/The one standing exception is//' \
     "github-issues names the standing filing exception with the same scope"
-mutant_pin "$ghi_flat" 'never a security finding, and on exit 2 or the burst rail below an unattended tick files nothing and reports it' \
+mutant_pin "$ghi_flat" 'never a security finding, filed without .ready. .and onto the board.s Backlog column when .board:. is set., and on exit 2 or the burst rail below an unattended tick files no nit and reports it' \
     's/never a security finding, //' \
     "github-issues' exception excludes security findings and fails closed"
+
+# ---------------------------------------------------------------------------
+# #667 review round 2 (two more Blocking findings and the rolled-in nits). Same shape: every pin has its
+# own mutant.
+# ---------------------------------------------------------------------------
+# B1: a spent arbitration hold must be able to end the drain (the waiver itself is pinned in
+# test-drain-terminal-states.sh, where STALLED's text is read whole).
+mutant_pin "$rounds_take" 'In .dispatch-ready. a spent hold is a STALLED entry that waives in-flight zero' \
+    's/a spent hold is a STALLED entry that waives in-flight zero//' \
+    "take-it: a spent arbitration hold is a STALLED entry that waives in-flight zero"
+mutant_pin "$retry_review_dr" 'a spent hold is a STALLED entry that waives in-flight zero .§7.' \
+    's/a spent hold is a STALLED entry that waives in-flight zero//' \
+    "dispatch-ready: the Blocking bullet points at the STALLED waiver for a spent hold"
+mutant_pin "$arch_flat" 'is a held root that waives STALLED.s in-flight zero beside the ownership hold.s' \
+    's/waives STALLED.s in-flight zero//' \
+    "ARCHITECTURE: a spent arbitration hold waives STALLED's in-flight zero"
+mutant_forbid "$arch_flat" 'so it can never be an eternal tick' \
+    'so it can never be an eternal tick' \
+    "ARCHITECTURE no longer claims a held root alone prevents an eternal tick"
+
+# B2: the carried-finding answers are part of the report, never absent from a clean round.
+mutant_pin "$orch_flat" '### Carried findings .present only when the caller passed carried_findings; then always.' \
+    's/### Carried findings .present only when the caller passed carried_findings; then always.//' \
+    "the orchestrator's full template carries a Carried findings block"
+mutant_pin "$orch_flat" 'When .carried_findings. is present the compact clean form is never used' \
+    's/the compact clean form is never used//' \
+    "the orchestrator never uses the compact clean form when findings were carried"
+mutant_pin "$orch_flat" 'a report is complete only with its .### Carried findings. block holding one line for every carried id' \
+    's/a report is complete only with its .### Carried findings. block holding one line for every carried id//' \
+    "report-only recovery's completeness test requires the Carried findings block"
+mutant_pin "$orch_flat" 'a missing block always means .no answer. and never .all fixed.' \
+    's/a missing block always means .no answer. and never .all fixed.//' \
+    "a missing Carried findings block means no answer, never all fixed"
+
+# n1: never two writers on one branch.
+mutant_pin "$rounds_take" 'Never two writers on one branch.{1,3}: before any round or redispatch, confirm the earlier worker is stopped or gone' \
+    's/Never two writers on one branch//' \
+    "take-it: the earlier worker is confirmed stopped before any round or redispatch"
+mutant_pin "$rounds_take" 'A worker that cannot be confirmed stopped holds the round, reported by name, and is never raced' \
+    's/and is never raced//' \
+    "take-it: a worker that cannot be confirmed stopped holds the round"
+mutant_pin "$retry_review_dr" 'the earlier worker must be confirmed stopped or gone.{1,3}, by .take-it. §6.s one-writer rule' \
+    's/the earlier worker must be confirmed stopped or gone//' \
+    "dispatch-ready points at take-it's one-writer rule"
+
+# n2/n3: carried findings are located relative to the override head; they ride in the plan context.
+mutant_pin "$orch_flat" 'locate it relative to the .base_override. head, then follow it into .HEAD.' \
+    's/then follow it into .HEAD.//' \
+    "the orchestrator locates a carried finding at the override head and follows it into HEAD"
+mutant_pin "$orch_flat" '.carried_findings. rides in the plan.s .context. field, and an .aggregate-only. pass runs this same step over it' \
+    's/and an .aggregate-only. pass runs this same step over it//' \
+    "carried_findings rides in the plan context and aggregate-only runs the carried step"
+mutant_pin "$orch_flat" '.carried_findings. .the caller.s list, or null.' \
+    's/the caller.s list, or null//' \
+    "the plan's context field lists carried_findings"
+mutant_pin "$orch_flat" 'Two callers pass it: the nit roll-in .{1,200} and every fix round of' \
+    's/Two callers pass it//' \
+    "the orchestrator names both callers of base_override"
+mutant_forbid "$orch_flat" 'No other dispatch passes it|the one exception, with no silent fallback: .take-it. §6 defines the roll-in' \
+    'No other dispatch passes it; the agent site and send-it never do.' \
+    "the orchestrator no longer claims only the nit roll-in passes base_override"
+mutant_forbid "$arch_flat" 'reviews only a nit roll-in delta' \
+    'when a coordinator reviews only a nit roll-in delta' \
+    "ARCHITECTURE no longer claims only the nit roll-in passes base_override"
+
+# n4: a refused DESCOPE filing holds the merge.
+mutant_pin "$rounds_take" 'A refused .DESCOPE. filing holds the merge and is retried next tick' \
+    's/holds the merge and is retried next tick//' \
+    "take-it: a refused DESCOPE filing holds the merge and is retried next tick"
+mutant_pin "$rounds_take" 'Only a filed-and-linked follow-up releases it' \
+    's/Only a filed-and-linked follow-up releases it//' \
+    "take-it: only a filed-and-linked follow-up releases a DESCOPE merge"
+mutant_pin "$rounds_take" 'in the hold record with .cause. .filing-refused. and the same three tries, after which it is the same held root' \
+    's/the same three tries//' \
+    "take-it: a refused DESCOPE filing is counted in the hold record and ends as the same held root"
+mutant_pin "$rollin_take" '\(A .DESCOPE. filing is the exception and holds the merge, as the verdict table says.\)' \
+    's/is the exception and holds the merge//' \
+    "take-it: the nit filing rule excepts DESCOPE, which holds the merge"
+
+# n7/n8: the marker hash is defined; auto-filed follow-ups never feed unattended dispatch.
+mutant_pin "$rollin_take" 'the hash is the sha256 of the claim text lowercased with every run of whitespace collapsed to one space and the ends trimmed, first 12 hex characters' \
+    's/first 12 hex characters//' \
+    "take-it defines the follow-up marker hash"
+mutant_pin "$rollin_take" 'An auto-filed follow-up is filed without .ready.{1,3} .and onto the board.s Backlog column when .board:. is set., so unattended filing never feeds unattended dispatch' \
+    's/never feeds unattended dispatch//' \
+    "take-it files follow-ups without ready, so unattended filing never feeds unattended dispatch"
+mutant_pin "$(flatten "$AGENTSMD")" 'filed without .ready., it never feeds unattended dispatch' \
+    's/filed without .ready., //' \
+    "AGENTS.md states auto-filed follow-ups are filed without ready"
+mutant_pin "$arch_flat" 'auto-filed follow-ups are filed without .ready., so unattended filing never feeds unattended dispatch' \
+    's/filed without .ready.//' \
+    "ARCHITECTURE states auto-filed follow-ups are filed without ready"
+
+# n10: every list of the shared allowance's members includes the infra redispatch.
+mutant_pin "$(flatten "$AGENTSMD")" 'report-only resume, an infra failure.s one redispatch' \
+    's/, an infra failure.s one redispatch//' \
+    "AGENTS.md lists the infra redispatch among the shared allowance's members"
+
+# n5: the numeric-cap ban is a family and best-effort; these four spellings slipped past it.
+for m in 'A third Blocking round blocks.' 'The worker may give up after five rounds.' \
+         'Stop after the second fix round.' 'After the third round, label the issue `blocked`.'; do
+    mutant_forbid "$takeit_flat" "$ROUND_CAP_RE" "$m" "take-it: the round-cap family catches: $m"
+done
 
 # The docs say what the skills now do.
 agents_flat="$(flatten "$AGENTSMD")"
@@ -2362,7 +2474,7 @@ assert_has "$recovery" \
 # treating a fragment as clean or replaying review work. These assertions cover
 # the observable accepted/rejected shapes and the bounded recovery operation.
 assert_has "$recovery" \
-    'The compact clean form is complete and needs no recovery.' \
+    'The compact clean form is complete and needs no recovery, except that when the run carried' \
     "normal and compact clean report shapes do not trigger report recovery"
 assert_has "$recovery" \
     'including an explicit `Base: unresolved (<why>)` degraded base if necessary' \
@@ -2580,8 +2692,9 @@ assert_has "$send_recovery" \
 retry_checks="$(bullet_slice "$DISPATCH" '- **Failed or red PRs**')"
 retry_review="$(bullet_slice "$DISPATCH" '- **PRs carrying a Blocking review finding**')"
 # #667: a failed check the PR caused is a Blocking finding in the uncapped rounds, so the failed-check
-# bullet no longer schedules a retry and no longer reserves the allowance; only the lost-review path
-# (NO REPORT / SKIPPED) still does, inside the Blocking bullet.
+# bullet reserves the allowance only for the infra or platform path it keeps (retry and probe, then the
+# one redispatch); a PR-caused failure is a round and never reaches that reservation. The lost-review
+# path (NO REPORT / SKIPPED) reserves it too, inside the Blocking bullet.
 assert_has "$retry_checks" 'persist `recovery_used=1 recovery=pending`' \
     "failed-check bullet reserves the shared allowance for the infra path it keeps (a PR-caused failure is a round and never reaches it)"
 assert_has "$retry_review" 'recovery_used=1 recovery=pending' \

@@ -45,11 +45,12 @@ Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEA
 
 ### Optional: a caller-supplied `base_override`
 
-A coordinator that has already reviewed a PR and then rolled nits into it (`take-it` §6, **Nit roll-in**)
-may hand you `base_override`: the full commit id it reviewed. It narrows the review to the roll-in
-delta. It is an input to this step only, and **absent means nothing changes**: the derivation above,
-the report and the identity below are exactly what they were. No other dispatch passes it; the agent
-site and `send-it` never do.
+A coordinator that has already reviewed a PR and then pushed more work to it may hand you
+`base_override`: the full commit id it reviewed. It narrows the review to that delta. Two callers
+pass it: the nit roll-in (`take-it` §6, **Nit roll-in**) and every fix round of **Review rounds and
+arbitration**, where the delta review of a round's new head also carries `carried_findings` (below).
+It is an input to this step only, and **absent means nothing changes**: the derivation above, the
+report and the identity below are exactly what they were. The agent site and `send-it` never pass it.
 
 When it is present, do not derive a base. First check its spelling, before any `git` call: it must
 match `^[0-9a-f]{40}$` or `^[0-9a-f]{64}$`, a full object id and nothing else. That rules out `HEAD`, a
@@ -79,22 +80,30 @@ smaller changeset, and the report header names the override on its `Base:` line.
 ### Optional: caller-supplied `carried_findings` (override mode)
 
 A coordinator running a fix round (`take-it` §6, **Review rounds and arbitration**) hands you, with
-`base_override`, the round's open findings as `carried_findings`: a list of file:line and claim.
+`base_override`, the round's open findings as `carried_findings`: a list of `id`, file:line and claim.
 **Absent means nothing changes.** The delta alone cannot say whether a finding raised against code the
 push never touched was fixed, and Step 5 drops a finding with no causal link to a changed hunk, so
 without this step an unresolved finding comes back as a clean delta and merges with no verdict.
 
 With `carried_findings` present, run one more step between Step 4 and Step 5, in this agent and not in
-a specialist: open each cited `file:line` at `HEAD`, as it now stands, and answer `resolved` (the cited
-code no longer has the problem, or the claim no longer holds) or `unresolved` (it still does), citing
-the `file:line` you read. Never answer `resolved` on the strength of the diff alone, and a carried
-finding you did not answer counts as `unresolved`. These findings are **exempt from Step 5's
-changed-hunk drop and its confidence floor** (they were raised against code that may be untouched by
-construction); Step 5's verification of the claim against the cited line still applies. An
-`unresolved` carried finding is Blocking and is counted in the tally. Put a **Carried findings** list
-directly under the report header, one line each: `- <file:line> — <claim> → resolved|unresolved
-(<file:line read>)`. The caller clears a carried finding only on an explicit `resolved`. It is part of
-the changeset's context: a recovery call that changes it is a changed input, never a reuse.
+a specialist: for each one, **locate it relative to the `base_override` head, then follow it into
+`HEAD`**. The fix push shifts lines, so open the cited `file:line` at the override head, find the claim
+there, and follow that code through the delta to where it now sits; a cited line read at `HEAD`
+alone is the wrong line. Then answer `resolved` (the code no longer has the problem, or the claim no
+longer holds) or `unresolved` (it still does), citing the `file:line` you read. **A carried finding
+that cannot be located or checked is `unresolved`, never dropped by Step 5**, and so is one you did
+not answer. Never answer `resolved` on the strength of the diff alone. These findings are **exempt
+from Step 5's changed-hunk drop and its confidence floor** (they were raised against code that may be
+untouched by construction); Step 5's verification of the claim against the cited line still applies.
+An `unresolved` carried finding is Blocking and is counted in the tally.
+
+The answers are part of the report. The full template carries a `### Carried findings` block with one
+line per carried finding: `- <id> — resolved|unresolved — <file:line read>`. **When `carried_findings`
+is present the compact clean form is never used**: a round with everything resolved still returns the
+full template, with the block and `No blocking findings` under Blocking, so a missing block always means
+"no answer" and never "all fixed". The caller clears a carried finding only on an explicit
+`resolved`. `carried_findings` rides in the plan's `context` field, and an `aggregate-only` pass runs
+this same step over it: a recovery call that changes it is a changed input, never a reuse.
 
 ### Changeset identity for recovery
 
@@ -253,7 +262,7 @@ with `kind: "review-fanout-plan"` and these required fields:
 | --- | --- |
 | `reason` | Observed nested-dispatch denial, unusable work, changed input, or explicit plan-only request; never claim a probe ran when it did not. |
 | `changeset` | The identity from Step 1, plus `untracked_encoding` describing the manifest encoding actually used. |
-| `context` | `scope` (original one-line statement), `review_surfaces` (original caller-supplied map or null), and `validation_failures` (map-validation causes, empty when valid); retain them for the integration pass too. |
+| `context` | `scope` (original one-line statement), `review_surfaces` (original caller-supplied map or null), `carried_findings` (the caller's list, or null), and `validation_failures` (map-validation causes, empty when valid); retain them for the integration pass too. |
 | `surfaces` | One row per selected surface: `surface`, `reviewer` from the shipped Step 2 table, and `brief` containing exactly the existing seven items. Include every selected surface, not just missing ones. |
 | `results` | Actual result records for attempted work, including successful same-changeset results and failures; an unattempted surface has no result, not an invented empty one. |
 
@@ -271,7 +280,9 @@ its `## PR review` header, Base/changeset context (including an explicit `Base: 
 (<why>)` degraded base if necessary), Surfaces ledger, and complete Blocking, Nits, Clean and
 integration content — or Step 5's compact clean form, with its header, Base and Surfaces ledger
 followed by `No blocking findings, no nits. Proceed to the PR body.` The
-compact clean form is complete and needs no recovery. A correction, tally, partial prose,
+compact clean form is complete and needs no recovery, except that when the run carried
+`carried_findings` it is never complete: a report is complete only with its `### Carried findings`
+block holding one line for every carried id. A correction, tally, partial prose,
 `review-fanout-plan`, message, file pointer, or a summary that does not enumerate the report's
 findings is not a complete report and never counts as clean. A `review-fanout-plan` is a control
 result for Caller recovery below, not report-only recovery. A `## PR review — unusable input` reply
@@ -411,9 +422,12 @@ Surfaces: code ✓ / security ✓ / tests ! / infra – / ci – / deps – / ob
 
 ### Clean
 - <surfaces and integration checks that were actually reviewed and had nothing to report>
+
+### Carried findings (present only when the caller passed carried_findings; then always)
+- <id> — resolved|unresolved — <file:line read>
 ```
 
-With nothing to report at all:
+With nothing to report at all, and no `carried_findings` (with them, use the full template above):
 
 ```text
 ## PR review — clean

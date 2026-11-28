@@ -674,7 +674,7 @@ refreshes it.
 1. **Every round is numbered and recorded durably, before it is dispatched.** Write the **round
    record**: an issue comment whose entire body is JSON, `kind: "take-it-review-round"`, `repo`,
    `issue`, `branch`, `attempt_id`, `pr` (null before a PR exists), `round` (1, 2, 3 and on),
-   `findings` (each as its file:line and its claim), `head` (the full commit id the findings were
+   `findings` (each as its `id` (`f1`, `f2`, …), its file:line and its claim), `head` (the full commit id the findings were
    raised against), `sent_at` (UTC, when the round was sent to the worker) and `disputed` (null, or
    the worker's reason once it disputes). Mirror it in the PR body as `review_round=<n>` and confirm
    the write. Read it back like `recovery_used`: author = the `gh api user` principal or a verified
@@ -704,12 +704,18 @@ refreshes it.
 2. **Every round must produce a new head, and that head gets a delta review that carries the
    round's findings.** Send the findings, the round number and the earlier rounds' history to the
    same worker by its manifest `agent_id` (SendMessage on Claude Code), or redispatch a worker on
-   the same branch when it cannot be resumed, with §5's tier binding and isolation rules. Then
+   the same branch when it cannot be resumed, with §5's tier binding and isolation rules. **Never
+   two writers on one branch**: before any round or redispatch, confirm the earlier worker is
+   stopped or gone. On Claude Code that is its task finished or stopped (a task still running is
+   stopped first); elsewhere `checkout-guard.sh status` reports no `ownership=active` and the
+   branch's last push is more than 30 minutes old. A worker that cannot be confirmed stopped holds
+   the round, reported by name, and is never raced (a healthy worker that merely ran past 30
+   minutes must not gain a second writer through the dispute path). Then
    review the new head through `base_override` set to the round record's `head`, under the **Delta
    base rule** in the Nit roll-in below (the round record's `head` takes the cap record's
    `reviewed_head` place; the ancestor test and the no-merge-commit test apply unchanged, and a
    merge in the range means a full review against the derived default branch). **The delta-review
-   brief carries the round record's open findings** (each file:line and claim) as
+   brief carries the round record's open findings** (each `id`, file:line and claim) as
    `carried_findings`, because the delta alone cannot show a finding raised against code the push
    never touched. The shipped orchestrator answers each one `resolved` or `unresolved` in its
    **Carried findings** list (its override-mode step, exempt from Step 5's changed-hunk drop). **A
@@ -747,13 +753,18 @@ refreshes it.
    | --- | --- |
    | `FIX` | Runs another round using the approach the verdict names. |
    | `ACCEPT` | Records the finding as a known and accepted limit, with the wording the verdict gives (README or PR body), and continues to merge. |
-   | `DESCOPE` | Files a follow-up issue for the descoped part, keeps `Closes #N`, links the follow-up from the PR body and from a comment on #N, and continues. The merge closes #N and the follow-up carries the remainder. |
+   | `DESCOPE` | Files a follow-up issue for the descoped part, keeps `Closes #N`, links the follow-up from the PR body and from a comment on #N, and continues once it is filed and linked. The merge closes #N and the follow-up carries the remainder. |
    | `REJECT` | Records the verdict's reasoning on the PR, drops the finding, and continues. |
    | `ESCALATE` | Labels the issue `blocked` for the operator. Only for a product or policy decision, or for an action that is already operator-only (destructive, outward-facing, irreversible). |
 
    `DESCOPE` keeps the closing keyword on purpose: a PR that says `Part of #N` merges and leaves #N
    open, claimed `in-progress` and `@me` for ever, and the drain could never reach a terminal
    state. This deviates from #667's text, which had `DESCOPE` rewrite the line to `Part of #N`.
+   **A refused `DESCOPE` filing holds the merge and is retried next tick** (the filer's exit 2 is
+   documented as safe to retry; its burst rail is the same refusal): a merge that went ahead would
+   close #N with the descoped Blocking remainder tracked nowhere. Only a filed-and-linked follow-up
+   releases it. The refusal is counted like an arbitration that cannot run, in the hold record with
+   `cause` `filing-refused` and the same three tries, after which it is the same held root.
 
    **A return with no verdict, two verdicts, a name outside the set, or no file:line evidence is
    not a verdict**, and never reads as `ESCALATE` or as consent. An arbitration that cannot be
@@ -767,7 +778,11 @@ refreshes it.
    **arbitration hold** is a held root: the PR is held from merge, the issue is not labelled
    `blocked` (it is no `ESCALATE`), and the report names it by shape,
    `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist`, until the cause is
-   resolved. A restarted drain makes one more attempt, and a verdict that lands clears the hold.
+   resolved. **In `dispatch-ready` a spent hold is a STALLED entry that waives in-flight zero** (its
+   §7 states the waiver beside the ownership hold's), because the issue stays claimed and not
+   `blocked` and would otherwise keep the drain ticking for ever; two identical ticks end the loop
+   and name the resume command. A restarted drain makes one more attempt, and a verdict that lands
+   clears the hold.
    **Write the verdict as its own durable record
    before acting on it**: an issue comment whose entire body is JSON, `kind: "take-it-arbitration"`,
    `repo`, `issue`, `branch`, `attempt_id`, `pr`, `round`, `trigger` (`persist`, `oscillate`,
@@ -888,13 +903,19 @@ runs this same step and points here for its definition.
    this skill, #667, standing in for the github-issues preview-then-confirm rule on exactly this
    path and the `DESCOPE` verdict's): the **same repo** as the claimed issue only; only the bins
    above (high / medium and medium / high, or a `DESCOPE`); and never a security-labelled or
-   security-surface finding, which is not filed as a public issue at all (`SECURITY.md`): a
-   high-impact security nit is listed for the operator in the §7 report instead, and is not filed.
-   Every auto-filed follow-up carries the marker `take-it-followup-source: #<N>/<file>:<hash of
-   the claim>` (N the claimed issue), so a re-run or a later tick finds it and files nothing twice.
-   When `file-or-link-issue.sh` exits 2, or the batch would pass its burst rail (more than 5 new
-   issues in one run), an unattended tick files nothing, records the refusal in the PR body, names
-   it in the report and continues; it never asks a human to approve a filing mid-tick.
+   security-surface finding, which is not filed as a public issue at all (`SECURITY.md`): every
+   security nit that is not rolled in, at any impact, is listed for the operator in the §7 report
+   instead, and is not filed. Every auto-filed follow-up carries the marker
+   `take-it-followup-source: #<N>/<file>:<hash of the claim>` (N the claimed issue; the hash is the
+   sha256 of the claim text lowercased with every run of whitespace collapsed to one space and the
+   ends trimmed, first 12 hex characters), so a re-run or a later tick finds it and files nothing
+   twice. **An auto-filed follow-up is filed without `ready`** (and onto the board's Backlog column
+   when `board:` is set), so unattended filing never feeds unattended dispatch: a human or
+   `groom-backlog` promotes it. When `file-or-link-issue.sh` exits 2, or the batch would pass its
+   burst rail (more than 5 new issues in one run), an unattended tick files no nit, records the
+   refusal in the PR body, names it in the report and continues; it never asks a human to approve a
+   filing mid-tick. (A `DESCOPE` filing is the exception and holds the merge, as the verdict table
+   says.)
 2. **Send the roll-in set once**, to the same worker by its manifest `agent_id` (SendMessage on Claude
    Code; a finished worker resumes from its transcript). Before sending, write the **cap record**: an
    issue comment whose entire body is JSON, `kind: "take-it-nit-rollin"`, `repo`, `issue`, `branch`,

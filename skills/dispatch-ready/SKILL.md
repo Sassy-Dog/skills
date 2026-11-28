@@ -401,7 +401,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   that cannot be dispatched, or returns no verdict, is counted** in `take-it` §6's hold record
   (`arbitration_hold=<cause>/<tries>` in the PR body): while `tries` is below 3 the next attempt is
   this loop's action, and at 3 it is a held root, reported as
-  `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist`. **Never park
+  `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist`, and a spent hold is a
+  STALLED entry that waives in-flight zero (§7). **Before any new round or redispatch on a branch,
+  the earlier worker must be confirmed stopped or gone**, by `take-it` §6's one-writer rule: a
+  worker past the 30 minutes is a dispute, never licence to start a second writer. **Never park
   it back in Ready**: Ready must stay synonymous with dispatchable. On omp it goes through §5's
   isolation check and its in-§2 dispatch.
   **A lost or skipped review is not a finding, and it keeps the shared allowance's ONE
@@ -1129,9 +1132,14 @@ moment the checkout it names ticks — subject there to the §4 filters this tic
 In-flight zero AND dispatched zero this tick AND **nothing this loop is permitted to advance**,
 over a **non-empty** held set — every Ready item held by a §4 filter or a verified §5 execution-safety gate, and every open PR held by the
 discriminator below. All four conjuncts are stated here rather than corrected further down, for the
-reason COMPLETE's condition now states all of its own. One waiver, also stated here: an ownership
+reason COMPLETE's condition now states all of its own. Two waivers, also stated here: an ownership
 hold or a refused acquisition (§7's opening) waives in-flight zero, because no in-flight item can
-advance without the checkout ownership the tick lacks. Nothing
+advance without the checkout ownership the tick lacks; and a **spent arbitration hold** (an issue
+whose only owed action was an arbitration that has used its three tries, or a refused `DESCOPE`
+filing that has) is not counted as in-flight for that first conjunct, because its PR is already in
+the held set by row 3 and nothing this loop does can advance it, while the issue stays claimed and
+not `blocked` (only `ESCALATE` ends a finding in `blocked`). Other in-flight work still prevents
+STALLED, so the waiver covers exactly the hold's own issue. Nothing
 this loop controls can change GitHub state before the next tick: no PRs it may merge, no agents
 working, and dependency holds only resolve when a dep closes — with nothing in flight, only
 external or human action closes one. The loop is stalled, not idle; "Ready isn't empty" alone must
@@ -1318,6 +1326,7 @@ DRAIN STALLED — nothing dispatchable, nothing in flight, and nothing this loop
   #103 #104 #105 #106 #108 → chain to #102 (parked in Backlog: awaiting planning session)
   #22 → blocked label (dispatch-ready: 2 failed attempts — CI check needs a human call)
   PR #279 (#273) → open, issue blocked (arbitration ESCALATE — a secret-guard policy decision)
+  PR #281 (#277) → arbitration hold (undispatchable ×3, round 2, trigger persist) — fix the cause (the S-Tier model or role), then restart the drain
 Loop <id> cancelled — resolve the gate(s), then restart the drain.
 ```
 
