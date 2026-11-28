@@ -93,16 +93,18 @@
 #        Cargo.lock         an allow-list of cargo's line shapes, `source =`
 #                           values minus revision, and URL hosts; also run over
 #                           real Cargo.lock files.
-#      Hostile cases are built in the third clone as above: 62 rejected cases
-#      (seven path-level, 55 content, each asserted by its REASON, not just by
-#      rejection), three benign patches that must still apply (every lane type;
+#      The gate prints its own counts (rejected, benign, mutants), derived from
+#      this file, and this header states none, so none can drift.
+#      Hostile cases are built in the third clone as above: rejected cases
+#      (the first few path-level, the rest content, each asserted by its
+#      REASON, not just by rejection), the benign patches that must still apply (every lane type;
 #      object-form workspaces; versions bumped as the REAL tools wrote them,
 #      captured from bun 1.4.4, npm 11.20 and cargo 1.96 on public packages in
 #      scripts/fixtures/deps-cadence/real/, plus a pub lockfile hand-written to
 #      pub's format with sdk and transitive entries, since no Flutter is
-#      installed), and a no-jq case. 43 mutants (mutate_content) each name the
+#      installed), and a no-jq case. The mutate_content mutants each name the
 #      case that must kill them. Cost: the unmutated run takes about a minute,
-#      so a generic mutation re-runs only the seven path-level cases and a
+#      so a generic mutation re-runs only the path-level cases and a
 #      content mutant only the cases its needle names; shard 0 alone runs the
 #      unmutated content cases. Not caught, by design and stated in the
 #      template: a lockfile package swapped within an allowed host, a git
@@ -1731,13 +1733,24 @@ hostile_checks() {
         'a Cargo.lock source key quoted@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|\"source\" = \"registry+https://evil.example/i\"|" Cargo.lock'
         'a Cargo.lock source with extra spaces@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|source  =  \"registry+https://evil.example/i\"|" Cargo.lock'
     )
+    # The counts the header refers to are printed, derived from this file, so
+    # they cannot drift: the array, the invocations below, the mutant lines.
+    local legacy_n=7
+    if [ "$MUT_SHARD" -eq 0 ] && [ "$in_mut" -eq 0 ]; then
+        local n_root n_ok
+        n_root="$(grep -c 'vreject "\$validate" "\$root"' "$0")"
+        n_ok="$(grep -c 'vaccept "\$validate"' "$0")"
+        printf 'hostile cases: %d rejected (%d in the array, %d root; the first %d are path-level), %d benign, 1 no-jq; mutants: %d mutate_content, %d mutate\n' \
+            $((${#cases[@]} + n_root)) "${#cases[@]}" "$n_root" "$legacy_n" "$n_ok" \
+            "$(grep -c '^mutate_content ' "$0")" "$(grep -c '^mutate ' "$0")" > "$WORK/hostile.counts"
+    fi
     local c name reason script i=0
     for c in "${cases[@]}"; do
         name="${c%%@@*}"; reason="${c#*@@}"; script="${reason#*@@}"; reason="${reason%%@@*}"
         i=$((i + 1))
         # The first seven are the path-level cases (every mutation of any
         # template line re-runs them); the rest are the content cases.
-        if [ "$i" -le 7 ]; then cc_want "$name" legacy || continue; else cc_want "$name" content || continue; fi
+        if [ "$i" -le "$legacy_n" ]; then cc_want "$name" legacy || continue; else cc_want "$name" content || continue; fi
         vreject "$validate" "$base" "$lanes4" "$name" "$reason" "$script" || rc=1
     done
     # A root bun lane (object-form workspaces, a recursive glob, a negation).
@@ -1804,6 +1817,7 @@ for f in plain workspaces color no-lockfile; do
 done
 
 if out="$(check "$TRIGGER" "$IMPL")"; then
+    [ ! -r "$WORK/hostile.counts" ] || ok "$(cat "$WORK/hostile.counts")"
     ok "templates hold every rule (one credential, failing refresh fails, no --label, lane-only staging, local-only trigger, plain --auto, exact-pin report)"
 else
     while IFS= read -r l; do bad "$l"; done <<<"$out"
