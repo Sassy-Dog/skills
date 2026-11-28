@@ -153,7 +153,7 @@ git rev-parse HEAD
 git status --porcelain
 ```
 
-Then dispatch **one** worker at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), with `isolated: true` on its `task` entry. **A `task` entry without `isolated: true` runs on the shared tree whatever the settings read**, so a probe without it measures nothing (#452's runs 3 and 4 probed the coordinator's own tree that way). Its prompt, self-contained:
+Then dispatch **one** worker at `B-Tier` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), with `isolated: true` on its `task` entry. **A `task` entry without `isolated: true` runs on the shared tree whatever the settings read**, so a probe without it measures nothing (#452's runs 3 and 4 probed the coordinator's own tree that way). Its prompt, self-contained:
 
 > Read-only probe. Run `pwd -P` and `git rev-parse --show-toplevel`, then `git branch --show-current`. Change nothing, create no branch, commit nothing and push nothing. Reply with exactly those three outputs.
 
@@ -206,7 +206,7 @@ does not accept `@task` as `--model` (it reports `Model "@task" not found`). Rea
 Report the default-role fallback explicitly; never invent a provider/model or write settings.
 A missing/non-string selector is `serial runner model unresolved`, before any claim.
 Use the foreground CLI below, not an asynchronous `task` or detached shell. This remains the
-serial worker, a dispatch at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`);
+serial worker, a dispatch at `B-Tier` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`);
 on this CLI transport the role resolves to the concrete `TASK_MODEL` selector above.
 
 1. Hold the acquired token. Before each launch confirm `git status --porcelain` is empty;

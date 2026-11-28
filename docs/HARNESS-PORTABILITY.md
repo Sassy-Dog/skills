@@ -38,7 +38,7 @@ gates this statement; it is a design fact, not a measured result.
 
 | # | Mechanism | Files | Reproducing command |
 | --- | --- | --- | --- |
-| 1 | Agent tool dispatch (every site that binds a tier) | 7 | ``git grep -l -F 'tier `' -- skills agents`` |
+| 1 | Agent tool dispatch (every site that binds a tier) | 8 | ``git grep -l -F -e '-Tier` (' -- skills agents`` |
 | 2 | `subagent_type` plugin-namespaced agent names | 2 | `git grep -l 'subagent_type' -- skills agents` |
 | 3 | `isolation: "worktree"` | 4 | `git grep -l 'isolation: "worktree"' -- skills agents` |
 | 4 | Skill delegation by namespaced name (`Skill: sassy-dog:<name>`, "invoke `sassy-dog:<name>`", "delegate to `sassy-dog:<name>`") | 10 | `git grep -l -E -e 'Skill: sassy-dog:' -e '[Ii]nvoke .sassy-dog:' -e '[Dd]elegates? to .sassy-dog:' -- skills agents` |
@@ -938,7 +938,7 @@ Each entry gives what the plugin uses the mechanism for, then what omp documents
 **Used for.** Fan-out. `take-it` and `dispatch-ready` dispatch implementation workers and the review
 agent, `send-it` dispatches the review agent, `assess-it` fans out reviewers,
 `pr-review-orchestrator` fans out to the nine reviewers, and `whats-on-fire`'s cloud fallback runs
-org-sweep subagents. The seven files are exactly the sites in `scripts/test-model-tiers.sh`'s
+org-sweep subagents. The eight files are exactly the sites in `scripts/test-model-tiers.sh`'s
 `required` table. The command keys on the inline tier binding, because the wording around a
 dispatch varies (`Agent tool`, `Agent call`, `Agent(...)`, or none) and a grep for the tool name
 misses `send-it` and `dispatch-ready`. The contract is "issue every call in a single message so they run

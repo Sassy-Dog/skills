@@ -33,6 +33,11 @@
 #   The collection-scope naming sweep dropped -it: plate-it -> survey-work,
 #     groom-it -> groom-backlog (nee fill-it), drain-it -> dispatch-ready,
 #     clean-it -> tidy-repo.
+#   The model tiers (issue #668): astra -> S-Tier, sol -> A-Tier, terra ->
+#     B-Tier, luna -> C-Tier. These four are ordinary words (sol is a prefix of
+#     solution), so the guard matches each one only WRAPPED IN BACKTICKS, the
+#     one form a tier was ever written in. The guarded entry therefore carries
+#     its backticks, and a bare astra, terra or sol in prose is out of scope.
 #
 # EXCLUSIONS ARE PER NAME, never one shared union (the #610 and #612 lesson): a
 # name is sanctioned in exactly the files that must still spell it out. A union
@@ -83,6 +88,10 @@ GUARDED_NAMES=(
     'groom-it'
     'drain-it'
     'clean-it'
+    '`astra`'
+    '`sol`'
+    '`terra`'
+    '`luna`'
 )
 
 # legacy_allow NAME — sets ALLOW to NAME's sanctioned paths (a trailing / is a
@@ -210,6 +219,29 @@ legacy_allow() {
                 'skills/setup-config/SKILL.md'
                 'skills/setup-config/references/migrate-mode.md'
                 'skills/setup-config/references/update-mode.md'
+                'scripts/check-legacy-names.sh'
+            ) ;;
+        # The four old tier names (#668), each spelled with its backticks. The one
+        # sanctioned file is the history note in docs/MODEL-TIERS.md, which says
+        # what the tiers used to be called; nothing else may use them.
+        '`astra`')
+            ALLOW=(
+                'docs/MODEL-TIERS.md'
+                'scripts/check-legacy-names.sh'
+            ) ;;
+        '`sol`')
+            ALLOW=(
+                'docs/MODEL-TIERS.md'
+                'scripts/check-legacy-names.sh'
+            ) ;;
+        '`terra`')
+            ALLOW=(
+                'docs/MODEL-TIERS.md'
+                'scripts/check-legacy-names.sh'
+            ) ;;
+        '`luna`')
+            ALLOW=(
+                'docs/MODEL-TIERS.md'
                 'scripts/check-legacy-names.sh'
             ) ;;
         *) ALLOW=('scripts/check-legacy-names.sh'); return 1 ;;

@@ -87,7 +87,7 @@ attach is the only route to a public repo's workflow runs.
    Skipping this step does not fail loudly — an unattached repo simply comes back empty, which
    reads as "healthy" and is exactly the silent gap this skill exists to prevent.
 3. **Fan out — bounded.** The per-repo pulls are chatty — dozens of raw workflow-run payloads would
-   swamp the coordinating context. Dispatch parallel subagents at tier `terra` (Claude Code:
+   swamp the coordinating context. Dispatch parallel subagents at `B-Tier` (Claude Code:
    `model: "sonnet"` · omp: `model: "@task"`), each owning a batch of repos, each
    returning ONLY the compact per-repo JSON mapped below and each writing to its own distinct
    scratchpad path. Issue the batch in a single message with multiple Agent calls, **at most 3 in

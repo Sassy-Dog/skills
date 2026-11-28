@@ -42,7 +42,7 @@
 #      overlay-only settings can never pass, and no fenced command anywhere in
 #      take-it runs `omp config set`: the profile is never written to make a
 #      check pass.
-#   5. The probe worker is dispatched at tier `terra` and compares `pwd` and
+#   5. The probe worker is dispatched at `B-Tier` and compares `pwd` and
 #      `git rev-parse --show-toplevel` with the coordinator's; the same path
 #      means isolation is off. (The tier binding's presence is also counted by
 #      test-model-tiers.sh's `required` table; this is the behavioural half.)
@@ -297,8 +297,8 @@ for rel, raw in (("skills/take-it/SKILL.md", SKILL_RAW),
 need("the doc forbids `omp config set`", ref, "Never run `omp config set`", 4)
 
 # 5. probe
-need("the probe is dispatched at tier terra",
-     ref, 'tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`)', 5)
+need("the probe is dispatched at B-Tier",
+     ref, '`B-Tier` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`)', 5)
 need("the probe reports pwd", ref, "`pwd -P`", 5)
 need("the probe reports the top level", ref, "git rev-parse --show-toplevel", 5)
 need("the same path means isolation is off", ref, "means isolation is off", 5)
