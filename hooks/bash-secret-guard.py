@@ -228,7 +228,7 @@ DOPPLER_MSG = (
     "`git commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release "
     "create|edit`, and the body of a quoted-delimiter `--body-file - <<'EOF'` / `-F - <<'EOF'` heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes, "
     "`git add|status`, `cd` and those message commands with plain options (no `$(`, `$`, backtick, backslash, `#`, parentheses, `-e`/`--amend`, no `export` or `git config`); a message "
-    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. "
+    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied."
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "

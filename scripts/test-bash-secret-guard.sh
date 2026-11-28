@@ -479,7 +479,12 @@
 # emitted text, replays EVERY backticked span that names the CLI (including a cd-prefixed or bash -c
 # wrapped one) plus the advertised run sub-forms (--no-fallback, --only-secrets, -p/-c before run), rejects
 # any offered get/download/substitute span with a redirect, --output or a path, and pins its own counts
-# (8 offered commands, 42 checks). Its TWENTY-TWO committed mutants each go red on a scratch copy (a
+# (8 offered commands, 43 checks). It also compares the hook's exact stderr for three denied commands (CLI,
+# credential URL, both) byte for byte with scripts/fixtures/secret-guard-deny-golden.txt: the word lists and
+# replays cannot see a reworded escape hint, a form in plain prose, or a trailing space. A failing golden
+# tells the editor to re-read the #666 decision before updating it; three mutants are marked GOLDEN ONLY
+# and each is additionally proved to pass every other check (golden path "-" compares to itself).
+# Its TWENTY-FIVE committed mutants each go red on a scratch copy (a
 # Traceback counts as red): either override or the word bypass or a README pointer in a message, the ask
 # line missing, reworded, printed per bullet or before the bullets, the file form back in three spellings,
 # --only-names before run, a denied form offered bare, behind cd and inside bash -c, --no-fallback no
@@ -2188,7 +2193,7 @@ echo "== #666: the deny messages name neither override, ask the user, and stay i
 cat >"$WORK/step666.py" <<'PYEOF'
 import importlib.util, json, re, subprocess, sys
 
-hookdir, readme_path = sys.argv[1], sys.argv[2]
+hookdir, readme_path, golden_path = sys.argv[1], sys.argv[2], sys.argv[3]
 py, wrapper = hookdir + "/bash-secret-guard.py", hookdir + "/bash-secret-guard.sh"
 ASK = "If you believe this is a false deny, stop and ask the user; do not look for a way around it."
 OVERRIDES = ("SASSYDOG_ALLOW_DOPPLER_PRINT", "SASSYDOG_ALLOW_CREDENTIAL_URL")
@@ -2269,12 +2274,30 @@ CLAIM = re.compile(r"override[^.]{0,80}(?:spelled out|printed|named|listed|shown
                    r"|(?:deny|denial) messages?[^.]{0,60}\b(?:names|prints|spells out|states|shows|lists)\b[^.]{0,30}(?:override|bypass)", re.I)
 for what, text in (("the README", section), ("the hook docstring", open(py).read())):
     check(not CLAIM.search(text), f"{what} does not claim the deny message names or prints an override")
+
+# GOLDEN: the hook's exact stderr for a denied CLI command, a denied credential-URL command and one tripping
+# both, byte for byte. The checks above are word lists and replays; only this one catches a reworded escape
+# hint, a form written in plain prose, or an offered form that is allowed but prints.
+actual = "".join(f"### {label}\n{rc_err(cmd)[1]}" for label, cmd in (
+    ("denied CLI command", f"{D} secrets get X"),
+    ("denied credential-URL command", "psql postgres://u:pw@h/db"),
+    ("denied by both rules", f"{D} secrets get X postgres://u:pw@h/db")))
+# golden path "-" means "compare to itself": used only to prove a mutant is caught by the golden ALONE.
+golden = actual if golden_path == "-" else open(golden_path).read()
+if actual == golden:
+    check(True, "the deny output matches the committed golden byte for byte")
+else:
+    import difflib
+    d = "".join(difflib.unified_diff(golden.splitlines(True), actual.splitlines(True), "golden", "actual", n=0))
+    check(False, "the deny output differs from scripts/fixtures/secret-guard-deny-golden.txt: RE-READ the #666 decision "
+                 "(issue #666, '## Decided': the messages name no override, ask the user, do not offer the file form) "
+                 "BEFORE updating the golden. Diff:\n" + d[:1500])
 PYEOF
-step666() { python3 -I -B "$WORK/step666.py" "$1" "$2" 2>&1; }
+step666() { python3 -I -B "$WORK/step666.py" "$1" "$2" "${3:-$REPO_ROOT/scripts/fixtures/secret-guard-deny-golden.txt}" 2>&1; }
 step_out="$(step666 "$REPO_ROOT/hooks" "$REPO_ROOT/README.md")"
 step_pass="$(grep -c '^PASS ' <<<"$step_out")"
 step_fail="$(grep -c '^FAIL \|Traceback' <<<"$step_out")"
-if [ "$step_fail" -eq 0 ] && [ "$step_pass" -eq 42 ]; then
+if [ "$step_fail" -eq 0 ] && [ "$step_pass" -eq 43 ]; then
     ok "#666: the messages, SAFE_FORMS, the allow decisions and the README agree ($step_pass checks)"
 else
     bad "#666: the messages, SAFE_FORMS, the allow decisions and the README agree"
@@ -2302,12 +2325,21 @@ open(p, "w").write(s.replace(old, new))' "$target" "$3" "$4"; then
     local mout
     mout="$(step666 "$d/hooks" "$d/README.md")"
     if grep -q '^FAIL \|Traceback' <<<"$mout"; then ok "#666 mutant caught: $1"; else bad "#666 mutant SURVIVED: $1"; fi
+    case "$1" in
+        "GOLDEN ONLY"*)  # every other check must pass on it: only the golden can tell it from the real output
+            mout="$(step666 "$d/hooks" "$d/README.md" -)"
+            if grep -q '^FAIL \|Traceback' <<<"$mout"; then bad "#666 mutant is caught by more than the golden, so it does not prove the golden: $1"
+            else ok "#666 mutant is caught by the golden alone: $1"; fi ;;
+    esac
 }
 mut666_n=0
-mut666 "the CLI message names the print override" bash-secret-guard.py 'is denied. "' 'is denied. SASSYDOG_ALLOW_DOPPLER_PRINT=1 "'
+mut666 "the CLI message names the print override" bash-secret-guard.py 'is denied."' 'is denied. SASSYDOG_ALLOW_DOPPLER_PRINT=1"'
 mut666 "the URL message names the URL override" bash-secret-guard.py 'variable in the child)."' 'variable in the child). SASSYDOG_ALLOW_CREDENTIAL_URL=1"'
-mut666 "the CLI message says 'bypass' without the name" bash-secret-guard.py 'is denied. "' 'is denied. A human can bypass it. "'
-mut666 "the CLI message points at the README's Bypass paragraph" bash-secret-guard.py 'is denied. "' 'is denied. See the README, Bypass paragraph. "'
+mut666 "the CLI message says 'bypass' without the name" bash-secret-guard.py 'is denied."' 'is denied. A human can bypass it."'
+mut666 "the CLI message points at the README's Bypass paragraph" bash-secret-guard.py 'is denied."' 'is denied. See the README, Bypass paragraph."'
+mut666 "GOLDEN ONLY: the URL message hints at switching the guard off, in words no list bans" bash-secret-guard.py 'variable in the child)."' 'variable in the child). A human can switch this guard off by setting an environment variable."'
+mut666 "GOLDEN ONLY: the CLI message hints at a misspelled override name" bash-secret-guard.py 'is denied."' 'is denied. Set ALLOW_DOPPLER_PRINT=1 first."'
+mut666 "GOLDEN ONLY: the CLI message gains a trailing space" bash-secret-guard.py 'is denied."' 'is denied. "'
 mut666 "the ask-the-user line is no longer printed" bash-secret-guard.py '        sys.stderr.write(ASK_USER + "\n")' '        pass'
 mut666 "the ask-the-user line is printed once per bullet" bash-secret-guard.py $'            sys.stderr.write(f"- {p}\\n")\n' $'            sys.stderr.write(f"- {p}\\n{ASK_USER}\\n")\n'
 mut666 "the ask-the-user line is printed before the bullets" bash-secret-guard.py $'        sys.stderr.write("bash-secret-guard: BLOCKED.\\n")\n' $'        sys.stderr.write("bash-secret-guard: BLOCKED.\\n" + ASK_USER + "\\n")\n'
