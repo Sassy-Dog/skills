@@ -78,21 +78,42 @@
 #      a host, registry or source its base lockfile lacks, and what it ADDS
 #      (by position, from diff) must be a line shape the tool writes:
 #        package-lock.json  `resolved` hosts (funding URLs are ignored) plus
-#                           any `version`/`from` holding `:` or `/`; a
-#                           lockfileVersion below the base's, or below 2, is
-#                           refused (v1 keeps sources outside `resolved`).
+#                           any `version`/`from` holding `:` or `/`; then an
+#                           ALLOW-LIST: every `resolved` must be an https URL
+#                           <prefix>/[@scope/]name/-/file whose prefix (scheme,
+#                           host, registry path) the base already has, or a
+#                           value the base holds verbatim, and an entry may not
+#                           lose its `resolved`. lockfileVersion must be one to
+#                           four digits, not below the base's, not below 2
+#                           (v1 keeps sources outside `resolved`).
 #        bun.lock           any URL or github/git/file shorthand; a backslash
 #                           on an added line is refused, because bun decodes
 #                           JSON escapes and the raw scan would not (the file
-#                           is JSONC with trailing commas, so it is not parsed).
+#                           is JSONC with trailing commas, so it is not parsed);
+#                           then an ALLOW-LIST of added lines: verbatim in the
+#                           base, a closer/opener/config/name/version line, a
+#                           plain or alias range, or a tuple with an empty
+#                           registry whose resolution is a plain version, an
+#                           alias to one, or the base's own source for that
+#                           package (git fragment aside).
+#                           No changed lane file may hold a NUL byte (diff
+#                           would call it binary and show no added lines); the
+#                           NUL case is a text patch left as .handpatch by its
+#                           script, since git would write a binary hunk.
 #        pubspec.lock       an allow-list of pub's line shapes (so no YAML
 #                           escape, re-indent or flow mapping), URL hosts and
 #                           `source:` kinds. The allow-list was run over every
 #                           line of the org's real pub lockfiles (none named
 #                           here: they are private) before it was committed.
 #        Cargo.lock         an allow-list of cargo's line shapes, `source =`
-#                           values minus revision, and URL hosts; also run over
-#                           real Cargo.lock files.
+#                           values minus their `#` revision (the `?` query is
+#                           kept, so a changed branch or rev is refused), and
+#                           URL hosts; also run over real Cargo.lock files.
+#      The bun.lock and package-lock.json allow-lists were also run read-only
+#      over the org's current bun.lock and package-lock.json files. Every line
+#      passed except lines a refresh does not rewrite (workspace, file and
+#      trustedDependencies values, and package tuples with a workspace
+#      resolution), which are refused only if a patch changes them.
 #      The gate prints its own counts (rejected, benign, mutants), derived from
 #      this file, and this header states none, so none can drift.
 #      Hostile cases are built in the third clone as above: rejected cases
@@ -107,16 +128,19 @@
 #      so a generic mutation re-runs only the path-level cases and a
 #      content mutant only the cases its needle names; shard 0 alone runs the
 #      unmutated content cases. Not caught, by design and stated in the
-#      template: a lockfile package swapped within an allowed host, a git
-#      source repointed within an allowed host, integrity hashes, a Cargo.lock
-#      path package, a package-lock dependency map value naming a source,
-#      glob syntax beyond `*`/`**` (refused), bun `catalog` entries (refused,
-#      and named in the message), a base manifest that itself repeats a key (every
-#      refresh of it is refused), and four branches with no committed case
-#      because they need a tool or the machine to fail: diff exiting above 1,
-#      awk failing in pub_shape, read-tree failing, and the post-apply re-check
-#      (a second copy of rules the path loop already enforces, which cannot
-#      fire when that loop works, and runs only before the App token exists).
+#      template: a lockfile package swapped within an allowed host or registry
+#      path, a git source repointed within an allowed host, integrity hashes,
+#      a Cargo.lock path package, a package-lock dependency map value naming a
+#      source, the inline dependency metadata of a bun.lock tuple, glob syntax
+#      beyond `*`/`**` (refused), bun `catalog` entries (refused, and named in
+#      the message), a base manifest that itself repeats a key (every refresh
+#      of it is refused), and branches with no committed case because they
+#      need a tool or the machine to fail: diff exiting above 1 and the
+#      "Binary files" guard in added_lines (both sit behind the NUL check, so
+#      no patch reaches them), awk failing in pub_shape, read-tree failing, and
+#      the post-apply re-check (a second copy of rules the path loop already
+#      enforces, which cannot fire when that loop works, and runs only before
+#      the App token exists).
 #      The unreachable "no content check exists" arm is killed only through the
 #      Cargo.toml mutant.
 #  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
@@ -414,7 +438,7 @@ printf '%s\n' "$*" >> "${FAKE_BUN_LOG:-/dev/null}"
 case "$1" in
     update)
         [ "${FAKE_BUN_MODE:-ok}" = "fail" ] && { echo "error: registry unreachable" >&2; exit 1; }
-        echo "lock $RANDOM" >> bun.lock
+        echo "    \"p\": [\"p@1.0.$RANDOM\", \"\", {}, \"sha512-AA\"]," >> bun.lock
         [ -f pkg/package.json ] && echo ' ' >> pkg/package.json
         [ -f README.md ] && echo 'touched' >> README.md
         echo 'stray' > new.txt
@@ -1489,9 +1513,17 @@ content_repo() {
         cat > web/bun.lock <<'LOCK'
 {
   "lockfileVersion": 1,
-  "workspaces": { "": { "name": "web", "dependencies": { "is-number": "6.0.0" } } },
+  "workspaces": {
+    "": {
+      "name": "web",
+      "dependencies": {
+        "is-number": "6.0.0",
+      },
+    },
+  },
   "packages": {
     "is-number": ["is-number@6.0.0", "", {}, "sha512-AAAA"],
+
     "kind-of": ["kind-of@6.0.3", "", {}, "sha512-BBBB"],
   }
 }
@@ -1556,11 +1588,27 @@ root_repo() {
         git init -q -b main
         git config user.name t; git config user.email t@example.com
         echo '{"name":"root","workspaces":{"packages":["**","!other"]},"dependencies":{"a":"^1.0.0"}}' > package.json
-        echo 'lock' > bun.lock
+        printf '{\n  "lockfileVersion": 1,\n  "packages": {\n    "a": ["a@1.0.0", "", {}, "sha512-AAAA"],\n  }\n}\n' > bun.lock
         echo '{"name":"a","dependencies":{"b":"^1.0.0"}}' > packages/a/package.json
         echo '{"name":"other"}' > other/package.json
         echo '{"name":"t"}' > .github/tools/package.json
         git add -A && git commit -qm init
+    )
+}
+
+# legacy_repo <dir> — one npm lane at the root whose lockfile is lockfileVersion 1
+# (a dependencies tree, no packages map), so the "below 2" rule can be tested
+# without the "below the base" rule also firing.
+legacy_repo() {
+    local d="$1"
+    mkdir -p "$d"
+    (
+        cd "$d" || exit 1
+        git init -q -b main
+        git config user.name t; git config user.email t@example.com
+        echo '{"name":"old","dependencies":{"chalk":"^4.0.0"}}' > package.json
+        echo '{"name":"old","lockfileVersion":1,"dependencies":{"chalk":{"version":"4.0.0","resolved":"https://registry.npmjs.org/chalk/-/chalk-4.0.0.tgz"}}}' > package-lock.json
+        git add -A && git commit -qm legacy
     )
 }
 
@@ -1588,7 +1636,9 @@ real_repo() {
 vpatch() {
     local mk="$WORK/vp-$RANDOM"
     rm -rf "$mk"; git clone -q "$1" "$mk" || return 1
-    (cd "$mk" && bash -c "$2" && git add -A && git diff --cached --binary -M > "$3") >/dev/null 2>&1
+    # A script may leave a .handpatch (a TEXT patch made with --text, which git
+    # would otherwise write as a binary hunk when the file holds a NUL byte).
+    (cd "$mk" && bash -c "$2" && if [ -f .handpatch ]; then cp .handpatch "$3"; else git add -A && git diff --cached --binary -M > "$3"; fi) >/dev/null 2>&1
     rm -rf "$mk"
     [ -s "$3" ]
 }
@@ -1668,7 +1718,7 @@ hostile_checks() {
     }
     rm -rf "$base" "$root"; content_repo "$base"; root_repo "$root"
     # name@@reason@@shell run inside the third clone to produce the change
-    local cases=(
+    local legacy_cases=(
         'a .github/ edit@@under .github/@@echo "on: push" >> .github/workflows/ci.yml; echo x >> web/bun.lock'
         'a rename on allowed paths@@creates, deletes, renames@@git mv web/pkg/package.json web/package2.json; mkdir -p web/pkg2; git mv web/package2.json web/pkg2/package.json'
         'a mode change@@creates, deletes, renames@@chmod +x web/bun.lock'
@@ -1677,6 +1727,8 @@ hostile_checks() {
         'a binary hunk@@binary change@@printf "lock\000bin\n" > web/bun.lock'
         'a path outside every lane@@outside the lanes@@echo x >> src/main.rs'
         'a patch that does not apply to the base commit@@does not apply to the base commit@@echo x >> web/bun.lock; git -c user.name=t -c user.email=t@e.com commit -qam x; echo y >> web/bun.lock'
+    )
+    local cases=(
         # --- what changes INSIDE a manifest ---
         'a scripts change in a lane package.json@@outside the four dependency maps@@jq ".scripts={\"postinstall\":\"x\"}" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
         'a bin key change@@outside the four dependency maps@@jq ".bin=\"evil.js\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
@@ -1732,31 +1784,61 @@ hostile_checks() {
         'a Cargo.lock source key indented@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|  source = \"registry+https://evil.example/i\"|" Cargo.lock'
         'a Cargo.lock source key quoted@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|\"source\" = \"registry+https://evil.example/i\"|" Cargo.lock'
         'a Cargo.lock source with extra spaces@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|source  =  \"registry+https://evil.example/i\"|" Cargo.lock'
+        'a package-lock.json resolved in owner/repo form@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"evil/chalk\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved in owner/repo#ref form@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"evil/chalk#abc\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved in scp-like form@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"git@github.com:evil/chalk.git\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json link entry the base lacks@@outside the base lockfile@@jq ".packages[\"node_modules/lnk\"]={\"resolved\":\"../evil\",\"link\":true}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json entry that loses its resolved value@@lost its resolved value@@jq "del(.packages[\"node_modules/chalk\"].resolved)" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json lockfileVersion that is not an integer@@no usable lockfileVersion@@sed "s/\"lockfileVersion\":3/\"lockfileVersion\":1e400/" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json version holding a slash and no colon@@names a host, registry or source@@jq ".packages[\"node_modules/chalk\"].version=\"evil/chalk\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a bun.lock resolution in owner/repo#ref form@@a refresh does not write@@sed "s|\"kind-of@6.0.3\"|\"kind-of@evil/kind-of#abc\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock resolution in scp-like form@@a refresh does not write@@sed "s|\"kind-of@6.0.3\"|\"kind-of@git@github.com:evil/kind-of.git#abc\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock resolution naming a workspace the base lacks@@a refresh does not write@@sed "s|\"kind-of@6.0.3\"|\"kind-of@workspace:evil\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock resolution that is a relative path@@a refresh does not write@@sed "s|\"kind-of@6.0.3\"|\"kind-of@../evil\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock with a NUL byte hiding an escaped registry@@contains a NUL byte@@printf "// \000\n" >> web/bun.lock; perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https:\x5c/\x5c/evil.example\x5c/\"|" web/bun.lock; git diff --text > .handpatch'
+        'a package.json range ending .TGZ@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.TGZ\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a package.json range ending .Tar@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.Tar\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a package.json range ending .TAR.GZ@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.TAR.GZ\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a package.json range ending .tar@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.tar\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a package.json range ending .tar.gz@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.tar.gz\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a Cargo.lock git source whose query changed@@names a host, registry or source@@sed "s|?rev=abc#|?rev=evil#|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
+        'a bun.lock workspace range that is an archive name@@a refresh does not write@@sed "s|\"is-number\": \"6.0.0\"|\"is-number\": \"x.TGZ\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a package-lock.json resolved under a registry path the base lacks@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/evil-prefix/chalk/-/chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
     )
     # The counts the header refers to are printed, derived from this file, so
-    # they cannot drift: the array, the invocations below, the mutant lines.
-    local legacy_n=7
+    # they cannot drift: the arrays, the invocations below, the mutant lines.
     if [ "$MUT_SHARD" -eq 0 ] && [ "$in_mut" -eq 0 ]; then
-        local n_root n_ok
+        local n_root n_repo n_ok n_nojq
         n_root="$(grep -c 'vreject "\$validate" "\$root"' "$0")"
+        n_repo="$(grep -c 'vreject "\$validate" "\$legacy"' "$0")"
         n_ok="$(grep -c 'vaccept "\$validate"' "$0")"
-        printf 'hostile cases: %d rejected (%d in the array, %d root; the first %d are path-level), %d benign, 1 no-jq; mutants: %d mutate_content, %d mutate\n' \
-            $((${#cases[@]} + n_root)) "${#cases[@]}" "$n_root" "$legacy_n" "$n_ok" \
+        n_nojq="$(grep -c 'cc_want "a patch with no jq on PAT[H]"' "$0")"
+        printf 'hostile cases: %d rejected (%d path-level and %d content in the arrays, %d on a root lane, %d on a version 1 lockfile), %d benign, %d no-jq; mutants: %d mutate_content, %d mutate\n' \
+            $((${#legacy_cases[@]} + ${#cases[@]} + n_root + n_repo)) "${#legacy_cases[@]}" "${#cases[@]}" "$n_root" "$n_repo" "$n_ok" "$n_nojq" \
             "$(grep -c '^mutate_content ' "$0")" "$(grep -c '^mutate ' "$0")" > "$WORK/hostile.counts"
     fi
-    local c name reason script i=0
-    for c in "${cases[@]}"; do
-        name="${c%%@@*}"; reason="${c#*@@}"; script="${reason#*@@}"; reason="${reason%%@@*}"
-        i=$((i + 1))
-        # The first seven are the path-level cases (every mutation of any
+    local c name reason script kind
+    for kind in legacy content; do
+        local -a arr=()
+        if [ "$kind" = legacy ]; then arr=("${legacy_cases[@]}"); else arr=("${cases[@]}"); fi
+        # The legacy cases are the path-level ones (every mutation of any
         # template line re-runs them); the rest are the content cases.
-        if [ "$i" -le "$legacy_n" ]; then cc_want "$name" legacy || continue; else cc_want "$name" content || continue; fi
-        vreject "$validate" "$base" "$lanes4" "$name" "$reason" "$script" || rc=1
+        for c in "${arr[@]}"; do
+            name="${c%%@@*}"; reason="${c#*@@}"; script="${reason#*@@}"; reason="${reason%%@@*}"
+            cc_want "$name" "$kind" || continue
+            vreject "$validate" "$base" "$lanes4" "$name" "$reason" "$script" || rc=1
+        done
     done
     # A root bun lane (object-form workspaces, a recursive glob, a negation).
     if cc_want "a .github/**/package.json under a root bun lane" content; then
         vreject "$validate" "$root" "bun:/" "a .github/**/package.json under a root bun lane" "under .github/" \
             'echo " " >> .github/tools/package.json' || rc=1
+    fi
+    local legacy="$WORK/h-legacy"
+    if cc_want "a version 1 lockfile staying at version 1" content; then
+        rm -rf "$legacy"; legacy_repo "$legacy"
+        vreject "$validate" "$legacy" "npm:/" "a version 1 lockfile staying at version 1" "lockfileVersion 1 (base 1)" \
+            'sed "s/4.0.0/4.0.1/g" package-lock.json > p.tmp && mv p.tmp package-lock.json' || rc=1
     fi
     if cc_want "a workspace member the base manifest excludes" content; then
         vreject "$validate" "$root" "bun:/" "a workspace member the base manifest excludes" "excludes" \
@@ -1778,7 +1860,7 @@ hostile_checks() {
         "bun.lock package.json packages/a/package.json" \
         'jq ".dependencies.a=\"^1.2.0\"" package.json > p.tmp && mv p.tmp package.json
          jq ".dependencies.b=\"^1.5.0\"" packages/a/package.json > p.tmp && mv p.tmp packages/a/package.json
-         echo "lock more" >> bun.lock' || rc=1; fi
+         sed "s/a@1.0.0/a@1.2.0/; s/sha512-AAAA/sha512-CCCC/" bun.lock > p.tmp && mv p.tmp bun.lock' || rc=1; fi
     local realb="$WORK/h-real"
     if cc_want "versions bumped as real bun, npm, cargo and pub files" content; then
         rm -rf "$realb"; real_repo "$realb"
@@ -1817,7 +1899,9 @@ for f in plain workspaces color no-lockfile; do
 done
 
 if out="$(check "$TRIGGER" "$IMPL")"; then
-    [ ! -r "$WORK/hostile.counts" ] || ok "$(cat "$WORK/hostile.counts")"
+    if [ "$MUT_SHARD" -ne 0 ]; then :
+    elif [ -r "$WORK/hostile.counts" ]; then ok "$(cat "$WORK/hostile.counts")"
+    else bad "the gate wrote no case counts, so the header's claim cannot be checked"; fi
     ok "templates hold every rule (one credential, failing refresh fails, no --label, lane-only staging, local-only trigger, plain --auto, exact-pin report)"
 else
     while IFS= read -r l; do bad "$l"; done <<<"$out"
@@ -1920,12 +2004,12 @@ mutate_content "workspace negation not read" impl 'if [ "${g:0:1}" = "!" ]; then
 mutate_content ".github/ rule removed" impl 'reject "$path is under .github/, which no lane may change" ;;' 'true ;;' 'a .github/**/package.json under a root bun lane'
 mutate_content "changed paths not collected for the content check" impl 'changed+=("$path")' 'true' 'a scripts change in a lane package.json'
 mutate_content "a lane file with no content check allowed" impl 'cargo) allowed+="^${p}Cargo\\.lock\$|" ;;' 'cargo) allowed+="^${p}Cargo\\.(lock|toml)\$|" ;;' 'a Cargo.toml edit'
-mutate_content "patch not applied to a throwaway index" impl '|| reject "it does not apply to the base commit"' '|| true' 'a patch that does not apply to the base commit'
+mutate "patch not applied to a throwaway index" impl '|| reject "it does not apply to the base commit"' '|| true' 'a patch that does not apply to the base commit'
 mutate_content "jq presence not checked" impl 'command -v jq >/dev/null 2>&1 || reject "jq is required to read the manifests"' 'true' 'no jq on PATH'
 mutate_content "manifest keys outside the dependency maps unchecked" impl '| if ($ch | length) > 0' '| if false' 'a scripts change in a lane package.json'
 mutate_content "dependency key set unchecked" impl 'elif ($x | keys) != ($y | keys) then' 'elif false then' 'a dependency removed'
 mutate_content "dependency map added or removed unchecked" impl 'if ($x | type) != ($y | type) then "\($m) was added, removed or changed type"' 'if false then "\($m) was added, removed or changed type"' 'a dependency map added'
-mutate_content "any string accepted as a version range" impl 'def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$") | not);' 'def isrange: true;' 'a dependency repointed at a git URL'
+mutate_content "any string accepted as a version range" impl 'def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not);' 'def isrange: true;' 'a dependency repointed at a git URL'
 mutate_content "registry alias target not compared" impl 'and ($was | alias).pre == ($now | alias).pre' 'and true' 'a registry alias retargeted'
 mutate_content "non-string dependency value not refused" impl '($now | type) == "string"' 'true' 'a dependency value that is not a string'
 mutate_content "invalid manifest JSON ignored" impl '|| reject "$path is not valid JSON"' '|| why=""' 'a manifest that is not JSON'
@@ -1939,13 +2023,26 @@ mutate_content "bun.lock hosts unchecked" impl 'bun.lock)          source_tokens
 mutate_content "git/github shorthand sources unchecked" impl $'printf \'%s\\n\' "$t" | grep -oE \'(^|[^A-Za-z0-9+.-])(github|gitlab|bitbucket|gist|file|link):\' | sed -E \'s/^[^a-z]//\' || true' 'true' 'a bun.lock with a github shorthand source'
 mutate_content "pubspec.lock hosts unchecked" impl '{ source_tokens < "$2"; grep' '{ true; grep' 'a pubspec.lock hosted from a new host'
 mutate_content "pubspec.lock source kinds unchecked" impl $'; grep -E \'^    source: \' "$2" | sed -E \'s/[[:space:]]+$//\' || true; }' '; }' 'a pubspec.lock gaining a path source'
-mutate_content "Cargo.lock sources unchecked" impl $'{ source_tokens < "$2"; grep -E \'^source = \' "$2" | sed -E \'s/[#?].*$//; s/"$//\' || true; } | sort -u ;;' 'true ;;' 'a Cargo.lock with a new registry'
-mutate_content "Cargo.lock revision kept in the source" impl $'sed -E \'s/[#?].*$//; s/"$//\'' $'sed -E \'s/"$//\'' 'rejected the benign patch'
+mutate_content "Cargo.lock sources unchecked" impl $'{ source_tokens < "$2"; grep -E \'^source = \' "$2" | sed -E \'s/#.*$//; s/"$//\' || true; } | sort -u ;;' 'true ;;' 'a Cargo.lock with a new registry'
+mutate_content "Cargo.lock revision kept in the source" impl $'sed -E \'s/#.*$//; s/"$//\'' $'sed -E \'s/"$//\'' 'rejected the benign patch'
 mutate_content "lockfile scheme ignored" impl $'grep -oE \'[A-Za-z][A-Za-z0-9+.-]*://[^]"/[:space:],)}]*\' || true' $'grep -oE \'://[^]"/[:space:],)}]*\' || true' 'a package-lock.json resolving over http'
 mutate_content "gained lockfile sources not rejected" impl '[ -z "$gained" ] || reject "' 'true || reject "' 'a Cargo.lock with a new registry'
+mutate_content "archive suffixes not refused" impl ' and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not)' '' 'a package.json range ending'
+mutate_content "archive suffix test case sensitive" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz|tar|tar\\.gz)$")' 'a package.json range ending .TGZ'
+mutate_content "only the .tgz suffix refused" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz)$"; "i")' 'a package.json range ending .tar'
+mutate_content "Cargo.lock query stripped from the source" impl $'sed -E \'s/#.*$//; s/"$//\'' $'sed -E \'s/[#?].*$//; s/"$//\'' 'a Cargo.lock git source whose query changed'
+mutate_content "package-lock.json resolved allow-list not enforced" impl '|| reject "$path has a resolved value outside the base lockfile' '|| true # "' 'a package-lock.json resolved in owner/repo form'
+mutate_content "package-lock.json any registry-shaped resolved allowed" impl 'pre as $p | $p != null and ($opre | any(. == $p))' 'pre as $p | $p != null' 'a package-lock.json resolved under a registry path the base lacks'
+mutate_content "package-lock.json base-verbatim resolved values wildcarded" impl '(. as $r | ($oset | any(. == $r))' '(. as $r | true' 'a package-lock.json link entry the base lacks'
+mutate_content "package-lock.json lost resolved value not refused" impl 'select((.value | type) == "object" and (.value | has("resolved") | not))' 'select(false)' 'a package-lock.json entry that loses its resolved value'
+mutate_content "package-lock.json lockfileVersion shape not enforced" impl '[[ $v =~ ^[0-9]{1,4}$ ]] || return 1' 'true' 'a package-lock.json lockfileVersion that is not an integer'
+mutate_content "package-lock.json pre-2 lockfile allowed" impl ' || [ "$new_v" -lt 2 ]' '' 'a version 1 lockfile staying at version 1'
+mutate_content "package-lock.json slash-only version values unchecked" impl 'select(test("[:/]"))' 'select(test("[:]"))' 'a package-lock.json version holding a slash and no colon'
+mutate_content "NUL byte not refused" impl $'[ "$(tr -d \'\\000\' < "$tmp/new" | wc -c)" -eq "$(wc -c < "$tmp/new")" ] || reject "$path contains a NUL byte"' 'true' 'a bun.lock with a NUL byte hiding an escaped registry'
+mutate_content "bun.lock resolutions unchecked" impl $'if [[ $res =~ $semver_re || $res =~ $alias_re ]] || grep -Fxq -- "$key" <<<"$base_set"; then continue; fi' 'if true; then continue; fi' 'a bun.lock resolution'
+mutate_content "bun.lock range lines not checked for archive names" impl $'case "$vv" in .*|*.tgz|*.tar|*.tar.gz) printf \'%s\' "$line"; return 1 ;; esac' ':' 'a bun.lock workspace range that is an archive name'
 mutate_content "duplicate manifest keys not refused" impl 'dup_keys "$tmp/new" || reject "$path repeats a key (or cannot be read), and JSON readers disagree about which copy wins"' 'true' 'a duplicate scripts key placed before the base one'
 mutate_content "a leading dot read as a version range" impl ' and (test("^\\.") | not)' '' 'a dependency set to a parent link'
-mutate_content "an archive name read as a version range" impl ' and (test("\\.(tgz|tar|tar\\.gz)$") | not)' '' 'a dependency set to a bare archive name'
 mutate_content "workspaces catalog not named in the rejection" impl '(a workspaces.catalog rewrite is refused here)' '(workspaces changed)' 'a workspaces catalog change'
 mutate_content "bun.lock escapes not refused" impl '[ -z "$why" ] || reject "$path adds a line with a backslash escape, which the source scan cannot read: $why"' 'true' 'a bun.lock registry written with escaped slashes'
 mutate_content "package-lock.json older lockfileVersion allowed" impl 'if [ "$new_v" -lt "$old_v" ] || [ "$new_v" -lt 2 ]; then' 'if false; then' 'a package-lock.json downgraded to lockfileVersion 1 with a URL as a version'

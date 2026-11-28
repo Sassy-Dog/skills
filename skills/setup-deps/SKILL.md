@@ -732,10 +732,13 @@ rejects it, before anything is applied, when:
   because bun and npm disagree about which copy wins); a bun `workspaces.catalog` rewrite, which
   `bun update --recursive` can make, is refused and named as such; a `pubspec.yaml` only
   version constraints under its dependency sections; and a lockfile may not name a host, registry
-  or source its base version does not already use, and may only add line shapes its tool writes
-  (a backslash escape on a `bun.lock` line, a `package-lock.json` below the base's
-  `lockfileVersion` or below 2, and any other spelling in a `pubspec.lock` or `Cargo.lock`
-  are refused). `scripts/test-deps-cadence-policy.sh` (decision 10)
+  or source its base version does not already use, and may only add what a real refresh writes,
+  as an allow-list rather than a scan for bad spellings: a `package-lock.json` `resolved` must be an
+  `https` URL under a registry prefix the base already uses; a `bun.lock` added line must be a
+  shape bun writes, with a plain version (or the base's own source) as each package resolution and
+  no backslash escape; a `package-lock.json` below the base's `lockfileVersion` or below 2 is
+  refused; so is any other spelling in a `pubspec.lock` or `Cargo.lock`. A changed lane file holding
+  a NUL byte is refused outright. `scripts/test-deps-cadence-policy.sh` (decision 10)
   lists what each of these catches and what it does not.
 
 Those content rejections happen before the tree is touched. It then runs `git apply --index` with
