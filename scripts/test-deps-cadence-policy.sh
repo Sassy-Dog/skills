@@ -84,8 +84,10 @@
 #                           any `version`/`from` holding `:` or `/`; then
 #                           every `resolved` must be an https URL
 #                           <prefix>/[@scope/]name/-/file (prefix group lazy,
-#                           no % or whitespace in a segment, no leading dot in
-#                           a name or scope) whose prefix (scheme, host,
+#                           no % or whitespace or backslash in a segment (npm
+#                           turns a backslash into a slash), no leading dot in
+#                           a name or scope, `.` and `..` refused as the file)
+#                           whose prefix (scheme, host,
 #                           registry path) the base already has, or a value
 #                           the base holds verbatim; an entry may not lose its
 #                           `resolved`; each value of an entry's four
@@ -105,7 +107,8 @@
 #                           workspace's name, version and four dependency
 #                           maps (same set of workspaces), and `packages`
 #                           entries that are unchanged, a registry tuple of
-#                           exactly [name@semver, "", {}, integrity], or the
+#                           exactly [name@semver, "", {any object}, integrity],
+#                           or the
 #                           base's own git tuple at that key with only its
 #                           fragment moved. Any other top-level key must equal
 #                           the base's. Cases use bun's REAL git tuple shape
@@ -143,13 +146,22 @@
 #      template: a lockfile package swapped for another on the same registry,
 #      a git commit moving to any commit its source serves (a package-lock git
 #      `resolved` whose commit moves is refused, not trusted), integrity
-#      hashes, the metadata object inside a bun.lock registry tuple, a
+#      hashes, the metadata object inside a bun.lock registry tuple or a
+#      moved git tuple, a
 #      Cargo.lock path package, glob syntax beyond `*`/`**` (refused), bun
 #      `catalog` entries (refused, and named in the message), a base manifest
 #      that itself repeats a key, and a base bun.lock that holds a backslash
-#      or a comment (every refresh of either is refused); one guard is
-#      redundant with another and so has no mutant of its own (a git tuple's
-#      arity, which its element-type check also catches); and branches with no
+#      or a comment (every refresh of either is refused), a field or
+#      dependency entry REMOVED from a workspace (the loop walks the head's
+#      fields only, and a removal fetches nothing new), bun's lockfileVersion
+#      and configVersion decreasing, and two false refusals that fail closed
+#      (an npm `npm:name` alias with no version, and a package-lock entry that
+#      moved); every hostile case asserts a reason, but about twenty assert
+#      the generic "a refresh does not write", so a case can be refused by a
+#      different guard than the one it targets, which the mutants then catch
+#      guard by guard; the backslash and host classes of the npm `resolved`
+#      shape have no mutant of their own, because the base-prefix test
+#      refuses the same URL; and branches with no
 #      committed case because they need a tool or the machine to fail: diff
 #      exiting above 1 (now serving only pub and Cargo), awk failing in
 #      pub_shape, read-tree failing, and the post-apply re-check (a second
@@ -1859,6 +1871,16 @@ hostile_checks() {
         'a package-lock.json dependency map naming a git+ssh source@@names a source inside a dependency map@@jq ".packages[\"node_modules/chalk\"].dependencies={\"y\":\"git+ssh://git@evil.example/y.git\"}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
         'a package-lock.json with its packages object deleted@@no packages object@@jq "del(.packages)" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
         'a package-lock.json resolved with a dot-dot name@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/../-/evil-1.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with backslashes in the file segment@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/chalk/-/..\\\\..\\\\evil\\\\chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a backslash in the name segment@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/ch\\\\alk/-/chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a backslash in the scope segment@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/@sc\\\\ope/chalk/-/chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a backslash in the registry path@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/a\\\\b/chalk/-/chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a single dot as the file@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/chalk/-/.\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a double dot as the file@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/chalk/-/..\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a bun.lock git tuple gaining a trailing null@@a refresh does not write@@perl -pi -e "s|\"sha512-GGGG\"\]|\"sha512-GGGG\", null]|" web/bun.lock'
+        'a bun.lock workspace version that is not a version@@workspace "" version@@perl -pi -e "s|^(      \"name\": \"web\",)|\$1\n      \"version\": \"1 2\",|" web/bun.lock'
+        'a bun.lock packages that is not an object@@packages is not an object@@perl -0pi -e "s|\"packages\": \{.*\n  \}\n\}|\"packages\": []\n}|s" web/bun.lock'
+        'a bun.lock workspaces that is not an object@@workspaces is not an object@@perl -0pi -e "s|\"workspaces\": \{.*?\n  \},\n|\"workspaces\": [],\n|s" web/bun.lock'
     )
     # The counts the header refers to are printed, derived from this file, so
     # they cannot drift: the arrays, the invocations below, the mutant lines.
@@ -2105,8 +2127,16 @@ mutate_content "bun.lock git tuple element types unchecked" impl 'and ([., $was]
 mutate_content "bun.lock git tuple ids unchecked" impl 'or test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))' 'or test(".")))' 'a bun.lock git tuple with a slash in the id'
 mutate_content "package-lock.json dependency maps unchecked" impl 'select((($bm | has($d)) and $bm[$d] == $s) or ($s | spec) | not)' 'select(false)' 'a package-lock.json dependency map naming owner/repo'
 mutate_content "package-lock.json packages object not required" impl 'if ($n[0].packages | type) != "object" then "it has no packages object"' 'if false then "it has no packages object"' 'a package-lock.json with its packages object deleted'
-mutate_content "package-lock.json registry prefix group greedy" impl '(?:/[^?#]*?)??)/(?:@' '(?:/[^?#]*?)?)/(?:@' 'rejected the benign patch'
-mutate_content "package-lock.json resolved name segment loose" impl '[^/?#%\\s.@][^/?#%\\s]*/-/[^/?#%\\s]+$")' '[^/?#]+/-/[^/?#]+$")' 'a package-lock.json resolved with a dot-dot name'
+mutate_content "package-lock.json registry prefix group greedy" impl '(?:/[^?#\\\\]*?)??)/(?:@' '(?:/[^?#\\\\]*?)?)/(?:@' 'rejected the benign patch'
+mutate_content "package-lock.json resolved name segment loose" impl '[^/?#%\\s\\\\.@][^/?#%\\s\\\\]*/-/(?!\\.{1,2}$)[^/?#%\\s\\\\]+$")' '[^/?#]+/-/[^/?#]+$")' 'a package-lock.json resolved with a dot-dot name'
+mutate_content "package-lock.json resolved file segment allows a backslash" impl '/-/(?!\\.{1,2}$)[^/?#%\\s\\\\]+$' '/-/(?!\\.{1,2}$)[^/?#%\\s]+$' 'a package-lock.json resolved with backslashes in the file segment'
+mutate_content "package-lock.json resolved name segment allows a backslash" impl '/)?[^/?#%\\s\\\\.@][^/?#%\\s\\\\]*/-/' '/)?[^/?#%\\s.@][^/?#%\\s]*/-/' 'a package-lock.json resolved with a backslash in the name segment'
+mutate_content "package-lock.json resolved scope segment allows a backslash" impl '(?:@[^/?#%\\s\\\\.][^/?#%\\s\\\\]*/)?' '(?:@[^/?#%\\s.][^/?#%\\s]*/)?' 'a package-lock.json resolved with a backslash in the scope segment'
+mutate_content "package-lock.json resolved file segment may be . or .." impl '/-/(?!\\.{1,2}$)' '/-/' 'a package-lock.json resolved with a single dot as the file'
+mutate_content "bun.lock git tuple arity unchecked" impl 'and length == ($was | length) and length >= 2' 'and length >= 2' 'a bun.lock git tuple gaining a trailing null'
+mutate_content "bun.lock workspace version pattern off" impl '($v | test("^[0-9A-Za-z.+-]*$"))' '($v | test("."))' 'a bun.lock workspace version that is not a version'
+mutate_content "bun.lock packages object not required" impl 'if ($b.packages | type) != "object" then "packages is not an object"' 'if false then "packages is not an object"' 'a bun.lock packages that is not an object'
+mutate_content "bun.lock workspaces object not required" impl 'if ($aw | type) != "object" or ($bw | type) != "object" then "workspaces is not an object"' 'if false then "workspaces is not an object"' 'a bun.lock workspaces that is not an object'
 mutate_content "archive suffixes not refused" impl ' and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not)' '' 'a package.json range ending'
 mutate_content "archive suffix test case sensitive" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz|tar|tar\\.gz)$")' 'a package.json range ending .TGZ'
 mutate_content "only the .tgz suffix refused" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz)$"; "i")' 'a package.json range ending .tar'

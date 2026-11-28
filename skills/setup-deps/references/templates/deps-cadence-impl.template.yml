@@ -121,8 +121,9 @@
 #     against an ALLOW-LIST of what a refresh writes, so a spelling no scan
 #     foresaw is refused. package-lock.json: every `resolved` must be an
 #     https URL of the shape <prefix>/[@scope/]name/-/file (the prefix group
-#     lazy, so a new scope is not swallowed into it; no % or whitespace in a
-#     segment, no leading dot in a name or scope) whose scheme, host and
+#     lazy, so a new scope is not swallowed into it; no %, whitespace or
+#     backslash in a segment (npm reads a backslash as a slash), no leading
+#     dot in a name or scope, `.` and `..` refused as the file) whose scheme, host and
 #     registry path prefix some base `resolved` already has, or a value the
 #     base holds verbatim; an entry may not lose its `resolved`; every value
 #     of an entry's four dependency maps must be unchanged from the base or a
@@ -139,8 +140,8 @@
 #     a workspace's name, version or four dependency maps (each value
 #     unchanged or a plain or alias range), over the SAME set of workspaces,
 #     any other workspace field being unchanged; and `packages` entries that
-#     are unchanged, a registry tuple of exactly [name@semver, "", {metadata},
-#     integrity], or the base's own entry at that key with only its git
+#     are unchanged, a registry tuple of exactly [name@semver, "", {any
+#     object}, integrity], or the base's own entry at that key with only its git
 #     fragment moved (same arity and element types, a fragment of
 #     [0-9A-Za-z._-], later strings an integrity hash or a plain id). Any
 #     other top-level key (trustedDependencies, overrides, ...) must equal the
@@ -154,7 +155,11 @@
 #     git `resolved`, which is refused rather than trusted), a Cargo.lock
 #     path package, a workspace glob using more than `*`/`**` (that member is
 #     simply refused), and bun `catalog` entries (outside the four maps, so
-#     refused, and named in the message). Refused rather than trusted: a base
+#     refused, and named in the message); a field or dependency entry REMOVED
+#     from a workspace (the check walks the head's fields only, and a removal
+#     fetches nothing new). Two false refusals, which fail closed: an npm
+#     `npm:name` alias with no version, and a package-lock entry that moved.
+#     Refused rather than trusted: a base
 #     bun.lock holding a backslash or a comment; a workspace added or removed;
 #     any other top-level key changing; a changing registry tuple with a
 #     non-empty registry field; a git tuple whose arity changes; a workspace
@@ -1145,8 +1150,9 @@ jobs:
           # real tree and index are not touched until every file has passed.
           # A manifest may change dependency version strings and nothing else.
           # A lockfile may not gain a host, registry or source the base
-          # lockfile does not already use, and what it ADDS must be a line
-          # shape its tool writes.
+          # lockfile does not already use. pubspec.lock and Cargo.lock must also
+          # ADD only line shapes their tool writes; bun.lock and
+          # package-lock.json are parsed and checked field by field instead.
 
           # A manifest whose parsed form and whose token stream disagree about
           # how many leaves it has repeats a key somewhere. jq keeps the LAST
@@ -1227,7 +1233,6 @@ jobs:
             local out rc=0
             out="$(diff -a "$1" "$2")" || rc=$?
             [ "$rc" -le 1 ] || return 1
-            case "$out" in "Binary files "*) return 1 ;; esac
             printf '%s\n' "$out" | sed -n 's/^> //p'
           }
           # bun_json <file> — a bun.lock (JSON with trailing commas) as strict
@@ -1348,7 +1353,7 @@ jobs:
           npm_resolved_violation() {
             local out
             out="$(jq -n -r --slurpfile o "$1" --slurpfile n "$2" '
-              def pre: [capture("^(?<p>https://[^/?#]+(?:/[^?#]*?)??)/(?:@[^/?#%\\s.][^/?#%\\s]*/)?[^/?#%\\s.@][^/?#%\\s]*/-/[^/?#%\\s]+$").p][0];
+              def pre: [capture("^(?<p>https://[^/?#\\\\]+(?:/[^?#\\\\]*?)??)/(?:@[^/?#%\\s\\\\.][^/?#%\\s\\\\]*/)?[^/?#%\\s\\\\.@][^/?#%\\s\\\\]*/-/(?!\\.{1,2}$)[^/?#%\\s\\\\]+$").p][0];
               def resolveds: [.. | objects | select(has("resolved")) | .resolved];
               ($o[0] | resolveds | map(select(type == "string"))) as $oset
               | ($oset | map(pre) | map(select(. != null))) as $opre
@@ -1415,8 +1420,9 @@ jobs:
           # (lockfileVersion 1 keeps a source there, and `npm ci` fetches it).
           # bun.lock: a registry field is empty for the default registry, so
           # any URL or git/github/file shorthand in it is a non-default
-          # source; JSON escapes are banned on added lines before this runs
-          # (bun decodes them, this scan would not). pubspec.lock: each URL's
+          # source; a backslash in bun.lock is refused by bun_json (bun decodes
+          # JSON escapes, this scan would not), and the checks that read this
+          # output run on the parsed, decoded document. pubspec.lock: each URL's
           # host and each `source:` kind. Cargo.lock: each `source =` value
           # minus its revision, and each URL's host.
           source_tokens() {
@@ -1458,8 +1464,9 @@ jobs:
             name="${path##*/}"
             git "${nohooks[@]}" cat-file blob "HEAD:$path" > "$tmp/old" || reject "cannot read $path at the base commit"
             GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" cat-file blob ":$path" > "$tmp/new" || reject "cannot read $path from the patched index"
-            # A NUL byte makes diff report a binary file and hides every added
-            # line from the line checks, so no changed lane file may hold one.
+            # A NUL byte can hide text from the line-based tools (diff -a reads
+            # past it, a parser or a tool may stop at it), so no changed lane
+            # file may hold one.
             [ "$(tr -d '\000' < "$tmp/new" | wc -c)" -eq "$(wc -c < "$tmp/new")" ] || reject "$path contains a NUL byte"
             case "$name" in
               package.json)

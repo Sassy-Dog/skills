@@ -736,7 +736,7 @@ rejects it, before anything is applied, when:
   writes, as an allow-list rather than a scan for bad spellings: a `package-lock.json` `resolved`
   must be an `https` URL under a registry prefix the base already uses (or be unchanged from the
   base), an entry may not lose its `resolved`, and every dependency-map value in it must be
-  unchanged or a plain version range; a `bun.lock` is parsed, not read line by line, and may differ
+  unchanged, a plain version range or an `npm:` alias range; a `bun.lock` is parsed, not read line by line, and may differ
   from its base only in version numbers, a workspace's name, version and dependency maps (the same
   set of workspaces), and `packages` entries that are unchanged, a registry tuple holding a plain
   version, or the base's own git tuple with only its commit moved, and any other top-level key must
