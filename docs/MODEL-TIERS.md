@@ -75,8 +75,8 @@ separate work:
 - Neon and Carbon need the paid API tier. Hydrogen and Flash-Lite are also on the free tier.
 - **Pin the IDs.** Google documents no per-family `-latest` alias, only the `gemini-flash-latest`
   naming pattern, so these IDs do not follow new releases on their own, and Google is already
-  rerouting retired IDs (`gemini-2.5-pro` and `gemini-2.5-flash` from 2026-12-01). Re-verify this
-  column when Google support lands.
+  rerouting retired IDs (`gemini-2.5-pro` and `gemini-2.5-flash` from 2026-12-01). Re-verify both Google columns (this one and the thinking levels in
+  Effort bindings) when Google support lands.
 - **Price** per 1M tokens (input / output), read 2026-11-27: Carbon $2 / $10, a promotion that runs
   until Nov 30 (the pricing page shows $4 / $20 from Dec 1); Neon $3 / $15; Hydrogen $1.50 / $7.50;
   Flash-Lite $0.30 / $2.50.

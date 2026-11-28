@@ -327,10 +327,10 @@ every run, never rolled into Clean. **Audit mode scores a lost reviewer too, in 
 Each dispatch site names a **model tier** rather than letting its agent inherit the session's
 model. Implementation workers and the nine reviewers run at `B-Tier` (Sonnet on
 Claude Code), and the orchestrator runs at `A-Tier` (Opus). A site may also name an effort
-(`light`, `standard` or `deep`); none means `standard`, so no site sets `effort`. On the coordinator site a worker is told
-outright not to review, and reports `review=deferred`. Tiers are harness-neutral words so the
+(`light`, `standard` or `deep`); none means `standard`, and every site names none today. On the
+coordinator site a worker is told outright not to review, and reports `review=deferred`. Tiers are harness-neutral words so the
 skills port beyond Claude Code. The bindings live in [`docs/MODEL-TIERS.md`](docs/MODEL-TIERS.md),
-and `scripts/test-model-tiers.sh` enumerates the sites and holds each one to that table.
+and `scripts/test-model-tiers.sh` enumerates the sites and holds each one to those tables.
 
 ## Installation
 

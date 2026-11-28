@@ -31,8 +31,9 @@
 # checked nothing. The Google columns of the doc are documentation only: no
 # dispatch site carries a Google entry and nothing below requires one.
 #
-# Six properties, over every tracked Markdown file under skills/ and agents/
-# (6 also reads docs/, and 2 also reads docs/MODEL-TIERS.md's own examples):
+# Seven properties, over every tracked Markdown file under skills/ and agents/
+# (6 also reads docs/ and the root AGENTS.md and README.md, and 2 also reads
+# docs/MODEL-TIERS.md's own examples):
 #
 #   1. The four tables parse: a row for each of the four tiers (Tiers and Model
 #      bindings), each of the three efforts (Efforts and Effort bindings).
@@ -62,22 +63,28 @@
 #      enumerated member list the repo's count rule asks for: a claim that
 #      "every dispatch site is tiered" means exactly these.
 #   6. No near-miss tier spelling in any tracked Markdown under skills/, agents/
-#      or docs/: `S-tier`, `s-tier`, `S tier`, `STier` (and the same for A, B, C).
-#      The one spelling is a capital letter, a hyphen and a capital T. "A tier"
-#      and "B tier" with a lowercase t are English ("a tier of"), so only the
-#      forms no sentence contains are flagged.
-#   6. No near-miss tier spelling in any tracked Markdown under skills/, agents/
-#      or docs/: `S-tier`, `s-tier`, `S tier`, `STier` (and the same for A, B, C).
-#      The one spelling is a capital letter, a hyphen and a capital T. "A tier"
-#      and "B tier" with a lowercase t are English ("a tier of"), so only the
-#      forms no sentence contains are flagged.
+#      or docs/, nor in the root AGENTS.md and README.md. The one spelling is a
+#      capital letter, a hyphen and a capital T. CAUGHT: a hyphenated form in any
+#      case (`S-tier`, `s-tier`, `S-TIER`, `a-tier`); a joined form (`STier`,
+#      `STIER`, `sTier`); and a spaced form for S, B and C (`S tier`, `S Tier`,
+#      `B tier`, `C tier`, and a lone lowercase `s tier`). NOT CAUGHT, by design,
+#      because each is ordinary English the gate must not fail: the article, as
+#      `A tier`, `A Tier of ...` at a sentence start, and `a tier`; and a
+#      possessive, `site's tier` or `site’s tier` (straight or curly). So a bare
+#      `A tier` or `A Tier` passes, and so do `a tier` and `b tier`: the lowercase
+#      a and b forms are never flagged. The match is on the written form only, so
+#      a near-miss inside a code fence is caught too.
+#   7. An `effort:` value outside a bound form fails, the effort twin of property
+#      3: a valid binding followed by "pass `effort: "max"` on that call" is a
+#      per-call override nobody can rebind from the table. Read over skills/ and
+#      agents/ with the bindings removed.
 #
 # Wrapping: prose wraps at ~100 columns and take-it's worker template is a
 # blockquote, so a binding routinely splits across lines behind `> `. Each file
 # is flattened (quote markers stripped, whitespace collapsed) before matching,
 # the same treatment the other prose gates give wrapped text.
 #
-# Mutation-proven below against twenty-four mutants, each of which must FAIL:
+# Mutation-proven below against thirty-three mutants, each of which must FAIL:
 #   M1 a binding's Claude Code alias flipped (B-Tier → opus)   -> property 2
 #   M2 dispatch-ready's bare `model: "opus"` pin restored     -> property 3
 #   M3 an agent given `model: sonnet` frontmatter             -> property 4
@@ -90,27 +97,38 @@
 #   M10 the supervised serial worker's `B-Tier` binding removed -> property 5
 #   M11 take-it's nit roll-in delta-review `A-Tier` binding removed -> property 5
 #   M12 dispatch-ready's nit roll-in delta-review `A-Tier` binding removed -> property 5
-#   (M1-M12 were written against the old names; they now use the new ones.)
 #   M13 a near-miss `S-tier` added to a skill                  -> property 6
 #   M14 a near-miss `s-tier` added to a skill                  -> property 6
 #   M15 a near-miss `S tier` added to a skill                  -> property 6
 #   M16 a near-miss `STier` added to a skill                   -> property 6
-#   M17 a near-miss `B-tier` added to a doc under docs/        -> property 6
+#   M17 a near-miss `B-tier` added to a doc under docs/        -> property 6 (asserts the message)
 #   M18 an unknown effort word `heavy` inside a binding         -> property 2
 #   M19 a deep binding whose Claude Code effort is `high`       -> property 2
 #   M20 a standard binding that sets `effort: "low"`            -> property 2
 #   M21 a light binding that omits its `effort:`                -> property 2
-#   M22 the Efforts table's deep row rebound to `max`, a well-formed deep
-#       binding added, sites untouched                          -> property 2
+#   M22 the Effort bindings table's deep row rebound to `max`, a well-formed
+#       deep binding added, sites untouched                     -> property 2
 #   M23 the Effort bindings table loses its `deep` row          -> property 1
 #   M24 the Model bindings table loses its `C-Tier` row         -> property 1
+#   M25 a valid binding, then a per-call `effort: "max"` outside one -> property 7
+#   M26 the Tiers table loses its `C-Tier` row                  -> property 1
+#   M27 the Efforts table loses its `deep` row                  -> property 1
+#   M28 the Effort bindings table gives `standard` a Claude Code effort -> property 1
+#   M29 a near-miss `B tier` added to a skill                   -> property 6
+#   M30 a near-miss `C tier` added to a skill                   -> property 6
+#   M31 a near-miss `S-TIER` added to a skill                   -> property 6
+#   M32 a near-miss `S-tier` added to the root AGENTS.md        -> property 6
+#   M33 a near-miss `S-tier` added to the root README.md        -> property 6
 #   Positive controls (must PASS, so the mutants above fail for their mutation
 #   and the gate is not simply hostile to every new form):
-#   C1 prose using the bare words `standard`, `light` and `deep`, and "A tier"
+#   C1 prose using the bare words `standard`, `light` and `deep`, the article
+#      ("a tier", "A tier", "A Tier of work") and a possessive in both apostrophe
+#      styles ("each site's tier", "the orchestrator’s tier")
 #   C2 a well-formed `S-Tier` · `deep` and an `S-Tier` · `light` binding
-#   C3 a binding with no Google entry (every binding; asserted explicitly)
-#   C2 a well-formed `S-Tier` · `deep` and an `S-Tier` · `light` binding
-#   C3 a binding with no Google entry (every binding; asserted explicitly)
+#   C3 prose that mentions Gemini CLI and a Google model id is not itself flagged.
+#      That Google entries are NOT required is proved by the real tree, whose
+#      every binding is Google-free and which passes: no separate control is
+#      needed for it, and none greps the tree.
 # A gate that passes a mutant is vacuous for that property. Each mutant must
 # also fail FOR ITS OWN REASON: an unmutated control copy has to pass first,
 # and each mutant's failure output has to name its property. Without both, a
@@ -203,7 +221,7 @@ def tracked(pattern):
     return [root / p for p in out]
 
 files = tracked("skills/*.md") + tracked("agents/*.md")
-docs_files = tracked("docs/*.md")
+docs_files = tracked("docs/*.md") + tracked("AGENTS.md") + tracked("README.md")
 if not files:
     # an empty scan set would pass every property below vacuously
     problems.append("scan set is empty — every property below would pass vacuously")
@@ -218,12 +236,17 @@ bind_re = re.compile(
     r"(?:, `effort: \"(\w+)\"`)? · omp: `model: \"(@\w+)\"`\)")
 bare_re = re.compile(
     r"[\"']?model[\"']?\s*:\s*[\"']?(opus|sonnet|haiku|fable|claude-[\w.-]+)\b")
-# near-miss tier spellings: only forms no English sentence contains ("a tier" is English)
+# bare Claude Code effort value outside a binding (property 7); a quoted value only,
+# so prose naming the key (`effort:`) is untouched
+bare_effort_re = re.compile(r"[\"']?effort[\"']?\s*:\s*[\"'](\w+)[\"']")
+# near-miss tier spellings. Not flagged, because English: the article (`A tier`,
+# `a tier`) and a possessive (`site's tier`, curly apostrophe too).
+_nb = r"(?<![\w'\u2019-])"
 near_res = [
-    re.compile(r"(?<![\w-])[SABCsabc]-(?:tier|Tier)\b"),
-    re.compile(r"(?<![\w-])[SABC] Tier\b"),
-    re.compile(r"(?<![\w-])[Ss] tier\b"),
-    re.compile(r"(?<![\w-])[SABCsabc][Tt]ier\b"),
+    re.compile(_nb + r"[SABCsabc]-(?i:tier)\b"),     # hyphenated, any case
+    re.compile(_nb + r"[SABCsabc](?:[Tt]ier|TIER)\b"),  # joined
+    re.compile(_nb + r"[SBC] (?i:tier)\b"),          # spaced, S B C only
+    re.compile(_nb + r"s tier\b"),                   # a lone lowercase s
 ]
 
 def check_bindings(rel, flat):
@@ -260,6 +283,9 @@ for f in files:
     # --- 3. no bare alias outside a binding --------------------------------
     for m in bare_re.finditer(bind_re.sub("", flat)):
         problems.append(f"{rel}: bare `{m.group(0)}` outside a tier binding")
+    # --- 7. no bare Claude Code effort outside a binding --------------------
+    for m in bare_effort_re.finditer(bind_re.sub("", flat)):
+        problems.append(f"{rel}: bare `{m.group(0)}` outside a tier binding — an effort is set by its binding")
     # --- 4. no model: frontmatter on agents --------------------------------
     if rel.startswith("agents/"):
         fm = re.match(r"\A---\n(.*?)\n---", text, re.S)
@@ -277,7 +303,7 @@ if n_bindings == 0:
 for f in files + docs_files:
     rel = str(f.relative_to(root))
     for lineno, ln in enumerate(f.read_text().splitlines(), 1):
-        ln = re.sub(r"`?[SABC]-Tier`?", "", ln)   # the one right spelling, removed first
+        ln = re.sub(r"`?(?<![\w-])[SABC]-Tier\b`?", "", ln)   # the one right spelling, removed first
         for rx in near_res:
             for m in rx.finditer(ln):
                 problems.append(f"{rel}:{lineno}: near-miss tier spelling `{m.group(0)}` — write S-Tier, A-Tier, B-Tier or C-Tier")
@@ -325,7 +351,7 @@ if [ "$status" = 0 ]; then
     ok "the four tables parse; $n inline bindings agree with them, model and effort"
     ok "no bare model alias outside a binding; no agent carries model: frontmatter"
     ok "every required dispatch site carries its tier"
-    ok "no near-miss tier spelling in skills, agents or docs"
+    ok "no near-miss tier spelling in skills, agents, docs, AGENTS.md or README.md; no bare effort outside a binding"
 else
     printf '%s\n' "$out" | grep -v '^BINDINGS ' | while IFS= read -r line; do bad "$line"; done
 fi
@@ -336,7 +362,7 @@ fi
 make_copy() {
     local dst="$WORK/$1"
     mkdir -p "$dst"
-    (cd "$ROOT" && git ls-files 'skills/*.md' 'agents/*.md' 'docs/*.md') |
+    (cd "$ROOT" && git ls-files 'skills/*.md' 'agents/*.md' 'docs/*.md' AGENTS.md README.md) |
         while IFS= read -r p; do
             mkdir -p "$dst/$(dirname "$p")"
             cp "$ROOT/$p" "$dst/$p"
@@ -459,18 +485,16 @@ LIGHT='`S-Tier` · `light` (Claude Code: `model: "fable"`, `effort: "low"` · om
 
 d=$(make_copy c1)
 printf '\nKeep the prompt light, the checks standard and the review deep. A tier of work is not a tier word.\n' >>"$d/skills/take-it/SKILL.md"
-expect_pass "C1 bare effort words and 'A tier' in prose are never matched" "$d"
+printf "\nA Tier of work, a tier of work, each site's tier and the orchestrator’s tier are English.\n" >>"$d/skills/take-it/SKILL.md"
+expect_pass "C1 bare effort words, the article and both possessive styles are never matched" "$d"
 
 d=$(make_copy c2)
 printf '\nArbitrate at %s; check in at %s.\n' "$DEEP" "$LIGHT" >>"$d/skills/take-it/SKILL.md"
 expect_pass "C2 a well-formed S-Tier deep binding and light binding" "$d"
 
-# C3: every binding in the real tree is Google-free, and the gate passes anyway.
-if git -C "$ROOT" grep -qiE 'gemini' -- skills agents; then
-    bad "C3: a skill or agent carries a Google entry — the Google columns are documentation only"
-else
-    ok "C3 no dispatch site carries a Google entry, and the gate does not require one"
-fi
+d=$(make_copy c3)
+printf '\nGemini CLI subagents take gemini-4-hydrogen; the Google column is documentation only.\n' >>"$d/skills/take-it/SKILL.md"
+expect_pass "C3 Google prose is not flagged, and (real tree) no binding needs a Google entry" "$d"
 
 d=$(make_copy m13)
 printf '\nRun this at S-tier.\n' >>"$d/skills/take-it/SKILL.md"
@@ -490,7 +514,7 @@ expect_fail "M16 near-miss STier, in an agent" "$d" 'near-miss tier spelling `ST
 
 d=$(make_copy m17)
 printf '\nThe workers run at B-tier.\n' >>"$d/docs/ARCHITECTURE.md"
-expect_fail "M17 near-miss B-tier, in docs/" "$d" 'ARCHITECTURE.md:'
+expect_fail "M17 near-miss B-tier, in docs/" "$d" 'near-miss tier spelling `B-tier`'
 
 d=$(make_copy m18)
 printf '\nArbitrate at `S-Tier` · `heavy` (Claude Code: `model: "fable"` · omp: `model: "@slow"`).\n' >>"$d/skills/take-it/SKILL.md"
@@ -524,6 +548,45 @@ mutate "$d/docs/MODEL-TIERS.md" '\| `C-Tier` \| `haiku` \|[^\n]*\n' '' ||
     bad "M24: mutation did not apply"
 expect_fail "M24 Model bindings table loses its C-Tier row" "$d" 'Model bindings table has no row for tier `C-Tier`'
 
+
+d=$(make_copy m25)
+printf '\nArbitrate at %s, then pass `effort: "max"` on that call.\n' "$DEEP" >>"$d/skills/take-it/SKILL.md"
+expect_fail "M25 per-call effort outside a binding" "$d" 'bare `effort: "max"` outside a tier binding'
+
+d=$(make_copy m26)
+mutate "$d/docs/MODEL-TIERS.md" '\| `C-Tier` \| 4 \|[^\n]*\n' '' ||
+    bad "M26: mutation did not apply"
+expect_fail "M26 Tiers table loses its C-Tier row" "$d" 'Tiers table has no row for tier `C-Tier`'
+
+d=$(make_copy m27)
+mutate "$d/docs/MODEL-TIERS.md" '\| `deep` \| The model[^\n]*\n' '' ||
+    bad "M27: mutation did not apply"
+expect_fail "M27 Efforts table loses its deep row" "$d" 'Efforts table has no row for effort `deep`'
+
+d=$(make_copy m28)
+mutate "$d/docs/MODEL-TIERS.md" '\| `standard` \| omitted \(the agent' '| `standard` | `low` (the agent' ||
+    bad "M28: mutation did not apply"
+expect_fail "M28 standard bound to a Claude Code effort" "$d" '`standard` a Claude Code effort; it must be omitted'
+
+d=$(make_copy m29)
+printf '\nRun this at B tier.\n' >>"$d/skills/take-it/SKILL.md"
+expect_fail "M29 near-miss B tier" "$d" 'near-miss tier spelling `B tier`'
+
+d=$(make_copy m30)
+printf '\nRun this at C tier.\n' >>"$d/skills/take-it/SKILL.md"
+expect_fail "M30 near-miss C tier" "$d" 'near-miss tier spelling `C tier`'
+
+d=$(make_copy m31)
+printf '\nRun this at S-TIER.\n' >>"$d/skills/take-it/SKILL.md"
+expect_fail "M31 near-miss S-TIER" "$d" 'near-miss tier spelling `S-TIER`'
+
+d=$(make_copy m32)
+printf '\nThe orchestrator runs at S-tier.\n' >>"$d/AGENTS.md"
+expect_fail "M32 near-miss S-tier in the root AGENTS.md" "$d" 'AGENTS.md:'
+
+d=$(make_copy m33)
+printf '\nThe orchestrator runs at S-tier.\n' >>"$d/README.md"
+expect_fail "M33 near-miss S-tier in the root README.md" "$d" 'README.md:'
 
 if [ "$FAILED" = 0 ]; then
     echo "model-tier tests: all green" >&2
