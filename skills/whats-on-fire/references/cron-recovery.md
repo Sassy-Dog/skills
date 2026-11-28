@@ -170,7 +170,9 @@ exactly one of the allowed forms (README, "Bash guard hook"), and a workflow fil
 `doppler-audit.yml` is such a mention. For such a file, put the per-command bypass in front, before
 the other assignments:
 `SASSYDOG_ALLOW_DOPPLER_PRINT=1 ORG=... REPO=... WORKFLOW_FILE=doppler-audit.yml ... bash ...`. It applies to that one
-command only and is visible in the transcript on purpose (README, Bash guard hook, "Bypass").
+command only and is visible in the transcript on purpose (README, Bash guard hook, "Bypass"). The
+override needs the whole command on ONE line: a backslash-newline continuation makes the guard ignore
+it, so do not copy the multi-line example above with the override in front, join it onto one line first.
 
 **A truncated page is a third state, and it renders exactly like an empty one.** The script's
 query is scoped server-side to the one workflow (`/actions/workflows/<file>/runs?event=workflow_dispatch&status=completed&per_page=10`),

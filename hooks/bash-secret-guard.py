@@ -159,16 +159,20 @@ or locale quoting, brace expansion, an expansion glued before or after the word 
 `"$x"secrets`, `secrets$x`), glob forms (only when the working directory holds a match), a subcommand held in a
 variable or a default, indirect invocation (xargs, or env with a $(cat) argument, fed by echo or printf), a
 subcommand assembled by printf, and any of these run through eval. Not modelled either (the override scan
-does not look for them): an expansion that evaluates a variable's text as code, `${x@P}` in bash and
-`${(e)x}` in zsh. A bare quote or backslash inside the word is
+does not look for them; both apply to that command and the strings it runs, like eval and bash -c): an
+expansion that evaluates text as code, `${x@P}` in bash and zsh's `(e)` flag on any word (`${(e)x}`, or a
+literal default in double quotes such as `"${(e):-\\$(...)}"`, which prints under zsh 5.9); and bash's
+arithmetic-subscript evaluation inside builtins (`let 'a[$(...)]'`, `declare -i y='a[$(...)]'`, `printf -v
+'a[$(...)]' x`, `test -v 'a[$(...)]'`). A bare quote or backslash inside the word is
 removed before matching and still denies. Deliberately NOT matched: a text matcher cannot model the shell's
 expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
 on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
 (implicit or spaced concatenation passes, unspaced `"a"+"b"` denies), credential-file reads (.env, the CLI token
 file), tools other than Bash and Monitor (Monitor is covered via the Bash matcher, see Tools above; Read, Grep,
 PowerShell and MCP shell tools are not).
-The override is printed in the deny message, so it is a speed bump for a careless agent, not protection
-against an injected one.
+The deny messages do not name either override and do not offer the file form (#666): the overrides are
+for a human or a skill a human wrote, documented in the README, and an agent that is denied is told to stop
+and ask the user. The override is still only a speed bump, not protection against an injected instruction.
 Also: aliases and functions, a command
 name assembled at run time from pieces the text never spells (printf formatting), symlinked
 redirect targets, a redirected file that is read back afterwards, `doppler run -- env` /
@@ -195,18 +199,25 @@ BYPASS_PREFIX_RE = re.compile(
     r"^\s*((?:(?:SASSYDOG_ALLOW_DOPPLER_PRINT|SASSYDOG_ALLOW_CREDENTIAL_URL)=1[ \t]+)+)"
 )
 
+# #666: the deny messages name NEITHER override and do not offer the file form (`get`, `download` and
+# `substitute` redirected to a literal path). Only the agent reads a message, and naming an override hands
+# the bypass to every agent the guard stops, and to an injected instruction; the file form leaves the value
+# on disk and the next step, reading the file back, puts it in the transcript. Both stay (the overrides for
+# humans, the file form as an ALLOWED form) and are documented in the README, which is why SAFE_FORMS lists
+# the forms that keep values out of the transcript and off disk, run first. The gate pins the message
+# against the allow decisions, the README and the absence of either override name.
+ASK_USER = "If you believe this is a false deny, stop and ask the user; do not look for a way around it."
 SAFE_FORMS = (
-    "Allowed forms (the whole command, nothing else): `doppler secrets --only-names`; "
+    "Allowed forms (the whole command, nothing else): "
     "`doppler run [flags] -- <cmd>` (the child reads values from its environment; the child may not "
     "mention doppler; `--no-fallback` and `--only-secrets NAME,NAME` (upper-case names only) are "
     "accepted on `run` and narrow it; run flags go AFTER the `run` word, only global flags and "
-    "-p/-c before it); `doppler secrets get NAME --plain > /literal/path` (also `download` and "
-    "`substitute`; the file is yours, reading it back is your responsibility); "
+    "-p/-c before it); `doppler secrets --only-names`; "
+    "a bare non-printing subcommand such as `doppler setup` or `doppler configs`; "
     "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
     "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "
     "NAME=\"$(cat /literal/path)\" >/dev/null 2>&1` (stdout and stderr must both be discarded); `eval \"$(doppler secrets download "
-    "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it); a bare "
-    "non-printing subcommand such as `doppler setup` or `doppler configs`."
+    "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it)."
 )
 DOPPLER_MSG = (
     "this command mentions doppler and is not one of the allowed Doppler forms, so it could "
@@ -214,16 +225,13 @@ DOPPLER_MSG = (
     "`git commit|tag`, `gh issue|pr create|edit|comment|close|reopen|review|merge` and `gh release "
     "create|edit`, and the body of a quoted-delimiter `--body-file - <<'EOF'` / `-F - <<'EOF'` heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes, "
     "`git add|status`, `cd` and those message commands with plain options (no `$(`, `$`, backtick, backslash, `#`, parentheses, `-e`/`--amend`, no `export` or `git config`); a message "
-    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. Deliberate "
-    "override for one single command: put SASSYDOG_ALLOW_DOPPLER_PRINT=1 as the very first thing in the "
-    "command (before any `cd ... &&`); the rest must be one simple command (redirects are fine; no `;`, "
-    "`&&`, pipe, `$(`, backtick or heredoc), or the override is ignored."
+    "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. "
+    + ASK_USER
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "
     "Pass the value through the environment instead (`doppler run -- <cmd>` and read the "
-    "variable in the child). Deliberate override for one single command: prefix it with "
-    "SASSYDOG_ALLOW_CREDENTIAL_URL=1."
+    "variable in the child). " + ASK_USER
 )
 
 # ---- trigger -------------------------------------------------------------------------------

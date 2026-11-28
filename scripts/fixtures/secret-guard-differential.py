@@ -432,13 +432,31 @@ def matches_any(path, specs):
     return any(matches(path, sp) for sp in specs.split(","))
 
 
+KNOWN_SHELLS = ("bash", "zsh", "dash")  # the shells find_shells() can ever return
+MAX_MAJOR = 9  # no shell here has a major version above this; `bash>=53` for `bash>=5.3` would skip everywhere
+
+
+def check_spec(spec):
+    """A declared shell spec must be well formed, name a shell find_shells() can find, and carry a bound
+    that a real version can meet. Syntax alone is not enough: `bypass[zhs]` and `bypass[bash>=53]` parse,
+    match no machine, and so turn a row's teeth check into a SKIP on every machine while the gate is green."""
+    m = SPEC.match(spec)
+    if not m:
+        raise ValueError(f"bad shell spec {spec!r}")
+    if m.group(1) not in KNOWN_SHELLS:
+        raise ValueError(f"shell spec {spec!r} names {m.group(1)!r}, not one of {KNOWN_SHELLS}")
+    for bound in (m.group(2), m.group(3)):
+        if bound is not None and int(bound) > MAX_MAJOR:
+            raise ValueError(f"shell spec {spec!r} has major version {bound}, above {MAX_MAJOR}: a typo?")
+
+
 def parse_kind(kind):
     """"bypass[bash,zsh]@glob" -> ("bypass", "bash,zsh" or None, True)."""
     m = re.match(r"^([a-z-]+)(?:\[([^\]]+)\])?(@glob)?$", kind)
     if not m:
         raise ValueError(f"bad corpus kind {kind!r}")
     for sp in (m.group(2) or "").split(",") if m.group(2) else []:
-        matches("", sp)  # validates the spec's syntax
+        check_spec(sp)
     return m.group(1), m.group(2), bool(m.group(3))
 
 
@@ -508,6 +526,16 @@ def self_test():
         fails += not out(not matches("/fake5/bash", "bash>=5.4") and matches("/fake5/bash", "bash>=5.3")
                          and matches("/fake5/bash", "bash>=5") and not matches("/fake/dash", "dash>=0"),
                          "self-test: version bounds compare major and minor, and an unversioned shell never meets a bound")
+        for typo in ("bypass[zhs]", "bypass[bash>=53]", "bypass[bash<40]", "bypass[bash,zhs]", "bypass[bash>=5.3,dsh]"):
+            try:
+                parse_kind(typo)
+                rejected = False
+            except ValueError:
+                rejected = True
+            fails += not out(rejected, f"self-test: a declaration typo {typo!r} is rejected, not silently skipped")
+        fails += not out(all(parse_kind(k)[1] for k in ("bypass[zsh]", "bypass[bash>=5.3]", "bypass[bash<4]",
+                                                       "bypass[bash>=5,zsh]", "bypass[zsh,dash]")),
+                         "self-test: every declaration the corpus uses is still accepted")
     finally:
         VERSIONS.clear()
         VERSIONS.update(saved)
