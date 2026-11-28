@@ -76,7 +76,7 @@ for path, body in ((os.path.join(REAL, D), FAKE), (os.path.join(GHBIN, "gh"), FA
         fh.write(body)
     os.chmod(path, 0o755)
 
-TOOLS = ["bash", "dirname", "readlink", "sed", "env", "xargs", "cat", "sh", "mkdir", "wc", "head", "grep", "tr"]
+TOOLS = ["bash", "dirname", "readlink", "sed", "env", "xargs", "cat", "sh", "mkdir", "wc", "head", "grep", "tr", "rmdir"]
 for t in TOOLS:
     src = shutil.which(t)
     for dst in (PYBIN, NOPY):
@@ -661,6 +661,57 @@ for tmpl in corpus:
 for tmpl in ("D secrets get X --plain | gh secret set X", "D secrets get X", "D secrets get X --plain", "D secrets download --no-file"):
     cmd = tmpl.replace("D ", D + " ", 1)
     check(bool(guard.analyze(cmd, CWD)), f"the text hook denies: {tmpl}")
+
+section("a decided deny never becomes a crash (closed descriptors, a deleted working directory)")
+# The classifier prints its refusal by file descriptor and returns the deny status whatever fails around it. If
+# it raised instead, the entry point would read the exit as a crash and run the real CLI (fail open): a
+# secret in the capture with no message. Each case spells the name by an expansion, so only the wrapper decides.
+for label, shell in (
+        ("stderr closed", 'A=dop; ${A}pler secrets get X --plain 2>&-'),
+        ("stdout closed", 'A=dop; ${A}pler secrets get X --plain >&-'),
+        ("stdout and stderr closed", 'A=dop; ${A}pler secrets get X --plain >&- 2>&-'),
+        ("stdin, stdout and stderr closed", 'A=dop; ${A}pler secrets get X --plain <&- >&- 2>&-'),
+        ("stderr discarded", 'A=dop; ${A}pler secrets get X --plain 2>/dev/null'),
+        ("the working directory deleted", 'mkdir gone; cd gone; rmdir ../gone; A=dop; ${A}pler secrets get X --plain'),
+        ("the working directory deleted and stderr closed",
+         'mkdir gone2; cd gone2; rmdir ../gone2; A=dop; ${A}pler secrets get X --plain 2>&-')):
+    r = run(None, "capture", shell=shell)
+    check(r.rc == 126 and calls() == [] and MARK not in r.seen,
+          f"denied with the real CLI never run: {label}", f"rc={r.rc} calls={calls()} {r.text[:200]!r}")
+r = run(None, "capture", shell='A=dop; ${A}pler secrets get X --plain 2>&-')
+check(MARK not in r.text, "closed stderr: no secret value reached the capture")
+
+section("two copies of the shim on PATH reach the real CLI instead of each other")
+copy = os.path.join(WORK, "copyB")
+os.makedirs(os.path.join(copy, "hooks", "shim"))
+for rel in ("hooks/shim/" + D, "hooks/doppler-wrapper.py", "hooks/bash-secret-guard.py"):
+    shutil.copy(os.path.join(REPO, rel), os.path.join(copy, rel))
+copy_shim = os.path.join(copy, "hooks", "shim")
+for label, order in (("copy B before the repo's", [copy_shim, SHIM_SRC]), ("the repo's before copy B", [SHIM_SRC, copy_shim])):
+    pth = ":".join(order + [REAL, GHBIN, PYBIN])
+    r = run(None, "capture", shell=f"{D} secrets --only-names", path=pth)
+    check(r.rc == 0 and len(calls()) == 1 and calls()[0][:2] == ["secrets", "--only-names"],
+          f"an allowed form reaches the real CLI once: {label}", f"rc={r.rc} calls={calls()} {r.text[:200]!r}")
+    r = run(None, "capture", shell=f"{D} secrets get X --plain", path=pth)
+    check(r.rc == 126 and calls() == [], f"a printing form is still denied: {label}", f"rc={r.rc} calls={calls()}")
+pth = ":".join([copy_shim, SHIM_SRC, GHBIN, PYBIN])
+r = run(None, "capture", shell=f"{D} secrets --only-names", path=pth)
+check(r.rc == 127 and "no real" in r.text, "two copies and no real CLI: 127 with the message, no loop", f"rc={r.rc} {r.text[:200]!r}")
+# session-path.sh does not take a second shim for the real CLI either
+envf5 = os.path.join(WORK, "two-copies-env.sh")
+r5 = subprocess.run(["bash", os.path.join(copy, "hooks", "session-path.sh")] if os.path.exists(os.path.join(copy, "hooks", "session-path.sh")) else ["bash", SESSION],
+                    env={"PATH": copy_shim + ":" + PYBIN, "CLAUDE_ENV_FILE": envf5}, capture_output=True, text=True)
+check(r5.returncode == 0 and not os.path.exists(envf5), "session-path.sh: another copy's shim is not mistaken for the real CLI (nothing written)",
+      f"rc={r5.returncode} {r5.stderr!r}")
+
+section("session-path.sh: an env file whose last line has no trailing newline")
+envf6 = os.path.join(WORK, "nonl-env.sh")
+with open(envf6, "w") as fh:
+    fh.write("export KEEP=1")
+r6 = subprocess.run(["bash", SESSION], env={"PATH": REAL + ":" + PYBIN, "CLAUDE_ENV_FILE": envf6}, capture_output=True, text=True)
+src6 = subprocess.run(["bash", "-c", f'. "{envf6}"; printf "%s|%s" "$KEEP" "${{PATH%%:*}}"'], env={"PATH": REAL + ":" + PYBIN},
+                      capture_output=True, text=True)
+check(r6.returncode == 0 and src6.stdout == "1|" + SHIM_SRC, "the old last line and the new PATH line both survive", f"{src6.stdout!r} {src6.stderr!r}")
 
 section("hooks.json")
 hj = json.load(open(os.path.join(REPO, "hooks", "hooks.json")))

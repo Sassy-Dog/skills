@@ -157,6 +157,10 @@ gh secret list --app dependabot
 # Hand a value from Doppler to GH secret: the plugin's wrapper subcommand reads it in memory
 # (a pipe into gh secret set is denied: a wrapper cannot tell it from a capture pipe).
 # It takes the name and optional --repo/--env/--app, and refuses on an empty value or a failure.
+# It EXISTS ONLY BEHIND THE PLUGIN'S SHIM (Claude Code puts it first on the agent's Bash PATH at
+# SessionStart). On omp, in a human's own terminal, or in a session where that hook did not run, the real
+# CLI rejects the word: use a private file instead (same as the bulk recipe below: create it 600, let gh
+# read it with `gh secret set NAME < file`, delete it).
 doppler sassydog-gh-secret-set SECRET_NAME
 
 # Bulk sync (set multiple): the plugin's Bash guard allows a Doppler command only on its own,

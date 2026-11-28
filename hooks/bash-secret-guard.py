@@ -13,9 +13,9 @@ grammar and gives up on anything else.
 
 This hook is the FIRST of two layers (#670). It decides only what the text SPELLS. A command name
 the text does not spell (`$D secrets get X`, `dop*ler me`, `${X}pler secrets`) is the second
-layer's job: `bin/doppler`, a wrapper that sits first on the agent's PATH, applies the same allow
+layer's job: `hooks/shim/doppler`, a wrapper that sits first on the agent's PATH, applies the same allow
 list to argv AFTER the shell has parsed, so quoting, glob and expansion spellings have already
-resolved. The wrapper (hooks/doppler-wrapper.py, entered through bin/doppler) shares this module's
+resolved. The wrapper (hooks/doppler-wrapper.py, entered through hooks/shim/doppler) shares this module's
 flag tables and parsers. The expansion and glob triggers and the inert-view tokenizer that used to
 guess at those names here are deleted: they were a treadmill (#649 to #654, #659) and they
 false-denied prose (#652, #657). A new expansion form found in review is a Known limit, not a rule.
@@ -124,8 +124,10 @@ a reviewed Monitor branch. See the README.
 Known limits (a seatbelt against the accident, not a sandbox). This layer: a command name the text does not
 spell (`$D secrets get X`, `dop*ler me`, `${X}pler secrets`, a subcommand word built by an expansion, xargs or
 eval) is NOT matched here; that is the wrapper's job, and where the wrapper is not first on PATH (a harness
-that does not load a plugin's bin/, a shell that resets PATH, an absolute path to the real binary) nothing
-catches it. The gate pins a sample of those spellings as allows (a known limit, not a feature), so a change
+that does not run the SessionStart hook, a shell that resets PATH, `PATH=` on the command, `env -i`,
+`command -p`, `hash -p`, an absolute path to the real binary) NEITHER layer catches it: the text layer
+cannot spell-check the name and the shim is not in the way. The base text guard denied those spellings, so
+this is a regression against it, accepted because the rules that denied them were guesses. The gate pins a sample of those spellings as allows (a known limit, not a feature), so a change
 that starts denying one is a deliberate edit. Not modelled either (the override scan does not look for them;
 they sit beside eval and bash -c, the strings a command runs): an
 expansion that evaluates text as code, `${x@P}` in bash and zsh's `(e)` flag on any word (`${(e)x}`, or a

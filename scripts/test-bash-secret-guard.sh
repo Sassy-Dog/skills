@@ -18,7 +18,7 @@
 # brackets/wildcards stripped), the ENTIRE command must be exactly one of the allowed forms
 # (--only-names; `doppler run -- <cmd>`; get/download/substitute redirected to a literal file;
 # a bare non-printing subcommand; and the two narrow forms the plugin's own skills emit, the
-# eval bootstrap and `get --plain | gh secret set`), or it is denied. A false deny costs a bypass token; a false
+# eval bootstrap and `sassydog-gh-secret-set`, since #670), or it is denied. A false deny costs a bypass token; a false
 # allow costs a secret in a transcript.
 #
 # Asserted, by piping the harness's event JSON into the hook exactly as Claude Code does.
@@ -66,7 +66,8 @@
 #     cannot grow into a ban on `run`; /DEV, /Dev, /PROC, /Sys and a relative DEV/ or Fd/
 #     redirect target; and the forms the plugin's own skills emit, with their near misses as
 #     denies (the `eval "$(doppler secrets download --no-file ...)"` bootstrap, and
-#     `get NAME --plain | gh secret set NAME`; review 6 cut the bootstrap's `&&` tail)
+#     `get NAME --plain | gh secret set NAME`, an allowed pipe until #670 replaced it with the
+#     wrapper subcommand `sassydog-gh-secret-set`; review 6 cut the bootstrap's `&&` tail)
 #   - review 5 (four Blocking findings), each with committed cases: the bootstrap's `&&` tail
 #     (since cut by review 6, see below); the bootstrap is exactly `--no-file --format env` (no --format json/dotnet-json/
 #     env-no-quotes/docker, no --name-transformer with or without `=`, no global --json/--debug/
@@ -196,70 +197,15 @@
 #     one of them is subsumed by the allow list: after it, the only commands that can be reached are
 #     owners and `git add|status`, `cd`, none of which executes a word, a pipe's input or stdin text,
 #     and the closed assignment names carry no executable value, so the extra guard only adds depth.
-# #649 (section "#649: prose after an expansion character ...", the corpus rows added to
-# scripts/fixtures/secret-guard-differential.py, and the two "limit (pre-existing)" allows): the
-# expansion triggers GUESS at a name the text does not spell and so denied prose (`echo "$HOME" let me
-# know`). The loosening is one allow-list tokenizer, `_inert_view`, that fails closed, and it exempts ONE
-# shape, only when the WHOLE input is that one simple command: `echo` as the literal first word with plain
-# words, quoted strings and `$NAME`/`${NAME}`. Not exempt, each pinned as a must-deny AND a differential
-# "bypass" row that prints under a real shell: `printf` (`printf -v 'a[$(..)]' x` runs the subscript under
-# bash 5.3 and zsh; seven spellings, including a quoted or split `-v`) and a python heredoc (three routes
-# that build `os.system` from allowed modules at run time: operator.attrgetter on typing, get_type_hints
-# evaluating an annotation, string.Formatter().get_field; so the plain python script with `{name:18} me`
-# is denied again, pinned as a deny-only row). The blocked attempt (PR 650) tried to keep splitting words
-# and lost four ways; each is a committed must-deny AND a differential "bypass" row run under bash,
-# /bin/bash 3.2, zsh and dash: (1) an unbalanced quote later in the segment, an apostrophe in a trailing
-# comment, `\$'..'` and `$$'..'` (`env "$D" -p 'a b' secrets # don't`); (2) one word read as two (`$(...)`,
-# `${P:--p app}`, a here-string carrying arguments, `{fd}>`, a variable holding an option); (3) a glob
-# literal re-read by something not on a shell list (sh, bash, env $SHELL, awk system(), perl system(), a
-# dot-source of stdin, write-then-source, write-then-sh, a fifo read by a shell; csh, tcsh, parallel, zsh,
-# dash and python3 -c are hook-side denies only: not installed or not usable everywhere, so no teeth are
-# required of them); (4) a POSIX class that is not the first bracket member (`[x[:alpha:]]oppler
-# projects`, `do[![:digit:]]pler projects`; must-deny gate cases only). The "@glob" rows `cd` into a
-# directory holding copies of the fake CLI. Asserted beyond those: every operator, redirect, fifo, second
-# command, wrapper, assignment, quoted or escaped command word, `$(`, backtick, `$@`, `${X:-..}`,
-# ANSI-C word, unquoted glob, comment, CR, heredoc, unbalanced quote and the CLI's name spelled in an
-# argument defeats the echo exemption; the four acceptance cases and the issue's own deny cases
-# (`${X}pler secrets get`, `dop*ler me`, `"$D" run`) are pinned. How acceptance item 2 (a heredoc commit
-# message or script with backticks or `{` plus run/me) is met: ONLY through `git commit -F - <<'EOF'` and
-# `gh pr create --body-file - <<'EOF'`, which the #647 sanitizer already allowed and which are pinned here
-# and in the differential; the `-m "$(cat <<'EOF'..)"` form and python heredocs stay denied. NAMED false
-# denies, pinned as denies: `echo '*' run; echo hi`, `cd x && echo ...`, `cat <<'EOF'`, any python
-# heredoc. The older hole found on the way (a subcommand word glued to `)` or a backtick) is fixed
-# below, see the glued-closer mutants.
-# MUTANTS of #649, in hooks/bash-secret-guard.py, ONE replacement each, run on parallel scratch copies of
-# the tree (a git-initialised copy, so the sweep works), failing-case count, after an unmutated baseline
-# of 0 with the summary line required. The replaced line, then the count:
-#   `_tokenize_one`: the two lines `if text[i:].strip(" \t\n"):` / `raise _Unrecognised("a second
-#   command")` deleted: 1; `if c in " \t":` -> `if c in " \t\r":` (a CR is blank): 5;
-#   `_read_token`: `if d in "`\\":` -> `if d in "`":` (a backslash accepted in double quotes): 1;
-#   -> `if d in "\\":` (a backtick accepted): 6; the double-quote `$` arm (`m = _VAR_RE.match(text, i)`,
-#   `if not m: raise`, `i = m.end()`, `continue`) -> `i += 1` + `continue`: 8; the unquoted `$` arm (the
-#   same lines up to `i = m.end()`) -> `i += 1`: 2; the unquoted `if not m: raise` -> `i = m.end() if m
-#   else i + 1`: 1; the raise on an unbalanced single quote -> `j = n - 1`: 1; the raise on an unbalanced
-#   double quote -> `break`: 1; `if c in WORD_CHARS:` -> `if c in WORD_CHARS or c == "<":`: 2, -> `or c in
-#   ";|&>":`: 46; `_VAR_RE`'s `\{[A-Za-z_][A-Za-z0-9_]*\}` -> `\{[^}]*\}|\(` (a `$(` read as a
-#   variable): 7; `DATA_COMMANDS = frozenset(("echo",))` plus `"eval"`: 2, plus `"sh"`: 2, plus
-#   `"printf"`: 25; `triggered`: `iplain, idecoded = (plain, decoded) if inert == text else
-#   _views(inert)` -> `iplain, idecoded = plain, decoded` (exemption never applied): 14; `_mentions`: the
-#   two spelled-name tests (`if "doppler" in t:` and the `re.sub` one) read `ti` instead of `t`: 4.
-#   `triggered`: `inert = _inert_view(text)` -> `inert = _inert_view(LINE_CONTINUATION_RE.sub("", text))`
-#   (the exemption decided on the line-joined text): 8, the two `echo x\<CR><LF>...` gate rows and their
-#   differential rows; a backslash, CR, LF is not a continuation, so the joined text is one echo while the
-#   shell runs a second command. Every mutant above is killed; none is left equivalent.
-# GLUED CLOSER (sections "a subcommand glued to a closing ) backtick or } is a whole word" and the
-# redirect/separator cases after it, plus their bypass rows in the differential): the whole-word lookahead in
-# `triggered`, now `(?=$|[\s)`};|&<>])`. ONE replacement each, count of failing checks, unmutated baseline 0:
-# -> `(?=$|\s)` (the original text): 48 failing; -> `(?=$|[\s)`;|&<>])` (only `}` dropped): 1 (the
-# `ls "$D secrets}"` case); -> `(?=$|[\s)`}])` (only the `;|&<>` additions dropped): 35. All killed; none
-# equivalent. Newly denied by the widening, pinned as known false denies: `echo "$x" run>out`,
-# `echo "$(date)" secrets>notes.txt` and a backtick commit message ending `run;` (the latter is quoted
-# prose after an expansion character; so are `rg -n "$PAT" -e "secrets|token" docs`, `awk '{print $1,
-# "run;"}' f`, `echo "${PWD}" me>>log` and a `gh pr comment --body "..., then run|tee"` holding a backtick,
-# all allowed on main and denied now, verified by hand, not pinned). `echo "$(date)" me` and `echo "$(pwd)" run` were already denied on main
-# (the `me`/`run` after `$(` pairing) and are pinned as denies.
-# Counts are one run on one machine, not a guarantee for other mutants or other cases; no total of
-# checks is stated because nothing re-derives it.
+# #649 to #654, #659 (HISTORY, deleted by #670): the expansion and glob rules, the `_inert_view` echo
+# exemption, the glued-closer lookahead and the #654 subcommand-word matcher guessed at a command name the
+# text does not spell, and each review found another spelling. They and their cases and mutant records are
+# gone; the argv wrapper (scripts/test-argv-wrapper.sh) decides those spellings after the shell has parsed
+# them. What this gate keeps from them: the prose they used to false-deny (`echo "$HOME" let me know`,
+# `echo "$(date)" me`, a python heredoc with `{name:18} me`, a backtick commit message ending `run;`, the
+# `for t in a b; do echo "$t: $(gh run list ...)"` loop) is pinned ALLOWED in section "#670", and a
+# sample of the unspelled-name spellings is pinned allowed there as KNOWN LIMITS of this layer. Counts of
+# failing cases per mutant are not recorded for deleted rules: nothing re-derives them.
 # Equivalent or unreachable by text, NOT asserted: `\c` and `\e` produce control characters, which
 # cannot spell a letter, so the decoder only matters when the control character is stripped and
 # joins a word (the `dopp\eler` cases pin that, a deliberate over-trigger).
@@ -268,24 +214,11 @@
 # prefix word (`time`, `!`, `{`), inside `<(...)` or a here-string, or after a detached redirect
 # target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is allowed. Those spellings carry allow cases
 # in the "KNOWN LIMIT" section. No mutant was run for the pin; it asserts current behaviour only.
-# NON-LITERAL SUBCOMMAND SPELLINGS, pinned as allows (#654, the issue's second acceptance branch: named, not
-# matched; the third bullet, the `echo "$(date)" me` false denies, stays with #652 because no tokenizer changed).
-# The subcommand rule recognises `secrets`/`configure`/`run`/`me` only as a whole word. An independent review
-# judged every matcher for the shell's other spellings of that word a treadmill (each pass of a scanner found
-# another differential), so none is shipped; the classes are named in README (Known limits) and the hook
-# docstring, and the rows in section "KNOWN LIMIT, pinned allow (#654)" pin that the guard allows each class today:
-# ANSI-C and locale quoting, brace expansion, an expansion glued before or after the word, glob forms, a subcommand
-# held in a variable or a default, indirect invocation (xargs, or env with a $(cat) argument), a subcommand assembled by printf,
-# and eval of the above. The rows after the eval row are not spelling classes but OUT-OF-SCOPE pins, in their own
-# sub-block at the end of the section: allow rows for an on-disk script, a base64 payload piped to a shell and
-# python string concatenation (implicit, spaced, half-spaced), plus one DENY row for the unspaced concatenation,
-# which the matcher does read. The condition is the OUTER first word: it must not itself expand (echo, printf, env, time,
-# eval); a top-level expanding command word, or any spelled name, still denies. The xargs rows have no substitution.
-# The three glob rows print only when the working directory holds a matching entry (bash passes the pattern
-# literally otherwise, zsh errors); the differential check ran them with such a directory. Every allow row printed under at
-# least one real shell on main. These are pins of CURRENT behaviour, not mutation-proven rules: no mutant is
-# claimed for them; a later change that denies one turns the row red, which is the point. Verified DENIED on main and
-# therefore NOT in the limit list: a bare quote or backslash inside the word (`sec''rets`, `"secrets"`, `\secrets`).
+# NON-LITERAL SUBCOMMAND SPELLINGS (#654, matcher deleted by #670): a subcommand word the text does not spell
+# (`$s get X`, `secrets$x get X`, `{secrets,x} get`, xargs, printf-built) is allowed by this layer and denied
+# on argv by the wrapper. Section "KNOWN LIMIT, pinned allow (#654)" keeps the rows that still say so, plus the
+# out-of-scope pins (an on-disk script, a base64 payload piped to a shell, python string concatenation). They
+# pin CURRENT behaviour, not mutation-proven rules: a later change that denies one turns the row red.
 # Review 6's bootstrap-tail spellings (`&& {set,}`, `&& FOO=1 set`, `&& let x=API_KEY`,
 # `&& [[ DB -gt 0 ]]`) are pinned as denies; the review-6 mutant (bootstrap accepts text after the
 # eval) is the one that targets them. It was re-run in review 8 as BOOTSTRAP_RE.fullmatch -> .match

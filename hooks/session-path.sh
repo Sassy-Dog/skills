@@ -37,6 +37,7 @@ for d in $PATH; do
     [ -n "$d" ] || continue
     [ -f "$d/doppler" ] && [ -x "$d/doppler" ] || continue
     [ "$d/doppler" -ef "$shim/doppler" ] && continue
+    head -c 400 "$d/doppler" 2>/dev/null | grep -q 'sassydog-secret-guard-shim' && continue
     found=1
     break
 done
@@ -46,7 +47,8 @@ unset IFS
 sq="'$(printf '%s' "$shim" | sed "s/'/'\\\\''/g")'"
 # Skip when the shim is already first, so a second SessionStart (resume, clear, compact) adds no copy.
 line="[ \"\${PATH%%:*}\" = $sq ] || export PATH=$sq:\"\$PATH\""
-if ! printf '%s\n' "$line" >>"$CLAUDE_ENV_FILE" 2>/dev/null; then
+# The leading newline keeps the line whole when the env file's last line has no trailing newline.
+if ! printf '\n%s\n' "$line" >>"$CLAUDE_ENV_FILE" 2>/dev/null; then
     echo "session-path: cannot write CLAUDE_ENV_FILE ($CLAUDE_ENV_FILE); the Bash PATH is NOT guarded by the wrapper" >&2
     exit 1
 fi

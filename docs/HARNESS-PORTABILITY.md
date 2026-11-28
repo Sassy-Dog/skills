@@ -62,9 +62,10 @@ classifier, not any harness's wiring.
 | 13 | `claude plugin` CLI and install state | 8 | `git grep -l -e 'claude plugin' -e installed_plugins -- skills agents` |
 | 14 | `mcp__...` tool-id literals | 6 | `git grep -l 'mcp__' -- skills agents` |
 | 15 | `.claude/worktrees` path convention | 4 | `git grep -l '\.claude/worktrees' -- skills agents` |
+| 16 | `sassydog-gh-secret-set`, which exists only behind the plugin's `hooks/shim` (Claude Code's SessionStart PATH wiring) | 1 | `git grep -l sassydog-gh-secret-set -- skills agents` |
 
 Rows 1 to 6 are the five mechanisms named in the issue, with row 2 split out of the Agent tool row
-because omp's answer differs. Rows 7 to 15 came from the search for mechanisms the issue did not
+because omp's answer differs. Rows 7 to 16 came from the search for mechanisms the issue did not
 list. Row 14 is not a dependency: the six files only forbid hardcoding a tool id, and one shows a
 hook matcher example, because tool ids are resolved by capability. It is listed so nobody re-searches
 it. Skill frontmatter was checked as well, and it carries only `name` and `description`, with no

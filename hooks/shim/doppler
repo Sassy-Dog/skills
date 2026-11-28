@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# sassydog-secret-guard-shim  (marker: every plugin copy of this file carries this line, and find_real skips any file that does)
 # hooks/shim/doppler — the plugin's second secret-guard layer (#670). hooks/session-path.sh puts this
 # directory first on the Bash tool's PATH at SessionStart (through CLAUDE_ENV_FILE: the agent's shell only,
 # never a user's own terminal), so a bare `doppler` the agent runs lands here. It is deliberately NOT in a
@@ -30,8 +31,11 @@ find_real() {
         [ -n "$d" ] || continue
         cand="$d/doppler"
         [ -f "$cand" ] && [ -x "$cand" ] || continue
-        # Skip this script, however it is reached (a symlink, a second PATH entry for the same dir).
+        # Skip this script, however it is reached (a symlink, a second PATH entry for the same dir), and
+        # skip any OTHER copy of the shim (an older plugin version's line still in the env file, a
+        # --plugin-dir copy): two copies would otherwise pick each other and exec forever.
         [ "$cand" -ef "$src" ] && continue
+        head -c 400 "$cand" 2>/dev/null | grep -q 'sassydog-secret-guard-shim' && continue
         printf '%s\n' "$cand"
         return 0
     done

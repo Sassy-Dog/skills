@@ -1768,7 +1768,9 @@ pg_start "$PREFLIGHT_JOBS" $PG_LIST
 
 # --- 1. shellcheck ----------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-    sh_files=$(git ls-files '*.sh')
+    # hooks/shim/* is bash with no .sh extension (a command's name cannot carry one), so '*.sh' alone
+    # would leave the shim outside BOTH shellcheck passes below; the pathspec names the directory.
+    sh_files=$(git ls-files '*.sh' 'hooks/shim/*')
     if [ -z "$sh_files" ]; then
         pass "shellcheck (no *.sh files)"
     elif echo "$sh_files" | xargs shellcheck -S warning; then

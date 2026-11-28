@@ -1,7 +1,7 @@
-"""doppler-wrapper.py — the argv classifier behind bin/doppler, the plugin's second layer (#670).
+"""doppler-wrapper.py — the argv classifier behind hooks/shim/doppler, the plugin's second layer (#670).
 
-bin/doppler is a bash entry point that sits FIRST on the agent's PATH (Claude Code adds a plugin's
-bin/ to the Bash tool's PATH). It finds the real CLI further down PATH, asks this file whether the
+hooks/shim/doppler is a bash entry point that sits FIRST on the agent's PATH (hooks/session-path.sh puts
+it there at SessionStart; a plugin bin/ is not used, it lands last on PATH). It finds the real CLI further down PATH, asks this file whether the
 call is allowed, and then either `exec`s the real CLI or refuses. This file sees ARGV, which the
 shell has already parsed, so quoting, glob and expansion spellings (`$D secrets get X`, `dop*ler`,
 `"$D" run`) have resolved to the words the CLI would receive. That is what the text guard
@@ -40,8 +40,16 @@ Forms that print nothing (`--only-names`, `run`, bare subcommands, `--version`, 
 `substitute --output PATH`) are allowed with any sink.
 
 NOT covered, named so nothing here reads as a claim of more:
-  - the real binary called by absolute path, or by a PATH that does not put bin/ first (a harness that
-    does not load a plugin's bin/, a shell that resets PATH, `env -i`, `command -p`);
+  - the real binary called by absolute path, or by a PATH that does not put hooks/shim first (a harness
+    that does not run the SessionStart hook, a shell that resets PATH, `PATH=` on the command, `env -i`,
+    `command -p`, `hash -p`). A name the text guard cannot spell-check (`/opt/homebrew/bin/dop?ler`) PLUS
+    one of these is caught by NEITHER layer: the base text guard denied it, this change does not. That is
+    a regression against the text guard alone, accepted because the deleted rules were guesses;
+  - the CLI's own environment variables (its API host, dashboard host, TLS-verify and config-dir
+    settings, each prefixed with the CLI's name): the wrapper does not inspect the environment, so one
+    can redirect the real CLI. The base text guard denied the `export` spelling: a regression;
+  - the bootstrap argv is allowed into ANY pipe (`download --no-file --format env | cat`), not only an
+    eval: also a regression against the base, where the whole-command shape had to be an eval;
   - a harness whose capture is a regular file opened WITHOUT O_APPEND and DIFFERENT from stderr's, or a
     capture that is two separate pipes: both look like a legitimate redirect or a `$(...)` to this file.
     Claude Code 2.1.332 is neither (the README records the measurement); other harnesses are unmeasured;
@@ -195,16 +203,32 @@ _DESCR = {
 
 
 def deny(g, reason):
-    sys.stderr.write("doppler-wrapper: BLOCKED.\n")
-    sys.stderr.write(f"- {reason}. {g.SAFE_FORMS}\n")
-    sys.stderr.write(g.ASK_USER + "\n")
+    """Print the refusal and ALWAYS return DENY. A decided deny must never become a crash: with stderr closed
+    (`2>&-`) sys.stderr is None, and a raise here would exit 1, which the entry point reads as a classifier
+    crash and answers by running the real CLI. So write by file descriptor and swallow the error."""
+    msg = f"doppler-wrapper: BLOCKED.\n- {reason}. {g.SAFE_FORMS}\n{g.ASK_USER}\n"
+    try:
+        os.write(2, msg.encode("utf-8", "replace"))
+    except (OSError, ValueError):
+        pass
     return DENY
 
 
+def _cwd():
+    try:
+        cwd = os.getcwd()
+    except OSError:  # the working directory was deleted: the guard module treats that as no cwd too
+        return None
+    return cwd if cwd.startswith("/") else None
+
+
 def classify(real, argv):
+    # Look at fd 1 and fd 2 BEFORE anything opens a file: with a descriptor closed, the next open() would
+    # take its number and the kind would describe the classifier's own file.
+    kind, err_devnull = stdout_kind(), _devnull(_stat(2))
     g = load_guard()
-    g.CWD = os.getcwd() if os.getcwd().startswith("/") else None
-    code, reason = decide(g, argv, stdout_kind(), _devnull(_stat(2)))
+    g.CWD = _cwd()
+    code, reason = decide(g, argv, kind, err_devnull)
     if code == DENY:
         return deny(g, reason)
     return code
