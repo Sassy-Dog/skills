@@ -1,4 +1,4 @@
-# TEMPLATE: deps-cadence-impl · version 10
+# TEMPLATE: deps-cadence-impl · version 11
 # Rendered by sassy-dog:setup-deps through scripts/render-cadence.sh, never by
 # hand. The renderer implements the same three rules as every template here
 # (drop this header, keep or delete each # {{IF:FLAG}} block, substitute each
@@ -45,6 +45,11 @@
 #            the patch against paths re-derived from LANES, applies it with
 #            hooks off, and only then mints the App token, commits, pushes,
 #            opens the PR and enqueues it.
+# Version 11 (impl version, #669): open-pr's validate step checks what a patch
+# changes INSIDE each allowed file (see "The refresh's patch is UNTRUSTED"),
+# and a bun lane's allowed manifests are its workspace members, not any
+# package.json below it. A rendered copy carries version 10's path-only check
+# until it is re-synced with setup-deps.
 # Version 8 (impl version, #548) applies the version 7 empty-npm rule to the
 # bun and npm exact-pin section: empty `npm outdated --json` output is listed in
 # its existing `**Could not evaluate**` list as `<manifest> (npm outdated
@@ -68,7 +73,7 @@
 # committed codegen on the PR this workflow opens; this file is unchanged by it.
 # Delete this header block from the rendered output; keep the generated-by line.
 ---
-# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 10
+# generated-by: sassy-dog:setup-deps | template: deps-cadence-impl | template-version: 11
 #
 # Monthly lockfile refresh, called by deps-cadence.yml (the thin trigger).
 #
@@ -98,9 +103,26 @@
 #     minted in open-pr, after the untrusted patch is validated and applied.
 #     The package managers run in a job that never sees a secret.
 #   - The refresh's patch is UNTRUSTED: open-pr rejects any path outside the
-#     lanes' manifests and lockfiles, any create, delete, rename, copy or mode
-#     change, any binary hunk, and any path that is not a tracked regular file
-#     (a symlink or a submodule).
+#     lanes' manifests, workspace members and lockfiles (a bun lane's members
+#     are the base commit's `workspaces` globs; nothing under .github/), any
+#     create, delete, rename, copy or mode change, any binary hunk, and any
+#     path that is not a tracked regular file (a symlink or a submodule). It
+#     then checks CONTENT on a throwaway index, before the tree is touched: a
+#     package.json may change only version strings inside its four dependency
+#     maps (same keys; a value may not become a git, URL, file, workspace or
+#     other source, and an `npm:` alias may not change its target); a
+#     pubspec.yaml only version constraints under dependencies,
+#     dev_dependencies and dependency_overrides (line level, no YAML parser);
+#     a lockfile may not name a host, registry or source its base version does
+#     not use (package-lock.json: `resolved` hosts; bun.lock: any URL or
+#     git/github/file shorthand, since the default registry is the empty
+#     field; pubspec.lock: URL hosts and `source:` kinds; Cargo.lock: each
+#     `source =` value minus its revision). NOT checked, and the gate does not
+#     claim to: a lockfile package swapped within an allowed host, integrity
+#     hashes, a Cargo.lock path package, a workspace glob using more than
+#     `*`/`**` (that member is simply refused), and bun `catalog` entries
+#     (outside the four maps, so refused). Pinned by
+#     scripts/test-deps-cadence-policy.sh, decision 10.
 #   - The token never reaches argv or a git config file: the push reads it
 #     from the environment through a one-shot credential helper, with system
 #     and global git config ignored and hooks disabled.
@@ -991,9 +1013,10 @@ jobs:
           path: ${{ runner.temp }}/deps-cadence-in
 
       # Every rule here is about the patch, not about who made it. The allowed
-      # paths are re-derived from LANES with the SAME mapping as the refresh
-      # step's case arms (test-deps-cadence-policy.sh executes both against the
-      # same scratch repo), and git itself reports what the patch would do.
+      # paths are re-derived from LANES (a bun lane's workspace members from
+      # the BASE commit's `workspaces` globs, never from the patch), git itself
+      # reports what the patch would do, and the patch is then applied to a
+      # throwaway index to check WHAT it changes inside each allowed file.
       - name: Validate and apply the refresh patch
         run: |
           set -euo pipefail
@@ -1002,8 +1025,25 @@ jobs:
           patch="$RUNNER_TEMP/deps-cadence-in/cadence.patch"
           reject() { echo "::error::Rejected the refresh patch: $1"; exit 1; }
           [ -s "$patch" ] || reject "the artifact holds no patch"
+          command -v jq >/dev/null 2>&1 || reject "jq is required to read the manifests"
+
+          # A workspace glob (a bun `workspaces` entry) as an ERE for a member's
+          # directory. Only plain path globs with `*` and `**` are read; any
+          # other glob syntax yields nothing, so that member is NOT allowed
+          # (the refresh then fails closed rather than trusting what it cannot
+          # read).
+          glob_re() {
+            local g="$1" star='[^/]*'
+            [[ "$g" =~ ^[A-Za-z0-9._/@+*-]+$ ]] || return 0
+            g="${g#./}"; g="${g%/}"
+            case "$g" in ''|/*|*..*) return 0 ;; esac
+            g="$(printf '%s' "$g" | sed 's/[.+]/\\&/g')"
+            g="${g//\*\*/$'\001'}"; g="${g//\*/$star}"; g="${g//$'\001'/.*}"
+            printf '%s' "$g"
+          }
 
           allowed=""
+          denied=""
           for lane in $LANES; do
             eco="${lane%%:*}"
             dir="${lane#*:}"
@@ -1012,7 +1052,23 @@ jobs:
             p="$(printf '%s' "$rel" | sed 's/[.+]/\\&/g')"
             p="${p:+$p/}"
             case "$eco" in
-              bun)   allowed+="^${p}(.*/)?package\\.json\$|^${p}bun\\.lock\$|" ;;
+              bun)
+                allowed+="^${p}package\\.json\$|^${p}bun\\.lock\$|"
+                # The members are the lane root's own `workspaces` globs, read
+                # from the BASE commit (this checkout), never from the patch.
+                # Array form or { "packages": [...] }; a leading ! excludes.
+                while IFS= read -r g; do
+                  [ -n "$g" ] || continue
+                  if [ "${g:0:1}" = "!" ]; then
+                    re="$(glob_re "${g:1}")"
+                    [ -z "$re" ] || denied+="^${p}${re}/package\\.json\$|"
+                  else
+                    re="$(glob_re "$g")"
+                    [ -z "$re" ] || allowed+="^${p}${re}/package\\.json\$|"
+                  fi
+                done < <(git "${nohooks[@]}" show "HEAD:${rel:+$rel/}package.json" 2>/dev/null \
+                  | jq -r '(.workspaces // empty) | if type == "array" then .[] elif type == "object" then ((.packages // []) | if type == "array" then .[] else empty end) else empty end | strings' 2>/dev/null || true)
+                ;;
               npm)   allowed+="^${p}package\\.json\$|^${p}package-lock\\.json\$|" ;;
               pub)   allowed+="^${p}pubspec\\.yaml\$|^${p}pubspec\\.lock\$|" ;;
               cargo) allowed+="^${p}Cargo\\.lock\$|" ;;
@@ -1020,6 +1076,7 @@ jobs:
             esac
           done
           allowed="${allowed%|}"
+          denied="${denied%|}"
           [ -n "$allowed" ] || reject "LANES is empty"
 
           # git's own reading of the patch: any create, delete, rename, copy
@@ -1028,16 +1085,136 @@ jobs:
           [ -z "$summary" ] || reject "it creates, deletes, renames, copies or re-modes a file: $(echo "$summary" | tr '\n' ' ')"
           numstat="$(git "${nohooks[@]}" apply --numstat -- "$patch")" || reject "git cannot parse it"
           [ -n "$numstat" ] || reject "it changes nothing"
+          changed=()
           while IFS=$'\t' read -r added _ path; do
             [ "$added" != "-" ] || reject "$path is a binary change; lane files are text"
             if ! [[ "$path" =~ ^[A-Za-z0-9._/@+-]+$ ]] || [[ "$path" == *..* ]]; then
               reject "unusual path '$path'"
             fi
-            [[ "$path" =~ $allowed ]] || reject "$path is outside the lanes' manifests and lockfiles"
+            case "$path" in
+              .github/*|*/.github/*) reject "$path is under .github/, which no lane may change" ;;
+            esac
+            [[ "$path" =~ $allowed ]] || reject "$path is outside the lanes' manifests, workspace members and lockfiles"
+            [ -z "$denied" ] || ! [[ "$path" =~ $denied ]] || reject "$path is a workspace member the base manifest excludes"
             mode="$(git "${nohooks[@]}" ls-files -s -- ":(literal)$path" | cut -d' ' -f1)"
             [ "$mode" = "100644" ] || [ "$mode" = "100755" ] \
               || reject "$path is not a tracked regular file (mode '${mode:-untracked}'; a symlink is 120000, a submodule 160000)"
+            changed+=("$path")
           done <<<"$numstat"
+
+          # WHAT changes inside an allowed file. A path check alone passes any
+          # hunk in a manifest, so the patch is applied to a THROWAWAY index
+          # first and each changed file is compared with its base version; the
+          # real tree and index are not touched until every file has passed.
+          # A manifest may change dependency version strings and nothing else.
+          # A lockfile may not gain a host, registry or source the base
+          # lockfile does not already use.
+          # The ranges a dependency value may move between: no `:` or `/` or
+          # `@`, so no git, URL, file, workspace or registry-alias source.
+          # shellcheck disable=SC2016  # a jq program: deliberately not expanded
+          manifest_violation() {
+            jq -n -r --slurpfile o "$1" --slurpfile n "$2" '
+              def maps: ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+              def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$");
+              def alias: if test("^npm:.+@[^@]*$") then {pre: sub("@[^@]*$"; ""), ver: sub("^.*@"; "")} else null end;
+              def spec_ok($was; $now):
+                ($now | type) == "string"
+                and ($now == $was
+                     or (($was | type) == "string" and ($was | isrange) and ($now | isrange))
+                     or (($was | type) == "string"
+                         and ($was | alias) != null and ($now | alias) != null
+                         and ($was | alias).pre == ($now | alias).pre
+                         and (($was | alias).ver | isrange) and (($now | alias).ver | isrange)));
+              if ($o | length) != 1 or ($n | length) != 1 then "not exactly one JSON document"
+              else $o[0] as $a | $n[0] as $b
+                | if ($a | type) != "object" or ($b | type) != "object" then "not a JSON object"
+                  else
+                    [ (if ($a | del(.dependencies, .devDependencies, .optionalDependencies, .peerDependencies))
+                          != ($b | del(.dependencies, .devDependencies, .optionalDependencies, .peerDependencies))
+                       then "a key outside the four dependency maps changed" else empty end),
+                      (maps[] as $m | $a[$m] as $x | $b[$m] as $y
+                       | if ($x | type) != ($y | type) then "\($m) was added, removed or changed type"
+                         elif ($x | type) == "null" then empty
+                         elif ($x | type) != "object" then "\($m) is not an object"
+                         elif ($x | keys) != ($y | keys) then "\($m) gained or lost a key"
+                         else ($y | to_entries[] | select(spec_ok($x[.key]; .value) | not) | "\($m) entry \(.key) is not a version-range change")
+                         end)
+                    ] | .[0] // empty
+                  end
+              end'
+          }
+
+          # pubspec.yaml, line level (no YAML parser here): each dependency's
+          # plain version constraint, and a nested `version:`, under
+          # dependencies, dev_dependencies and dependency_overrides is masked;
+          # every other line, comments and nested sources included, must be
+          # identical between the two files.
+          # shellcheck disable=SC2016  # an awk program: deliberately not expanded
+          pub_shape() {
+            awk '
+              function vers(v) { gsub(/^["\047]|["\047]$/, "", v); return v ~ /^[0-9A-Za-z.*^~<>=| _+-]+$/ }
+              /^[^[:space:]#]/ { sect = ($0 ~ /^(dependencies|dev_dependencies|dependency_overrides):/); print; next }
+              sect && (/^  [A-Za-z_][A-Za-z0-9_]*:[[:space:]]/ || /^    version:[[:space:]]/) {
+                line = $0
+                sub(/[[:space:]]+#.*$/, "", line)
+                key = line; sub(/:.*$/, "", key)
+                val = line; sub(/^[^:]*:[[:space:]]*/, "", val); sub(/[[:space:]]+$/, "", val)
+                if (val != "" && vers(val)) { print key ": <V>"; next }
+              }
+              { print }'
+          }
+
+          # Every host, registry or source a lockfile names, one per line.
+          # package-lock.json: the host of each `resolved` URL (not its funding
+          # URLs). bun.lock: a registry field is empty for the default registry,
+          # so any URL or git/github/file shorthand in it is a non-default
+          # source. pubspec.lock: each URL's host and each `source:` kind.
+          # Cargo.lock: each `source =` value, minus its revision.
+          source_tokens() {
+            local t
+            t="$(cat)"
+            {
+              printf '%s\n' "$t" | grep -oE '[A-Za-z][A-Za-z0-9+.-]*://[^]"/[:space:],)}]*' || true
+              printf '%s\n' "$t" | grep -oE '(^|[^A-Za-z0-9+.-])(github|gitlab|bitbucket|gist|file|link):' | sed -E 's/^[^a-z]//' || true
+            } | sort -u
+          }
+          lock_sources() {
+            case "$1" in
+              package-lock.json) jq -r '[.. | objects | select(has("resolved")) | .resolved | strings] | .[]' "$2" | source_tokens ;;
+              bun.lock)          source_tokens < "$2" ;;
+              pubspec.lock)      { source_tokens < "$2"; grep -E '^    source: ' "$2" | sed -E 's/[[:space:]]+$//' || true; } | sort -u ;;
+              Cargo.lock)        { grep -E '^source = ' "$2" || true; } | sed -E 's/[#?].*$//; s/"$//' | sort -u ;;
+              *)                 return 1 ;;
+            esac
+          }
+
+          tmp="$RUNNER_TEMP/deps-cadence-check"
+          rm -rf "$tmp"; mkdir -p "$tmp"
+          tidx="$tmp/index"
+          GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" read-tree HEAD
+          GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" apply --cached -- "$patch" || reject "it does not apply to the base commit"
+          for path in "${changed[@]}"; do
+            name="${path##*/}"
+            git "${nohooks[@]}" cat-file blob "HEAD:$path" > "$tmp/old" || reject "cannot read $path at the base commit"
+            GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" cat-file blob ":$path" > "$tmp/new" || reject "cannot read $path from the patched index"
+            case "$name" in
+              package.json)
+                why="$(manifest_violation "$tmp/old" "$tmp/new")" || reject "$path is not valid JSON"
+                [ -z "$why" ] || reject "$path changes more than dependency versions: $why"
+                ;;
+              pubspec.yaml)
+                cmp -s <(pub_shape < "$tmp/old") <(pub_shape < "$tmp/new") \
+                  || reject "$path changes more than dependency version constraints"
+                ;;
+              package-lock.json|bun.lock|pubspec.lock|Cargo.lock)
+                old_src="$(lock_sources "$name" "$tmp/old")" || reject "$path (base) cannot be read as a $name"
+                new_src="$(lock_sources "$name" "$tmp/new")" || reject "$path cannot be read as a $name"
+                gained="$(comm -13 <(printf '%s\n' "$old_src") <(printf '%s\n' "$new_src") | grep -v '^$' || true)"
+                [ -z "$gained" ] || reject "$path names a host, registry or source the base lockfile does not use: $(echo "$gained" | tr '\n' ' ')"
+                ;;
+              *) reject "no content check exists for $path" ;;
+            esac
+          done
 
           git "${nohooks[@]}" apply --index -- "$patch"
           # Belt and braces: what is staged, and only that, is lane files.

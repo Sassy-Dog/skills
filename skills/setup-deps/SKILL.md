@@ -715,18 +715,26 @@ outlive its step and read the token from `/proc/*/environ`, `$RUNNER_TEMP` or st
 | `open-pr` | no package-manager or repo code: checkout, download the artifact, validate and apply it, then mint the App token, commit, push, open the PR and enqueue it | the App token, minted only after the patch is applied |
 
 **The artifact is untrusted.** `open-pr` re-derives the allowed paths from `LANES` with the same
-mapping as the refresh's case arms (bun: any `package.json` under the lane plus its `bun.lock`;
+mapping as the refresh's case arms (bun: the lane's own `package.json` and `bun.lock` plus each
+workspace member, the directories its `workspaces` globs name, read from the base commit and never from the patch;
 npm: `package.json`, `package-lock.json`; pub: `pubspec.yaml`, `pubspec.lock`; cargo:
-`Cargo.lock`), then asks git what the patch would do and rejects it, before anything is applied, when:
+`Cargo.lock`; nothing under `.github/` for any lane), then asks git what the patch would do and
+rejects it, before anything is applied, when:
 
 - `git apply --summary` reports anything: a create, delete, rename, copy or mode change;
 - `git apply --numstat` shows a binary hunk, an unusual path (quoted, `..`, characters outside
   `[A-Za-z0-9._/@+-]`) or a path outside the allowed set (`.github/**` included);
 - a path is not a tracked regular file in the checkout (mode `100644` / `100755`), which is how a
-  symlink (`120000`) or a submodule (`160000`) is refused.
+  symlink (`120000`) or a submodule (`160000`) is refused;
+- the patch, applied to a throwaway index, changes more than a version inside an allowed file: a
+  `package.json` may change dependency version strings in its four dependency maps and nothing else
+  (same keys, no new source such as a git URL, tarball or file path); a `pubspec.yaml` only
+  version constraints under its dependency sections; and a lockfile may not name a host, registry
+  or source its base version does not already use. `scripts/test-deps-cadence-policy.sh` (decision 10)
+  lists what each of these catches and what it does not.
 
 It then runs `git apply --index` with hooks and fsmonitor off, and re-checks that only allowed
-paths are staged and nothing else changed.
+paths are staged and nothing else changed. Every rejection happens before the tree is touched.
 
 The token rules from version 2 still hold inside `open-pr`:
 
@@ -747,7 +755,7 @@ single mint in `open-pr` after validation, the actions `open-pr` may use, no pac
 in `open-pr`, and hosted runners. Executed, the refresh and package steps run in one scratch repo,
 the validate and PR steps run in a fresh clone (as `open-pr` does), and hostile patches (a
 `.github/` edit, a rename, a mode change, a symlink retarget, a new file, a binary hunk, a path
-outside every lane) must each be rejected with the tree untouched. A logging `git` wrapper and a
+outside every lane, and since version 11 a `scripts` or `bin` change, a dependency added or repointed at a git URL, a `package.json` outside the workspace globs, a `pubspec.yaml` change outside its dependency sections, a lockfile naming a new host) must each be rejected with the tree untouched, and a patch that only moves versions must still apply. A logging `git` wrapper and a
 poisoned global gitconfig prove the token reaches no argv and no hook.
 
 The optional `deps-cadence-codegen.yml` follows the same rule and the same split (a `regen` job
@@ -851,12 +859,12 @@ release among the N evaluated.`, or `No bare ignore: hold in .github/dependabot.
 none), the same way the exact-pin sections do, and the unevaluated ones follow as a list.
 
 **Re-render and ownership.** Both files carry the `generated-by:` marker, and each has its own
-`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `10`, and the optional
+`template-version` (`deps-cadence.yml` is `3`, `deps-cadence-impl.yml` is `11`, and the optional
 `deps-cadence-codegen.yml` is `5`). Impl history: impl version 1 ran on the fleet and minted the token first;
 impl version 2 ran the package managers and the token in one job; impl version 3 split the token from the
 package managers; impl version 4 adds the pub and cargo exact-pin section; impl version 5 passes the
 hook-disabling `nohooks` to the validator's `git ls-files -s`, the one git call in `open-pr` that
-lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; impl version 8 lists empty `npm outdated --json` output in the bun and npm exact-pin section's existing `Could not evaluate` list instead of reading it as nothing behind; impl version 9 disables the built-in cache of every `oven-sh/setup-bun` (`no-cache: true`) and `actions/setup-node` (`package-manager-cache: false`) step, so the refresh job on the default branch saves no cache entry that a self-hosted CI sharing the scope could restore ([#551](https://github.com/Sassy-Dog/skills/issues/551)); `subosito/flutter-action` (`cache:` defaults to false, none set) and `dtolnay/rust-toolchain` (no cache) were checked and need nothing. Impl version 10 only moves the pinned `actions/create-github-app-token` (v3.3.0) and `subosito/flutter-action` (v2.23.0) SHAs and writes the full `# v2.2.0` comment on `oven-sh/setup-bun` ([#564](https://github.com/Sassy-Dog/skills/issues/564)). Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
+lacked it; impl version 6 adds the bare `ignore:` holds section; impl version 7 makes empty `npm outdated --json` output `Could not evaluate` and resolves a crate with several versions in `Cargo.lock` through a workspace member's dependency edge; impl version 8 lists empty `npm outdated --json` output in the bun and npm exact-pin section's existing `Could not evaluate` list instead of reading it as nothing behind; impl version 9 disables the built-in cache of every `oven-sh/setup-bun` (`no-cache: true`) and `actions/setup-node` (`package-manager-cache: false`) step, so the refresh job on the default branch saves no cache entry that a self-hosted CI sharing the scope could restore ([#551](https://github.com/Sassy-Dog/skills/issues/551)); `subosito/flutter-action` (`cache:` defaults to false, none set) and `dtolnay/rust-toolchain` (no cache) were checked and need nothing. Impl version 10 only moves the pinned `actions/create-github-app-token` (v3.3.0) and `subosito/flutter-action` (v2.23.0) SHAs and writes the full `# v2.2.0` comment on `oven-sh/setup-bun` ([#564](https://github.com/Sassy-Dog/skills/issues/564)). Impl version 11 makes `open-pr` check what a patch changes inside each lane file, not only the file's path ([#669](https://github.com/Sassy-Dog/skills/issues/669)); a repo's rendered copy carries the old path-only check until `setup-deps` re-syncs it. Codegen history: codegen version 1 shipped the push job's `denied=` list with the `package.json`, bun, npm, pub and cargo manifests and lockfiles ([#525](https://github.com/Sassy-Dog/skills/pull/525)); codegen version 2 widens it
 to CocoaPods, Bundler, yarn, pnpm and `.npmrc`; codegen version 3 adds `.yarnrc.yml`, `bunfig.toml`, `.pnpmfile.cjs`, `npm-shrinkwrap.json`, SwiftPM's `Package.resolved` and `go.sum`; codegen version 4 sets the same two cache-off inputs on its setup-bun and setup-node steps ([#551](https://github.com/Sassy-Dog/skills/issues/551)); codegen version 5 is the same action-pin move as impl version 10. The ownership rules in §1 apply to each. Re-render owned files with
 `--compare-to .github/workflows/deps-cadence-impl.yml`: a committed lane the fresh render drops is
 `DIVERGED` (exit `5`), the same stop signal as a dropped `dependabot.yml` lane. A `deps-cadence.yml`

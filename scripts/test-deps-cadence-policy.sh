@@ -61,6 +61,32 @@
 #      Hostile patches built in a third clone (a .github/ edit, a rename, a
 #      mode change, a symlink, a new file on an allowed path, a binary hunk)
 #      must each be rejected with the tree left untouched.
+#      CONTENT (impl version 11, #669): the path check alone passed any hunk in
+#      an allowed file, so open-pr also applies the patch to a throwaway index
+#      and compares each changed file with its base version, before the tree is
+#      touched. A bun lane's members are the base manifest's `workspaces` globs
+#      (array or { "packages": [...] } form, `!` negation, `*` and `**` only),
+#      never the patch's, and never anything under .github/. A package.json
+#      may change only version strings in its four dependency maps (same keys;
+#      a value must stay a plain range, so a git/URL/file/workspace source or a
+#      retargeted `npm:` alias is refused); a pubspec.yaml only version
+#      constraints in its dependency sections; a lockfile may not name a host,
+#      registry or source its base lockfile lacks (package-lock.json `resolved`
+#      hosts, so funding URLs are ignored; bun.lock any URL or github/git/file
+#      shorthand; pubspec.lock URL hosts and `source:` kinds; Cargo.lock the
+#      `source =` values minus revision). Hostile cases are built in the third
+#      clone as above: 42 rejected cases (seven path-level, the rest content,
+#      each asserted by its REASON, not just by rejection), two benign patches
+#      that must still apply (every lane type; object-form workspaces), and a
+#      no-jq case. 32 mutants (mutate_content) each name the case that must
+#      kill them. Cost: the unmutated run takes about a minute, so a generic
+#      mutation re-runs only the seven path-level cases and a content mutant
+#      only the cases its needle names; shard 0 alone runs the unmutated
+#      content cases. Not caught, by design and stated in the template: a
+#      lockfile package swapped within an allowed host, integrity hashes, a
+#      Cargo.lock path package, glob syntax beyond `*`/`**` (refused), bun
+#      `catalog` entries (refused), and the unreachable "no content check
+#      exists" arm (killed only through the Cargo.toml mutant).
 #  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
 #      `bun update` there moves only the root's own dependencies). Executed: a
 #      fake bun logs its argv.
@@ -291,6 +317,7 @@ MUT_SHARDS="$SHARDS"
 mut_seq=0
 mut_ran=0
 in_mut=0
+CONTENT_ONLY=""
 # mut_mine — true when this process owns the next mutation call (call order mod
 # shard count), so every process agrees on the split without talking.
 mut_mine() {
@@ -1413,41 +1440,277 @@ report_checks() {
     return "$rc"
 }
 
-# hostile_checks <validate-script> — each hostile patch, built in a clone of a
-# scratch repo, must be rejected by the validate step and leave a fresh clone
-# untouched. Hostile = anything the refresh could never legitimately produce.
-hostile_checks() {
-    local validate="$1" rc=0 base="$WORK/h-base" name d out
-    rm -rf "$base"; new_repo "$base"
-    # name|shell run inside the hostile clone to produce the change
-    local cases=(
-        'a .github/ edit|echo "on: push" >> .github/workflows/ci.yml; echo x >> web/bun.lock'
-        'a rename on allowed paths|git mv web/pkg/package.json web/package2.json; mkdir -p web/pkg2; git mv web/package2.json web/pkg2/package.json'
-        'a mode change|chmod +x web/bun.lock'
-        'a symlink retarget|rm web/sym/package.json; ln -s ../../Cargo.toml web/sym/package.json'
-        'a new file on an allowed path|mkdir -p web/new; echo "{}" > web/new/package.json; git add -N web/new/package.json'
-        'a binary hunk|printf "lock\000bin\n" > web/bun.lock'
-        'a path outside every lane|echo x >> src/main.rs'
+# content_repo <dir> — new_repo plus what the CONTENT checks need: a workspace
+# list that names a symlinked member (so the mode check is still reached), a
+# tracked package.json the list does not name, realistic lockfiles for every
+# lane type (hosts and sources the base already uses), a pub lane (app/) and an
+# npm lane (tools/, with a registry alias).
+content_repo() {
+    local d="$1"
+    new_repo "$d"
+    (
+        cd "$d" || exit 1
+        echo '{"name":"web","workspaces":["pkg","sym"],"dependencies":{"is-number":"6.0.0","left-pad":"^1.1.0"},"devDependencies":{"kind-of":"=6.0.3"}}' > web/package.json
+        mkdir -p web/other app tools
+        echo '{"name":"other"}' > web/other/package.json
+        cat > web/bun.lock <<'LOCK'
+{
+  "lockfileVersion": 1,
+  "workspaces": { "": { "name": "web", "dependencies": { "is-number": "6.0.0" } } },
+  "packages": {
+    "is-number": ["is-number@6.0.0", "", {}, "sha512-AAAA"],
+    "kind-of": ["kind-of@6.0.3", "", {}, "sha512-BBBB"],
+  }
+}
+LOCK
+        cat > app/pubspec.yaml <<'YML'
+name: app
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+dependencies:
+  http: ^1.0.0
+  collection: "^1.17.0"
+  intl:
+    hosted: https://pub.example.org
+    version: ^0.18.0
+dev_dependencies:
+  lints: ^3.0.0
+YML
+        cat > app/pubspec.lock <<'LOCK'
+packages:
+  http:
+    dependency: "direct main"
+    description:
+      name: http
+      sha256: "aa"
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.0"
+sdks:
+  dart: ">=3.0.0 <4.0.0"
+LOCK
+        echo '{"name":"tools","dependencies":{"chalk":"^4.0.0","aliased":"npm:left-pad@^1.0.0"},"devDependencies":{"mocha":"~10.0.0"}}' > tools/package.json
+        echo '{"name":"tools","lockfileVersion":3,"packages":{"":{"name":"tools"},"node_modules/chalk":{"version":"4.0.0","resolved":"https://registry.npmjs.org/chalk/-/chalk-4.0.0.tgz","integrity":"sha512-aa","funding":{"url":"https://github.com/chalk/chalk?sponsor=1"}}}}' > tools/package-lock.json
+        cat > Cargo.lock <<'LOCK'
+version = 3
+
+[[package]]
+name = "serde"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa"
+
+[[package]]
+name = "gitdep"
+version = "0.1.0"
+source = "git+https://github.com/example/gitdep?rev=abc#abc123"
+LOCK
+        git add -A && git commit -qm content
     )
-    local c
+}
+
+# root_repo <dir> — a bun lane at the repo root whose workspaces use the
+# { "packages": [...] } form, a recursive glob that also matches a tracked
+# package.json under .github/, and a negation.
+root_repo() {
+    local d="$1"
+    mkdir -p "$d/packages/a" "$d/other" "$d/.github/tools"
+    (
+        cd "$d" || exit 1
+        git init -q -b main
+        git config user.name t; git config user.email t@example.com
+        echo '{"name":"root","workspaces":{"packages":["**","!other"]},"dependencies":{"a":"^1.0.0"}}' > package.json
+        echo 'lock' > bun.lock
+        echo '{"name":"a","dependencies":{"b":"^1.0.0"}}' > packages/a/package.json
+        echo '{"name":"other"}' > other/package.json
+        echo '{"name":"t"}' > .github/tools/package.json
+        git add -A && git commit -qm init
+    )
+}
+
+# vpatch <base> <script> <out> — the patch <script> makes, built in a THIRD clone.
+vpatch() {
+    local mk="$WORK/vp-$RANDOM"
+    rm -rf "$mk"; git clone -q "$1" "$mk" || return 1
+    (cd "$mk" && bash -c "$2" && git add -A && git diff --cached --binary -M > "$3") >/dev/null 2>&1
+    rm -rf "$mk"
+    [ -s "$3" ]
+}
+
+# vrun <validate> <base> <patch> <lanes> — the validate step in a FRESH clone of
+# <base>, as open-pr runs it. Leaves the clone in VCLONE and the output in VOUT.
+vrun() {
+    VCLONE="$WORK/vc-$RANDOM"; rm -rf "$VCLONE" "$VCLONE.tmp"
+    git clone -q "$2" "$VCLONE"
+    mkdir -p "$VCLONE.tmp/deps-cadence-in"; cp "$3" "$VCLONE.tmp/deps-cadence-in/cadence.patch"
+    VOUT="$(cd "$VCLONE" && gh_shell "$1" RUNNER_TEMP="$VCLONE.tmp" LANES="$4" 2>&1)"
+}
+
+# vreject <validate> <base> <lanes> <name> <needle> <script> — the patch must be
+# rejected with the existing message, for the reason <needle> names, and leave
+# the tree untouched.
+vreject() {
+    local v="$1" base="$2" lanes="$3" name="$4" needle="$5" script="$6" p="$WORK/vp.patch"
+    rm -f "$p"
+    vpatch "$base" "$script" "$p" || { echo "hostile case '$name' produced no patch (fixture broken)"; return 1; }
+    if vrun "$v" "$base" "$p" "$lanes"; then
+        echo "the validate step ACCEPTED $name"; return 1
+    elif ! grep -q '::error::Rejected the refresh patch' <<<"$VOUT"; then
+        echo "$name failed without a rejection message: $(tail -n1 <<<"$VOUT")"; return 1
+    elif [ -n "$needle" ] && ! grep -qF -- "$needle" <<<"$VOUT"; then
+        echo "$name was rejected, but not for the expected reason ($needle): $(grep -m1 '::error::' <<<"$VOUT")"; return 1
+    elif [ -n "$(git -C "$VCLONE" status --porcelain)" ]; then
+        echo "$name was rejected only AFTER changing the tree: $(git -C "$VCLONE" status --porcelain | tr '\n' ' ')"; return 1
+    fi
+    rm -rf "$VCLONE" "$VCLONE.tmp" "$p"
+}
+
+# vaccept <validate> <base> <lanes> <name> <files> <script> — a benign patch must
+# be accepted, applied, and stage exactly <files> (space-separated).
+vaccept() {
+    local v="$1" base="$2" lanes="$3" name="$4" files="$5" script="$6" p="$WORK/vp.patch" want got
+    rm -f "$p"
+    vpatch "$base" "$script" "$p" || { echo "benign case '$name' produced no patch (fixture broken)"; return 1; }
+    if ! vrun "$v" "$base" "$p" "$lanes"; then
+        echo "the validate step rejected the benign patch '$name': $(grep -m1 '::error::' <<<"$VOUT")"; return 1
+    fi
+    want="$(tr ' ' '\n' <<<"$files" | sort | tr '\n' ' ')"
+    got="$(git -C "$VCLONE" diff --cached --name-only | sort | tr '\n' ' ')"
+    if [ "$got" != "$want" ]; then
+        echo "the benign patch '$name' staged '$got', not '$want'"; return 1
+    elif [ -n "$(git -C "$VCLONE" status --porcelain | grep -v '^M  ' || true)" ]; then
+        echo "the benign patch '$name' left changes outside the index"; return 1
+    fi
+    rm -rf "$VCLONE" "$VCLONE.tmp" "$p"
+}
+
+# hostile_checks <validate-script> — each hostile patch, built in a clone of a
+# scratch repo, must be rejected by the validate step (for the reason it names)
+# and leave a fresh clone untouched. Hostile = anything the refresh could never
+# legitimately produce. The benign patches, which a real refresh does make, must
+# still apply.
+hostile_checks() {
+    local validate="$1" rc=0 base="$WORK/h-base" root="$WORK/h-root" lanes4="bun:/web cargo:/ pub:/app npm:/tools"
+    # Which cases run. The whole set is slow (about a minute: every case clones
+    # twice more), and every mutation of ANY template line re-runs this gate, so
+    # a mutation runs only the path-level cases, except a content mutation
+    # (mutate_content), which runs just the cases its needle names. The
+    # unmutated run is shard 0's.
+    local run_legacy=1 run_content=1 only=""
+    if [ "$in_mut" -eq 1 ]; then
+        if [ -n "$CONTENT_ONLY" ]; then run_legacy=0; only="$CONTENT_ONLY"; else run_content=0; fi
+    elif [ "$MUT_SHARD" -ne 0 ]; then
+        run_content=0
+    fi
+    # cc_want <case name> <legacy|content>
+    cc_want() {
+        if [ "$2" = legacy ]; then [ "$run_legacy" -eq 1 ]; return; fi
+        [ "$run_content" -eq 1 ] || return 1
+        [ -z "$only" ] && return 0
+        [[ "$1" == *"$only"* ]] && return 0
+        [ "$only" = "rejected the benign patch" ] && [[ "$1" == "versions bumped"* ]]
+    }
+    rm -rf "$base" "$root"; content_repo "$base"; root_repo "$root"
+    # name@@reason@@shell run inside the third clone to produce the change
+    local cases=(
+        'a .github/ edit@@under .github/@@echo "on: push" >> .github/workflows/ci.yml; echo x >> web/bun.lock'
+        'a rename on allowed paths@@creates, deletes, renames@@git mv web/pkg/package.json web/package2.json; mkdir -p web/pkg2; git mv web/package2.json web/pkg2/package.json'
+        'a mode change@@creates, deletes, renames@@chmod +x web/bun.lock'
+        'a symlink retarget@@not a tracked regular file@@rm web/sym/package.json; ln -s ../../Cargo.toml web/sym/package.json'
+        'a new file on an allowed path@@creates, deletes, renames@@mkdir -p web/new; echo "{}" > web/new/package.json; git add -N web/new/package.json'
+        'a binary hunk@@binary change@@printf "lock\000bin\n" > web/bun.lock'
+        'a path outside every lane@@outside the lanes@@echo x >> src/main.rs'
+        'a patch that does not apply to the base commit@@does not apply to the base commit@@echo x >> web/bun.lock; git -c user.name=t -c user.email=t@e.com commit -qam x; echo y >> web/bun.lock'
+        # --- what changes INSIDE a manifest ---
+        'a scripts change in a lane package.json@@outside the four dependency maps@@jq ".scripts={\"postinstall\":\"x\"}" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a bin key change@@outside the four dependency maps@@jq ".bin=\"evil.js\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a main key change@@outside the four dependency maps@@jq ".main=\"evil.js\"" web/pkg/package.json > web/pkg/p.tmp && mv web/pkg/p.tmp web/pkg/package.json'
+        'a workspaces change in a lane package.json@@outside the four dependency maps@@jq ".workspaces=[\"pkg\",\"sym\",\"other\"]" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency added@@gained or lost a key@@jq ".dependencies.evil=\"1.0.0\"" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency removed@@gained or lost a key@@jq "del(.dependencies[\"left-pad\"])" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency map added@@was added, removed or changed type@@jq ".dependencies={\"x\":\"1.0.0\"}" web/pkg/package.json > web/pkg/p.tmp && mv web/pkg/p.tmp web/pkg/package.json'
+        'a dependency map removed@@was added, removed or changed type@@jq "del(.devDependencies)" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency repointed at a git URL@@is not a version-range change@@jq ".dependencies[\"left-pad\"]=\"git+https://evil.example/x.git\"" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency repointed at a tarball@@is not a version-range change@@jq ".devDependencies.mocha=\"https://evil.example/x.tgz\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a registry alias retargeted@@is not a version-range change@@jq ".dependencies.aliased=\"npm:evil@^1.0.0\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a dependency value that is not a string@@is not a version-range change@@jq ".dependencies.chalk={\"git\":\"x\"}" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a manifest that is not JSON@@is not valid JSON@@echo "{" > web/pkg/package.json'
+        'a package.json outside the workspace globs@@outside the lanes@@echo " " >> web/other/package.json'
+        'a workspace list widened by the same patch@@outside the lanes@@jq ".workspaces=[\"pkg\",\"sym\",\"other\"]" web/package.json > web/p.tmp && mv web/p.tmp web/package.json; jq ".dependencies.evil=\"1.0.0\"" web/other/package.json > web/other/p.tmp && mv web/other/p.tmp web/other/package.json'
+        # --- what changes INSIDE a pubspec.yaml ---
+        'a pubspec.yaml change outside the dependency maps@@changes more than dependency version constraints@@sed "s/^name: app/name: evil/" app/pubspec.yaml > app/p.tmp && mv app/p.tmp app/pubspec.yaml'
+        'a pubspec.yaml dependency added@@changes more than dependency version constraints@@echo "  evil: ^1.0.0" >> app/pubspec.yaml'
+        'a pubspec.yaml dependency repointed at a git source@@changes more than dependency version constraints@@perl -pi -e "s|^  http: .*|  http:\\n    git: https://evil.example/x.git|" app/pubspec.yaml'
+        'a pubspec.yaml dependency repointed at an inline git source@@changes more than dependency version constraints@@sed "s|^  http: .*|  http: {git: https://evil.example/x.git}|" app/pubspec.yaml > app/p.tmp && mv app/p.tmp app/pubspec.yaml'
+        'a pubspec.yaml hosted source changed@@changes more than dependency version constraints@@sed "s|hosted: https://pub.example.org|hosted: https://evil.example|" app/pubspec.yaml > app/p.tmp && mv app/p.tmp app/pubspec.yaml'
+        'a Cargo.toml edit@@outside the lanes@@echo "[build-dependencies]" >> Cargo.toml'
+        'a pubspec.yaml sdk constraint change@@changes more than dependency version constraints@@sed "s|>=3.0.0 <4.0.0|>=2.0.0 <9.0.0|" app/pubspec.yaml > app/p.tmp && mv app/p.tmp app/pubspec.yaml'
+        # --- a lockfile that gains a host, registry or source ---
+        'a package-lock.json resolving from a new host@@names a host, registry or source@@sed "s|https://registry.npmjs.org/chalk|https://evil.example/chalk|" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolving over http@@names a host, registry or source@@sed "s|https://registry.npmjs.org/chalk|http://registry.npmjs.org/chalk|" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json with a github shorthand source@@names a host, registry or source@@sed "s|https://registry.npmjs.org/chalk/-/chalk-4.0.0.tgz|github:evil/chalk#abc|" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a bun.lock naming a new registry@@names a host, registry or source@@sed "s|\"kind-of@6.0.3\", \"\"|\"kind-of@6.0.3\", \"https://evil.example/\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock with a git source@@names a host, registry or source@@sed "s|\"kind-of@6.0.3\"|\"kind-of@git+https://evil.example/k.git\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a bun.lock with a github shorthand source@@names a host, registry or source@@sed "s|\"kind-of@6.0.3\"|\"kind-of@github:evil/kind-of#abc\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
+        'a pubspec.lock hosted from a new host@@names a host, registry or source@@sed "s|https://pub.dev|https://evil.example|" app/pubspec.lock > app/p.tmp && mv app/p.tmp app/pubspec.lock'
+        'a pubspec.lock gaining a path source@@names a host, registry or source@@sed "s|source: hosted|source: path|" app/pubspec.lock > app/p.tmp && mv app/p.tmp app/pubspec.lock'
+        'a Cargo.lock with a new registry@@names a host, registry or source@@sed "s|registry+https://github.com/rust-lang/crates.io-index|registry+https://evil.example/index|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
+        'a Cargo.lock repointing a git source@@names a host, registry or source@@sed "s|github.com/example/gitdep|evil.example/gitdep|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
+    )
+    local c name reason script i=0
     for c in "${cases[@]}"; do
-        name="${c%%|*}"
-        d="$WORK/h-$RANDOM"
-        rm -rf "$d" "$d.mk" "$d.tmp"
-        git clone -q "$base" "$d.mk"
-        (cd "$d.mk" && bash -c "${c#*|}" && git add -A && git diff --cached --binary -M > "$WORK/hostile.patch") >/dev/null 2>&1
-        if [ ! -s "$WORK/hostile.patch" ]; then echo "hostile case '$name' produced no patch (fixture broken)"; rc=1; continue; fi
-        git clone -q "$base" "$d"
-        mkdir -p "$d.tmp/deps-cadence-in"; cp "$WORK/hostile.patch" "$d.tmp/deps-cadence-in/cadence.patch"
-        if out="$(cd "$d" && gh_shell "$validate" RUNNER_TEMP="$d.tmp" LANES="bun:/web cargo:/" 2>&1)"; then
-            echo "the validate step ACCEPTED $name"; rc=1
-        elif ! grep -q '::error::Rejected the refresh patch' <<<"$out"; then
-            echo "$name failed without a rejection message: $(tail -n1 <<<"$out")"; rc=1
-        elif [ -n "$(git -C "$d" status --porcelain)" ]; then
-            echo "$name was rejected only AFTER changing the tree: $(git -C "$d" status --porcelain | tr '\n' ' ')"; rc=1
-        fi
-        rm -f "$WORK/hostile.patch"
+        name="${c%%@@*}"; reason="${c#*@@}"; script="${reason#*@@}"; reason="${reason%%@@*}"
+        i=$((i + 1))
+        # The first seven are the path-level cases (every mutation of any
+        # template line re-runs them); the rest are the content cases.
+        if [ "$i" -le 7 ]; then cc_want "$name" legacy || continue; else cc_want "$name" content || continue; fi
+        vreject "$validate" "$base" "$lanes4" "$name" "$reason" "$script" || rc=1
     done
+    # A root bun lane (object-form workspaces, a recursive glob, a negation).
+    if cc_want "a .github/**/package.json under a root bun lane" content; then
+        vreject "$validate" "$root" "bun:/" "a .github/**/package.json under a root bun lane" "under .github/" \
+            'echo " " >> .github/tools/package.json' || rc=1
+    fi
+    if cc_want "a workspace member the base manifest excludes" content; then
+        vreject "$validate" "$root" "bun:/" "a workspace member the base manifest excludes" "excludes" \
+            'echo " " >> other/package.json' || rc=1
+    fi
+    # What a real refresh makes must still apply: versions moved inside the
+    # maps and the lockfiles, on every lane type and both workspace forms.
+    if cc_want "versions bumped on every lane type" content; then vaccept "$validate" "$base" "$lanes4" "versions bumped on every lane type" \
+        "Cargo.lock app/pubspec.lock app/pubspec.yaml tools/package-lock.json tools/package.json web/bun.lock web/package.json web/pkg/package.json" \
+        'jq ".dependencies[\"is-number\"]=\"7.0.0\" | .dependencies[\"left-pad\"]=\"^1.3.0\" | .devDependencies[\"kind-of\"]=\"=6.0.5\"" web/package.json > web/p.tmp && mv web/p.tmp web/package.json
+         echo " " >> web/pkg/package.json
+         sed "s/6\.0\.0/7.0.0/; s/sha512-AAAA/sha512-CCCC/" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock
+         jq ".dependencies.chalk=\"^4.1.2\" | .dependencies.aliased=\"npm:left-pad@^1.3.0\" | .devDependencies.mocha=\"~10.8.0\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json
+         jq ".packages[\"node_modules/chalk\"].version=\"4.1.2\" | .packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/chalk/-/chalk-4.1.2.tgz\" | .packages[\"node_modules/chalk\"].integrity=\"sha512-bb\" | .packages[\"node_modules/new\"]={\"version\":\"1.0.0\",\"resolved\":\"https://registry.npmjs.org/new/-/new-1.0.0.tgz\",\"funding\":{\"url\":\"https://opencollective.com/new\"}}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json
+         sed "s/http: ^1.0.0/http: ^1.2.0/; s/version: ^0.18.0/version: ^0.19.0/; s/lints: ^3.0.0/lints: ^3.0.1  # bumped/" app/pubspec.yaml > app/p.tmp && mv app/p.tmp app/pubspec.yaml
+         sed "s/version: \"1.0.0\"/version: \"1.2.0\"/; s/sha256: \"aa\"/sha256: \"bb\"/" app/pubspec.lock > app/p.tmp && mv app/p.tmp app/pubspec.lock
+         sed "s/version = \"1.0.0\"/version = \"1.0.5\"/; s/#abc123/#def456/; s/checksum = \"aa\"/checksum = \"bb\"/" Cargo.lock > p.tmp && mv p.tmp Cargo.lock' || rc=1; fi
+    if cc_want "versions bumped under a root lane with object-form workspaces" content; then vaccept "$validate" "$root" "bun:/" "versions bumped under a root lane with object-form workspaces" \
+        "bun.lock package.json packages/a/package.json" \
+        'jq ".dependencies.a=\"^1.2.0\"" package.json > p.tmp && mv p.tmp package.json
+         jq ".dependencies.b=\"^1.5.0\"" packages/a/package.json > p.tmp && mv p.tmp packages/a/package.json
+         echo "lock more" >> bun.lock' || rc=1; fi
+    # jq is the one tool the content checks cannot do without: with none on
+    # PATH the step must reject, not guess.
+    local emptybin="$WORK/nojq-bin" p="$WORK/vp.patch" d out
+    mkdir -p "$emptybin"
+    if ! cc_want "a patch with no jq on PATH" content; then
+        :
+    elif vpatch "$base" 'echo " " >> web/bun.lock' "$p"; then
+        d="$WORK/h-nojq"; rm -rf "$d" "$d.tmp"; git clone -q "$base" "$d"
+        mkdir -p "$d.tmp/deps-cadence-in"; cp "$p" "$d.tmp/deps-cadence-in/cadence.patch"
+        if out="$(cd "$d" && env PATH="$emptybin" RUNNER_TEMP="$d.tmp" LANES="$lanes4" "$BASH" --noprofile --norc -eo pipefail "$validate" 2>&1)"; then
+            echo "the validate step ACCEPTED a patch with no jq on PATH"; rc=1
+        elif ! grep -q '::error::Rejected the refresh patch: jq is required' <<<"$out"; then
+            echo "no jq on PATH did not reject with the jq message: $(tail -n1 <<<"$out")"; rc=1
+        elif [ -n "$(git -C "$d" status --porcelain)" ]; then
+            echo "no jq on PATH was rejected only AFTER changing the tree"; rc=1
+        fi
+    else
+        echo "the no-jq case produced no patch (fixture broken)"; rc=1
+    fi
     return "$rc"
 }
 
@@ -1487,6 +1750,9 @@ _mutate() {
 
 # Sharded (#567): only the owning process runs a mutation call; see the header.
 mutate() { mut_mine || return 0; in_mut=1; _mutate "$@"; in_mut=0; }
+# mutate_content: as mutate, but the content cases its needle names run too
+# (hostile_checks), and only those.
+mutate_content() { mut_mine || return 0; in_mut=1; CONTENT_ONLY="$5"; _mutate "$@"; CONTENT_ONLY=""; in_mut=0; }
 
 APP='GH_TOKEN: ${{ steps.app_token.outputs.token }}'
 mutate "setup-bun built-in cache left on (file arm)" impl $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n          no-cache: true\n' $'          bun-version-file: \'{{BUN_VERSION_FILE}}\'\n' 'setup-bun step without'
@@ -1546,8 +1812,42 @@ mutate "App token minted early"      impl    $'      - name: Plan this month\'s 
 mutate "token minted in the refresh job" impl "      - name: $REFRESH_STEP" "$MINT"$'\n\n'"      - name: $REFRESH_STEP"
 mutate "secrets in the refresh job"  impl    $'        id: refresh\n' $'        id: refresh\n        env:\n          KEY: ${{ secrets.PLATFORM_WRITER_APP_PRIVATE_KEY }}\n'
 mutate "open-pr runs a package manager" impl "      - name: $VALIDATE_STEP"$'\n' $'      - name: Install dependencies\n        run: bun install --frozen-lockfile\n\n'"      - name: $VALIDATE_STEP"$'\n'
-mutate "allowed paths widened (.github/ passes)" impl 'allowed+="^${p}(.*/)?package\\.json\$|' 'allowed+=".*|'
-mutate "patch-path validation removed" impl  $'[[ "$path" =~ $allowed ]] || reject "$path is outside the lanes\' manifests and lockfiles"' 'true'
+mutate "allowed paths widened (.github/ passes)" impl 'allowed+="^${p}package\\.json\$|^${p}bun\\.lock\$|"' 'allowed+=".*|"'
+mutate "patch-path validation removed" impl  $'[[ "$path" =~ $allowed ]] || reject "$path is outside the lanes\' manifests, workspace members and lockfiles"' 'true'
+# 10, content checks (#669). The needle of each is the NAME of the hostile (or
+# benign) case that must catch it, so a mutant that is killed by some other case,
+# or only by an error, does not count.
+mutate_content "bun lane allows any package.json below it" impl 'allowed+="^${p}package\\.json\$|^${p}bun\\.lock\$|"' 'allowed+="^${p}(.*/)?package\\.json\$|^${p}bun\\.lock\$|"' 'a package.json outside the workspace globs'
+mutate_content "workspaces object form not read" impl '(.packages // [])' '(.nothing // [])' 'rejected the benign patch'
+mutate_content "workspaces array form not read" impl 'if type == "array" then .[] elif type == "object"' 'if type == "array" then empty elif type == "object"' 'rejected the benign patch'
+mutate_content "workspace negation not enforced" impl 'reject "$path is a workspace member the base manifest excludes"' 'true' 'a workspace member the base manifest excludes'
+mutate_content "workspace negation not read" impl 'if [ "${g:0:1}" = "!" ]; then' 'if false; then' 'a workspace member the base manifest excludes'
+mutate_content ".github/ rule removed" impl 'reject "$path is under .github/, which no lane may change" ;;' 'true ;;' 'a .github/**/package.json under a root bun lane'
+mutate_content "changed paths not collected for the content check" impl 'changed+=("$path")' 'true' 'a scripts change in a lane package.json'
+mutate_content "a lane file with no content check allowed" impl 'cargo) allowed+="^${p}Cargo\\.lock\$|" ;;' 'cargo) allowed+="^${p}Cargo\\.(lock|toml)\$|" ;;' 'a Cargo.toml edit'
+mutate_content "patch not applied to a throwaway index" impl '|| reject "it does not apply to the base commit"' '|| true' 'a patch that does not apply to the base commit'
+mutate_content "jq presence not checked" impl 'command -v jq >/dev/null 2>&1 || reject "jq is required to read the manifests"' 'true' 'no jq on PATH'
+mutate_content "manifest keys outside the dependency maps unchecked" impl 'then "a key outside the four dependency maps changed" else empty end' 'then empty else empty end' 'a scripts change in a lane package.json'
+mutate_content "dependency key set unchecked" impl 'elif ($x | keys) != ($y | keys) then' 'elif false then' 'a dependency removed'
+mutate_content "dependency map added or removed unchecked" impl 'if ($x | type) != ($y | type) then "\($m) was added, removed or changed type"' 'if false then "\($m) was added, removed or changed type"' 'a dependency map added'
+mutate_content "any string accepted as a version range" impl 'def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$");' 'def isrange: true;' 'a dependency repointed at a git URL'
+mutate_content "registry alias target not compared" impl 'and ($was | alias).pre == ($now | alias).pre' 'and true' 'a registry alias retargeted'
+mutate_content "non-string dependency value not refused" impl '($now | type) == "string"' 'true' 'a dependency value that is not a string'
+mutate_content "invalid manifest JSON ignored" impl '|| reject "$path is not valid JSON"' '|| why=""' 'a manifest that is not JSON'
+mutate_content "pubspec.yaml content unchecked" impl '|| reject "$path changes more than dependency version constraints"' '|| true' 'a pubspec.yaml change outside the dependency maps'
+mutate_content "pubspec.yaml masks any value" impl 'if (val != "" && vers(val)) {' 'if (val != "") {' 'a pubspec.yaml dependency repointed at an inline git source'
+mutate_content "pubspec.yaml masks the environment section" impl '/^(dependencies|dev_dependencies|dependency_overrides):/' '/^(dependencies|dev_dependencies|dependency_overrides|environment):/' 'a pubspec.yaml sdk constraint change'
+mutate_content "pubspec.yaml nested version not masked" impl ' || /^    version:[[:space:]]/' '' 'rejected the benign patch'
+mutate_content "package-lock.json hosts unchecked" impl $'package-lock.json) jq -r \'[.. | objects | select(has("resolved")) | .resolved | strings] | .[]\' "$2" | source_tokens ;;' 'package-lock.json) true ;;' 'a package-lock.json resolving from a new host'
+mutate_content "package-lock.json funding URLs read as sources" impl $'jq -r \'[.. | objects | select(has("resolved")) | .resolved | strings] | .[]\' "$2" | source_tokens' 'source_tokens < "$2"' 'rejected the benign patch'
+mutate_content "bun.lock hosts unchecked" impl 'bun.lock)          source_tokens < "$2" ;;' 'bun.lock)          true ;;' 'a bun.lock naming a new registry'
+mutate_content "git/github shorthand sources unchecked" impl $'printf \'%s\\n\' "$t" | grep -oE \'(^|[^A-Za-z0-9+.-])(github|gitlab|bitbucket|gist|file|link):\' | sed -E \'s/^[^a-z]//\' || true' 'true' 'a bun.lock with a github shorthand source'
+mutate_content "pubspec.lock hosts unchecked" impl '{ source_tokens < "$2"; grep' '{ true; grep' 'a pubspec.lock hosted from a new host'
+mutate_content "pubspec.lock source kinds unchecked" impl $'; grep -E \'^    source: \' "$2" | sed -E \'s/[[:space:]]+$//\' || true; }' '; }' 'a pubspec.lock gaining a path source'
+mutate_content "Cargo.lock sources unchecked" impl $'{ grep -E \'^source = \' "$2" || true; } | sed -E \'s/[#?].*$//; s/"$//\' | sort -u ;;' 'true ;;' 'a Cargo.lock with a new registry'
+mutate_content "Cargo.lock revision kept in the source" impl $'sed -E \'s/[#?].*$//; s/"$//\'' $'sed -E \'s/"$//\'' 'rejected the benign patch'
+mutate_content "lockfile scheme ignored" impl $'grep -oE \'[A-Za-z][A-Za-z0-9+.-]*://[^]"/[:space:],)}]*\' || true' $'grep -oE \'://[^]"/[:space:],)}]*\' || true' 'a package-lock.json resolving over http'
+mutate_content "gained lockfile sources not rejected" impl '[ -z "$gained" ] || reject "' 'true || reject "' 'a Cargo.lock with a new registry'
 mutate "plain bun update on a workspace root" impl '(cd "./$rel" && bun update --recursive --ignore-scripts)' '(cd "./$rel" && bun update --ignore-scripts)'
 mutate "PR step on the built-in token" impl  "$APP" 'GH_TOKEN: ${{ github.token }}'
 mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n\njobs:' $'permissions:\n  contents: write\n\njobs:'
