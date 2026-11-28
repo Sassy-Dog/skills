@@ -71,20 +71,31 @@
 #      because each is ordinary English the gate must not fail: the article, as
 #      `A tier`, `A Tier of ...` at a sentence start, and `a tier`; and a
 #      possessive, `site's tier` or `site’s tier` (straight or curly). So a bare
-#      `A tier` or `A Tier` passes, and so do `a tier` and `b tier`: the lowercase
-#      a and b forms are never flagged. The match is on the written form only, so
-#      a near-miss inside a code fence is caught too.
+#      `A tier` or `A Tier` passes. The lowercase spaced forms `a tier`, `b tier`
+#      and `c tier` are never flagged, and a lone `s tier` is the only lowercase
+#      spaced form that is. The apostrophe exemption (the possessive) belongs to
+#      that lone `s tier` pattern alone: the hyphenated, joined and spaced
+#      patterns only refuse a word character or a hyphen before them, so a
+#      single-quoted `'S-tier'`, `'STier'`, `'B-tier'` or `'B tier'` is caught.
+#      The match is on the written form only, so a near-miss inside a code fence
+#      is caught too.
 #   7. An `effort:` value outside a bound form fails, the effort twin of property
 #      3: a valid binding followed by "pass `effort: "max"` on that call" is a
 #      per-call override nobody can rebind from the table. Read over skills/ and
-#      agents/ with the bindings removed.
+#      agents/ with the bindings removed. CAUGHT: the key `effort` (bare, or
+#      quoted in either style) followed by a colon and one of Claude Code's five
+#      values `low`, `medium`, `high`, `xhigh` or `max`, with or without quotes,
+#      and with no word character or hyphen before the key. NOT CAUGHT, by
+#      design: the key with no value (prose such as "`effort:` is unset"), a value
+#      outside those five, and any longer key that merely ends in `effort`, so
+#      `reasoning_effort: "high"` is another vendor's setting and passes.
 #
 # Wrapping: prose wraps at ~100 columns and take-it's worker template is a
 # blockquote, so a binding routinely splits across lines behind `> `. Each file
 # is flattened (quote markers stripped, whitespace collapsed) before matching,
 # the same treatment the other prose gates give wrapped text.
 #
-# Mutation-proven below against thirty-three mutants, each of which must FAIL:
+# Mutation-proven below against thirty-seven mutants, each of which must FAIL:
 #   M1 a binding's Claude Code alias flipped (B-Tier → opus)   -> property 2
 #   M2 dispatch-ready's bare `model: "opus"` pin restored     -> property 3
 #   M3 an agent given `model: sonnet` frontmatter             -> property 4
@@ -119,12 +130,18 @@
 #   M31 a near-miss `S-TIER` added to a skill                   -> property 6
 #   M32 a near-miss `S-tier` added to the root AGENTS.md        -> property 6
 #   M33 a near-miss `S-tier` added to the root README.md        -> property 6
+#   M34 a single-quoted near-miss `'S-tier'` added to a skill   -> property 6
+#   M35 an unquoted `effort: max` outside a binding             -> property 7
+#   M36 take-it's `S-Tier` · `deep` arbitration binding removed      -> property 5
+#   M37 dispatch-ready's `S-Tier` · `light` check-in binding removed -> property 5
 #   Positive controls (must PASS, so the mutants above fail for their mutation
 #   and the gate is not simply hostile to every new form):
 #   C1 prose using the bare words `standard`, `light` and `deep`, the article
 #      ("a tier", "A tier", "A Tier of work") and a possessive in both apostrophe
 #      styles ("each site's tier", "the orchestrator’s tier")
 #   C2 a well-formed `S-Tier` · `deep` and an `S-Tier` · `light` binding
+#   C4 prose naming the key with no value (`effort:` is unset), and another
+#      vendor's `reasoning_effort: "high"`, are not a bare Claude Code effort
 #   C3 prose that mentions Gemini CLI and a Google model id is not itself flagged.
 #      That Google entries are NOT required is proved by the real tree, whose
 #      every binding is Google-free and which passes: no separate control is
@@ -236,17 +253,23 @@ bind_re = re.compile(
     r"(?:, `effort: \"(\w+)\"`)? · omp: `model: \"(@\w+)\"`\)")
 bare_re = re.compile(
     r"[\"']?model[\"']?\s*:\s*[\"']?(opus|sonnet|haiku|fable|claude-[\w.-]+)\b")
-# bare Claude Code effort value outside a binding (property 7); a quoted value only,
-# so prose naming the key (`effort:`) is untouched
-bare_effort_re = re.compile(r"[\"']?effort[\"']?\s*:\s*[\"'](\w+)[\"']")
+# bare Claude Code effort value outside a binding (property 7): the closed value set,
+# quoted or not, with a left boundary so `reasoning_effort` is not this key. Prose
+# naming the key with no value (`effort:` is unset) is untouched.
+bare_effort_re = re.compile(
+    r"(?<![\w-])[\"']?effort[\"']?\s*:\s*[\"']?(?:low|medium|high|xhigh|max)\b[\"']?")
 # near-miss tier spellings. Not flagged, because English: the article (`A tier`,
 # `a tier`) and a possessive (`site's tier`, curly apostrophe too).
-_nb = r"(?<![\w'\u2019-])"
+# The apostrophe exemption is the possessive's, so only the lone `s tier` pattern
+# carries it: the other three refuse just a word character or a hyphen before them,
+# which lets a single-quoted `'S-tier'` through to be caught.
+_nb = r"(?<![\w-])"
+_nbp = r"(?<![\w'\u2019-])"
 near_res = [
     re.compile(_nb + r"[SABCsabc]-(?i:tier)\b"),     # hyphenated, any case
     re.compile(_nb + r"[SABCsabc](?:[Tt]ier|TIER)\b"),  # joined
     re.compile(_nb + r"[SBC] (?i:tier)\b"),          # spaced, S B C only
-    re.compile(_nb + r"s tier\b"),                   # a lone lowercase s
+    re.compile(_nbp + r"s tier\b"),                  # a lone lowercase s
 ]
 
 def check_bindings(rel, flat):
@@ -313,12 +336,15 @@ for f in files + docs_files:
 required = {
     # §5 worker dispatch (B-Tier); step-6 orchestrator + §6 coordinator gate + §6 nit roll-in
     # delta review (A-Tier ×3)
-    "skills/take-it/SKILL.md": {"B-Tier": 1, "A-Tier": 3},
+    # plus the two arbitration sites (#667): S-Tier deep for a disputed or persistent finding,
+    # S-Tier light for the scheduled check-in
+    "skills/take-it/SKILL.md": {"B-Tier": 1, "A-Tier": 3, "S-Tier": 2},
     # the isolation probe worker (#451) and the supervised serial worker (#484): two dispatch
     # sites that live in the reference doc §5 points to
     "skills/take-it/references/isolation-confirmation.md": {"B-Tier": 2},
     # §5 worker model policy (B-Tier); §2 coordinator review + §2 nit roll-in delta review (A-Tier ×2)
-    "skills/dispatch-ready/SKILL.md": {"B-Tier": 1, "A-Tier": 2},
+    # plus its own two arbitration sites (#667), deep and light, the same pair
+    "skills/dispatch-ready/SKILL.md": {"B-Tier": 1, "A-Tier": 2, "S-Tier": 2},
     # §4 review gate
     "skills/send-it/SKILL.md": {"A-Tier": 1},
     # Step 3 fan-out + Parent recovery batch
@@ -582,11 +608,33 @@ expect_fail "M31 near-miss S-TIER" "$d" 'near-miss tier spelling `S-TIER`'
 
 d=$(make_copy m32)
 printf '\nThe orchestrator runs at S-tier.\n' >>"$d/AGENTS.md"
-expect_fail "M32 near-miss S-tier in the root AGENTS.md" "$d" 'AGENTS.md:'
+expect_fail "M32 near-miss S-tier in the root AGENTS.md" "$d" 'near-miss tier spelling `S-tier`'
 
 d=$(make_copy m33)
 printf '\nThe orchestrator runs at S-tier.\n' >>"$d/README.md"
-expect_fail "M33 near-miss S-tier in the root README.md" "$d" 'README.md:'
+expect_fail "M33 near-miss S-tier in the root README.md" "$d" 'near-miss tier spelling `S-tier`'
+
+d=$(make_copy m34)
+printf "\nThe orchestrator runs at 'S-tier' and 'STier'.\n" >>"$d/skills/take-it/SKILL.md"
+expect_fail "M34 a single-quoted near-miss 'S-tier'" "$d" 'near-miss tier spelling `S-tier`'
+
+d=$(make_copy m35)
+printf '\nPass effort: max on that call.\n' >>"$d/skills/take-it/SKILL.md"
+expect_fail "M35 an unquoted per-call effort outside a binding" "$d" 'bare `effort: max` outside a tier binding'
+
+d=$(make_copy m36)
+mutate "$d/skills/take-it/SKILL.md" '`S-Tier` · `deep` \(Claude\s+Code:\s*`model:\s*"fable"`,\s*`effort:\s*"xhigh"`\s*·\s*omp:\s*`model:\s*"@slow"`\)' 'the top tier' ||
+    bad "M36: mutation did not apply"
+expect_fail "M36 take-it's arbitration binding removed" "$d" 'take-it/SKILL.md: required dispatch tier `S-Tier` bound 1x, needs at least 2x'
+
+d=$(make_copy m37)
+mutate "$d/skills/dispatch-ready/SKILL.md" 'or at `S-Tier` · `light` \(Claude Code: `model:\s*"fable"`, `effort: "low"` · omp: `model: "@slow"`\)' 'or at the top tier' ||
+    bad "M37: mutation did not apply"
+expect_fail "M37 dispatch-ready's scheduled check-in binding removed" "$d" 'dispatch-ready/SKILL.md: required dispatch tier `S-Tier` bound 1x, needs at least 2x'
+
+d=$(make_copy c4)
+printf '\nThe field `effort:` is unset here, and a vendor may take reasoning_effort: "high" instead.\n' >>"$d/skills/take-it/SKILL.md"
+expect_pass "C4 the key with no value, and another vendor's reasoning_effort, are not a bare effort" "$d"
 
 if [ "$FAILED" = 0 ]; then
     echo "model-tier tests: all green" >&2

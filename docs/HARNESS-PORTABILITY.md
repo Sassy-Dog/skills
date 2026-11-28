@@ -944,6 +944,17 @@ dispatch varies (`Agent tool`, `Agent call`, `Agent(...)`, or none) and a grep f
 misses `send-it` and `dispatch-ready`. The contract is "issue every call in a single message so they run
 concurrently", with a tier bound inline at each site.
 
+**Arbitration sites (#667).** `take-it` and `dispatch-ready` each dispatch a read-only arbitration
+agent at `S-Tier`, `deep` for a disputed or persistent finding and `light` for the scheduled
+check-in, so neither file is new to the eight. On Claude Code the binding is
+`model: "fable"` plus `effort: "xhigh"` or `"low"`. On omp the role alias `@slow` carries the model,
+and `MODEL-TIERS.md` still lists omp's effort setting as **to verify**, so on omp both calls may run at the
+role's default effort. The contract does not depend on effort: the agent's final text opens with one
+`VERDICT:` line from a closed set of five, and a return without exactly one is asked again, never
+read as consent or as `ESCALATE`. Whether omp's `@slow` role is configured is a consumer setting
+this plugin cannot ship, so an unresolvable `@slow` is a dispatch failure that holds the PR, never a
+silent fall-back to the session model.
+
 **omp.** `task` is the dispatch tool: "Fan independent work out to specialist subagents,
 optionally in isolated workspaces, and collect their results" (`https://omp.sh/docs/tools`).
 Concurrency is `task.maxConcurrency` (default 32) and nesting is capped by `task.maxRecursionDepth`

@@ -19,7 +19,7 @@ also label the options in decision prompts and in take-it attempt records.
 
 | Tier | Rank | Used for |
 | --- | --- | --- |
-| `S-Tier` | 1 | reserved — nothing dispatches here today |
+| `S-Tier` | 1 | review-finding arbitration (`take-it` §6, `dispatch-ready` §2): `deep` for a disputed or persistent finding, `light` for the scheduled check-in every third round |
 | `A-Tier` | 2 | the resolved review agent (`review_agent:`, by default `pr-review-orchestrator`): the integration pass and the Blocking-vs-Nits judgement |
 | `B-Tier` | 3 | implementation workers (`take-it`, `dispatch-ready`); the nine `*-reviewer` agents in both review modes; `assess-it`'s refute-pass skeptics; `whats-on-fire`'s org-sweep subagents |
 | `C-Tier` | 4 | reserved — nothing dispatches here today |
@@ -37,7 +37,7 @@ a tier. It may name an effort, and naming none means `standard`. An effort is al
 | Effort | Meaning |
 | --- | --- |
 | `light` | The fewest thinking tokens per turn the model offers. Cheapest and fastest. |
-| `standard` | The provider's default for that model. Every dispatch site runs at this today. |
+| `standard` | The provider's default for that model. Every dispatch site runs at this except the two arbitration sites, which bind `deep` and `light` at `S-Tier`. |
 | `deep` | The model's highest level short of an unbounded one. |
 
 `standard` is deliberately not the same level on every model: Carbon's default is `medium`, Neon's
@@ -125,7 +125,12 @@ the session's Opus model. `dispatch-ready` also pinned its workers to Opus, on t
 that Opus was "the cheaper tier relative to the coordinator's session model". That premise stopped
 holding once the session model itself became Opus. One judgement-heavy agent per PR stays at
 `A-Tier`: the orchestrator, which derives Blocking from Nits and runs the cross-surface integration
-pass.
+pass. The one `S-Tier` site is **arbitration** (#667): when a Blocking finding persists, a fix
+oscillates, a worker disputes a finding or the coordinator is unsure, a read-only agent at
+`S-Tier` · `deep` returns one verdict and the coordinator follows it without a human. A wrong call
+there either stalls a PR or accepts a real defect, and it fires rarely, so it takes the strongest
+model. The scheduled check-in every third round runs at `S-Tier` · `light`, which is cheap enough
+to leave on.
 
 **A tier word never goes in `model:` frontmatter.** Claude Code and omp both read a `model:` key,
 but their value spaces do not overlap: Claude Code takes `sonnet`, `opus` and the like, while omp
@@ -149,8 +154,10 @@ Any other effort adds the effort word and its Claude Code value:
 A cold sub-agent or a `/loop` tick acts on the text in front of it and never opens this file, so
 the binding has to be at the site. The copies are safe because the gate re-derives each one from
 the tables above, both the model and the effort part. A binding that disagrees with its rows fails
-CI. So does a bare `model: "opus"` left outside a binding, an effort word other than the three,
-a near-miss tier spelling, and removing a required site's binding. Only the bound forms are matched,
+CI. So does a bare `model: "opus"` left outside a binding, a bare `effort:` followed by one of
+Claude Code's five values (`low`, `medium`, `high`, `xhigh` or `max`, quoted or not) outside a
+binding, an effort word other than the three, a near-miss tier spelling, and removing a required
+site's binding. Only the bound forms are matched,
 never the bare words, because `standard` and `light` are ordinary English.
 
 ## What a tier does not cover

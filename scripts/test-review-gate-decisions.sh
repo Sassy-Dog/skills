@@ -111,31 +111,60 @@
 #      7; append `gh repo view` to the Tracking section; append the `gh api`
 #      form to the Tracking section. Each turns the gate red.
 #
-#   5. A BLOCKING FINDING BLOCKS THE MERGE, WITH EXACTLY ONE REDISPATCH.
-#      `dispatch-ready` surfaces the finding named, comments it on the issue,
-#      allows ONE redispatch carrying the finding as context, then demotes to
-#      `blocked` on a second failure. Never merge past it; never park it back
-#      in Ready, which must stay synonymous with dispatchable. The number is
-#      the part that rots: on its own "one" reads as an arbitrary retry count,
-#      so the rationale — it is the SAME single-redispatch budget a failed
-#      check already gets — is pinned alongside it. `take-it` states the same
-#      rule for its own coordinator site, and both guardrail lists repeat it,
-#      because these two skills dispatch sub-agents that open PRs from a cold
-#      worktree and never see an interactive session's instructions.
-#      #385 extends that same allowance to parent fan-out; #386 uses it for
-#      one same-agent report-only recovery. Both preserve durable
-#      recovery_used accounting across a new head, agent or tick. This extends
-#      decision 5 rather than inventing a second budget.
-#      #581 adds the coordinator site's NIT ROLL-IN beside it, and it sits
-#      OUTSIDE that budget on purpose: at most one per PR, capped by its own
-#      author-checked cap record, never counted in `recovery_used`, no
-#      reservation. Read the cap as the thing that stops it becoming a second
-#      retry loop, and do not "tidy" it into the allowance, which would let a
-#      roll-in spend the repair a failed check is owed. Its pins sit at the end
-#      of decision 5's section, each with an in-script mutant: the pin text is
-#      deleted (or, for the budget, a recovery write is appended) from a copy of
-#      the flattened document and the pin must go red on it, so a pin that
-#      matches nothing cannot sit green.
+#   5. A BLOCKING FINDING BLOCKS THE MERGE, AND ITS REVIEW ROUNDS HAVE NO CAP.
+#      This decision used to read "WITH EXACTLY ONE REDISPATCH": one fix, the
+#      same single-redispatch budget a failed check got, then `blocked` and a
+#      human. #667 REVERSED it on purpose, so a later sweep must not "restore"
+#      it, and the gate is rewritten rather than worked around. The evidence:
+#      #649 was `blocked` twice in one day and the operator's answer both times
+#      was "fix it" (the second fix was one test case); #654 sat `blocked` for
+#      about 44 hours over one gate row and three wordings; ten "PR #N review
+#      nits" issues were filed that never needed weighing. Each stop was a human
+#      round trip for a mechanical fix.
+#      What is pinned now, each of which reads to a tidying sweep like drift or
+#      like an unbounded loop that "needs a safety cap". It does not; the
+#      arbitration triggers ARE the safety, and re-adding a numeric cap is the
+#      edit this decision exists to stop:
+#        - NO CAP. `take-it` §6's `### Review rounds and arbitration` is the one
+#          definition (`dispatch-ready` and `send-it` point at it). A Blocking
+#          finding, and a check the PR itself caused, is worked in numbered
+#          rounds, each recorded as a `take-it-review-round` issue comment, each
+#          producing a new head that gets a delta review. The only count is a
+#          record for the operator and for the check-in schedule.
+#        - THE ARBITRATION TRIGGERS replace the cap: a finding persists, a fix
+#          oscillates, the worker disputes, the coordinator is unsure, and the
+#          scheduled check-in at round 3, 6, 9. Four run at `S-Tier` · `deep`,
+#          the check-in alone at `S-Tier` · `light` (test-model-tiers.sh holds
+#          the two bindings per file). The check-in is not a cap; deleting it
+#          would leave a loop nobody is ever asked about.
+#        - THE VERDICT SET IS CLOSED AT FIVE: FIX, ACCEPT, DESCOPE, REJECT,
+#          ESCALATE. A sixth (a DEFER, a bare "continue") is a new path to
+#          `blocked` or to a merge that nobody reviewed, so the count is pinned
+#          against a mutant row, not just each name.
+#        - ESCALATE IS THE ONLY WAY A REVIEW FINDING ENDS IN `blocked`, and the
+#          merge still never goes past a Blocking finding that is merely
+#          unresolved: only a clean re-review, ACCEPT, DESCOPE or REJECT clears
+#          one. An ACCEPT of a security finding lands in the repo's docs, not
+#          only the PR body.
+#        - THE SHARED ALLOWANCE IS A DIFFERENT BUDGET AND STAYS. #385 (parent
+#          fan-out) and #386 (report-only resume) extended it, and NO REPORT /
+#          SKIPPED keep their ONE redispatch then `blocked`. Review rounds never
+#          read, spend or refresh it, and failed checks the PR caused moved from
+#          it into the rounds, while infra and platform failures keep
+#          pr-shepherd's retry and probe. Folding either budget into the other
+#          is the edit to refuse in both directions.
+#        - NITS ARE RANKED by impact and probability in
+#          `agents/pr-review-orchestrator.md` alone (the nine reviewers' schema
+#          does not change): high/high is treated as Blocking, high/medium and
+#          medium/high roll in once or are filed, anything else is one "Known and
+#          accepted" line and no issue.
+#      #581's coordinator-site NIT ROLL-IN is unchanged and still sits OUTSIDE
+#      the allowance: at most one per PR, capped by its own author-checked cap
+#      record, never counted in `recovery_used`, no reservation. Do not "tidy" it
+#      into either budget. Every pin below carries an in-script mutant: the pin
+#      text is deleted (or a forbidden spelling is appended) in a copy of the
+#      flattened document and the pin must go red on it, so a pin that matches
+#      nothing cannot sit green.
 #
 #   6. THE REPORT IS RETURNED, AND A LOST ONE IS ITS OWN OUTCOME. A review
 #      report is delivered as the reviewing agent's FINAL TEXT — its return
@@ -874,60 +903,68 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. A Blocking finding blocks the merge, with ONE redispatch (decision 5)
+# 5. A Blocking finding blocks the merge; its review rounds have no cap (decision 5)
 # ---------------------------------------------------------------------------
-echo "-- decision 5: never merge past a Blocking finding; one redispatch, then blocked"
+echo "-- decision 5: never merge past a Blocking finding; review rounds have no cap, ESCALATE alone blocks"
 
 assert_in "$contract_flat" \
     'A Blocking finding is never merged past' \
     "contract states a Blocking finding is never merged past"
 assert_in "$contract_flat" \
-    'one redispatch carrying the finding as context' \
-    "contract states one redispatch carrying the finding"
+    'runs review rounds on it with no retry cap' \
+    "contract states a Blocking finding has no retry cap"
+assert_in "$contract_flat" \
+    'sets the `blocked` label only on an `ESCALATE` verdict' \
+    "contract states ESCALATE is the only way a finding sets blocked"
 assert_in "$contract_flat" \
     'never parks it back in Ready' \
     "contract states the finding is never parked back in Ready"
-# The contract points at the owner instead of restating the path — the same
+# The contract points at the owners instead of restating the path — the same
 # write-it-once posture it takes for `review_agent`'s resolution order.
 assert_in "$contract_flat" \
-    'That path lives in `dispatch-ready` §2' \
+    'the path lives in `dispatch-ready` §2' \
     "contract defers the path itself to dispatch-ready §2"
+assert_in "$contract_flat" \
+    'defined once, in `take-it` §6.s \*\*Review rounds and arbitration\*\*' \
+    "contract defers the rounds and verdicts to take-it §6's one definition"
 
 assert_in "$dispatch_flat" \
     '\*\*never merge past one\.\*\*' \
     "dispatch-ready never merges past a Blocking finding"
 assert_in "$dispatch_flat" \
-    'allow ONE redispatch carrying that finding as context on a later tick' \
-    "dispatch-ready allows exactly one redispatch carrying the finding"
-# The rationale for the number. Without it "one" is an arbitrary retry count,
-# and an arbitrary number is the kind a later edit rounds up.
+    'A Blocking finding has no retry cap' \
+    "dispatch-ready: a Blocking finding has no retry cap"
 assert_in "$dispatch_flat" \
-    'the same single-redispatch budget a failed check gets' \
-    "dispatch-ready justifies the number as parity with a failed check"
-assert_in "$dispatch_flat" \
-    'A second failure demotes to `blocked` the same way' \
-    "dispatch-ready demotes to blocked on a second failure"
+    'Only `ESCALATE` demotes to `blocked`' \
+    "dispatch-ready demotes to blocked only on ESCALATE"
 assert_in "$dispatch_flat" \
     '\*\*Never park it back in Ready\*\*' \
     "dispatch-ready never parks a Blocking finding back in Ready"
+# The lost-review path keeps its ONE redispatch and its second-failure demotion.
 assert_in "$dispatch_flat" \
-    'max one redispatch per issue without a human' \
-    "dispatch-ready guardrails cap redispatches at one without a human"
+    'A lost or skipped review is not a finding, and it keeps the shared allowance.s ONE redispatch' \
+    "dispatch-ready: a lost or skipped review keeps the shared allowance's ONE redispatch"
 assert_in "$dispatch_flat" \
-    'never park one back in Ready — one redispatch carrying the finding, then `blocked`' \
-    "dispatch-ready guardrails repeat the one-redispatch-then-blocked rule"
-# The reported shape. A budget nobody prints is a budget nobody can audit.
+    'A second failure demotes to `blocked` the same way, with the outcome in the comment' \
+    "dispatch-ready demotes a lost review to blocked on a second failure"
+assert_in "$dispatch_flat" \
+    'a lost or skipped review gets max one redispatch per issue without a human, and review rounds have no cap' \
+    "dispatch-ready guardrails give a lost review one redispatch and review rounds no cap"
+assert_in "$dispatch_flat" \
+    'rounds have no cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in `blocked`' \
+    "dispatch-ready guardrails repeat the no-cap-then-ESCALATE rule"
+# The reported shape. A count nobody prints is a cost nobody can see.
 assert_line "$DISPATCH" \
-    '^review: #[0-9]+ BLOCKING .*redispatch 1 of 1$' \
-    "dispatch-ready tick report shows the 1-of-1 redispatch budget"
+    '^review: #[0-9]+ BLOCKING .*— round [0-9]+$' \
+    "dispatch-ready tick report shows the review round number"
 assert_in "$dispatch_flat" \
     'never drop a Blocking finding or a `review: SKIPPED` from it' \
     "dispatch-ready never drops a Blocking finding from the tick report"
 # The `agent`-site case that looks dead and is not: a sub-agent that could not
 # resolve a reviewer produces a PR the coordinator must still stop.
 assert_in "$dispatch_flat" \
-    'it still fires when a sub-agent could not resolve a reviewer at all' \
-    "dispatch-ready keeps the Blocking path live on the agent site"
+    'this path still fires when a sub-agent could not resolve a reviewer at all' \
+    "dispatch-ready keeps the lost-review path live on the agent site"
 
 assert_line "$TAKEIT" \
     '^### Review gate on the coordinator site \(ONLY when `review_site: coordinator`\)$' \
@@ -936,19 +973,28 @@ assert_in "$takeit_flat" \
     'hold the PR; \*\*never merge past it\*\*' \
     "take-it holds the PR and never merges past a Blocking finding"
 assert_in "$takeit_flat" \
-    'allow ONE redispatch carrying it as context' \
-    "take-it allows exactly one redispatch carrying the finding"
+    'run \*\*Review rounds and arbitration\*\* above: round after round with no cap' \
+    "take-it's Blocking bullet runs the uncapped rounds"
 assert_in "$takeit_flat" \
-    'A second failure gets the `blocked` label' \
-    "take-it labels blocked on a second failure"
+    'A second failure gets the `blocked` label plus a comment naming the outcome' \
+    "take-it labels blocked on a second failure of a lost or skipped review"
 assert_in "$takeit_flat" \
     'Never merge past a Blocking review finding\*\*, on either `review_site`' \
     "take-it guardrails apply the rule on either review_site"
+assert_in "$takeit_flat" \
+    'Review rounds have no cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in `blocked`' \
+    "take-it guardrails repeat the no-cap-then-ESCALATE rule"
 # Inside the `>` sub-agent prompt, and wrapped — only visible to a flatten that
 # strips blockquote markers. This is the assertion that proves the flatten.
 assert_in "$takeit_flat" \
-    '\*\*Blocking findings → fix them and re-review before you commit\*\*' \
-    "take-it's dispatched prompt fixes Blocking findings before committing"
+    '\*\*Blocking findings → fix them and re-review before you commit\*\*, with no cap on rounds' \
+    "take-it's dispatched prompt fixes Blocking findings before committing, with no cap"
+assert_in "$takeit_flat" \
+    '\*\*Review rounds have no cap\.\*\*' \
+    "take-it's dispatched prompt states review rounds have no cap"
+assert_in "$takeit_flat" \
+    'return `dispute: <file and claim> — <why>` and stop for the coordinator.s arbitration' \
+    "take-it's dispatched prompt has the worker return a dispute instead of guessing"
 
 # --- decision 5, continued: the coordinator-site NIT ROLL-IN is outside the budget (#581)
 # mutant_pin <haystack> <ERE> <sed -E deletion> <label>: the pin must hold on the
@@ -1225,9 +1271,9 @@ mutant_pin "$dispatch_flat" 'including a later tick.s re-run after exit .11.' \
 mutant_pin "$rollin_disp" 'applies .take-it. §6.s \*\*Delta base rule\*\*' \
     's/Delta base rule//' \
     "dispatch-ready applies the one Delta base rule"
-mutant_pin "$rollin_disp" 'File. nits go in the §6 tick report' \
-    's/go in the §6 tick report//' \
-    "dispatch-ready sends file-bin nits to its own §6 tick report"
+mutant_pin "$rollin_disp" 'File. nits are filed as follow-up issues as that section defines, and named in the §6 tick report' \
+    's/and named in the §6 tick report//' \
+    "dispatch-ready files file-bin nits as follow-ups and names them in its own §6 tick report"
 mutant_pin "$takeit_flat" '`\{issue, pr, worktreePath, worktreeBranch, agent_id\}`' \
     's/, agent_id//' \
     "take-it's batch manifest carries agent_id"
@@ -1260,6 +1306,237 @@ mutant_pin "$orch_flat" '`base_override` \(the caller-supplied commit id, null w
 mutant_pin "$orch_flat" 'or "override <commit id> \(roll-in delta\)"' \
     's/or "override <commit id> \(roll-in delta\)"//g' \
     "the orchestrator names the override on the report's Base: line"
+
+# --- decision 5, rewritten (#667): the review rounds have no cap, and arbitration replaces it
+# count_pin <haystack> <ERE> <want> <text the mutant appends> <label>: the number of matches is held,
+# so a sixth verdict row (or a fourth nit row) turns the pin red even though every name still matches.
+count_pin() {
+    local hay="$1" re="$2" want="$3" add="$4" label="$5" n m
+    n="$(grep -o -E -- "$re" <<<"$hay" | wc -l | tr -d ' ')"
+    if [ "$n" = "$want" ]; then ok "$label"; else bad "$label — found $n, wanted $want"; fi
+    m="$(grep -o -E -- "$re" <<<"$hay $add" | wc -l | tr -d ' ')"
+    if [ "$m" = "$want" ]; then bad "$label — mutant survives, so the count is vacuous"; else ok "$label — mutant is caught"; fi
+}
+ROUNDS_START='### Review rounds and arbitration (the one definition'
+ROUNDS_END='### Review gate on the coordinator site'
+anchor_pin "$takeit_flat" "$ROUNDS_START" "take-it's Review rounds and arbitration start anchor is present"
+anchor_pin "$takeit_flat" "$ROUNDS_END" "take-it's coordinator-site heading anchor follows the rounds section"
+rounds_take="${takeit_flat#*"$ROUNDS_START"}"
+rounds_take="${rounds_take%%"$ROUNDS_END"*}"
+rounds_heading_pos="${takeit_flat%%"$ROUNDS_END"*}"
+mutant_pin "$rounds_heading_pos" '### Review rounds and arbitration \(the one definition' \
+    's/### Review rounds and arbitration//' \
+    "take-it defines the review rounds once, above the coordinator-site heading, so both sites read it"
+
+mutant_pin "$rounds_take" 'A Blocking review finding has no retry cap, on either .review_site.' \
+    's/has no retry cap//' \
+    "take-it: a Blocking review finding has no retry cap, on either site"
+mutant_pin "$rounds_take" 'A failed check the PR.{0,4}itself caused .{0,120} counts as a Blocking finding and enters the same loop' \
+    's/counts as a Blocking finding and enters the same loop//' \
+    "take-it: a failed check the PR caused is a Blocking finding in the same loop"
+mutant_pin "$rounds_take" 'An infra or platform failure .{0,120} does not: it keeps .pr-shepherd.{1,3}s retry and probe' \
+    's/does not: it keeps//' \
+    "take-it: infra and platform failures keep pr-shepherd's retry and probe"
+mutant_pin "$rounds_take" 'no review round reads, spends or refreshes it' \
+    's/no review round reads, spends or refreshes it//' \
+    "take-it: no review round reads, spends or refreshes the shared allowance"
+mutant_pin "$rounds_take" 'it stays the budget of .NO REPORT., parent fan-out and report-only resume' \
+    's/parent fan-out and report-only resume//' \
+    "take-it: the shared allowance stays the budget of NO REPORT, parent fan-out and report-only resume"
+mutant_forbid "$rounds_take" '(at most|max(imum)?( of)?|up to|no more than) [A-Za-z0-9]+ (fix |review )?rounds?|rounds? (is|are) (capped|limited)|round cap|recovery_used=1|recovery=(pending|started|finished)' \
+    'a PR gets at most three review rounds' \
+    "take-it's rounds section states no numeric cap and writes no allowance record"
+mutant_pin "$rounds_take" 'kind: "take-it-review-round"' \
+    's/take-it-review-round/x/' \
+    "take-it records each round as its own take-it-review-round comment"
+mutant_pin "$rounds_take" 'Every round is numbered and recorded durably, before it is dispatched' \
+    's/recorded durably, before it is dispatched//' \
+    "take-it records a round before dispatching it"
+mutant_pin "$rounds_take" 'the PR-body line is a mirror and never the source' \
+    's/a mirror and never the source//' \
+    "take-it reads the round count from the author-checked record, not the PR body"
+mutant_pin "$rounds_take" 'The count is a record for the operator and the check-in schedule, never a limit' \
+    's/never a limit//' \
+    "take-it: the round count is a record, never a limit"
+mutant_pin "$rounds_take" 'Every round must produce a new head, and that head gets a delta review' \
+    's/that head gets a delta review//' \
+    "take-it: every round produces a new head that gets a delta review"
+mutant_pin "$rounds_take" 'the round record.s .head. takes the cap record.s .reviewed_head. place' \
+    's/takes the cap record.s .reviewed_head. place//' \
+    "take-it: a round's delta base is the round record's head under the one Delta base rule"
+mutant_pin "$rounds_take" 'A round that pushes no new head is not a round: it is a dispute' \
+    's/is a dispute//' \
+    "take-it: a round that pushes no new head is a dispute"
+for trig in 'a finding persists' 'a fix oscillates' 'the worker disputes a finding' 'the coordinator is unsure' 'the PR reaches round 3, 6, 9 and so on'; do
+    mutant_pin "$rounds_take" "\\*\\*$trig\\*\\*" \
+        "s/$trig//" \
+        "take-it: arbitration trigger \"$trig\""
+done
+mutant_pin "$rounds_take" 'It is not a cap: it lets arbitration decide whether to keep going or re-scope' \
+    's/It is not a cap//' \
+    "take-it: the scheduled check-in is not a cap"
+mutant_pin "$rounds_take" 'For the first four triggers it runs at .S-Tier. · .deep. \(Claude Code: .model: "fable"., .effort: "xhigh". · omp: .model: "@slow".\)' \
+    's/For the first four triggers//' \
+    "take-it: four triggers arbitrate at S-Tier deep"
+mutant_pin "$rounds_take" 'for a scheduled check-in alone it runs at .S-Tier. · .light. \(Claude Code: .model: "fable"., .effort: "low". · omp: .model:.{0,3}"@slow".\)' \
+    's/for a scheduled check-in alone//' \
+    "take-it: the scheduled check-in alone arbitrates at S-Tier light"
+mutant_pin "$rounds_take" 'The arbitration agent is read-only: it edits, files and merges nothing' \
+    's/it edits, files and merges nothing//' \
+    "take-it: the arbitration agent is read-only"
+mutant_pin "$rounds_take" 'it returns \*\*exactly one verdict\*\* from this closed set' \
+    's/exactly one verdict//' \
+    "take-it: arbitration returns exactly one verdict from a closed set"
+count_pin "$rounds_take" '\| `[A-Z]+` \|' 5 '| `DEFER` | Waits. |' \
+    "take-it's verdict table holds exactly five verdicts"
+for v in FIX ACCEPT DESCOPE REJECT ESCALATE; do
+    mutant_pin "$rounds_take" "\\| \`$v\` \\|" \
+        "s/\\| \`$v\` \\|//" \
+        "take-it's verdict table names $v"
+done
+mutant_pin "$rounds_take" 'A return with no verdict, two verdicts, or a name outside the set is not a verdict: ask again, and never read it as .ESCALATE. or as consent' \
+    's/never read it as .ESCALATE. or as consent//' \
+    "take-it: an unusable arbitration return is asked again, never read as ESCALATE or consent"
+mutant_pin "$rounds_take" 'An arbitration that cannot be dispatched .* holds the PR and is reported by name; it never falls back to the session model' \
+    's/it never falls back to the session model//' \
+    "take-it: an arbitration that cannot be dispatched holds the PR, never falls back to the session model"
+mutant_pin "$rounds_take" 'Write the verdict as its own durable record before acting on it' \
+    's/before acting on it//' \
+    "take-it writes the verdict as its own durable record before acting"
+mutant_pin "$rounds_take" 'kind: "take-it-arbitration"' \
+    's/take-it-arbitration/x/' \
+    "take-it records each verdict as a take-it-arbitration comment"
+mutant_pin "$rounds_take" 'Then follow it without asking a human' \
+    's/without asking a human/after asking a human/' \
+    "take-it follows a verdict without asking a human"
+mutant_pin "$rounds_take" 'ESCALATE. is the only way a review finding ends in .blocked.{1,3}, and the merge never goes past a Blocking finding that is merely unresolved' \
+    's/the merge never goes past a Blocking finding that is merely unresolved//' \
+    "take-it: ESCALATE is the only way a review finding ends in blocked"
+mutant_pin "$rounds_take" 'Only a clean re-review, or an .ACCEPT., .DESCOPE. or .REJECT. verdict, clears one' \
+    's/Only a clean re-review, or an//' \
+    "take-it: only a clean re-review or ACCEPT, DESCOPE or REJECT clears a Blocking finding"
+mutant_pin "$rounds_take" 'An .ACCEPT. of a security finding must land as a documented known limit in the repo.s docs' \
+    's/must land as a documented known limit in the repo.s docs//' \
+    "take-it: an ACCEPT of a security finding lands in the repo's docs"
+mutant_pin "$rounds_take" 'rewriting the PR body.s .Closes #N. line to .Part of #N.' \
+    's/line to .Part of #N.//' \
+    "take-it: DESCOPE rewrites the closing keyword to Part of #N"
+mutant_pin "$rounds_take" 'Cost is visible, not capped' \
+    's/not capped//' \
+    "take-it: cost is visible, not capped"
+mutant_pin "$takeit_flat" 'except a nit ranked high impact and high probability, which is treated as a Blocking finding' \
+    's/which is treated as a Blocking finding//' \
+    "take-it: a high/high nit takes the Blocking path"
+
+# The nit table lives in take-it's roll-in step 1 (rollin_take) and the orchestrator ranks the nits.
+mutant_pin "$rollin_take" 'Rank every nit by impact and probability, then sort it into exactly one bin' \
+    's/Rank every nit by impact and probability, then//' \
+    "take-it ranks every nit by impact and probability before sorting it"
+mutant_pin "$rollin_take" '\| high / high \| \*\*Blocking\*\*: not a roll-in; it enters the uncapped rounds above' \
+    's/it enters the uncapped rounds above//' \
+    "take-it: a high/high nit is Blocking, never a roll-in"
+mutant_pin "$rollin_take" '\| high / medium, medium / high \| \*\*roll in\*\* when it is inside the issue.s stated scope, small, and adds no new script, guard or test machinery; otherwise \*\*file\*\*' \
+    's/otherwise \*\*file\*\*//' \
+    "take-it: a high/medium or medium/high nit rolls in once, otherwise it is filed"
+mutant_pin "$rollin_take" '\| anything else \| \*\*accept\*\*: one "Known and accepted" line in the PR body, and no issue' \
+    's/and no issue//' \
+    "take-it: any other nit is accepted with one line and no issue"
+count_pin "$rollin_take" '\| (high|medium|low) / (high|medium|low)[^|]*\||\| anything else \|' 3 '| low / low | Drop it. |' \
+    "take-it's nit table holds exactly three dispositions"
+mutant_pin "$rollin_take" 'High impact.{1,3} is a weakened security control or a wrong description of one, wrong behaviour or data loss, a claim in a security or safety doc that contradicts the code, or a test or gate that cannot fail' \
+    's/or a test or gate that cannot fail//' \
+    "take-it defines high impact, a gate that cannot fail included"
+mutant_pin "$rollin_take" 'High probability.{1,3} is a case reachable in normal use, on the default path, or by a careless agent, not only by deliberate construction' \
+    's/or by a careless agent//' \
+    "take-it defines high probability"
+mutant_pin "$rollin_take" 'a ranking you are unsure of is the .coordinator is unsure. trigger of \*\*Review rounds and arbitration\*\*, never a silent downgrade' \
+    's/never a silent downgrade//' \
+    "take-it: a disputed or unsure nit ranking goes to arbitration, never a silent downgrade"
+mutant_pin "$rollin_take" '\*\*file\*\* is a follow-up issue, filed through .sassy-dog:github-issues.. .file-or-link-issue.sh.' \
+    's/file-or-link-issue.sh//' \
+    "take-it files a follow-up through file-or-link-issue.sh"
+mutant_pin "$rollin_take" 'It is never silent: the PR body and the §7 report name each issue filed' \
+    's/It is never silent//' \
+    "take-it names each follow-up it files, so filing is never silent"
+mutant_forbid "$rollin_take" 'recovery_used=1|recovery=(pending|started|finished)' \
+    'the ranking writes recovery_used=1 recovery=pending' \
+    "take-it's nit ranking writes no allowance record"
+
+mutant_pin "$orch_flat" 'Rank every nit by impact and probability' \
+    's/Rank every nit by impact and probability//' \
+    "the orchestrator ranks every nit by impact and probability"
+mutant_pin "$orch_flat" 'the nine reviewers. finding schema does not carry it and does not change' \
+    's/does not carry it and does not change//' \
+    "the orchestrator ranks nits itself and leaves the nine reviewers' schema unchanged"
+mutant_pin "$orch_flat" 'Impact: <high\|medium\|low> \(<reason>\)\. Probability: <high\|medium\|low> \(<reason>\)' \
+    's/Probability: /P: /' \
+    "the orchestrator's report line gives each nit an impact and a probability with a reason"
+mutant_pin "$orch_flat" 'high/high is treated as Blocking' \
+    's/high\/high is treated as Blocking//' \
+    "the orchestrator states what the caller does with a high/high nit"
+mutant_pin "$orch_flat" 'You rank; you do not move a nit into the Blocking list yourself' \
+    's/you do not move a nit into the Blocking list yourself//' \
+    "the orchestrator ranks nits and never promotes one itself"
+mutant_pin "$orch_flat" 'or leaves a test or gate that cannot fail' \
+    's/or leaves a test or gate that cannot fail//' \
+    "the orchestrator's high-impact definition covers a gate that cannot fail"
+rev_all=""
+for rf in agents/*-reviewer.md; do rev_all="$rev_all $(flatten "$rf")"; done
+mutant_forbid "$rev_all" '"(impact|probability)" *:' \
+    'each finding carries "impact": "high"' \
+    "the nine reviewers' finding schema carries no impact or probability key"
+
+# dispatch-ready's side: the failed-check bullet, the Blocking bullet, the §7 rows.
+retry_checks_dr="$(bullet_slice "$DISPATCH" '- **Failed or red PRs**')"
+retry_review_dr="$(bullet_slice "$DISPATCH" '- **PRs carrying a Blocking review finding**')"
+mutant_pin "$retry_checks_dr" 'A check the PR.{0,3}itself caused .{0,120} is a Blocking finding and takes the Blocking bullet below: uncapped review rounds, never a second-failure demotion' \
+    's/never a second-failure demotion//' \
+    "dispatch-ready: a PR-caused red check is a Blocking finding in the uncapped rounds"
+mutant_pin "$retry_checks_dr" 'it keeps .sassy-dog:pr-shepherd.{1,3}s retry and probe, writes no round record and is never demoted to .blocked. by this loop' \
+    's/is never demoted to .blocked. by this loop//' \
+    "dispatch-ready: an infra or platform failure keeps pr-shepherd's retry and is never demoted"
+mutant_pin "$retry_review_dr" 'run \*\*Review rounds and arbitration\*\*, defined once in .take-it. §6' \
+    's/defined once in/defined in/' \
+    "dispatch-ready points at take-it §6's one definition of the rounds"
+mutant_pin "$retry_review_dr" 'each tick writes and confirms the round record before it dispatches a round' \
+    's/writes and confirms the round record before it dispatches a round/dispatches a round/' \
+    "dispatch-ready writes and confirms the round record before dispatching a round"
+mutant_pin "$retry_review_dr" 'a finding persists, a fix oscillates, the worker disputes a finding, this tick is unsure, or a round number reaches a multiple of three' \
+    's/or a round number reaches a multiple of three//' \
+    "dispatch-ready names the five arbitration triggers, the check-in included"
+mutant_pin "$retry_review_dr" 'dispatch the arbitration agent this tick, at .S-Tier. · .deep. \(Claude Code: .model: "fable"., .effort: "xhigh". · omp: .model: "@slow".\)' \
+    's/dispatch the arbitration agent this tick, at//' \
+    "dispatch-ready arbitrates a stuck finding at S-Tier deep"
+mutant_pin "$retry_review_dr" 'or at .S-Tier. · .light. \(Claude Code: .model:.{0,3}"fable"., .effort: "low". · omp: .model: "@slow".\) for a scheduled check-in alone' \
+    's/for a scheduled check-in alone//' \
+    "dispatch-ready arbitrates the scheduled check-in alone at S-Tier light"
+mutant_pin "$retry_review_dr" 'follow it in the same tick without asking a human' \
+    's/without asking a human/after asking a human/' \
+    "dispatch-ready follows a verdict in the same tick without asking a human"
+mutant_forbid "$retry_review_dr" '(at most|max(imum)?( of)?|up to|no more than) [A-Za-z0-9]+ (fix |review )?rounds?|rounds? (is|are) (capped|limited)|round cap' \
+    'a PR gets at most three review rounds' \
+    "dispatch-ready's Blocking bullet states no numeric cap on rounds"
+mutant_pin "$dispatch_flat" 'Held by a §2 review outcome — a .NO REPORT., a held .SKIPPED., or a .deferred. no review has replaced — with its shared allowance spent' \
+    's/with its shared allowance spent/with its ONE redispatch spent/' \
+    "dispatch-ready §7: a held review outcome row is a lost or skipped review with the allowance spent"
+mutant_forbid "$dispatch_flat" 'Held by a §2 review outcome — a Blocking finding' \
+    'Held by a §2 review outcome — a Blocking finding, a NO REPORT' \
+    "dispatch-ready §7: an open Blocking finding is never a held row, it has an action of its own"
+mutant_pin "$dispatch_flat" 'Checks red, or a Blocking finding open, and its issue not .blocked. \| \*\*Yes\*\* — a review round or an arbitration is always available, because rounds have no cap' \
+    's/because rounds have no cap//' \
+    "dispatch-ready §7: a red check or open Blocking finding keeps the loop alive"
+
+# The docs say what the skills now do.
+agents_flat="$(flatten "$AGENTSMD")"
+mutant_pin "$agents_flat" 'worked in numbered, durably recorded review rounds with no retry cap' \
+    's/with no retry cap//' \
+    "AGENTS.md states decision 5 as uncapped review rounds"
+mutant_pin "$agents_flat" 'makes .ESCALATE. the only way a finding ends in .blocked.' \
+    's/the only way a finding ends in .blocked.//' \
+    "AGENTS.md states ESCALATE is the only way a finding ends in blocked"
+mutant_forbid "$agents_flat" 'exactly one automatic recovery shared with failed checks' \
+    'with exactly one automatic recovery shared with failed checks, Blocking findings' \
+    "AGENTS.md no longer states decision 5 as exactly one recovery for review findings"
 
 # ---------------------------------------------------------------------------
 # 6. The report is RETURNED; a lost one is its own outcome (decision 6, #273)
@@ -1839,8 +2116,8 @@ assert_has "$recovery" \
     "Since an orchestrator ran, this is the caller's **NO REPORT** path, not **SKIPPED**;" \
     "incomplete fallback uses NO REPORT rather than SKIPPED"
 assert_has "$recovery" \
-    '**one automatic recovery allowance per PR**, shared with failed checks, Blocking findings and report recovery.' \
-    "parent recovery shares the existing failure allowance"
+    '**one automatic recovery allowance per PR**, shared with report recovery. Blocking findings and failed checks the PR itself caused are not drawn from it' \
+    "parent recovery shares the report-recovery allowance, and review findings are not drawn from it (#667)"
 assert_has "$recovery" \
     'This fallback batch plus its aggregate-only pass spends that one allowance; it is not one allowance per surface.' \
     "batch and aggregation consume one total allowance"
@@ -2073,14 +2350,15 @@ assert_has "$send_recovery" \
     "pre-PR accounting survives the GitHub handoff"
 retry_checks="$(bullet_slice "$DISPATCH" '- **Failed or red PRs**')"
 retry_review="$(bullet_slice "$DISPATCH" '- **PRs carrying a Blocking review finding**')"
-assert_has "$retry_checks" 'recovery_used=1 recovery=pending' \
-    "failed-check producer records its pending reservation"
-assert_has "$retry_checks" '**before this tick ends**' \
-    "failed-check producer persists before a later tick can mistake it for spent legacy history"
+# #667: a failed check the PR caused is a Blocking finding in the uncapped rounds, so the failed-check
+# bullet no longer schedules a retry and no longer reserves the allowance; only the lost-review path
+# (NO REPORT / SKIPPED) still does, inside the Blocking bullet.
+assert_not_in "$retry_checks" 'recovery_used=1|recovery=(pending|started|finished)' \
+    "failed-check bullet writes no reservation: a PR-caused failure is a review round, not allowance"
 assert_has "$retry_review" 'recovery_used=1 recovery=pending' \
-    "review-failure producer records its pending reservation"
+    "lost-review producer records its pending reservation"
 assert_has "$retry_review" '**before this tick ends**' \
-    "review-failure producer persists before a later tick can mistake it for spent legacy history"
+    "lost-review producer persists before a later tick can mistake it for spent legacy history"
 
 # A terminal pre-PR failure is an issue outcome, not a missing entry in a PR list.
 assert_has "$takeit_handoff" \
@@ -2634,16 +2912,17 @@ for pair in "contract:$contract_flat" "setup-config:$setup_flat" \
     assert_not_in "${pair#*:}" 're-?read visibility (live|on every|at each|on each)' \
         "${pair%%:*} does not re-read visibility per run or per refresh"
     # Decision 5: an unqualified "merge past", a Blocking finding parked back in
-    # Ready, or a redispatch budget grown past one. `[^r] ` excludes the legal
-    # forms, all of which are preceded by "never"/"Never".
+    # Ready, or a numeric cap on review rounds back (#667 reversed the old one-redispatch
+    # budget, so "two/three redispatches" is no longer the shape to catch). `[^r] `
+    # excludes the legal forms, all of which are preceded by "never"/"Never".
     assert_not_in "${pair#*:}" '[^r] merge past' \
         "${pair%%:*} carries no unqualified 'merge past'"
     assert_not_in "${pair#*:}" '[^r] park (it|one|them|the PR) back in Ready' \
         "${pair%%:*} carries no unqualified 'park … back in Ready'"
-    assert_not_in "${pair#*:}" '(two|TWO|2|three) redispatches?' \
-        "${pair%%:*} grants no second redispatch"
-    assert_not_in "${pair#*:}" 'redispatch 2 of' \
-        "${pair%%:*} reports no redispatch budget past 1"
+    assert_not_in "${pair#*:}" '(at most|max(imum)?( of)?|up to|no more than) [A-Za-z0-9]+ (fix |review )?rounds?|rounds? (is|are) (capped|limited)|round cap' \
+        "${pair%%:*} puts no numeric cap on review rounds"
+    assert_not_in "${pair#*:}" 'ONE redispatch carrying (it|that finding|the finding)|one redispatch carrying the finding|redispatch [0-9] of [0-9]' \
+        "${pair%%:*} no longer grants a Blocking finding one redispatch"
 done
 
 # Decision 6, reverted. The two shapes that need no polarity to detect, because

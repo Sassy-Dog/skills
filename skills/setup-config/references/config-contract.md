@@ -369,10 +369,12 @@ not restated here, because an order written twice drifts into an order honoured 
 No value of `review_site`, and no absence of it, turns the gate off. Only `review_agent: skip`
 does, and that still prints the SKIPPED line.
 
-**A Blocking finding is never merged past.** On the `coordinator` site `dispatch-ready` treats one
-exactly like a failed check — surface it named, one redispatch carrying the finding as context,
-then the `blocked` label — and never parks it back in Ready. That path lives in
-`dispatch-ready` §2; this key only decides whether it is the path that runs.
+**A Blocking finding is never merged past.** On the `coordinator` site `dispatch-ready` surfaces one
+named and runs review rounds on it with no retry cap — a fix round, then a delta review of the new
+head — sends a stuck one to arbitration at `S-Tier`, and sets the `blocked` label only on an
+`ESCALATE` verdict. It never parks it back in Ready. The rounds and the verdicts are defined once,
+in `take-it` §6's **Review rounds and arbitration**; the path lives in `dispatch-ready` §2; this
+key only decides whether it is the path that runs.
 
 **`NO_CONFIG` is not a hole in this.** `take-it` and `dispatch-ready` are the two workflow skills
 that stop outright on `NO_CONFIG` rather than degrading (the `work-recommendations` and

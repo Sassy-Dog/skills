@@ -284,8 +284,9 @@ reviewers and briefs outside the closed list; do not repair a plan by inventing 
 Keep failed/unusable work visibly separate from usable results. Then:
 
 1. Check the caller's existing `recovery_used` state and actual dispatch capability. There is
-   **one automatic recovery allowance per PR**, shared with failed checks, Blocking findings
-   and report recovery. This fallback batch plus its aggregate-only pass spends that one
+   **one automatic recovery allowance per PR**, shared with report recovery. Blocking findings
+   and failed checks the PR itself caused are not drawn from it: the caller runs them as uncapped
+   review rounds. This fallback batch plus its aggregate-only pass spends that one
    allowance; it is not one allowance per surface. Reserve it before dispatch and carry the
    consumed value through resumed agents, PR-body/RESULT handoffs and durable attempt comments.
    A fresh agent, head or tick never resets it. Reconcile earlier failure/recovery history
@@ -359,6 +360,17 @@ Accept a reviewer's returned result only when it is a usable envelope whose JSON
 - **Dedupe.** Two reviewers flagging the same line from different angles is one finding, keeping the sharper evidence and the higher severity.
 - **Verify the claim and the link — never the location.** Open each cited `file:line`. Drop the finding if the line does not say what the finding claims. Do **not** drop it for sitting outside the diff: blast-radius findings and most of your own integration checks cite untouched lines *by construction* — the caller a rename missed, the config key never provisioned, the doc the change made untrue. What has to hold is a stated causal chain back to a changed hunk. A finding with no such chain is a repo-audit finding that wandered in — drop that one.
 - **Split by severity, do not re-derive it.** `critical` and `high` are **Blocking**; `medium` and `low` are **Nits**. One narrow exception: a finding whose own `evidence` cites the repo gate or written policy it violates is Blocking at any severity — the citation is inside the finding, not in your impression of it. Never promote on a hunch; if a `low` feels bigger than it reads, say so in the finding rather than moving it. Drop findings below ~0.6 `confidence` unless the severity is `critical`.
+- **Rank every nit by impact and probability.** Give each Nit an **impact** and a **probability**, each
+  `high`, `medium` or `low`, with a one-line reason for each. Classification lives here, in your own
+  aggregation: the nine reviewers' finding schema does not carry it and does not change. **High
+  impact:** the change weakens a security control or describes it wrongly, causes wrong behaviour or
+  data loss, puts a claim in a security or safety doc that contradicts the code, or leaves a test or
+  gate that cannot fail. **High probability:** the case is reachable in normal use, on the default
+  path, or by a careless agent, not only by deliberate construction. Rank on the evidence in the
+  finding, never on a hunch; a nit you cannot rank is `medium` with the reason "unclear". The
+  caller turns the pair into a disposition (high/high is treated as Blocking; high/medium and
+  medium/high are rolled in once or filed; anything else is accepted with one line, no issue). You
+  rank; you do not move a nit into the Blocking list yourself, because severity is not re-derived here.
 - **A reviewer that did not come back is not a clean surface.** If a dispatch errors, times out, or returns something you cannot parse, its surface is `!`, never `✓`, and nothing about it goes under Clean. Report it on every run, the clean one included, and name what failed. A fan-out that quietly lost a reviewer reads exactly like one that found nothing — on the one gate that exists *because* lint, type and test cannot see the defect.
 - **Your report is your RETURN VALUE — the final text of this run, and nothing else.** Deliver it by *ending on it*. `SendMessage` is not a delivery mechanism for a report: sending needs an address, and you cannot reliably resolve one. Measured on 2026-08-25, five occurrences across three issues, not one of them reaching the session that dispatched it: three reports arrived in a coordinator's session instead, one round lost 2 of 5 dispatches that never returned at all, and one was addressed to an agent *type* rather than an address — which is not an address, so it resolved to nobody ([#273](https://github.com/Sassy-Dog/skills/issues/273)). Returning needs no address. So an unresolvable dispatcher changes nothing about what you do: return the report in full anyway, as your final text. Never hand it to another session to relay, never leave it in a file and return a pointer to it, and never end a run with the report unstated because delivery failed — the return **is** the delivery. This is the bullet above, one level up: a report that reached nobody reads exactly like a review that found nothing, and the dispatcher is owed the same honesty you owe a lost reviewer.
 - **The hop below you is bound too — and that does not retire the bullet that scores a lost reviewer** ([#280](https://github.com/Sassy-Dog/skills/issues/280)). Each of the nine now carries this same rule worded for a reviewer, and item 6 of your brief is how you pass it down; state it there rather than assuming the agent's own file will be read. A stated contract is not a delivered report, though: a reviewer can still error, time out, or come back unparseable, and that is still scored `!` and named on every run by that same bullet. So do not read a clean fan-out as proof the hop worked — read the `!` count. #273's own review ran degraded on exactly this hop, losing three of four surfaces, and two of the three carried Blocking findings that a `✓` would have shipped.
@@ -375,7 +387,7 @@ Surfaces: code ✓ / security ✓ / tests ! / infra – / ci – / deps – / ob
 - [<surface|integration>] <file:line> — <what is wrong>. <why it matters here>. Fix: <concrete suggestion>.
 
 ### Nits (roll in, or note "Known and accepted")
-- [<surface>] <file:line> — <suggestion>.
+- [<surface>] <file:line> — <suggestion>. Impact: <high|medium|low> (<reason>). Probability: <high|medium|low> (<reason>).
 
 ### Clean
 - <surfaces and integration checks that were actually reviewed and had nothing to report>
@@ -388,4 +400,4 @@ With nothing to report at all:
 Base: <ref, or "unresolved (<why>)", or "override <commit id> (roll-in delta)"> · files changed: <n>. Surfaces: <…>. No blocking findings, no nits. Proceed to the PR body.
 ```
 
-The caller maps your output: **Blocking → fix locally and re-run; Nits → roll in or note "Known and accepted" in the PR body; clean → proceed.** Render the header, the base and the surfaces line on **every** run, the clean one included — a review that failed to happen reads exactly like a review that found nothing, and those three lines are the only thing separating them. A run carrying any `!` surface, or an unresolved base, is a **degraded** run: say so in the first line of the report rather than letting a short Blocking list imply a clean diff.
+The caller maps your output: **Blocking → fix locally and re-run, with no cap on rounds; Nits → by their impact and probability, high/high treated as Blocking, high/medium and medium/high rolled in once or filed, anything else noted as "Known and accepted" in the PR body with no issue; clean → proceed.** Render the header, the base and the surfaces line on **every** run, the clean one included — a review that failed to happen reads exactly like a review that found nothing, and those three lines are the only thing separating them. A run carrying any `!` surface, or an unresolved base, is a **degraded** run: say so in the first line of the report rather than letting a short Blocking list imply a clean diff.

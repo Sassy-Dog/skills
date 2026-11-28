@@ -185,8 +185,13 @@ real and accepted: one extra review pass of latency and tokens on every `send-it
 drafting the PR body, run it against the **changeset** — working tree, staged and untracked
 included — versus the derived default branch, with a one-line scope statement. Not "the staged
 diff": this gate runs before the commit, and an untracked file is invisible to `git diff` while
-being the highest-risk class in the change (§3). Blocking findings → fix and re-run. Nits → roll
-in, or note "Known and accepted" in the PR body.
+being the highest-risk class in the change (§3). Blocking findings → fix and re-run, with no cap
+on rounds: keep going until the review of the current head has none. A nit the report ranks high
+impact and high probability counts as Blocking. Other nits → by their ranking, roll in or note
+"Known and accepted" in the PR body (`take-it` §6's **Review rounds and arbitration** is the one
+definition of the rounds and the ranking). `send-it` has no arbitration dispatch of its own: an
+operator is present, so a finding that persists, a fix that oscillates or a ruling you are unsure of
+goes to them in the session, named, rather than to a coordinator's `S-Tier` agent.
 
 **Forward `review_surfaces:` when the shipped orchestrator is what resolved.** If config carries
 that optional map, pass it **verbatim** in the dispatch brief. It steers the orchestrator's path
@@ -229,8 +234,9 @@ integration. Do not request a relay or file pointer. A changed input, expired/un
 spent or unknown allowance, or incomplete second return is NO REPORT, never clean or another
 request.
 
-**One automatic recovery allowance per PR** is shared by failed checks, Blocking findings,
-missing/faulty reports and parent recovery. Carry `recovery_used=0|1` through every dispatch and
+**One automatic recovery allowance per PR** is shared by missing/faulty reports and parent
+recovery; Blocking findings and failed checks the PR itself caused are review rounds, which have no
+cap and never draw on it. Carry `recovery_used=0|1` through every dispatch and
 the PR body; read existing PR-body and linked-issue comments first, including legacy attempt-1
 history. Start at 0 only for a new PR with no prior failure/recovery history; never reset for a new
 agent, head or invocation. Before using the allowance, persist `recovery_used=1` and its cause in
@@ -278,7 +284,7 @@ something untrue:
 
 | Outcome | What happened | What renders |
 | --- | --- | --- |
-| reviewed | the agent returned a report, not control or incomplete fallback | its findings — Blocking fixed and re-run, Nits rolled in or noted |
+| reviewed | the agent returned a report, not control or incomplete fallback | its findings — Blocking fixed and re-run with no cap on rounds, Nits ranked, then rolled in or noted |
 | dispatched, no report returned | the agent ran; no complete readable report came back | the NO REPORT line below, naming the agent |
 | could not dispatch | no agent resolved, or the dispatch itself errored | the SKIPPED line below, naming the cause |
 

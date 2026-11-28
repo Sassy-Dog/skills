@@ -294,8 +294,11 @@ Custom agents retain their existing contract.
 Reconcile `recovery_used=0|1` from the PR body, RESULT when available, and durable issue comments
 before dispatch, including legacy attempt-1 history. Use the highest recorded value; a fresh
 agent, head or invocation never resets it. Start a new PR at 0 only absent prior failure/recovery
-history. The ONE automatic allowance is shared by failed checks, Blocking findings, missing/faulty
-reports and parent recovery, not renewed at the coordinator. Before any recovery dispatch, record
+history. The ONE automatic allowance is shared by missing/faulty reports and parent recovery
+(report-only resume included), not renewed at the coordinator. It is not the budget for review
+findings: a Blocking finding, and a failed check the PR itself caused, enter §6's uncapped review
+rounds and never read, spend or refresh it, while an infra or platform failure keeps `pr-shepherd`'s
+retry and probe. Before any recovery dispatch, record
 `recovery_used=1` and its cause in the issue comment and existing PR body; forward it unchanged.
 Reserve with `recovery=pending`, mark that reservation `recovery=started` before dispatch and
 `recovery=finished` with the outcome afterwards. Only explicitly pending/not-started work may
@@ -326,8 +329,9 @@ confirm demotion before freeing the already-claimed slot. Bind recovery reservat
 When recovery is spent and the worker stops with an unresolved failure **before a PR exists**,
 persist an issue comment whose entire body is JSON: `kind: "take-it-terminal-failure"`, `repo`,
 `issue`, `branch`, `attempt_id`, `reservation` (the recovery comment's API ID), `pr: null`,
-`recovery_used: 1`, `recovery: "finished"` and `cause` (the actual Blocking finding, check failure
-or NO REPORT cause). Reuse an existing authenticated terminal record for that attempt rather
+`recovery_used: 1`, `recovery: "finished"` and `cause` (the NO REPORT cause, an infra or platform
+failure, or an `ESCALATE` verdict's reasoning; never a review finding that merely ran out of rounds,
+since rounds have no cap). Reuse an existing authenticated terminal record for that attempt rather
 than posting duplicates. Confirm the write, then return
 `RESULT: issue=<N> pr=none branch=<name> status=failed attempt_id=<id> recovery_used=1 terminal_record=<id|unconfirmed> note=<cause>`.
 Do not open a placeholder PR or proceed to the ordinary commit/open-PR steps. If persistence
@@ -369,7 +373,8 @@ behind in coordinator-only context.
 > ```
 >
 > **Recovery handoff:** `recovery_used={reconciled 0|1}`. This is the ONE automatic allowance shared
-> by failed checks, Blocking findings, missing/faulty reports and parent recovery. Before spending
+> by missing/faulty reports and parent recovery; it is not a budget for review findings or for a
+> failed check your own change caused, which have no cap (the next paragraph). Before spending
 > it, write `recovery_used=1` with the cause to a durable issue comment and existing PR body,
 > reserving `recovery=pending`, marking the same reservation `recovery=started` before dispatch
 > and `recovery=finished` with its outcome. Confirm the write before dispatch. Only explicitly
@@ -385,7 +390,11 @@ behind in coordinator-only context.
 > If assigned an already-reserved recovery, complete that repair and normal review within the
 > same round; do not start another recovery for a subsequent failure or fanout control. Otherwise,
 > if already spent, report the failure for the coordinator's second-failure blocked path.
-> Never open a PR with unresolved Blocking findings.
+> **Review rounds have no cap.** A Blocking finding, or a check your own change broke, is fixed and
+> re-reviewed until the review is clean, in as many rounds as it takes, and no round spends the
+> allowance above. If you cannot reproduce a finding, believe it is wrong, or believe it is out of
+> scope, do not guess and do not ignore it: return `dispute: <file and claim> — <why>` and stop
+> for the coordinator's arbitration. Never open a PR with unresolved Blocking findings.
 >
 > **Your job:**
 >
@@ -411,7 +420,8 @@ behind in coordinator-only context.
 >    staged and untracked included — versus `{default_branch}`, with a one-line scope statement.
 >    Not "the staged diff": you have not committed yet, and an untracked file is invisible to
 >    `git diff` while being the highest-risk class in the change. **Blocking findings → fix them
->    and re-review before you commit**, using the shared automatic allowance, not a fresh budget.
+>    and re-review before you commit**, with no cap on rounds, and never against the shared
+>    automatic allowance.
 >    Nits → roll in, or record "Known and accepted" in the PR body.
 >    **If the agent cannot be dispatched at all** — it does not exist, the plugin did not load,
 >    the dispatch errors — do not open the PR silently:
@@ -593,10 +603,12 @@ Do not drop such failures while extracting PR numbers; an exhausted pre-PR failu
 same blocked transition without requiring a PR. Missing PR alone never proves terminal failure.
 
 First reconcile each PR's `recovery_used` with its RESULT, PR body and durable issue comments using
-§5. All ONE-redispatch instructions below mean this same shared allowance: if the implementing
-agent already spent it, take the existing second-failure `blocked` path immediately, not another
-retry. Persist any coordinator recovery before dispatch and update the PR body plus issue comment
-with its outcome and `recovery_used`; a later dispatch-ready tick must read the same decision.
+§5. The ONE-redispatch instructions below that name a `NO REPORT` or `SKIPPED` outcome mean this
+same shared allowance: if the implementing agent already spent it, take the existing second-failure
+`blocked` path immediately, not another retry. Review findings are not among them: they run the
+uncapped rounds of **Review rounds and arbitration** below. Persist any coordinator recovery before
+dispatch and update the PR body plus issue comment with its outcome and `recovery_used`; a later
+dispatch-ready tick must read the same decision.
 
 **Before handing anything onward, on EITHER site: a sub-agent whose RESULT line reported
 `review=no-report` OR `review=skipped` is held, never merged.** Both, and for one reason — each
@@ -605,11 +617,11 @@ PR lacks a complete reported review — so they are held identically; the siblin
 opposite conclusion about the very same sub-agent's output. This sits ABOVE the coordinator-only
 subsection deliberately: under `review_site: agent` that subsection does not run at
 all, so a rule stated inside it would leave the agent site merging PRs whose review reached
-nobody, which is the whole of #273 one layer out. Either outcome gets the same treatment a
-Blocking finding gets — name it in the §7 report, allow ONE redispatch carrying the outcome as
-context, and keep the PR out of the list you hand to `sassy-dog:pr-shepherd` below. A second
-failure gets the `blocked` label plus a comment naming the outcome, and a human decides; never
-park it back in Ready.
+nobody, which is the whole of #273 one layer out. Either outcome is held — name it in the §7 report, allow ONE redispatch from the shared
+allowance carrying the outcome as context, and keep the PR out of the list you hand to
+`sassy-dog:pr-shepherd` below. A second failure gets the `blocked` label plus a comment naming the
+outcome, and a human decides; never park it back in Ready. This is the budget a lost or skipped
+review has, and it is separate from the rounds a Blocking finding gets.
 
 **One carve-out, and without it this rule freezes merges: `review_agent: skip`.** That opt-out is
 the ONLY configuration whose every run legitimately reports `review=skipped`, so holding on
@@ -637,6 +649,87 @@ ordinary waiting. Report the line by name with its cause and hold the PR; do not
 it as a re-review. The script is stateless, so one line is a re-run (exit `11` already means re-run);
 when a human is needed, and what to check, is `pr-shepherd`'s `DIRECT MERGE FAILED` paragraph, the
 one home of that rule.
+
+### Review rounds and arbitration (the one definition; `dispatch-ready` and `send-it` point here)
+
+**A Blocking review finding has no retry cap, on either `review_site`.** The coordinator keeps going
+— a fix round, then a delta review of the new head — until the review of the current head returns
+no Blocking finding, or an arbitration verdict (below) clears or escalates it. A failed check the PR
+itself caused (a test the change broke, a lint or type error it introduced) counts as a Blocking
+finding and enters the same loop. An infra or platform failure (a runner outage, a flaky service, a
+failing platform-degradation probe) does not: it keeps `pr-shepherd`'s retry and probe. The shared
+recovery allowance of §5 is no part of this loop: it stays the budget of `NO REPORT`, parent
+fan-out and report-only resume, and no review round reads, spends or refreshes it.
+
+1. **Every round is numbered and recorded durably, before it is dispatched.** Write the **round
+   record**: an issue comment whose entire body is JSON, `kind: "take-it-review-round"`, `repo`,
+   `issue`, `branch`, `attempt_id`, `pr` (null before a PR exists), `round` (1, 2, 3 and on),
+   `findings` (each as its file and its claim) and `head` (the full commit id the findings were
+   raised against). Mirror it in the PR body as `review_round=<n>` and confirm the write. Read it
+   back like `recovery_used`: author = the `gh api user` principal or a verified caller, bound to
+   this repo, issue, branch and active `attempt_id`; the highest verified `round` is the count; the
+   PR-body line is a mirror and never the source. A write that cannot be confirmed holds the round
+   rather than starting an unrecorded one. The count is a record for the operator and the check-in
+   schedule, never a limit.
+2. **Every round must produce a new head, and that head gets a delta review.** Send the findings,
+   the round number and the earlier rounds' history to the same worker by its manifest `agent_id`
+   (SendMessage on Claude Code), or redispatch a worker on the same branch when it cannot be
+   resumed, with §5's tier binding and isolation rules. Then review the new head through
+   `base_override` set to the round record's `head`, under the **Delta base rule** in the Nit
+   roll-in below (the round record's `head` takes the cap record's `reviewed_head` place; the
+   ancestor test and the no-merge-commit test apply unchanged, and a merge in the range means a
+   full review against the derived default branch). A round that pushes no new head is not a round:
+   it is a dispute.
+3. **Arbitrate instead of blocking.** The coordinator sends the PR (or, before a PR exists, the
+   worker's branch) to arbitration, and does not block, when any of these hold:
+   - **a finding persists** — the same finding (same file and claim) survives a fix round;
+   - **a fix oscillates** — a round reintroduces a finding an earlier round closed;
+   - **the worker disputes a finding** — it cannot reproduce it, says it is wrong, or says it is out
+     of scope (a worker's `dispute:` return);
+   - **the coordinator is unsure** — whether a finding is Blocking, how to fix it, or whether the fix
+     belongs in this PR or a follow-up;
+   - **the PR reaches round 3, 6, 9 and so on** — a scheduled check-in. It is not a cap: it lets
+     arbitration decide whether to keep going or re-scope.
+   Dispatch a fresh agent for it. For the first four triggers it runs at `S-Tier` · `deep` (Claude
+   Code: `model: "fable"`, `effort: "xhigh"` · omp: `model: "@slow"`); for a scheduled check-in alone
+   it runs at `S-Tier` · `light` (Claude Code: `model: "fable"`, `effort: "low"` · omp: `model:
+   "@slow"`). The arbitration agent is read-only: it edits, files and merges nothing. It gets the
+   issue, the PR diff versus the derived default branch, every review report and every round
+   record, and it returns **exactly one verdict** from this closed set, as the first line of its
+   final text (`VERDICT: <name>`) followed by its reasoning:
+
+   | Verdict | What the coordinator does |
+   | --- | --- |
+   | `FIX` | Runs another round using the approach the verdict names. |
+   | `ACCEPT` | Records the finding as a known and accepted limit, with the wording the verdict gives (README or PR body), and continues to merge. |
+   | `DESCOPE` | Files a follow-up issue, changes the PR to `Part of #N`, and continues. |
+   | `REJECT` | Records the verdict's reasoning on the PR, drops the finding, and continues. |
+   | `ESCALATE` | Labels the issue `blocked` for the operator. Only for a product or policy decision, or for an action that is already operator-only (destructive, outward-facing, irreversible). |
+
+   A return with no verdict, two verdicts, or a name outside the set is not a verdict: ask again,
+   and never read it as `ESCALATE` or as consent. An arbitration that cannot be dispatched (the
+   `S-Tier` model or role does not resolve) holds the PR and is reported by name; it never falls
+   back to the session model and never counts as a verdict. **Write the verdict as its own durable record
+   before acting on it**: an issue comment whose entire body is JSON, `kind: "take-it-arbitration"`,
+   `repo`, `issue`, `branch`, `attempt_id`, `pr`, `round`, `trigger` (`persist`, `oscillate`,
+   `dispute`, `unsure` or `check-in`), `verdict` and `reasoning`, mirrored in the PR body as
+   `arbitration=<verdict>` and read back like the round record. Then follow it without asking a
+   human: `FIX` as a round (step 1); `ACCEPT` by writing its wording where it names; `DESCOPE` by
+   filing the follow-up through `sassy-dog:github-issues`' `file-or-link-issue.sh` and rewriting the
+   PR body's `Closes #N` line to `Part of #N`; `REJECT` by posting its reasoning on the PR;
+   `ESCALATE` by the existing blocked transition, `issue-claim.sh block N --comment "take-it:
+   arbitration ESCALATE — <reason>"`, preserving the worktree and branch. **An `ACCEPT` of a
+   security finding must land as a documented known limit in the repo's docs** (one more worker
+   round and its delta review), not only in the PR body. A finding a verdict cleared stays cleared
+   for the rest of the attempt (same file and claim); a later review raising it again is not a new
+   Blocking finding.
+4. **`ESCALATE` is the only way a review finding ends in `blocked`**, and the merge never goes past
+   a Blocking finding that is merely unresolved. Only a clean re-review, or an `ACCEPT`, `DESCOPE`
+   or `REJECT` verdict, clears one; until then the PR is held and the loop has an action of its
+   own (the next round or the arbitration), so it is never a stalled PR.
+5. **Cost is visible, not capped.** Every round record and every verdict record is a comment on the
+   issue, and the §7 report and each progress line show the round count (`review round <n>`), so
+   the operator can see the cost and interrupt.
 
 ### Review gate on the coordinator site (ONLY when `review_site: coordinator`)
 
@@ -674,10 +767,12 @@ REPORT, never clean or another request.
 Then:
 
 - **Blocking finding** → hold the PR; **never merge past it**. Name the finding in the §7 report and
-  allow ONE redispatch carrying it as context. A second failure gets the `blocked` label plus a
-  comment naming the finding, and a human decides.
-- **Nits** → they never hold a merge. With no Blocking finding and at least one nit, run the
-  **Nit roll-in** below before the hand-off; its sort decides what each nit becomes.
+  run **Review rounds and arbitration** above: round after round with no cap, an arbitration verdict
+  when a trigger fires, and `blocked` only on `ESCALATE`.
+- **Nits** → they never hold a merge, except a nit ranked high impact and high probability, which is
+  treated as a Blocking finding and takes the bullet above. With no Blocking finding and at least
+  one other nit, run the **Nit roll-in** below before the hand-off; its sort decides what each nit
+  becomes.
 - **Dispatched, but no report came back** → print
   `review: NO REPORT — <agent> dispatched, no report returned (lint/type/test only)`, name the
   agent, and **hold the PR** — never merge it, and never hand it to `sassy-dog:pr-shepherd`. Never
@@ -701,12 +796,29 @@ review of the current head returned no Blocking finding and at least one nit, be
 `send-it` is unchanged: on both of those, nits already roll in before the PR opens. `dispatch-ready` §2
 runs this same step and points here for its definition.
 
-1. **Sort every nit into exactly one bin**, and record the sort in the PR body (a `Nit sort:` list).
-   **roll in**: inside the issue's stated scope, small, and adds no new script, guard or test
-   machinery. **file**: has a concrete failure scenario but is out of scope or large; name it in the
-   §7 report for the operator (`dispatch-ready` names it in its §6 tick report) and never file it automatically. **accept**: no failure scenario, or it
-   only extends coverage of behaviour that is already correct; list it under "Known and accepted" in
-   the PR body.
+1. **Rank every nit by impact and probability, then sort it into exactly one bin**, and record each
+   nit's pair and bin in the PR body (a `Nit sort:` list). The shipped orchestrator's report gives
+   every nit an impact and a probability (each high, medium or low, with a one-line reason); a nit it
+   left unranked, a custom agent's nits, or a ranking you dispute are yours to rank by the same
+   definitions, and a ranking you are unsure of is the *coordinator is unsure* trigger of **Review
+   rounds and arbitration**, never a silent downgrade. **High impact** is a weakened security
+   control or a wrong description of one, wrong behaviour or data loss, a claim in a security or
+   safety doc that contradicts the code, or a test or gate that cannot fail. **High probability** is
+   a case reachable in normal use, on the default path, or by a careless agent, not only by
+   deliberate construction.
+
+   | Impact / probability | Bin |
+   | --- | --- |
+   | high / high | **Blocking**: not a roll-in; it enters the uncapped rounds above. |
+   | high / medium, medium / high | **roll in** when it is inside the issue's stated scope, small, and adds no new script, guard or test machinery; otherwise **file**. |
+   | anything else | **accept**: one "Known and accepted" line in the PR body, and no issue. |
+
+   **file** is a follow-up issue, filed through `sassy-dog:github-issues`' `file-or-link-issue.sh`
+   (marker-keyed, so a re-run never duplicates it; its burst rail, more than 5 new issues in one run,
+   stops and shows the list). It is never silent: the PR body and the §7 report name each issue filed
+   with its title and labels. The operator's standing policy for this skill (#667) is the approval
+   the github-issues preview-then-confirm rule asks for, on this path and the `DESCOPE` verdict's
+   only.
 2. **Send the roll-in set once**, to the same worker by its manifest `agent_id` (SendMessage on Claude
    Code; a finished worker resumes from its transcript). Before sending, write the **cap record**: an
    issue comment whose entire body is JSON, `kind: "take-it-nit-rollin"`, `repo`, `issue`, `branch`,
@@ -738,8 +850,9 @@ runs this same step and points here for its definition.
 4. **The roll-in is not a recovery.** It is never counted in `recovery_used` and writes no
    reservation. The cap is `nit_rollin`, one per PR, spent whatever the delta returns; it is not a
    retry loop, and a roll-in never reduces or refreshes the one shared allowance.
-5. **A roll-in commit that breaks CI takes the existing failed-check path**: the one recovery if
-   unused, then `blocked`. Never revert a roll-in commit.
+5. **A roll-in commit that breaks CI takes the existing failed-check path**, which is now the
+   uncapped rounds above: a check the PR itself caused is a Blocking finding. Never revert a
+   roll-in commit.
 6. **Sort-only fallback.** With no recorded `agent_id`, a worker the harness cannot resume (a session
    restart, a serial worker, a harness without resume), a failed send, or a review agent other than
    the shipped orchestrator (no `base_override`, so the delta could not be reviewed), sort into file
@@ -837,6 +950,10 @@ When no board is configured, clear the claim label for every MERGED row via
 `sassy-dog:github-issues`' `issue-claim.sh release N1 N2` — `Closes #N` closed the issue but
 does not strip labels, and a stale claim label misleads the next loop's in-flight reconcile.
 
+Put each PR's review round count (`review round <n>`) and every arbitration verdict in its Notes
+cell, and name every follow-up issue filed (a `DESCOPE` or a filed nit), so the cost of an uncapped
+loop is visible to the operator.
+
 State the isolation outcome in the report (confirmed, **serial and not isolated**, or stopped with
 the setting or probe that failed), and any `review_site` override, so a reader can tell parallel
 isolated workers from workers that took turns on one tree.
@@ -848,9 +965,10 @@ for unshipped issues) and a next-action one-liner per failure.
 
 - **Single-writer**: sub-agents never merge or enqueue; only the coordinator does, and only for
   green PRs.
-- **Never merge past a Blocking review finding**, on either `review_site`. One redispatch carrying
-  the finding, then `blocked` — and a review that could not run, or that ran and never came back,
-  is reported under its own name, never passed over and never waited out.
+- **Never merge past a Blocking review finding**, on either `review_site`. Review rounds have no
+  cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in
+  `blocked` — and a review that could not run, or that ran and never came back, is reported under
+  its own name, never passed over and never waited out.
 - **One nit roll-in per PR, and it is not a recovery.** §6 defines it; it is never counted in
   `recovery_used`.
 - **Never auto-rebase a CONFLICTING PR** — surface it. Expect an upper stack layer to go

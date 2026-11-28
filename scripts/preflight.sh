@@ -509,10 +509,12 @@
 #      the Phase 4 carve-out exempting it from update mode's re-verify-every-
 #      fact rule — the half that survives a REFRESH, and the half that lives in
 #      another file — is pinned scoped to that phase. (e) A Blocking finding
-#      blocks the merge with exactly ONE redispatch, then `blocked`; never
-#      merged past, never parked back in Ready. The rationale for the number is
-#      pinned with it, since "one" alone reads as an arbitrary retry count.
-#      #385 extends that SAME automatic allowance to parent fallback; #386
+#      blocks the merge and its review rounds have no cap (#667 reversed the
+#      original exactly-ONE-redispatch rule); `blocked` only on an arbitration
+#      ESCALATE, never merged past, never parked back in Ready. The arbitration
+#      triggers and the closed five-verdict set are pinned in place of the
+#      number. The shared automatic allowance is a separate budget:
+#      #385 extends it to parent fallback; #386
 #      spends it on at most one same-agent report-only request when returned
 #      text is incomplete, with durable recovery_used accounting across
 #      agents/heads/ticks.
@@ -2429,7 +2431,9 @@ fi
 # the gate is unconditional (and the SKIPPED line survives the default),
 # `review_agent` is deliberately not presence-is-the-toggle, the opt-out is
 # `skip` and not `none`, `review_site` is configured rather than derived, a
-# Blocking finding blocks the merge with exactly one redispatch, a review report
+# Blocking finding blocks the merge and its review rounds have no cap (#667
+# reversed the old exactly-one-redispatch rule; arbitration at S-Tier and the
+# closed five-verdict set replace the cap), a review report
 # is RETURNED as the agent's final text — with a lost one held as its own
 # outcome rather than merged past or folded into the SKIPPED line — and the
 # reviewer -> orchestrator hop is bound the same way, with the fan-out brief

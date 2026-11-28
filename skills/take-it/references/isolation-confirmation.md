@@ -186,7 +186,7 @@ first outcome that applies, before claiming anything:
   or worker requiring a private parent. Checkout ownership, a clean/pushed starting checkout,
   and a real supervised foreground runner must be available. Say **serial and not isolated**.
   Apply the synchronous contract below. take-it can complete an independent list one by one;
-  dispatch-ready launches at most one issue total per tick, including §2 recovery.
+  dispatch-ready launches at most one issue total per tick, including §2 recovery and a §2 review round.
 - **Stop dispatch.** Name the failed isolation setting/probe AND the specific unsafe serial
   prerequisite. No new claim, no invented launch, no dirty-work cleanup and no profile changes.
   A resumed invocation preserves existing claims and work; do not unwind a launched worker's
@@ -216,7 +216,9 @@ on this CLI transport the role resolves to the concrete `TASK_MODEL` selector ab
    directory, outside tracked files. Build it from take-it §5's template: actual repo slug and
    checkout path, default/assigned branch, issue number/title/body/comments needed for scope,
    config stack summary, implementation rules, preflight commands and PR sections; authenticated
-   `attempt_id`, recovery allowance/reservation and existing PR for a recovery. Embed the
+   `attempt_id`, recovery allowance/reservation and existing PR for a recovery, or the findings
+   and round number of a review round (`take-it` §6, which is a worker launch here like any
+   other and draws on no allowance). Embed the
    Issue-only terminal handoff, doc reconciliation, conventional commit, push and RESULT rules.
    Replace step 1 with the **Serial variant** verbatim. Replace step 6 with the coordinator-site
    prohibition on worker review (or explicit skip), never both. Make initial-versus-recovery
