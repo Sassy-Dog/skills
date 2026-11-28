@@ -728,13 +728,19 @@ rejects it, before anything is applied, when:
   symlink (`120000`) or a submodule (`160000`) is refused;
 - the patch, applied to a throwaway index, changes more than a version inside an allowed file: a
   `package.json` may change dependency version strings in its four dependency maps and nothing else
-  (same keys, no new source such as a git URL, tarball or file path); a `pubspec.yaml` only
+  (same keys, no new source such as a git URL, tarball, file path or `..`, and no repeated key,
+  because bun and npm disagree about which copy wins); a bun `workspaces.catalog` rewrite, which
+  `bun update --recursive` can make, is refused and named as such; a `pubspec.yaml` only
   version constraints under its dependency sections; and a lockfile may not name a host, registry
-  or source its base version does not already use. `scripts/test-deps-cadence-policy.sh` (decision 10)
+  or source its base version does not already use, and may only add line shapes its tool writes
+  (a backslash escape on a `bun.lock` line, a `package-lock.json` below the base's
+  `lockfileVersion` or below 2, and any other spelling in a `pubspec.lock` or `Cargo.lock`
+  are refused). `scripts/test-deps-cadence-policy.sh` (decision 10)
   lists what each of these catches and what it does not.
 
-It then runs `git apply --index` with hooks and fsmonitor off, and re-checks that only allowed
-paths are staged and nothing else changed. Every rejection happens before the tree is touched.
+Those content rejections happen before the tree is touched. It then runs `git apply --index` with
+hooks and fsmonitor off, and re-checks that only allowed paths are staged and nothing else
+changed; that re-check rejects after the apply but still before the App token is minted.
 
 The token rules from version 2 still hold inside `open-pr`:
 

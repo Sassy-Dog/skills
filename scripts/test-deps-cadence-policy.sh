@@ -68,25 +68,55 @@
 #      (array or { "packages": [...] } form, `!` negation, `*` and `**` only),
 #      never the patch's, and never anything under .github/. A package.json
 #      may change only version strings in its four dependency maps (same keys;
-#      a value must stay a plain range, so a git/URL/file/workspace source or a
-#      retargeted `npm:` alias is refused); a pubspec.yaml only version
-#      constraints in its dependency sections; a lockfile may not name a host,
-#      registry or source its base lockfile lacks (package-lock.json `resolved`
-#      hosts, so funding URLs are ignored; bun.lock any URL or github/git/file
-#      shorthand; pubspec.lock URL hosts and `source:` kinds; Cargo.lock the
-#      `source =` values minus revision). Hostile cases are built in the third
-#      clone as above: 42 rejected cases (seven path-level, the rest content,
-#      each asserted by its REASON, not just by rejection), two benign patches
-#      that must still apply (every lane type; object-form workspaces), and a
-#      no-jq case. 32 mutants (mutate_content) each name the case that must
-#      kill them. Cost: the unmutated run takes about a minute, so a generic
-#      mutation re-runs only the seven path-level cases and a content mutant
-#      only the cases its needle names; shard 0 alone runs the unmutated
-#      content cases. Not caught, by design and stated in the template: a
-#      lockfile package swapped within an allowed host, integrity hashes, a
-#      Cargo.lock path package, glob syntax beyond `*`/`**` (refused), bun
-#      `catalog` entries (refused), and the unreachable "no content check
-#      exists" arm (killed only through the Cargo.toml mutant).
+#      a value must stay a plain range, so a git/URL/file/workspace source, a
+#      retargeted `npm:` alias, a leading `.` (npm locks `..` as a link) and a
+#      `.tgz`/`.tar`/`.tar.gz` name (npm locks it as `file:`) are refused), and
+#      may repeat no key at all: jq keeps the LAST copy of a repeated key, bun
+#      the FIRST, so the two read different manifests (the jq --stream leaf
+#      count must equal the parsed document's). A pubspec.yaml may change only
+#      version constraints in its dependency sections. A lockfile may not name
+#      a host, registry or source its base lockfile lacks, and what it ADDS
+#      (by position, from diff) must be a line shape the tool writes:
+#        package-lock.json  `resolved` hosts (funding URLs are ignored) plus
+#                           any `version`/`from` holding `:` or `/`; a
+#                           lockfileVersion below the base's, or below 2, is
+#                           refused (v1 keeps sources outside `resolved`).
+#        bun.lock           any URL or github/git/file shorthand; a backslash
+#                           on an added line is refused, because bun decodes
+#                           JSON escapes and the raw scan would not (the file
+#                           is JSONC with trailing commas, so it is not parsed).
+#        pubspec.lock       an allow-list of pub's line shapes (so no YAML
+#                           escape, re-indent or flow mapping), URL hosts and
+#                           `source:` kinds. The allow-list was run over every
+#                           line of the org's real pub lockfiles (none named
+#                           here: they are private) before it was committed.
+#        Cargo.lock         an allow-list of cargo's line shapes, `source =`
+#                           values minus revision, and URL hosts; also run over
+#                           real Cargo.lock files.
+#      Hostile cases are built in the third clone as above: 62 rejected cases
+#      (seven path-level, 55 content, each asserted by its REASON, not just by
+#      rejection), three benign patches that must still apply (every lane type;
+#      object-form workspaces; versions bumped as the REAL tools wrote them,
+#      captured from bun 1.4.4, npm 11.20 and cargo 1.96 on public packages in
+#      scripts/fixtures/deps-cadence/real/, plus a pub lockfile hand-written to
+#      pub's format with sdk and transitive entries, since no Flutter is
+#      installed), and a no-jq case. 43 mutants (mutate_content) each name the
+#      case that must kill them. Cost: the unmutated run takes about a minute,
+#      so a generic mutation re-runs only the seven path-level cases and a
+#      content mutant only the cases its needle names; shard 0 alone runs the
+#      unmutated content cases. Not caught, by design and stated in the
+#      template: a lockfile package swapped within an allowed host, a git
+#      source repointed within an allowed host, integrity hashes, a Cargo.lock
+#      path package, a package-lock dependency map value naming a source,
+#      glob syntax beyond `*`/`**` (refused), bun `catalog` entries (refused,
+#      and named in the message), a base manifest that itself repeats a key (every
+#      refresh of it is refused), and four branches with no committed case
+#      because they need a tool or the machine to fail: diff exiting above 1,
+#      awk failing in pub_shape, read-tree failing, and the post-apply re-check
+#      (a second copy of rules the path loop already enforces, which cannot
+#      fire when that loop works, and runs only before the App token exists).
+#      The unreachable "no content check exists" arm is killed only through the
+#      Cargo.toml mutant.
 #  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
 #      `bun update` there moves only the root's own dependencies). Executed: a
 #      fake bun logs its argv.
@@ -1453,6 +1483,7 @@ content_repo() {
         echo '{"name":"web","workspaces":["pkg","sym"],"dependencies":{"is-number":"6.0.0","left-pad":"^1.1.0"},"devDependencies":{"kind-of":"=6.0.3"}}' > web/package.json
         mkdir -p web/other app tools
         echo '{"name":"other"}' > web/other/package.json
+        echo '{"name":"pkg","scripts":{"test":"true"},"dependencies":{"x":"1.0.0"}}' > web/pkg/package.json
         cat > web/bun.lock <<'LOCK'
 {
   "lockfileVersion": 1,
@@ -1504,6 +1535,9 @@ checksum = "aa"
 name = "gitdep"
 version = "0.1.0"
 source = "git+https://github.com/example/gitdep?rev=abc#abc123"
+dependencies = [
+ "serde",
+]
 LOCK
         git add -A && git commit -qm content
     )
@@ -1525,6 +1559,26 @@ root_repo() {
         echo '{"name":"other"}' > other/package.json
         echo '{"name":"t"}' > .github/tools/package.json
         git add -A && git commit -qm init
+    )
+}
+
+# real_repo <dir> — a lane per ecosystem holding what the REAL tools wrote
+# (scripts/fixtures/deps-cadence/real/: bun 1.4.4, npm 11.20 and cargo 1.96
+# captures on public packages, before and after a refresh; the pub files are
+# hand-written to pub's format, since no Flutter is installed here). They are
+# stored as <name>.txt so no tool or scanner reads them as this repo's own.
+real_repo() {
+    local d="$1" t f
+    mkdir -p "$d"
+    for t in bun npm cargo pub; do
+        mkdir -p "$d/r$t"
+        for f in "$FIX/real/$t/base"/*.txt; do cp "$f" "$d/r$t/$(basename "${f%.txt}")"; done
+    done
+    (
+        cd "$d" || exit 1
+        git init -q -b main
+        git config user.name t; git config user.email t@example.com
+        git add -A && git commit -qm real
     )
 }
 
@@ -1628,7 +1682,12 @@ hostile_checks() {
         'a workspaces change in a lane package.json@@outside the four dependency maps@@jq ".workspaces=[\"pkg\",\"sym\",\"other\"]" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
         'a dependency added@@gained or lost a key@@jq ".dependencies.evil=\"1.0.0\"" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
         'a dependency removed@@gained or lost a key@@jq "del(.dependencies[\"left-pad\"])" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
-        'a dependency map added@@was added, removed or changed type@@jq ".dependencies={\"x\":\"1.0.0\"}" web/pkg/package.json > web/pkg/p.tmp && mv web/pkg/p.tmp web/pkg/package.json'
+        'a dependency map added@@was added, removed or changed type@@jq ".optionalDependencies={\"x\":\"1.0.0\"}" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a duplicate scripts key placed before the base one@@repeats a key@@sed "s/^{/{\"scripts\":{\"postinstall\":\"x\"},/" web/pkg/package.json > web/pkg/p.tmp && mv web/pkg/p.tmp web/pkg/package.json'
+        'a duplicate dependencies key whose first copy is a github source@@repeats a key@@sed "s/^{/{\"dependencies\":{\"x\":\"github:evil\\/x\"},/" web/pkg/package.json > web/pkg/p.tmp && mv web/pkg/p.tmp web/pkg/package.json'
+        'a workspaces catalog change@@a workspaces.catalog rewrite@@jq ".workspaces={\"packages\":[\"pkg\",\"sym\"],\"catalog\":{\"x\":\"1.0.0\"}}" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
+        'a dependency set to a parent link@@is not a version-range change@@jq ".devDependencies.mocha=\"..\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
+        'a dependency set to a bare archive name@@is not a version-range change@@jq ".dependencies.chalk=\"chalk-4.1.2.tgz\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
         'a dependency map removed@@was added, removed or changed type@@jq "del(.devDependencies)" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
         'a dependency repointed at a git URL@@is not a version-range change@@jq ".dependencies[\"left-pad\"]=\"git+https://evil.example/x.git\"" web/package.json > web/p.tmp && mv web/p.tmp web/package.json'
         'a dependency repointed at a tarball@@is not a version-range change@@jq ".devDependencies.mocha=\"https://evil.example/x.tgz\"" tools/package.json > tools/p.tmp && mv tools/p.tmp tools/package.json'
@@ -1656,6 +1715,21 @@ hostile_checks() {
         'a pubspec.lock gaining a path source@@names a host, registry or source@@sed "s|source: hosted|source: path|" app/pubspec.lock > app/p.tmp && mv app/p.tmp app/pubspec.lock'
         'a Cargo.lock with a new registry@@names a host, registry or source@@sed "s|registry+https://github.com/rust-lang/crates.io-index|registry+https://evil.example/index|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
         'a Cargo.lock repointing a git source@@names a host, registry or source@@sed "s|github.com/example/gitdep|evil.example/gitdep|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
+        'a bun.lock registry written with escaped slashes@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https:\x5c/\x5c/evil.example\x5c/\"|" web/bun.lock'
+        'a bun.lock registry written with an escaped colon@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https\x5cu003a//evil.example/\"|" web/bun.lock'
+        'a bun.lock github source written with an escaped colon@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@github\x5cu003aevil/kind-of#abc\"|" web/bun.lock'
+        'a bun.lock git source written with escaped slashes@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@git+https:\x5c/\x5c/evil.example\x5c/k.git\"|" web/bun.lock'
+        'a package-lock.json downgraded to lockfileVersion 1 with a URL as a version@@lockfileVersion@@jq ".lockfileVersion=1 | del(.packages) | .dependencies={\"chalk\":{\"version\":\"https://evil.example/c.tgz\"}}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json version holding a URL@@names a host, registry or source@@jq "del(.packages[\"node_modules/chalk\"].resolved) | .packages[\"node_modules/chalk\"].version=\"https://evil.example/c.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json from value holding a github source@@names a host, registry or source@@jq ".packages[\"node_modules/chalk\"].from=\"github:evil/chalk\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a pubspec.lock url written with YAML escapes@@adds a line pub does not write@@perl -pi -e "s|url: \"https://pub.dev\"|url: \"https:\x5c/\x5c/evil.example\"|" app/pubspec.lock'
+        'a pubspec.lock url written with a hex escape@@adds a line pub does not write@@perl -pi -e "s|url: \"https://pub.dev\"|url: \"https\x5cx3a//evil.example\"|" app/pubspec.lock'
+        'a pubspec.lock source re-indented@@adds a line pub does not write@@perl -pi -e "s|^    source: hosted|      source: path|" app/pubspec.lock'
+        'a pubspec.lock description as a flow mapping@@adds a line pub does not write@@perl -pi -e "s|^    description:(?=\n)|    description: {url: https://evil.example}|" app/pubspec.lock'
+        'a Cargo.lock source with no spaces@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|source=\"registry+https://evil.example/i\"|" Cargo.lock'
+        'a Cargo.lock source key indented@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|  source = \"registry+https://evil.example/i\"|" Cargo.lock'
+        'a Cargo.lock source key quoted@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|\"source\" = \"registry+https://evil.example/i\"|" Cargo.lock'
+        'a Cargo.lock source with extra spaces@@adds a line its tool does not write@@perl -pi -e "s|^source = \"registry\+https://github.com/rust-lang/crates.io-index\"|source  =  \"registry+https://evil.example/i\"|" Cargo.lock'
     )
     local c name reason script i=0
     for c in "${cases[@]}"; do
@@ -1692,6 +1766,13 @@ hostile_checks() {
         'jq ".dependencies.a=\"^1.2.0\"" package.json > p.tmp && mv p.tmp package.json
          jq ".dependencies.b=\"^1.5.0\"" packages/a/package.json > p.tmp && mv p.tmp packages/a/package.json
          echo "lock more" >> bun.lock' || rc=1; fi
+    local realb="$WORK/h-real"
+    if cc_want "versions bumped as real bun, npm, cargo and pub files" content; then
+        rm -rf "$realb"; real_repo "$realb"
+        vaccept "$validate" "$realb" "bun:/rbun npm:/rnpm cargo:/rcargo pub:/rpub" "versions bumped as real bun, npm, cargo and pub files" \
+            "rbun/bun.lock rbun/package.json rnpm/package-lock.json rnpm/package.json rcargo/Cargo.lock rpub/pubspec.lock rpub/pubspec.yaml" \
+            "for t in bun npm cargo pub; do for f in \"$FIX/real/\$t/after\"/*.txt; do cp \"\$f\" \"r\$t/\$(basename \"\${f%.txt}\")\"; done; done" || rc=1
+    fi
     # jq is the one tool the content checks cannot do without: with none on
     # PATH the step must reject, not guess.
     local emptybin="$WORK/nojq-bin" p="$WORK/vp.patch" d out
@@ -1827,10 +1908,10 @@ mutate_content "changed paths not collected for the content check" impl 'changed
 mutate_content "a lane file with no content check allowed" impl 'cargo) allowed+="^${p}Cargo\\.lock\$|" ;;' 'cargo) allowed+="^${p}Cargo\\.(lock|toml)\$|" ;;' 'a Cargo.toml edit'
 mutate_content "patch not applied to a throwaway index" impl '|| reject "it does not apply to the base commit"' '|| true' 'a patch that does not apply to the base commit'
 mutate_content "jq presence not checked" impl 'command -v jq >/dev/null 2>&1 || reject "jq is required to read the manifests"' 'true' 'no jq on PATH'
-mutate_content "manifest keys outside the dependency maps unchecked" impl 'then "a key outside the four dependency maps changed" else empty end' 'then empty else empty end' 'a scripts change in a lane package.json'
+mutate_content "manifest keys outside the dependency maps unchecked" impl '| if ($ch | length) > 0' '| if false' 'a scripts change in a lane package.json'
 mutate_content "dependency key set unchecked" impl 'elif ($x | keys) != ($y | keys) then' 'elif false then' 'a dependency removed'
 mutate_content "dependency map added or removed unchecked" impl 'if ($x | type) != ($y | type) then "\($m) was added, removed or changed type"' 'if false then "\($m) was added, removed or changed type"' 'a dependency map added'
-mutate_content "any string accepted as a version range" impl 'def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$");' 'def isrange: true;' 'a dependency repointed at a git URL'
+mutate_content "any string accepted as a version range" impl 'def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$") | not);' 'def isrange: true;' 'a dependency repointed at a git URL'
 mutate_content "registry alias target not compared" impl 'and ($was | alias).pre == ($now | alias).pre' 'and true' 'a registry alias retargeted'
 mutate_content "non-string dependency value not refused" impl '($now | type) == "string"' 'true' 'a dependency value that is not a string'
 mutate_content "invalid manifest JSON ignored" impl '|| reject "$path is not valid JSON"' '|| why=""' 'a manifest that is not JSON'
@@ -1838,16 +1919,28 @@ mutate_content "pubspec.yaml content unchecked" impl '|| reject "$path changes m
 mutate_content "pubspec.yaml masks any value" impl 'if (val != "" && vers(val)) {' 'if (val != "") {' 'a pubspec.yaml dependency repointed at an inline git source'
 mutate_content "pubspec.yaml masks the environment section" impl '/^(dependencies|dev_dependencies|dependency_overrides):/' '/^(dependencies|dev_dependencies|dependency_overrides|environment):/' 'a pubspec.yaml sdk constraint change'
 mutate_content "pubspec.yaml nested version not masked" impl ' || /^    version:[[:space:]]/' '' 'rejected the benign patch'
-mutate_content "package-lock.json hosts unchecked" impl $'package-lock.json) jq -r \'[.. | objects | select(has("resolved")) | .resolved | strings] | .[]\' "$2" | source_tokens ;;' 'package-lock.json) true ;;' 'a package-lock.json resolving from a new host'
+mutate_content "package-lock.json resolved hosts unchecked" impl $'jq -r \'[.. | objects | select(has("resolved")) | .resolved | strings] | .[]\' "$2" | source_tokens' 'true' 'a package-lock.json resolving from a new host'
 mutate_content "package-lock.json funding URLs read as sources" impl $'jq -r \'[.. | objects | select(has("resolved")) | .resolved | strings] | .[]\' "$2" | source_tokens' 'source_tokens < "$2"' 'rejected the benign patch'
 mutate_content "bun.lock hosts unchecked" impl 'bun.lock)          source_tokens < "$2" ;;' 'bun.lock)          true ;;' 'a bun.lock naming a new registry'
 mutate_content "git/github shorthand sources unchecked" impl $'printf \'%s\\n\' "$t" | grep -oE \'(^|[^A-Za-z0-9+.-])(github|gitlab|bitbucket|gist|file|link):\' | sed -E \'s/^[^a-z]//\' || true' 'true' 'a bun.lock with a github shorthand source'
 mutate_content "pubspec.lock hosts unchecked" impl '{ source_tokens < "$2"; grep' '{ true; grep' 'a pubspec.lock hosted from a new host'
 mutate_content "pubspec.lock source kinds unchecked" impl $'; grep -E \'^    source: \' "$2" | sed -E \'s/[[:space:]]+$//\' || true; }' '; }' 'a pubspec.lock gaining a path source'
-mutate_content "Cargo.lock sources unchecked" impl $'{ grep -E \'^source = \' "$2" || true; } | sed -E \'s/[#?].*$//; s/"$//\' | sort -u ;;' 'true ;;' 'a Cargo.lock with a new registry'
+mutate_content "Cargo.lock sources unchecked" impl $'{ source_tokens < "$2"; grep -E \'^source = \' "$2" | sed -E \'s/[#?].*$//; s/"$//\' || true; } | sort -u ;;' 'true ;;' 'a Cargo.lock with a new registry'
 mutate_content "Cargo.lock revision kept in the source" impl $'sed -E \'s/[#?].*$//; s/"$//\'' $'sed -E \'s/"$//\'' 'rejected the benign patch'
 mutate_content "lockfile scheme ignored" impl $'grep -oE \'[A-Za-z][A-Za-z0-9+.-]*://[^]"/[:space:],)}]*\' || true' $'grep -oE \'://[^]"/[:space:],)}]*\' || true' 'a package-lock.json resolving over http'
 mutate_content "gained lockfile sources not rejected" impl '[ -z "$gained" ] || reject "' 'true || reject "' 'a Cargo.lock with a new registry'
+mutate_content "duplicate manifest keys not refused" impl 'dup_keys "$tmp/new" || reject "$path repeats a key (or cannot be read), and JSON readers disagree about which copy wins"' 'true' 'a duplicate scripts key placed before the base one'
+mutate_content "a leading dot read as a version range" impl ' and (test("^\\.") | not)' '' 'a dependency set to a parent link'
+mutate_content "an archive name read as a version range" impl ' and (test("\\.(tgz|tar|tar\\.gz)$") | not)' '' 'a dependency set to a bare archive name'
+mutate_content "workspaces catalog not named in the rejection" impl '(a workspaces.catalog rewrite is refused here)' '(workspaces changed)' 'a workspaces catalog change'
+mutate_content "bun.lock escapes not refused" impl '[ -z "$why" ] || reject "$path adds a line with a backslash escape, which the source scan cannot read: $why"' 'true' 'a bun.lock registry written with escaped slashes'
+mutate_content "package-lock.json older lockfileVersion allowed" impl 'if [ "$new_v" -lt "$old_v" ] || [ "$new_v" -lt 2 ]; then' 'if false; then' 'a package-lock.json downgraded to lockfileVersion 1 with a URL as a version'
+mutate_content "package-lock.json version and from values unchecked" impl $'jq -r \'[.. | objects | (.version?, .from?) | strings | select(test("[:/]")) | "value:" + .] | .[]\' "$2"' 'true' 'a package-lock.json version holding a URL'
+mutate_content "package-lock.json from values unchecked" impl '(.version?, .from?)' '(.version?)' 'a package-lock.json from value holding a github source'
+mutate_content "pubspec.lock line shapes not enforced" impl '|| reject "$path adds a line pub does not write: $why"' '|| true' 'a pubspec.lock url written with YAML escapes'
+mutate_content "pubspec.lock unquoted sha256 refused" impl '      sha256: "?[0-9a-f]+"?|' '      sha256: "[0-9a-f]+"|' 'versions bumped as real bun, npm, cargo and pub files'
+mutate_content "Cargo.lock line shapes not enforced" impl '|| reject "$path adds a line its tool does not write: $why"' '|| true' 'a Cargo.lock source with no spaces'
+mutate_content "Cargo.lock dependency entries refused" impl '|\]| "[A-Za-z0-9_.-]+(' '|\]| "NEVER(' 'versions bumped as real bun, npm, cargo and pub files'
 mutate "plain bun update on a workspace root" impl '(cd "./$rel" && bun update --recursive --ignore-scripts)' '(cd "./$rel" && bun update --ignore-scripts)'
 mutate "PR step on the built-in token" impl  "$APP" 'GH_TOKEN: ${{ github.token }}'
 mutate "built-in token granted write" impl   $'permissions:\n  contents: read\n\njobs:' $'permissions:\n  contents: write\n\njobs:'

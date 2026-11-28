@@ -110,19 +110,25 @@
 #     then checks CONTENT on a throwaway index, before the tree is touched: a
 #     package.json may change only version strings inside its four dependency
 #     maps (same keys; a value may not become a git, URL, file, workspace or
-#     other source, and an `npm:` alias may not change its target); a
-#     pubspec.yaml only version constraints under dependencies,
-#     dev_dependencies and dependency_overrides (line level, no YAML parser);
-#     a lockfile may not name a host, registry or source its base version does
-#     not use (package-lock.json: `resolved` hosts; bun.lock: any URL or
+#     other source, nor start with `.` or end in .tgz/.tar/.tar.gz, and an
+#     `npm:` alias may not change its target) and may repeat no key (jq keeps
+#     the last copy of a repeated key, bun the first); a pubspec.yaml only
+#     version constraints under dependencies, dev_dependencies and
+#     dependency_overrides (line level, no YAML parser); a lockfile may not
+#     name a host, registry or source its base version does not use, and what
+#     it adds must be a line shape its tool writes (package-lock.json:
+#     `resolved` hosts plus any `version`/`from` holding `:` or `/`, and no
+#     lockfileVersion below the base's or below 2; bun.lock: any URL or
 #     git/github/file shorthand, since the default registry is the empty
-#     field; pubspec.lock: URL hosts and `source:` kinds; Cargo.lock: each
-#     `source =` value minus its revision). NOT checked, and the gate does not
-#     claim to: a lockfile package swapped within an allowed host, integrity
-#     hashes, a Cargo.lock path package, a workspace glob using more than
-#     `*`/`**` (that member is simply refused), and bun `catalog` entries
-#     (outside the four maps, so refused). Pinned by
-#     scripts/test-deps-cadence-policy.sh, decision 10.
+#     field, and no backslash on an added line, because bun decodes JSON
+#     escapes; pubspec.lock and Cargo.lock: an allow-list of the line shapes
+#     pub and cargo write, plus URL hosts and source kinds). NOT checked, and
+#     the gate does not claim to: a lockfile package or git source swapped
+#     within an allowed host, integrity hashes, a Cargo.lock path package, a
+#     source named in a package-lock dependency map, a workspace glob using
+#     more than `*`/`**` (that member is simply refused), and bun `catalog`
+#     entries (outside the four maps, so refused, and named in the message).
+#     Pinned by scripts/test-deps-cadence-policy.sh, decision 10.
 #   - The token never reaches argv or a git config file: the push reads it
 #     from the environment through a one-shot credential helper, with system
 #     and global git config ignored and hooks disabled.
@@ -1108,14 +1114,29 @@ jobs:
           # real tree and index are not touched until every file has passed.
           # A manifest may change dependency version strings and nothing else.
           # A lockfile may not gain a host, registry or source the base
-          # lockfile does not already use.
+          # lockfile does not already use, and what it ADDS must be a line
+          # shape its tool writes.
+
+          # A manifest whose parsed form and whose token stream disagree about
+          # how many leaves it has repeats a key somewhere. jq keeps the LAST
+          # copy of a repeated key, bun the FIRST, so the two would read
+          # different manifests: such a file is refused outright.
+          dup_keys() {
+            local a b
+            a="$(jq -n --stream '[inputs | select(length == 2)] | length' "$1")" || return 2
+            b="$(jq '[paths(type != "object" and type != "array" or length == 0)] | length' "$1")" || return 2
+            [ "$a" = "$b" ]
+          }
+
           # The ranges a dependency value may move between: no `:` or `/` or
-          # `@`, so no git, URL, file, workspace or registry-alias source.
+          # `@`, so no git, URL, file, workspace or registry-alias source; and
+          # not a leading `.` (npm locks `..` as a link) or a `.tgz`, `.tar`
+          # or `.tar.gz` suffix (npm locks a bare archive name as `file:`).
           # shellcheck disable=SC2016  # a jq program: deliberately not expanded
           manifest_violation() {
             jq -n -r --slurpfile o "$1" --slurpfile n "$2" '
               def maps: ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
-              def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$");
+              def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$") | not);
               def alias: if test("^npm:.+@[^@]*$") then {pre: sub("@[^@]*$"; ""), ver: sub("^.*@"; "")} else null end;
               def spec_ok($was; $now):
                 ($now | type) == "string"
@@ -1129,9 +1150,13 @@ jobs:
               else $o[0] as $a | $n[0] as $b
                 | if ($a | type) != "object" or ($b | type) != "object" then "not a JSON object"
                   else
-                    [ (if ($a | del(.dependencies, .devDependencies, .optionalDependencies, .peerDependencies))
-                          != ($b | del(.dependencies, .devDependencies, .optionalDependencies, .peerDependencies))
-                       then "a key outside the four dependency maps changed" else empty end),
+                    [ ([($a | keys_unsorted), ($b | keys_unsorted)] | add | unique
+                       | map(select(. as $k | (maps | any(. == $k) | not)
+                                    and ((($a | has($k)) != ($b | has($k))) or ($a[$k] != $b[$k]))))) as $ch
+                      | if ($ch | length) > 0
+                        then "keys outside the four dependency maps changed: \($ch | join(", "))"
+                             + (if ($ch | any(. == "workspaces")) then " (a workspaces.catalog rewrite is refused here)" else "" end)
+                        else empty end,
                       (maps[] as $m | $a[$m] as $x | $b[$m] as $y
                        | if ($x | type) != ($y | type) then "\($m) was added, removed or changed type"
                          elif ($x | type) == "null" then empty
@@ -1164,12 +1189,41 @@ jobs:
               { print }'
           }
 
+          # The lines the patch ADDS to a file (by position, from diff), one per
+          # line. diff exits 1 when the files differ; anything above that is an
+          # error, which must not read as "adds nothing".
+          added_lines() {
+            local out rc=0
+            out="$(diff "$1" "$2")" || rc=$?
+            [ "$rc" -le 1 ] || return 1
+            printf '%s\n' "$out" | sed -n 's/^> //p'
+          }
+          # shape_violation <old> <new> <ERE> — the first added line that is
+          # not blank and does not match the ERE (anchored here). Prints it.
+          # Returns 0 when every added line has an allowed shape.
+          shape_violation() {
+            local added bad
+            added="$(added_lines "$1" "$2")" || { echo "(cannot diff the two files)"; return 1; }
+            bad="$(printf '%s\n' "$added" | grep -v '^$' | grep -vE "^($3)\$" | head -n1 || true)"
+            [ -z "$bad" ] || { printf '%s' "$bad"; return 1; }
+          }
+          # The line shapes pub writes into pubspec.lock, and cargo into
+          # Cargo.lock (version 3 and 4). Anything else on an added line is a
+          # spelling the raw scans below would not see (a YAML escape in a url,
+          # an indented key, a flow mapping, a quoted TOML key).
+          pub_lock_shapes='#.*|packages:|sdks:|  [A-Za-z0-9_.-]+:|    dependency: ("direct main"|"direct dev"|"direct overridden"|transitive)|    description:( [a-z_]+)?|      name: [A-Za-z0-9_.-]+|      sha256: "?[0-9a-f]+"?|      url: "https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?"|      path: "[^"\\]*"|      ref: ("[^"\\]*"|[A-Za-z0-9._/-]+)|      resolved-ref: "[0-9a-f]+"|      relative: (true|false)|    source: (hosted|git|path|sdk)|    version: "[0-9A-Za-z.+-]+"|  (dart|flutter): "[^"\\]*"'
+          cargo_lock_shapes='# .*|\[\[package\]\]|version = [0-9]+|name = "[A-Za-z0-9_.-]+"|version = "[0-9A-Za-z.+-]+"|source = "(registry|sparse|git)\+https?://[^"\\ ]+"|checksum = "[0-9a-f]+"|dependencies = \[|\]| "[A-Za-z0-9_.-]+( [0-9A-Za-z.+-]+( \((registry|sparse|git)\+https?://[^")\\ ]+\))?)?",'
+
           # Every host, registry or source a lockfile names, one per line.
           # package-lock.json: the host of each `resolved` URL (not its funding
-          # URLs). bun.lock: a registry field is empty for the default registry,
-          # so any URL or git/github/file shorthand in it is a non-default
-          # source. pubspec.lock: each URL's host and each `source:` kind.
-          # Cargo.lock: each `source =` value, minus its revision.
+          # URLs), and any `version` or `from` value holding a `:` or a `/`
+          # (lockfileVersion 1 keeps a source there, and `npm ci` fetches it).
+          # bun.lock: a registry field is empty for the default registry, so
+          # any URL or git/github/file shorthand in it is a non-default
+          # source; JSON escapes are banned on added lines before this runs
+          # (bun decodes them, this scan would not). pubspec.lock: each URL's
+          # host and each `source:` kind. Cargo.lock: each `source =` value
+          # minus its revision, and each URL's host.
           source_tokens() {
             local t
             t="$(cat)"
@@ -1180,18 +1234,26 @@ jobs:
           }
           lock_sources() {
             case "$1" in
-              package-lock.json) jq -r '[.. | objects | select(has("resolved")) | .resolved | strings] | .[]' "$2" | source_tokens ;;
+              package-lock.json)
+                {
+                  jq -r '[.. | objects | select(has("resolved")) | .resolved | strings] | .[]' "$2" | source_tokens
+                  jq -r '[.. | objects | (.version?, .from?) | strings | select(test("[:/]")) | "value:" + .] | .[]' "$2"
+                } | sort -u ;;
               bun.lock)          source_tokens < "$2" ;;
               pubspec.lock)      { source_tokens < "$2"; grep -E '^    source: ' "$2" | sed -E 's/[[:space:]]+$//' || true; } | sort -u ;;
-              Cargo.lock)        { grep -E '^source = ' "$2" || true; } | sed -E 's/[#?].*$//; s/"$//' | sort -u ;;
+              Cargo.lock)        { source_tokens < "$2"; grep -E '^source = ' "$2" | sed -E 's/[#?].*$//; s/"$//' || true; } | sort -u ;;
               *)                 return 1 ;;
             esac
+          }
+          # lockfileVersion of a package-lock.json, 1 when absent or not a number.
+          lock_version() {
+            jq -r '(.lockfileVersion // 1) | if type == "number" then floor else 1 end' "$1"
           }
 
           tmp="$RUNNER_TEMP/deps-cadence-check"
           rm -rf "$tmp"; mkdir -p "$tmp"
           tidx="$tmp/index"
-          GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" read-tree HEAD
+          GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" read-tree HEAD || reject "cannot read the base commit into a scratch index"
           GIT_INDEX_FILE="$tidx" git "${nohooks[@]}" apply --cached -- "$patch" || reject "it does not apply to the base commit"
           for path in "${changed[@]}"; do
             name="${path##*/}"
@@ -1201,12 +1263,39 @@ jobs:
               package.json)
                 why="$(manifest_violation "$tmp/old" "$tmp/new")" || reject "$path is not valid JSON"
                 [ -z "$why" ] || reject "$path changes more than dependency versions: $why"
+                dup_keys "$tmp/new" || reject "$path repeats a key (or cannot be read), and JSON readers disagree about which copy wins"
                 ;;
               pubspec.yaml)
-                cmp -s <(pub_shape < "$tmp/old") <(pub_shape < "$tmp/new") \
+                pub_shape < "$tmp/old" > "$tmp/old.shape" || reject "$path (base) cannot be read"
+                pub_shape < "$tmp/new" > "$tmp/new.shape" || reject "$path cannot be read"
+                cmp -s "$tmp/old.shape" "$tmp/new.shape" \
                   || reject "$path changes more than dependency version constraints"
                 ;;
               package-lock.json|bun.lock|pubspec.lock|Cargo.lock)
+                case "$name" in
+                  bun.lock)
+                    # bun decodes JSON escapes in a registry or source; the
+                    # scan below reads raw text. No escape may be ADDED.
+                    added="$(added_lines "$tmp/old" "$tmp/new")" || reject "$path cannot be compared with its base"
+                    why="$(printf '%s\n' "$added" | grep -F -e "\\" | head -n1 || true)"
+                    [ -z "$why" ] || reject "$path adds a line with a backslash escape, which the source scan cannot read: $why"
+                    ;;
+                  package-lock.json)
+                    old_v="$(lock_version "$tmp/old")" || reject "$path (base) cannot be read as JSON"
+                    new_v="$(lock_version "$tmp/new")" || reject "$path cannot be read as JSON"
+                    if [ "$new_v" -lt "$old_v" ] || [ "$new_v" -lt 2 ]; then
+                      reject "$path has lockfileVersion $new_v (base $old_v); a lower or pre-2 lockfile keeps sources outside resolved"
+                    fi
+                    ;;
+                  pubspec.lock)
+                    why="$(shape_violation "$tmp/old" "$tmp/new" "$pub_lock_shapes")" \
+                      || reject "$path adds a line pub does not write: $why"
+                    ;;
+                  Cargo.lock)
+                    why="$(shape_violation "$tmp/old" "$tmp/new" "$cargo_lock_shapes")" \
+                      || reject "$path adds a line its tool does not write: $why"
+                    ;;
+                esac
                 old_src="$(lock_sources "$name" "$tmp/old")" || reject "$path (base) cannot be read as a $name"
                 new_src="$(lock_sources "$name" "$tmp/new")" || reject "$path cannot be read as a $name"
                 gained="$(comm -13 <(printf '%s\n' "$old_src") <(printf '%s\n' "$new_src") | grep -v '^$' || true)"
@@ -1217,9 +1306,12 @@ jobs:
           done
 
           git "${nohooks[@]}" apply --index -- "$patch"
-          # Belt and braces: what is staged, and only that, is lane files.
+          # Belt and braces, and only before the App token exists: what is
+          # staged, and only that, is lane files.
           while IFS= read -r path; do
+            case "$path" in .github/*|*/.github/*) reject "after applying, $path is under .github/" ;; esac
             [[ "$path" =~ $allowed ]] || reject "after applying, $path is staged"
+            [ -z "$denied" ] || ! [[ "$path" =~ $denied ]] || reject "after applying, $path is a workspace member the base manifest excludes"
           done < <(git "${nohooks[@]}" diff --cached --name-only)
           if [ -n "$(git "${nohooks[@]}" status --porcelain --untracked-files=all | grep -v '^M  ' || true)" ]; then
             reject "after applying, the tree holds changes outside the index"
