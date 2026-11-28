@@ -1768,7 +1768,9 @@ pg_start "$PREFLIGHT_JOBS" $PG_LIST
 
 # --- 1. shellcheck ----------------------------------------------------------
 if command -v shellcheck >/dev/null 2>&1; then
-    sh_files=$(git ls-files '*.sh')
+    # hooks/shim/* is bash with no .sh extension (a command's name cannot carry one), so '*.sh' alone
+    # would leave the shim outside BOTH shellcheck passes below; the pathspec names the directory.
+    sh_files=$(git ls-files '*.sh' 'hooks/shim/*')
     if [ -z "$sh_files" ]; then
         pass "shellcheck (no *.sh files)"
     elif echo "$sh_files" | xargs shellcheck -S warning; then
@@ -2918,6 +2920,16 @@ if pg_gate scripts/test-bash-secret-guard.sh; then
     pass "bash-secret-guard tests (scripts/test-bash-secret-guard.sh)"
 else
     failed "bash-secret-guard tests (scripts/test-bash-secret-guard.sh)"
+fi
+
+# --- 67. argv-wrapper tests ----------------------------------------------------
+# hooks/shim/ + hooks/doppler-wrapper.py run the secret guard's allow list on argv, after the
+# shell has parsed, with stdout classified by fstat. Real processes, a fake CLI, a fake gh,
+# scratch space only: no network, no repo mutation.
+if pg_gate scripts/test-argv-wrapper.sh; then
+    pass "argv-wrapper tests (scripts/test-argv-wrapper.sh)"
+else
+    failed "argv-wrapper tests (scripts/test-argv-wrapper.sh)"
 fi
 
 # ------------------------------------------------------------------------------

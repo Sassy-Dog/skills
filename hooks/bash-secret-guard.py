@@ -6,39 +6,28 @@ FAILS OPEN there and says so on stderr (Claude Code shows stderr of any non-0/2 
 non-blocking error). It never prints to stdout.
 
 Two rules, both over the raw command text only (a PreToolUse hook cannot see output). There
-is no general shell parser (the two tokenizers, sanitize() and _inert_view(), each recognise a tiny
-allow-listed grammar and give up on anything else): every shell-parsing classifier tried here lost to a new spelling,
-so the Doppler rule is a WHOLE-COMMAND ALLOW LIST matched on the raw string, which cannot
-disagree with itself about quoting.
+is no general shell parser: every shell-parsing classifier tried here lost to a new spelling, so
+the Doppler rule is a WHOLE-COMMAND ALLOW LIST matched on the raw string, which cannot disagree
+with itself about quoting. The one tokenizer left, sanitize(), recognises a tiny allow-listed
+grammar and gives up on anything else.
+
+This hook is the FIRST of two layers (#670). It decides only what the text SPELLS. A command name
+the text does not spell (`$D secrets get X`, `dop*ler me`, `${X}pler secrets`) is the second
+layer's job: `hooks/shim/doppler`, a wrapper that sits first on the agent's PATH, applies the same allow
+list to argv AFTER the shell has parsed, so quoting, glob and expansion spellings have already
+resolved. The wrapper (hooks/doppler-wrapper.py, entered through hooks/shim/doppler) shares this module's
+flag tables and parsers. The expansion and glob triggers and the inert-view tokenizer that used to
+guess at those names here are deleted: they were a treadmill (#649 to #654, #659) and they
+false-denied prose (#652, #657). A new expansion form found in review is a Known limit, not a rule.
 
 1. Doppler value-printing guard, deny by construction.
    Trigger: the command mentions `doppler` in any spelling the text can show. The raw text is
    lower-cased, Unicode-folded and ANSI-C escapes are decoded; then `doppler` is looked for
    both as written and with every character that is not a letter, digit or whitespace removed
    (so `DOPPLER`, `$'\\x64oppler'`, `d"o"ppler`, `dopp\\ler`, `{doppler,}`, `doppl[e]r`,
-   `dop*ler` all trigger; a backslash-newline is removed first, as the shell joins the lines;
-   the ANSI-C escapes x, u, U, octal, c and e are decoded). A second trigger covers a command name the text does not
-   spell (`${X}pler secrets get`): a shell expansion or glob character plus a value-printing
-   doppler phrase (`secrets get|download|substitute`, `configure get|--all`, `configs
-   tokens`, `--print-config`), or plus a bare `secrets`, `configure`, `run` or `me` argument
-   later in the same simple command (`dop*ler secrets`, `"$D" run`; `ls $HOME/secrets` and
-   `gh run view $ID` stay quiet). That search runs on text with quotes and backslashes removed
-   (`dop*ler sec''rets`, `$D con''figure`, `$D \\me`) and on segments split quote-aware, so a
-   quoted `;` (`"$D" --scope=';' secrets`) does not hide the subcommand from the glob. An `&`
-   next to `>` or `<` (`2>&1`, `>&2`, `&>`, `<&`) is a redirect, not a separator, so it does not
-   split a segment either (`dop?ler 2>&1 secrets`). A command word (the first word of a segment,
-   after leading `NAME=value` assignments and redirections) that holds an expansion or glob character triggers on
-   its own, whatever follows: the allow list then decides (`"$D" >&2 secrets`, `dop?ler s?crets`).
-   KNOWN LIMIT (accepted, pinned as allows in the gate): that trigger inspects ONLY the first word
-   of a simple command. A doppler name produced by a glob or expansion and sitting behind a prefix
-   word (`time`, `!`, `{`), inside a capture (`<(...)`, a here-string `<<< $(...)`), or after a
-   detached redirect target (`< in "$D" $S`, `2> out $D $S`, `&< out ...`) is not caught, but only
-   when the subcommand is not spelled literally too: the second trigger still denies
-   `time dop?ler secrets`, `{ dop?ler secrets; }`, `< in "$D" secrets`,
-   `cat <(dop?ler secrets get X)` and `! $D run`. The
-   threat model is accidental printing; these are deliberate obfuscations, in the same class as
-   aliases/functions, printf-assembled names, symlink targets and the two-step symlink rename, and
-   a redirected file read back. A future change that closes or reopens them is a conscious decision.
+   all trigger; a backslash-newline is removed first, as the shell joins the lines;
+   the ANSI-C escapes x, u, U, octal, c and e are decoded). That is the whole trigger: a name
+   the text does not spell is not guessed at.
    A triggered command is allowed only if the ENTIRE command is exactly one of:
      1. `doppler [global flags] secrets [flags] --only-names`, optionally followed by one of
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
@@ -53,8 +42,12 @@ disagree with itself about quoting.
      3. `doppler secrets get NAME... [flags] > <literal path>`, `secrets download --no-file
         [flags] > <literal path>`, `secrets download [flags] <literal path>`, and
         `secrets substitute <template> [flags] (> | --output) <literal path>`
-     3b. `doppler secrets get NAME --plain | gh secret set NAME [--repo R ...]` (gh reads the
-        value from stdin and prints none of it; no `--body`, no other consumer)
+     3b. `doppler sassydog-gh-secret-set NAME [-p P] [-c C] [--repo R | --env E | --app A | --org O |
+        --visibility V | --no-store]`, a subcommand the WRAPPER provides (#670). It runs the real
+        `secrets get NAME --plain`, holds the value in memory and feeds it to `gh secret set NAME` on
+        gh's stdin, so the value never crosses a pipe the wrapper cannot see. The old text pipe
+        `secrets get NAME --plain | gh secret set NAME` is gone: a wrapper cannot tell that pipe from
+        a capture pipe, so it denies it, and this text rule must not allow what the wrapper denies
      3c. the secret_bootstrap shape `eval "$(doppler secrets download --no-file --format env
         [-p P] [-c C] [2>/dev/null])"`, as the WHOLE command and nothing after it (exactly that:
         no other format, no --name-transformer, no global flag; `&&`, `;`, a pipe or a newline
@@ -121,29 +114,6 @@ where the text ends; the plain `-F - <<'X'` / `--body-file - <<'X'` form is read
 shell. Under the override an `&>` is not a redirect (dash reads it as `&` then `>`); only `>&` and
 `<&` are.
 
-Inert data for the expansion triggers (#649): the second trigger above only GUESSES at a name the text
-does not spell, so it is skipped (a spelled name is not) when the whole input is exactly ONE simple
-command that the allow-list tokenizer _inert_view() recognises completely, and that command is a plain
-`echo` of literals, quoted strings and `$NAME`/`${NAME}` (`echo '*' run`, `echo "$HOME" let me know`). No
-pipe, redirect, fifo or earlier `exec >` can carry an echo's output to a shell when the echo is the whole
-input, so a second command or any operator keeps the old reading; so does anything the tokenizer does
-not recognise (an unbalanced quote, `$(`, a backtick, a backslash, a comment, a glob, `$'..'`, `{fd}>`,
-`<<`, a CR). It never falls back to a weaker reading. Only echo is exempt: `printf -v 'a[$(...)]'`
-runs the subscript, and an interpreter script (python) can build a command at run time from allowed
-pieces, so neither is inert and both keep the old reading. Still denied, named in the README: an echo
-that is not the whole input, any heredoc whose body holds an expansion character beside
-`run`/`me`/`secrets`/`configure` unless the sanitizer blanks it (`git commit -F - <<'EOF'`,
-`gh pr create --body-file - <<'EOF'`; the `-m "$(cat <<'EOF'...)"` form and a python heredoc are not).
-A subcommand word followed by a closing `)`, backtick or `}`, or by a `;`, `|`, `&`, `<` or `>` (`echo
-"$($D secrets)" x`, `echo "$($D secrets>&2)" x`), counts as a whole word for the expansion rule. False denies
-that already existed: `echo "$(date)" me` and `echo "$(pwd)" run` (an expansion character, then `me`/`run`).
-False denies this change adds: `echo "$x" run>out`, `echo "$(date)" secrets>notes.txt`, and quoted prose
-after an expansion character such as a backtick commit message ending `run;`, `rg -n "$PAT" -e
-"secrets|token" docs` or `echo "${PWD}" me>>log`. The override covers only a command without `$(` or a
-backtick (`echo "$x" run>out`, the `rg` and `echo "${PWD}"` forms); for the rest put the word before the
-substitution (`echo me "$(date)"`, `echo secrets "$(date)" >notes.txt`) or send a commit message or PR
-body on stdin (`git commit -F - <<'EOF'`, `gh pr create --body-file - <<'EOF'`).
-
 Tools (#661): hooks.json matches `Bash` only, and must stay `Bash`. Per the hooks documentation, a `Bash`
 matcher also runs on Monitor commands (Claude Code v2.1.314+), delivered as a Bash call (`tool_name`
 "Bash", command in `tool_input.command`); verified live on Claude Code 2.1.332, where exit 2 blocks
@@ -151,22 +121,20 @@ them. Under `Bash|Monitor` (or `.*`, or no matcher) the call arrives with `tool_
 `tool_name != "Bash"` exit 0 below would leave Monitor commands unguarded unless this classifier gained
 a reviewed Monitor branch. See the README.
 
-Known limits (a seatbelt against the accident, not a sandbox): a subcommand word the text does not spell
-literally, where the command word is built by an expansion and sits behind a first word that does not itself
-expand (#654); a top-level `$D ...` and any command that spells the name still deny. The examples are the bare
-forms the gate pins: a following get/download word can still deny some of them, not others. The classes: ANSI-C
-or locale quoting, brace expansion, an expansion glued before or after the word (quoted or not: `${x}secrets`,
-`"$x"secrets`, `secrets$x`), glob forms (only when the working directory holds a match), a subcommand held in a
-variable or a default, indirect invocation (xargs, or env with a $(cat) argument, fed by echo or printf), a
-subcommand assembled by printf, and any of these run through eval. Not modelled either (the override scan
-does not look for them; they sit beside eval and bash -c, the strings a command runs): an
+Known limits (a seatbelt against the accident, not a sandbox). This layer: a command name the text does not
+spell (`$D secrets get X`, `dop*ler me`, `${X}pler secrets`, a subcommand word built by an expansion, xargs or
+eval) is NOT matched here; that is the wrapper's job, and where the wrapper is not first on PATH (a harness
+that does not run the SessionStart hook, a shell that resets PATH, `PATH=` on the command, `env -i`,
+`command -p`, `hash -p`, an absolute path to the real binary) NEITHER layer catches it: the text layer
+cannot spell-check the name and the shim is not in the way. The base text guard denied those spellings, so
+this is a regression against it, accepted because the rules that denied them were guesses. The gate pins a sample of those spellings as allows (a known limit, not a feature), so a change
+that starts denying one is a deliberate edit. Not modelled either (the override scan does not look for them;
+they sit beside eval and bash -c, the strings a command runs): an
 expansion that evaluates text as code, `${x@P}` in bash and zsh's `(e)` flag on any word (`${(e)x}`, or a
 literal default in double quotes such as `"${(e):-\\$(...)}"`, which prints under zsh 5.9); and bash's
 arithmetic-subscript evaluation inside builtins (`let 'a[$(...)]'`, `declare -i y='a[$(...)]'`, `printf -v
 'a[$(...)]' x`, `test -v 'a[$(...)]'`; let and declare -i run it on bash 3.2 and 5, printf -v and test -v
-on bash 5 only). A bare quote or backslash inside the word is
-removed before matching and still denies. Deliberately NOT matched: a text matcher cannot model the shell's
-expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
+on bash 5 only). Out of scope too:
 on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
 (implicit or spaced concatenation passes, unspaced `"a"+"b"` denies), credential-file reads (.env, the CLI token
 file), tools other than Bash and Monitor (Monitor is covered via the Bash matcher, see Tools above; Read, Grep,
@@ -217,7 +185,8 @@ SAFE_FORMS = (
     "accepted on `run` and narrow it; run flags go AFTER the `run` word, only global flags and "
     "-p/-c before it); `doppler secrets --only-names`; "
     "a bare non-printing subcommand such as `doppler setup` or `doppler configs`; "
-    "`doppler secrets get NAME --plain | gh secret set NAME`; to WRITE a secret without printing it: "
+    "`doppler sassydog-gh-secret-set NAME [--repo R]` (the plugin's wrapper reads the value and hands it "
+    "to `gh secret set`); to WRITE a secret without printing it: "
     "`doppler secrets set NAME < /literal/path >/dev/null 2>&1` or `doppler secrets set "
     "NAME=\"$(cat /literal/path)\" >/dev/null 2>&1` (stdout and stderr must both be discarded); `eval \"$(doppler secrets download "
     "--no-file --format env 2>/dev/null)\"` (alone: nothing may follow it)."
@@ -238,11 +207,16 @@ URL_MSG = (
 
 # ---- trigger -------------------------------------------------------------------------------
 
-EXPANSION_RE = re.compile(r"[$`{*?\[]")
-# Words that make a command that Doppler's CLI would run, for a command NAME the text does not spell.
-SUBCOMMAND_WORDS = ("secrets", "configure", "run", "me")
-QUOTES_RE = re.compile(r"['\"\\]")
 LINE_CONTINUATION_RE = re.compile(r"\\\r?\n")
+# #657: the shell deletes an UNESCAPED backslash-newline pair before it parses, so a recipe written over
+# several lines is one command and the allow list reads it joined. Only a bare LF counts (a backslash CR LF is
+# not a continuation) and only when the backslash is not itself escaped (`\\` + newline is a literal backslash
+# and then a second command, which must stay a second command).
+UNESCAPED_CONTINUATION_RE = re.compile(r"(?<!\\)((?:\\\\)*)\\\n")
+
+
+def join_continuations(text):
+    return UNESCAPED_CONTINUATION_RE.sub(r"\1", text)
 
 
 def _chr(code):
@@ -274,97 +248,15 @@ def _views(text):
 
 
 def triggered(text):
+    """True when the text SPELLS the CLI's name in any reading the shell could join or decode."""
     plain, decoded = _views(text)
-    # The inert view is decided on the RAW text, before the line-continuation join: a backslash-newline
-    # inside a quoted-delimiter heredoc body is literal there, and joining it could move the terminator.
-    inert = _inert_view(text)
-    iplain, idecoded = (plain, decoded) if inert == text else _views(inert)
     # Both readings: a backslash before `e` or `c` is a plain letter outside `$'...'`, and the
     # decoder would turn it into a control character and drop the letter.
-    return _mentions(plain, iplain) or (decoded != plain and _mentions(decoded, idecoded))
+    return _mentions(plain) or (decoded != plain and _mentions(decoded))
 
 
-def _mentions(t, ti):
-    """`t` is the whole text; `ti` is the same text with inert data blanked (see _inert_view).
-
-    The rule that the name is SPELLED runs on all of `t`; the expansion rules, which only guess at a
-    name the text does not spell, run on `ti`.
-    """
-    if "doppler" in t:
-        return True
-    if "doppler" in re.sub(r"[^a-z0-9\s]", "", t):
-        return True
-    if EXPANSION_RE.search(ti):
-        n = QUOTES_RE.sub("", ti)
-        w = lambda *names: all(re.search(r"\b" + x + r"\b", n) for x in names)  # noqa: E731
-        if (w("secrets") and any(re.search(r"\b" + x + r"\b", n) for x in ("get", "download", "substitute"))) \
-                or (w("configure") and (w("get") or "--all" in n)) \
-                or w("configs", "tokens") or "print-config" in n:
-            return True
-        # An expansion or glob in a command NAME (`${X}pler secrets`, `dop*ler me`, `"$D" run`):
-        # an expansion character, then later in the same simple command a Doppler subcommand as a
-        # whole argument (not a path piece: `ls $HOME/secrets`, `/run/pw` stay quiet).
-        for seg in split_segments(ti):
-            seg = QUOTES_RE.sub("", seg)
-            if _command_word_expands(seg):
-                return True  # `sec''rets`, `s\\ecrets`, `"$D"` read as the shell reads them
-            m = EXPANSION_RE.search(seg)
-            if m and any(re.search(r"(?:^|\s)" + n + r"(?=$|[\s)`};|&<>])", seg[m.start():])
-                         for n in SUBCOMMAND_WORDS):
-                return True
-    return False
-
-
-_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
-_REDIRECT_WORD_RE = re.compile(r"(?:[0-9]*|&)[<>]")
-_SYNTAX_WORDS = {"[", "[[", "{", "}", "(", ")", "]]", "]"}
-
-
-def _command_word_expands(seg):
-    """True when the first word of a segment (after NAME=value prefixes) holds an expansion or glob.
-
-    `[`, `[[` and `{` are shell syntax, not command names, so they stay quiet.
-    """
-    for w in seg.split():
-        if _ASSIGN_RE.match(w) or _REDIRECT_WORD_RE.match(w):
-            continue
-        return w not in _SYNTAX_WORDS and EXPANSION_RE.search(w) is not None
-    return False
-
-
-def split_segments(s):
-    """Split at ; & | newline outside quotes (an `&` beside `>` or `<` is a redirect), so `--scope=';' secrets` stays one simple command.
-
-    Quote-aware on purpose: splitting inside a quote hid the later subcommand word from the
-    earlier glob. `$'...'` honours a backslash. An unbalanced quote runs to the end, which keeps
-    more text together and so can only trigger more, never less.
-    """
-    segs, start, quote, i, ansi_c = [], 0, None, 0, False
-    while i < len(s):
-        c = s[i]
-        if quote == "'":
-            if c == "\\" and ansi_c:
-                i += 1
-            elif c == "'":
-                quote = None
-        elif quote == '"':
-            if c == "\\":
-                i += 1
-            elif c == '"':
-                quote = None
-        elif c == "\\":
-            i += 1
-        elif c in "'\"":
-            quote = c
-            ansi_c = c == "'" and i > 0 and s[i - 1] == "$"
-        elif c == "&" and ((i > 0 and s[i - 1] in "<>") or (i + 1 < len(s) and s[i + 1] in "<>")):
-            pass  # a redirect (`2>&1`, `>&2`, `&>`, `<&`), not a separator
-        elif c in ";&|\n":  # not \r: the shell does not split there, and splitting hides words
-            segs.append(s[start:i])
-            start = i + 1
-        i += 1
-    segs.append(s[start:])
-    return segs
+def _mentions(t):
+    return "doppler" in t or "doppler" in re.sub(r"[^a-z0-9\s]", "", t)
 
 
 # ---- inert text (#647): ONE tokenizer, an allow list ------------------------------------------
@@ -575,107 +467,6 @@ def _sanitize(text):
     return "".join(out)
 
 
-# ---- inert data for the expansion rules (#649): a whole-input tokenizer that fails closed ----------
-#
-# The expansion rules guess at a Doppler name the text does not spell, so they over-trigger on prose
-# (`echo "$HOME" let me know`). _inert_view() blanks the arguments of exactly ONE shape, and only when
-# the WHOLE input is that one simple command: `echo` as the literal first word, with arguments that are
-# literals, quoted strings, or simple `$NAME` / `${NAME}` expansions, and nothing else: no redirect, pipe,
-# separator, heredoc, comment, glob, `$(`, backtick.
-# Why the whole input: a command's output, or a redirect set up by an earlier command
-# (`mkfifo p; sh <p & exec >p; echo '*' secrets`), is read again by a shell, which expands the glob and
-# runs the CLI. With ONE command, no operator and no redirect, nothing can carry the text anywhere.
-# Why only echo: `printf -v NAME` evaluates an array subscript in NAME (`a[$(...)]`) and runs it, and a
-# script handed to an interpreter (python) can build a command at run time from allowed pieces, so
-# neither is inert; echo only prints.
-# Why a tokenizer: the shape is decided on the exact words the shell sees, never on a regex over text.
-# It is the same allow-list stance as sanitize(): a character or construct it does not positively
-# recognise (an unbalanced quote, `$(`, a backslash, `{fd}>`, `<<`, `#`, a CR, `$'..'`, a glob, any
-# operator) raises, and the caller then keeps the whole text, i.e. the old, stricter reading.
-
-
-class _Unrecognised(Exception):
-    pass
-
-
-_VAR_RE = re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
-DATA_COMMANDS = frozenset(("echo",))
-
-
-def _read_token(text, i):
-    """The word at text[i]: (end, raw text). Raises _Unrecognised on anything not allow-listed."""
-    n, start = len(text), i
-    while i < n:
-        c = text[i]
-        if c in WORD_CHARS:
-            i += 1
-        elif c == "'":
-            j = text.find("'", i + 1)
-            if j < 0:
-                raise _Unrecognised("unbalanced single quote")
-            i = j + 1
-        elif c == '"':
-            i += 1
-            while True:
-                if i >= n:
-                    raise _Unrecognised("unbalanced double quote")
-                d = text[i]
-                if d == '"':
-                    break
-                if d == "$":
-                    m = _VAR_RE.match(text, i)
-                    if not m:
-                        raise _Unrecognised("expansion other than $NAME or ${NAME}")
-                    i = m.end()
-                    continue
-                if d in "`\\":
-                    raise _Unrecognised("backtick or backslash in double quotes")
-                i += 1
-            i += 1
-        elif c == "$":
-            m = _VAR_RE.match(text, i)
-            if not m:
-                raise _Unrecognised("expansion other than $NAME or ${NAME}")
-            i = m.end()
-        else:
-            break
-    if i == start:
-        raise _Unrecognised("character not recognised")
-    return i, text[start:i]
-
-
-def _tokenize_one(text):
-    """The raw words of ONE simple command that is the whole input.
-
-    Only blanks and newlines may follow the last word. Any operator, redirect, heredoc, comment or
-    second command raises.
-    """
-    n, i, words = len(text), 0, []
-    while i < n:
-        c = text[i]
-        if c in " \t":
-            i += 1
-        elif c == "\n":
-            if text[i:].strip(" \t\n"):
-                raise _Unrecognised("a second command")
-            return words
-        else:
-            i, raw = _read_token(text, i)
-            words.append(raw)
-    return words
-
-
-def _inert_view(text):
-    """`text` with the one command it holds reduced to its command word when it is an echo, else `text`."""
-    try:
-        words = _tokenize_one(text)
-    except _Unrecognised:
-        return text
-    if words and words[0] in DATA_COMMANDS:
-        return words[0]
-    return text
-
-
 # ---- single simple command, quote-aware ------------------------------------------------------
 
 
@@ -814,12 +605,13 @@ DEVLIKE = {"fd", "stdin", "stdout", "stderr", "tty", "console", "pts", "ptmx", "
 PIPE_OK_RE = re.compile(
     r"wc -l|head -n [0-9]+|grep(?: -[cqxFiwv]+)? [A-Za-z0-9_.-]+"
 )
-# `doppler secrets get NAME --plain | gh secret set NAME [...]`: gh reads the value from its
-# stdin and prints nothing of it. No `-b/--body` (it would replace stdin) and no other consumer.
-GH_SET_RE = re.compile(
-    r"gh secret set [A-Za-z_][A-Za-z0-9_]*"
-    r"(?: (?:-R|--repo|-e|--env|-a|--app|-o|--org|-v|--visibility) [A-Za-z0-9._/@:-]+| --no-store)*"
-)
+# The wrapper's own subcommand (#670): `sassydog-gh-secret-set NAME [-p P] [-c C] [gh flags]` runs the
+# real `secrets get NAME --plain` and feeds the value to `gh secret set NAME` on gh's stdin. No `-b/--body`
+# (it would replace stdin) and no other consumer. The value crosses a pipe only the wrapper holds.
+GH_SET_SUB = "sassydog-gh-secret-set"
+GH_SET_BOOL = {"--no-store"}
+GH_SET_VAL = {"-R", "--repo", "-e", "--env", "-a", "--app", "-o", "--org", "-v", "--visibility"}
+GH_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # The secret_bootstrap shape: `eval "$(doppler secrets download --no-file ...)"`. The shell
 # consumes the output, nothing prints it. Only `2>/dev/null` may ride inside the substitution.
 BOOTSTRAP_RE = re.compile(
@@ -986,9 +778,16 @@ def allowed_run(cmd):
     toks = head.split()
     if not toks or toks[0] != "doppler":
         return False
-    # Run-local flags (`--no-cache`, `--no-fallback`, `--only-secrets`, ...) are accepted only AFTER
-    # the `run` word. Before it only global flags and -p/-c may stand: the first `run` token the
-    # prefix leaves over as the subcommand (a flag value spelled `run` is consumed by its flag).
+    return run_head_ok(toks)
+
+
+def run_head_ok(toks):
+    """The words of a `run` command up to its child (`doppler [flags] run [flags]`), as the wrapper also reads them.
+
+    Run-local flags (`--no-cache`, `--no-fallback`, `--only-secrets`, ...) are accepted only AFTER
+    the `run` word. Before it only global flags and -p/-c may stand: the first `run` token the
+    prefix leaves over as the subcommand (a flag value spelled `run` is consumed by its flag).
+    """
     for k in range(1, len(toks)):
         if toks[k] != "run":
             continue
@@ -1030,7 +829,7 @@ def allowed_strict(cmd):
         k = toks.index("|")
         toks, tail = toks[:k], toks[k + 1:]
         joined = " ".join(tail)
-        if "|" in tail or ">" in tail or not (PIPE_OK_RE.fullmatch(joined) or GH_SET_RE.fullmatch(joined)):
+        if "|" in tail or ">" in tail or not PIPE_OK_RE.fullmatch(joined):
             return False
     split = split_redirect(toks)
     if split is None:
@@ -1038,12 +837,22 @@ def allowed_strict(cmd):
     toks, redirect = split
     if redirect is not None and (tail is not None or not literal_path(redirect)):
         return False
+    return allowed_simple(toks, redirect, tail is not None)
+
+
+def allowed_simple(toks, redirect, has_tail):
+    """One command's words (`doppler ...`) against the allow list. `redirect` is the stdout target or None.
+
+    The text guard calls this with the literal path it read after `>`; the wrapper calls it with a
+    sentinel when its stdout is a regular file the shell opened for it. `has_tail` is a names-only
+    pipe consumer, which only `secrets --only-names` accepts.
+    """
     rest = toks[1:]
     # info
-    if rest and (rest[0] in INFO_FLAGS or rest[0] == "help") and tail is None and redirect is None:
+    if rest and (rest[0] in INFO_FLAGS or rest[0] == "help") and not has_tail and redirect is None:
         return len(rest) == 1 or (rest[0] == "help" and len(rest) <= 3 and all(re.fullmatch(r"[a-z]+", x) for x in rest[1:]))
     if rest[:2] in (["run", "--help"], ["run", "-h"]) and len(rest) == 2:
-        return tail is None and redirect is None
+        return not has_tail and redirect is None
     # global flags, then the subcommand
     g = parse_global(toks)
     if g is None:
@@ -1053,8 +862,10 @@ def allowed_strict(cmd):
         return False
     sub = toks[i]
     if sub == "secrets":
-        return allowed_secrets(toks, i + 1, redirect, tail)
-    if sub in BARE_SUBS and tail is None and redirect is None:
+        return allowed_secrets(toks, i + 1, redirect, has_tail)
+    if sub == GH_SET_SUB and not has_tail and redirect is None:
+        return parse_gh_secret_set(toks, i + 1) is not None
+    if sub in BARE_SUBS and not has_tail and redirect is None:
         bools, vals = BARE_SUBS[sub]
         if sub == "me":
             return i + 1 == len(toks) and not glob
@@ -1118,12 +929,28 @@ def allowed_bootstrap(cmd):
     # starts with `doppler`. Kept so a loosened regex cannot make this check silently permissive.
     if toks[0] != "doppler":
         return False
+    return bootstrap_toks_ok(toks)
+
+
+def bootstrap_toks_ok(toks):
+    """`doppler secrets download --no-file --format env [-p P] [-c C]` as words (the wrapper reads argv the same way)."""
     parsed = parse_args(toks, 1, {"--no-file"}, PC_VAL | {"--format"})
     return bool(parsed) and parsed[1] == ["secrets", "download"] \
         and parsed[0].get("--no-file") is True and parsed[0].get("--format") == "env"
 
 
-def allowed_secrets(toks, i, redirect, tail):
+def parse_gh_secret_set(toks, i):
+    """(doppler flags, gh flags, NAME) for the args of the wrapper's `sassydog-gh-secret-set` at toks[i:], else None."""
+    parsed = parse_args(toks, i, GLOBAL_BOOL | GH_SET_BOOL, GLOBAL_VAL | PC_VAL | GH_SET_VAL)
+    if parsed is None or len(parsed[1]) != 1 or not GH_NAME_RE.fullmatch(parsed[1][0]):
+        return None
+    flags, pos = parsed
+    gh = {k: v for k, v in flags.items() if k in GH_SET_BOOL or k in GH_SET_VAL}
+    cli = {k: v for k, v in flags.items() if k not in gh}
+    return cli, gh, pos[0]
+
+
+def allowed_secrets(toks, i, redirect, has_tail):
     probe = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL | GET_BOOL | DOWNLOAD_BOOL | RUN_BOOL,
                        GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL | SUBST_VAL)
     if probe is None:
@@ -1134,17 +961,13 @@ def allowed_secrets(toks, i, redirect, tail):
         parsed = parse_args(toks, i, GLOBAL_BOOL | SECRETS_BOOL, GLOBAL_VAL | PC_VAL)
         return bool(parsed) and parsed[0].get("--only-names") is True and not parsed[1] \
             and redirect is None
-    if tail is not None and sub != "get":
+    if has_tail:
         return False
     if sub == "get":
         parsed = parse_args(toks, i, GLOBAL_BOOL | GET_BOOL, GLOBAL_VAL | PC_VAL)
         if not parsed or parsed[1][0] != "get" or len(parsed[1]) < 2:
             return False
         names_ok = all(NAME_RE.fullmatch(n) for n in parsed[1][1:])
-        if tail is not None:
-            # only the gh pipe reaches here with a tail; one name, --plain, no redirect
-            return GH_SET_RE.fullmatch(" ".join(tail)) is not None and names_ok \
-                and len(parsed[1]) == 2 and parsed[0].get("--plain") is True and redirect is None
         return redirect is not None and names_ok
     if sub == "download":
         parsed = parse_args(toks, i, GLOBAL_BOOL | DOWNLOAD_BOOL, GLOBAL_VAL | PC_VAL | DOWNLOAD_VAL)
@@ -1198,7 +1021,7 @@ def analyze(command, cwd=None):
     CWD = cwd if isinstance(cwd, str) and cwd.startswith("/") else None
     bd, bu, body = split_bypass(command)
     problems = []
-    if not bd and triggered(sanitize(body)) and not allowed_strict(body):
+    if not bd and triggered(sanitize(body)) and not allowed_strict(join_continuations(body)):
         problems.append(DOPPLER_MSG)
     if not bu and url_violation(body if (bd or bu) else command):
         problems.append(URL_MSG)

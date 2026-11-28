@@ -34,6 +34,15 @@ hook command, and has `python3` on `PATH`. That is Claude Code. No other harness
 to load it, so on omp (or anything else) the guard enforces nothing and says nothing. Nothing
 gates this statement; it is a design fact, not a measured result.
 
+The argv wrapper (`hooks/shim/`, #670) is the second layer and has a harness precondition of its
+own. Claude Code gets it from a SessionStart hook that appends `hooks/shim` to `CLAUDE_ENV_FILE`,
+so the shim is first on the agent's Bash PATH (a plugin `bin/` is not used: it lands last on the
+PATH). Another harness must put `hooks/shim` first on its agent shell's PATH itself. The wrapper
+also assumes stdout is observable by `fstat`: on Claude Code 2.1.332 the capture is one append-mode
+file shared as fd 1 and fd 2. A harness whose capture is a separate non-append file or two pipes
+would let a printing form pass, which is a named limit. `scripts/test-argv-wrapper.sh` pins the
+classifier, not any harness's wiring.
+
 ## Inventory
 
 | # | Mechanism | Files | Reproducing command |
@@ -53,9 +62,10 @@ gates this statement; it is a design fact, not a measured result.
 | 13 | `claude plugin` CLI and install state | 8 | `git grep -l -e 'claude plugin' -e installed_plugins -- skills agents` |
 | 14 | `mcp__...` tool-id literals | 6 | `git grep -l 'mcp__' -- skills agents` |
 | 15 | `.claude/worktrees` path convention | 4 | `git grep -l '\.claude/worktrees' -- skills agents` |
+| 16 | `sassydog-gh-secret-set`, which exists only behind the plugin's `hooks/shim` (Claude Code's SessionStart PATH wiring) | 1 | `git grep -l sassydog-gh-secret-set -- skills agents` |
 
 Rows 1 to 6 are the five mechanisms named in the issue, with row 2 split out of the Agent tool row
-because omp's answer differs. Rows 7 to 15 came from the search for mechanisms the issue did not
+because omp's answer differs. Rows 7 to 16 came from the search for mechanisms the issue did not
 list. Row 14 is not a dependency: the six files only forbid hardcoding a tool id, and one shows a
 hook matcher example, because tool ids are resolved by capability. It is listed so nobody re-searches
 it. Skill frontmatter was checked as well, and it carries only `name` and `description`, with no
