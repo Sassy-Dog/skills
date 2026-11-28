@@ -185,6 +185,13 @@
 #          it. The positive pins of the no-cap sentences guard the sentences
 #          themselves; a cap sentence ADDED BESIDE them deletes none of those
 #          pins, so it is caught only by this best-effort ban.
+#        - THE ESCALATE-ONLY CARVE-OUT CHECK (co_check) is windowed: every spelling of
+#          "ESCALATE is the only verdict" must carry "infrastructure stop" in the
+#          500 characters after it, per statement, not merely somewhere in the file.
+#          It reads only the files this gate reads, so docs/HARNESS-PORTABILITY.md,
+#          which restates the rule, is NOT covered by it (adding a file would move
+#          the spelled read-set count). In-script mutants (README, ARCHITECTURE,
+#          take-it) and backticked controls run through co_check keep it honest.
 #      #581's coordinator-site NIT ROLL-IN is unchanged and still sits OUTSIDE
 #      the allowance: at most one per PR, capped by its own author-checked cap
 #      record, never counted in `recovery_used`, no reservation. Do not "tidy" it
@@ -1884,9 +1891,9 @@ mutant_pin "$rounds_take" 'A refused .DESCOPE. filing holds the merge and is ret
 mutant_pin "$rounds_take" 'Only a filed-and-linked follow-up releases it' \
     's/Only a filed-and-linked follow-up releases it//' \
     "take-it: only a filed-and-linked follow-up releases a DESCOPE merge"
-mutant_pin "$rounds_take" 'in the hold record with .cause. .filing-refused. and the same three tries, after which it is the same held root' \
+mutant_pin "$rounds_take" 'in the hold record with .cause. .filing-refused. and the same three tries, after which it is the same infrastructure stop' \
     's/the same three tries//' \
-    "take-it: a refused DESCOPE filing is counted in the hold record and ends as the same held root"
+    "take-it: a refused DESCOPE filing is counted in the hold record and ends as the same infrastructure stop"
 mutant_pin "$rollin_take" '\(A .DESCOPE. filing is the exception and holds the merge, as the verdict table says.\)' \
     's/is the exception and holds the merge//' \
     "take-it: the nit filing rule excepts DESCOPE, which holds the merge"
@@ -1922,14 +1929,33 @@ done
 # Co-occurrence: the ESCALATE-only rule is never stated without its carve-out. A file that says
 # ESCALATE is the only verdict ending a finding in blocked, and does not also say a spent hold is an
 # infrastructure stop, has restated the old unqualified rule that the waiver attempt contradicted.
-ESC_ONLY_RE='ESCALATE.{1,3} (is|the) only (verdict|way)|only .ESCALATE. (verdict|sets)|only on an .ESCALATE.|makes .ESCALATE. the only'
+# Every spelling of the rule seen in the tree, backtick- and emphasis-tolerant: "`ESCALATE` is the only
+# verdict", "`blocked` only on an `ESCALATE` verdict", "reaches `blocked` only by an arbitration
+# `ESCALATE`", "makes `ESCALATE` the only". (A first edition of this check matched none of the
+# backticked spellings, so it printed "does not state the rule" for take-it, dispatch-ready, README and
+# ARCHITECTURE, and deleting the carve-out from README or ARCHITECTURE left every gate green.)
+ESC_ONLY_RE='ESCALATE[^A-Za-z]{0,6}(is )?the only (verdict|way)|only (by|on) (an )?(arbitration )?[`*]?ESCALATE|only [`*]?ESCALATE[`*]? (verdict|sets)|makes [`*]?ESCALATE[`*]? the only'
+# The carve-out must sit in the SAME WINDOW as the rule (the rule and the next 500 characters), not
+# merely somewhere in the file, or one file's correct mention masks its stale one.
+# co_check returns 0 = every stated rule carries the carve-out, 1 = one does not, 2 = states no rule.
+co_check() {
+    local hay="$1" win n=0
+    while IFS= read -r win; do
+        [ -n "$win" ] || continue
+        n=$((n + 1))
+        grep -qF -- 'infrastructure stop' <<<"$win" || return 1
+    done < <(grep -oE -- "($ESC_ONLY_RE).{0,250}.{0,250}" <<<"$hay")
+    [ "$n" -gt 0 ] || return 2
+    return 0
+}
 co_occurs() {
-    local hay="$1" label="$2"
-    if grep -qE -- "$ESC_ONLY_RE" <<<"$hay"; then
-        if grep -qF -- 'infrastructure stop' <<<"$hay"; then ok "$label"; else bad "$label"; fi
-    else
-        ok "$label (does not state the rule)"
-    fi
+    local rc=0
+    co_check "$1" || rc=$?
+    case "$rc" in
+        0) ok "$2" ;;
+        2) ok "$2 (does not state the rule)" ;;
+        *) bad "$2" ;;
+    esac
 }
 for pair in "send-it:$skill_flat" "take-it:$takeit_flat" "dispatch-ready:$dispatch_flat" \
             "work-recommendations:$workrec_flat" "isolation-confirmation:$iso_flat" \
@@ -1937,13 +1963,31 @@ for pair in "send-it:$skill_flat" "take-it:$takeit_flat" "dispatch-ready:$dispat
             "orchestrator:$orch_flat" "setup-config:$setup_flat" "AGENTS.md:$(flatten "$AGENTSMD")"; do
     co_occurs "${pair#*:}" "${pair%%:*} states the ESCALATE-only rule only with its infrastructure-stop carve-out"
 done
-# The check must itself be able to fail: the rule alone, with no carve-out, is caught.
-if grep -qE -- "$ESC_ONLY_RE" <<<"ESCALATE is the only verdict that ends a finding in blocked." \
-   && ! grep -qF -- 'infrastructure stop' <<<"ESCALATE is the only verdict that ends a finding in blocked."; then
-    ok "co-occurrence mutant is caught: the bare rule has no carve-out"
-else
-    bad "co-occurrence mutant survives: the bare rule would pass"
-fi
+# Not every file that restates the rule is read by this gate: docs/HARNESS-PORTABILITY.md states it
+# without being in the read set (adding it would move the spelled file count at three sites, and the
+# arbitration said to add no file), so it is NOT covered by this check.
+# The check is run THROUGH co_check on the real (backticked) spellings, so it can fail:
+rc=0; co_check 'Only `ESCALATE` is the only verdict that ends a finding in `blocked`.' || rc=$?
+[ "$rc" -eq 1 ] && ok "co-occurrence control: a backticked bare rule is caught" || bad "co-occurrence control: a backticked bare rule passes (rc $rc)"
+rc=0; co_check 'a finding reaches `blocked` only by an arbitration `ESCALATE` verdict, and that is all.' || rc=$?
+[ "$rc" -eq 1 ] && ok "co-occurrence control: the 'only by an arbitration' spelling is caught" || bad "co-occurrence control: the 'only by an arbitration' spelling passes (rc $rc)"
+rc=0; co_check 'and `blocked` only on an `ESCALATE` verdict (a spent arbitration hold is an infrastructure stop, not a verdict).' || rc=$?
+[ "$rc" -eq 0 ] && ok "co-occurrence control: a rule with its carve-out passes" || bad "co-occurrence control: a rule with its carve-out fails (rc $rc)"
+# In-script mutants: delete the carve-out from the real text, and the check must go red.
+rc=0; co_check "${readme_flat/, and a spent arbitration hold is an infrastructure stop, not a verdict/}" || rc=$?
+[ "$rc" -eq 1 ] && ok "README mutant: deleting the carve-out is caught" || bad "README mutant: deleting the carve-out survives (rc $rc)"
+rc=0; co_check "${arch_flat/, and a spent arbitration hold is an infrastructure stop, not a verdict,/,}" || rc=$?
+[ "$rc" -eq 1 ] && ok "ARCHITECTURE mutant: deleting the carve-out is caught" || bad "ARCHITECTURE mutant: deleting the carve-out survives (rc $rc)"
+rc=0; co_check "${takeit_flat/ (a spent arbitration hold is an infrastructure stop, not a verdict)./.}" || rc=$?
+[ "$rc" -eq 1 ] && ok "take-it guardrail mutant: deleting the carve-out is caught" || bad "take-it guardrail mutant: deleting the carve-out survives (rc $rc)"
+
+# The resume check runs before the CONFLICTING bullet's demote-once predicate (round 4 roll-in).
+mutant_pin "$retry_review_dr" 'Resume rule, .{0,3}which runs first.{1,3}: a resumed issue .not .blocked., record spent, demotion comment found. gets its fresh .tries: 0. record' \
+    's/which runs first//' \
+    "dispatch-ready: take-it's Resume check runs before the demote-once predicate"
+mutant_pin "$retry_review_dr" 'applies only on the Resume check.s "Not found" branch, never before it' \
+    's/never before it//' \
+    "dispatch-ready: the CONFLICTING bullet's predicate applies only on the Resume check's Not-found branch"
 
 # Nit (c): a security nit is never described in a public PR body.
 mutant_pin "$rollin_take" 'a security nit is written there only as the placeholder .security nit — listed for the operator., never described, because the repo is public' \

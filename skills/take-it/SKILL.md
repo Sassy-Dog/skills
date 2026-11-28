@@ -764,7 +764,7 @@ refreshes it.
    documented as safe to retry; its burst rail is the same refusal): a merge that went ahead would
    close #N with the descoped Blocking remainder tracked nowhere. Only a filed-and-linked follow-up
    releases it. The refusal is counted like an arbitration that cannot run, in the hold record with
-   `cause` `filing-refused` and the same three tries, after which it is the same held root.
+   `cause` `filing-refused` and the same three tries, after which it is the same infrastructure stop.
 
    **A return with no verdict, two verdicts, a name outside the set, or no file:line evidence is
    not a verdict**, and never reads as `ESCALATE` or as consent. An arbitration that cannot be
@@ -866,8 +866,8 @@ Then:
 
 - **Blocking finding** → hold the PR; **never merge past it**. Name the finding in the §7 report and
   run **Review rounds and arbitration** above: round after round with no cap, each delta review
-  carrying the open findings, an arbitration verdict when a trigger fires, and `blocked` only on
-  `ESCALATE`.
+  carrying the open findings, an arbitration verdict when a trigger fires, and `blocked` only on an
+  `ESCALATE` verdict (a spent arbitration hold is an infrastructure stop, not a verdict).
 - **Nits** → they never hold a merge, except a nit ranked high impact and high probability, which is
   treated as a Blocking finding and takes the bullet above. With no Blocking finding and at least
   one other nit, run the **Nit roll-in** below before the hand-off; its sort decides what each nit

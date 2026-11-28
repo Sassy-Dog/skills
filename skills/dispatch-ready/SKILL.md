@@ -406,7 +406,10 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   ×3, round <n>, trigger <trigger>, hold <id>) — <remedy>, then resume: gh issue edit N
   --remove-label blocked --add-label in-progress"`), exactly as the `CONFLICTING` bullet demotes,
   and its confirmed demotion frees the §3 slot. It reads and spends no `recovery_used`, and the
-  issue resumes by `take-it` §6's Resume rule. The PR is reported as
+  issue resumes by `take-it` §6's Resume rule, **which runs first**: a resumed issue (not `blocked`,
+  record spent, demotion comment found) gets its fresh `tries: 0` record, and the `CONFLICTING`
+  bullet's demote-once predicate, which only skips an issue already carrying `blocked`, applies
+  only on the Resume check's "Not found" branch, never before it. The PR is reported as
   `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist` until then. **Before any new round or redispatch on a branch,
   the earlier worker must be confirmed stopped or gone**, by `take-it` §6's one-writer rule: a
   worker past the 30 minutes is a dispute, never licence to start a second writer. **Never park
@@ -1255,7 +1258,7 @@ be dispatched, or returns no verdict, is counted, and with its three tries spent
 infrastructure stop that §2 demotes to `blocked` once, exactly as it demotes a lost review, so the
 row-3 hold clause is only the tick before that demotion is written. Once the allowance is spent §2
 demotes a lost review or an infra failure to `blocked`, and a review finding reaches `blocked`
-only by an arbitration `ESCALATE` verdict (a spent hold is no verdict), which is why the label is
+only by an arbitration `ESCALATE` verdict (a spent hold is an infrastructure stop, not a verdict), which is why the label is
 the usual way a held PR presents — and why the review-outcome row is not redundant
 beside it: the label is a write this loop performs, the outcome is a fact it reads, and a demotion
 not yet written must never read as advanceable. It is also why the red-checks row asks for an owed
