@@ -404,8 +404,13 @@
 # beyond those in the section: heredoc markers, `$((`, `((..))` and `[[ ]]` were tried and already deny or
 # print nothing; a bare `{` inside `${...}` was probed by brute force and no allowed spelling printed, so
 # it is neither modelled nor claimed; the `;` and newline spellings of the zsh-only `$[` shapes did not
-# print on any shell and are gate cases only. KNOWN LIMITS, not modelled and not pinned as allows: `${x@P}`
-# (bash) and `${(e)x}` (zsh) evaluate a variable's text as code.
+# print on any shell and are gate cases only. KNOWN LIMITS, not modelled by the override scan: `${x@P}`
+# (bash) and zsh's `(e)` flag on any word (`${(e)x}`, a literal default in double quotes) evaluate text as
+# code, and bash's arithmetic-subscript evaluation inside `let`, `declare -i`, `printf -v` and `test -v` runs
+# a `$(...)` in the subscript. The `(e)` default form and the four subscript forms ARE pinned (#666) as
+# differential rows of kind "limit" (allowed by the hook, really printing under a declared shell: let and
+# declare -i on bash 3.2 and 5, printf -v and test -v on bash 5 only, the `(e)` form on zsh); `${x@P}` and
+# `${(e)x}` on a variable are not.
 # Mutants, ONE replacement each in hooks/bash-secret-guard.py, run against the section and its corpus rows
 # alone on scratch copies with bash 5.3, bash 3.2, zsh and dash all present (failing gate cases / failing
 # differential checks, unmutated baseline 0 / 0): the four-way `$'`/`$"`/`$[`/backslash-newline refusal
@@ -469,15 +474,26 @@
 # puts it in the transcript. The section's python checker runs against the real hook (emitted stderr, not
 # the constants), asserts both messages and the README, and replays every command the message offers
 # through the hook (all must be allowed), so SAFE_FORMS, the allow decisions and the README cannot drift.
-# Its ELEVEN committed mutants each go red on a scratch copy: the print or URL override named in its
-# message, the ask line dropped from either message or reworded, the file form returned to the message,
-# --only-names before run, a form offered that the hook denies, the README losing the allowed-not-offered
-# sentence or the ask-line quote, and the docstring claiming the message prints the override. A mutant
-# whose anchor no longer matches exactly once FAILS rather than passing vacuously. The differential
-# driver's parse_kind now checks a declared shell against the shells find_shells() can return and a bound's
-# major version against 9 (the carried #663 finding: `bypass[zhs]` and `bypass[bash>=53]` parsed, matched no
-# machine and skipped every teeth check, silently); five typos are self-test cases, and reverting
-# check_spec to the syntax-only check fails all five (7 failing checks in all, with the driver run).
+# The ask line is printed ONCE, by main(), after the bullets, whichever rules fired (pinned for a command
+# that trips both). The checker forbids "override", "bypass", "README" and either variable name in the
+# emitted text, replays EVERY backticked span that names the CLI (including a cd-prefixed or bash -c
+# wrapped one) plus the advertised run sub-forms (--no-fallback, --only-secrets, -p/-c before run), rejects
+# any offered get/download/substitute span with a redirect, --output or a path, and pins its own counts
+# (8 offered commands, 42 checks). Its TWENTY-TWO committed mutants each go red on a scratch copy (a
+# Traceback counts as red): either override or the word bypass or a README pointer in a message, the ask
+# line missing, reworded, printed per bullet or before the bullets, the file form back in three spellings,
+# --only-names before run, a denied form offered bare, behind cd and inside bash -c, --no-fallback no
+# longer advertised, the README losing the allowed-not-offered sentence, the ask quote or the reason the
+# messages omit the overrides, a README that re-claims the message names the override in new words, and a
+# docstring doing the same. A mutant whose anchor no longer matches exactly once FAILS rather than passing
+# vacuously. The differential driver's check_spec (called by parse_kind) rejects a declared shell the
+# driver cannot find, any version bound on a shell whose version is not read (zsh, dash), a major above 9
+# and a minor above 9 (the carried #663 finding: `bypass[zhs]` and `bypass[bash>=53]` parsed, matched no
+# machine and skipped every teeth check silently); ten typos are self-test cases, and reverting check_spec
+# to the syntax-only check fails them all. The README's two newly documented Known-limit classes are
+# pinned as differential rows of kind "limit" (the hook ALLOWS, a declared shell really prints): the zsh
+# `(e)` flag on a literal default, and the arithmetic-subscript builtins (let and declare -i declared
+# bash<4 and bash>=5, printf -v and test -v declared bash>=5, as bash 3.2 does not run them).
 #
 # Safe beside every other gate: own mktemp -d, no fixed path, no network, no repo mutation.
 set -u
@@ -2197,30 +2213,45 @@ section = readme.split("### Bash guard hook", 1)[1].split("### Review agents", 1
 
 rc_cli, cli = rc_err(f"{D} secrets get X")
 rc_url, url = rc_err("psql postgres://u:pw@h/db")
-check(rc_cli == 2 and rc_url == 2, "both rules still deny (the messages below are the emitted ones)")
-for name, msg in (("CLI", cli), ("URL", url)):
-    check(not any(o in msg for o in OVERRIDES) and "SASSYDOG_ALLOW" not in msg and "override" not in msg.lower(),
-          f"the {name} deny message names neither override")
-    check(ASK in msg, f"the {name} deny message carries the ask-the-user line")
+rc_both, both = rc_err(f"{D} secrets get X postgres://u:pw@h/db")
+check(rc_cli == 2 and rc_url == 2 and rc_both == 2, "both rules still deny, alone and together (the text below is the emitted stderr)")
+FORBIDDEN = ("sassydog_allow", "override", "bypass", "readme")
+for name, msg in (("CLI", cli), ("URL", url), ("combined", both)):
+    check(not any(w in msg.lower() for w in FORBIDDEN) and not any(o in msg for o in OVERRIDES),
+          f"the {name} deny output names neither override and does not point at the README's Bypass paragraph")
+    check(msg.count(ASK) == 1, f"the {name} deny output carries the ask-the-user line exactly once")
+check(both.count("\n- ") == 2 and both.rstrip("\n").endswith(ASK) and both.rfind(ASK) > both.rfind("\n- "),
+      "with both rules firing the ask line is printed once, after the bullets")
 check(g.ASK_USER == ASK, "the module's ASK_USER is the decided sentence")
 
 # Forms: the message leads with run, then --only-names, then the bare non-printing subcommands.
 idx = [cli.find(t) for t in ("`" + D + " run", "--only-names", "non-printing subcommand", "gh secret set")]
 check(all(i >= 0 for i in idx) and idx == sorted(idx), "the CLI message lists run, then --only-names, then a bare subcommand, then the gh pipe")
-# The file form (get/download/substitute to a literal path) is not offered, yet stays ALLOWED.
-check("> /literal/path" not in cli and "reading it back" not in cli and "substitute" not in cli and "`download`" not in cli,
-      "the CLI message does not offer the file form")
+# The file form (get/download/substitute to a path) is not offered in ANY spelling, yet stays ALLOWED.
+all_spans = re.findall(r"`([^`]+)`", cli)
+file_form = [s for s in all_spans if not s.startswith("eval ")
+             and re.search(r"secrets\s+(get|download|substitute)\b", s)
+             and (">" in s or "--output" in s or re.search(r"(^|\s)(/|~|\./)", s))]
+check(not file_form, f"the CLI message offers no get/download/substitute form with a redirect, --output or a path: {file_form}")
+check("reading it back" not in cli and "substitute" not in cli and "`download`" not in cli,
+      "the CLI message does not mention the file form")
 for c in (f"{D} secrets get X --plain > /literal/path", f"{D} secrets download --no-file > /literal/path",
           f"{D} secrets substitute /literal/tmpl --output /literal/path"):
     check(rc_err(c)[0] == 0, f"the file form is still allowed: {c}")
 
-# SAFE_FORMS vs the allow decisions: every command the message offers is allowed by the hook as written.
-spans = [s for s in re.findall(r"`([^`]+)`", g.SAFE_FORMS) if s.startswith(D + " ") or s.startswith("eval ")]
-check(len(spans) >= 7, f"the message offers at least 7 commands to check ({len(spans)} found)")
+# SAFE_FORMS vs the allow decisions: EVERY command the message offers (any backticked span that names the
+# CLI, or the eval bootstrap) is allowed by the hook as written, wrapped or not.
+spans = [s for s in all_spans if D in s or s.startswith("eval ")]
+check(len(spans) == 8, f"the message offers exactly 8 commands to replay ({len(spans)} found)")
 for s in spans:
     concrete = s.replace("[flags] ", "").replace("<cmd>", "true").replace("NAME,NAME", "A,B")
     concrete = re.sub(r"\bNAME\b", "X", concrete)
     check(rc_err(concrete)[0] == 0, f"an offered form is allowed by the hook: {concrete}")
+# The advertised run sub-forms are replayed too.
+for tok in ("--no-fallback", "--only-secrets NAME,NAME", "-p/-c before it"):
+    check(tok in cli, f"the CLI message advertises: {tok}")
+for c in (f"{D} run --no-fallback -- true", f"{D} run --only-secrets A,B -- true", f"{D} -p x -c y run -- true"):
+    check(rc_err(c)[0] == 0, f"an advertised run sub-form is allowed: {c}")
 
 # SAFE_FORMS vs the README: each offered form is documented there, the file form is documented as allowed
 # but not offered, both overrides are documented with the reason the message omits them.
@@ -2229,17 +2260,21 @@ for tok in ("`" + D + " run", "--only-names", "non-printing subcommand", "gh sec
 check("> /literal/path" in section and "stays ALLOWED but the deny message does not offer it" in section,
       "the README documents the file form as allowed but not offered")
 check(all(o in section for o in OVERRIDES), "the README documents both overrides")
-check(ASK in section and "do not name either override" in section, "the README says why the message omits them and quotes the ask line")
+check(ASK in section and "do not name either override" in section, "the README quotes the ask line and says the messages name no override")
+check("naming an override hands the bypass to every agent the guard stops" in section,
+      "the README says why the messages omit the overrides")
 
-# The module docstring and the README no longer say the message prints the override.
-check("printed in the deny message" not in open(py).read() and "spelled out in the deny message" not in section,
-      "no doc claims the deny message prints the override")
+# No doc claims the message names or prints an override, in any wording near these shapes.
+CLAIM = re.compile(r"override[^.]{0,80}(?:spelled out|printed|named|listed|shown|stated)[^.]{0,30}(?:deny|denial|message)"
+                   r"|(?:deny|denial) messages?[^.]{0,60}\b(?:names|prints|spells out|states|shows|lists)\b[^.]{0,30}(?:override|bypass)", re.I)
+for what, text in (("the README", section), ("the hook docstring", open(py).read())):
+    check(not CLAIM.search(text), f"{what} does not claim the deny message names or prints an override")
 PYEOF
 step666() { python3 -I -B "$WORK/step666.py" "$1" "$2" 2>&1; }
 step_out="$(step666 "$REPO_ROOT/hooks" "$REPO_ROOT/README.md")"
 step_pass="$(grep -c '^PASS ' <<<"$step_out")"
 step_fail="$(grep -c '^FAIL \|Traceback' <<<"$step_out")"
-if [ "$step_fail" -eq 0 ] && [ "$step_pass" -ge 25 ]; then
+if [ "$step_fail" -eq 0 ] && [ "$step_pass" -eq 42 ]; then
     ok "#666: the messages, SAFE_FORMS, the allow decisions and the README agree ($step_pass checks)"
 else
     bad "#666: the messages, SAFE_FORMS, the allow decisions and the README agree"
@@ -2266,19 +2301,30 @@ open(p, "w").write(s.replace(old, new))' "$target" "$3" "$4"; then
     fi
     local mout
     mout="$(step666 "$d/hooks" "$d/README.md")"
-    if grep -q '^FAIL ' <<<"$mout"; then ok "#666 mutant caught: $1"; else bad "#666 mutant SURVIVED: $1"; fi
+    if grep -q '^FAIL \|Traceback' <<<"$mout"; then ok "#666 mutant caught: $1"; else bad "#666 mutant SURVIVED: $1"; fi
 }
 mut666_n=0
 mut666 "the CLI message names the print override" bash-secret-guard.py 'is denied. "' 'is denied. SASSYDOG_ALLOW_DOPPLER_PRINT=1 "'
-mut666 "the URL message names the URL override" bash-secret-guard.py 'variable in the child). " + ASK_USER' 'variable in the child). SASSYDOG_ALLOW_CREDENTIAL_URL=1 " + ASK_USER'
-mut666 "the CLI message loses the ask-the-user line" bash-secret-guard.py $'is denied. "\n    + ASK_USER' 'is denied."'
-mut666 "the URL message loses the ask-the-user line" bash-secret-guard.py 'variable in the child). " + ASK_USER' 'variable in the child)."'
+mut666 "the URL message names the URL override" bash-secret-guard.py 'variable in the child)."' 'variable in the child). SASSYDOG_ALLOW_CREDENTIAL_URL=1"'
+mut666 "the CLI message says 'bypass' without the name" bash-secret-guard.py 'is denied. "' 'is denied. A human can bypass it. "'
+mut666 "the CLI message points at the README's Bypass paragraph" bash-secret-guard.py 'is denied. "' 'is denied. See the README, Bypass paragraph. "'
+mut666 "the ask-the-user line is no longer printed" bash-secret-guard.py '        sys.stderr.write(ASK_USER + "\n")' '        pass'
+mut666 "the ask-the-user line is printed once per bullet" bash-secret-guard.py $'            sys.stderr.write(f"- {p}\\n")\n' $'            sys.stderr.write(f"- {p}\\n{ASK_USER}\\n")\n'
+mut666 "the ask-the-user line is printed before the bullets" bash-secret-guard.py $'        sys.stderr.write("bash-secret-guard: BLOCKED.\\n")\n' $'        sys.stderr.write("bash-secret-guard: BLOCKED.\\n" + ASK_USER + "\\n")\n'
 mut666 "the ask-the-user sentence is reworded" bash-secret-guard.py 'stop and ask the user; do not look' 'ask someone; look'
 mut666 "the file form returns to the message" bash-secret-guard.py '-p/-c before it); `doppler secrets --only-names`; ' '-p/-c before it); `doppler secrets get NAME --plain > /literal/path`; `doppler secrets --only-names`; '
+mut666 "the file form returns with a different path" bash-secret-guard.py '-p/-c before it); `doppler secrets --only-names`; ' '-p/-c before it); `doppler secrets get NAME --plain > /tmp/NAME.env`; `doppler secrets --only-names`; '
+mut666 "the file form returns as --output" bash-secret-guard.py '-p/-c before it); `doppler secrets --only-names`; ' '-p/-c before it); `doppler secrets substitute T --output /tmp/o`; `doppler secrets --only-names`; '
 mut666 "--only-names is listed before run" bash-secret-guard.py '(the whole command, nothing else): ' '(the whole command, nothing else): `doppler secrets --only-names`; '
 mut666 "the message offers a form the hook denies" bash-secret-guard.py 'or `doppler configs`; ' 'or `doppler configs` or `doppler secrets get X --plain`; '
+mut666 "the message offers a denied form behind a cd prefix" bash-secret-guard.py 'or `doppler configs`; ' 'or `doppler configs` or `cd /tmp && doppler secrets get X`; '
+mut666 "the message offers a denied form wrapped in bash -c" bash-secret-guard.py 'or `doppler configs`; ' 'or `doppler configs` or `bash -c '"'"'doppler secrets get X'"'"'`; '
+mut666 "the message stops advertising --no-fallback" bash-secret-guard.py 'mention doppler; `--no-fallback` and `--only-secrets NAME,NAME` (upper' 'mention doppler; `--only-secrets NAME,NAME` (upper'
 mut666 "the README stops documenting the file form as allowed-not-offered" README.md 'stays ALLOWED but the deny message does not offer it' 'is documented'
 mut666 "the README drops the ask-the-user quote" README.md 'If you believe this is a false deny, stop and ask the user; do not look for a way around it.' 'Ask.'
+mut666 "the README drops the reason the messages omit the overrides" README.md 'naming an override hands the bypass to every agent the guard stops' 'naming one is unwise'
+mut666 "the README re-claims the message names the override, in new words" README.md 'The overrides stay for a human' 'The deny message states the override, and it stays for a human'
+mut666 "the README says the override is printed in the denial" README.md 'The override is a speed bump, not protection' 'The override is shown in the denial message, a speed bump, not protection'
 mut666 "the docstring says the message prints the override again" bash-secret-guard.py 'The deny messages do not name either override' 'The override is printed in the deny message, and the messages do not name either override'
 
 echo "== hooks.json wiring, run as the harness runs it =="

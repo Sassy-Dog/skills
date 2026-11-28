@@ -159,11 +159,12 @@ or locale quoting, brace expansion, an expansion glued before or after the word 
 `"$x"secrets`, `secrets$x`), glob forms (only when the working directory holds a match), a subcommand held in a
 variable or a default, indirect invocation (xargs, or env with a $(cat) argument, fed by echo or printf), a
 subcommand assembled by printf, and any of these run through eval. Not modelled either (the override scan
-does not look for them; both apply to that command and the strings it runs, like eval and bash -c): an
+does not look for them; they sit beside eval and bash -c, the strings a command runs): an
 expansion that evaluates text as code, `${x@P}` in bash and zsh's `(e)` flag on any word (`${(e)x}`, or a
 literal default in double quotes such as `"${(e):-\\$(...)}"`, which prints under zsh 5.9); and bash's
 arithmetic-subscript evaluation inside builtins (`let 'a[$(...)]'`, `declare -i y='a[$(...)]'`, `printf -v
-'a[$(...)]' x`, `test -v 'a[$(...)]'`). A bare quote or backslash inside the word is
+'a[$(...)]' x`, `test -v 'a[$(...)]'`; let and declare -i run it on bash 3.2 and 5, printf -v and test -v
+on bash 5 only). A bare quote or backslash inside the word is
 removed before matching and still denies. Deliberately NOT matched: a text matcher cannot model the shell's
 expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
 on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
@@ -179,7 +180,7 @@ redirect targets, a redirected file that is read back afterwards, `doppler run -
 `printenv` / `doppler run --command 'echo $X'` (a child can print its own environment: the
 child decides), a two-step symlink rename (`ln -s <doppler> /tmp/dp`, then `/tmp/dp secrets`:
 each command text is innocent alone), a relative redirect when the event carries no `cwd`, `password=` / `?password=` URL forms, and false denies for any
-text that mentions doppler outside the sanitized spots above (a `grep doppler docs/`, an `echo`): use the bypass.
+text that mentions doppler outside the sanitized spots above (a `grep doppler docs/`, an `echo`): a human can use the bypass; an agent that is denied stops and asks.
 """
 
 import json
@@ -204,8 +205,10 @@ BYPASS_PREFIX_RE = re.compile(
 # the bypass to every agent the guard stops, and to an injected instruction; the file form leaves the value
 # on disk and the next step, reading the file back, puts it in the transcript. Both stay (the overrides for
 # humans, the file form as an ALLOWED form) and are documented in the README, which is why SAFE_FORMS lists
-# the forms that keep values out of the transcript and off disk, run first. The gate pins the message
-# against the allow decisions, the README and the absence of either override name.
+# the forms that keep values out of the transcript, run first (the write form needs the value in a file
+# you already hold, but never prints it). ASK_USER is written once, by main(), after the bullets, whichever
+# rules fired. The gate pins the message against the allow decisions, the README and the absence of either
+# override name.
 ASK_USER = "If you believe this is a false deny, stop and ask the user; do not look for a way around it."
 SAFE_FORMS = (
     "Allowed forms (the whole command, nothing else): "
@@ -226,12 +229,11 @@ DOPPLER_MSG = (
     "create|edit`, and the body of a quoted-delimiter `--body-file - <<'EOF'` / `-F - <<'EOF'` heredoc ending its line, is not scanned when the WHOLE command is plain words, quotes, "
     "`git add|status`, `cd` and those message commands with plain options (no `$(`, `$`, backtick, backslash, `#`, parentheses, `-e`/`--amend`, no `export` or `git config`); a message "
     "must be written `-m 'text'` or `-F - <<'EOF'`, not `-m \"$(cat <<'EOF'...)\"`; any other text that mentions the word is denied. "
-    + ASK_USER
 )
 URL_MSG = (
     "the command embeds a URL with a literal password (scheme://user:password@host). "
     "Pass the value through the environment instead (`doppler run -- <cmd>` and read the "
-    "variable in the child). " + ASK_USER
+    "variable in the child)."
 )
 
 # ---- trigger -------------------------------------------------------------------------------
@@ -1237,6 +1239,7 @@ def main():
         sys.stderr.write("bash-secret-guard: BLOCKED.\n")
         for p in dict.fromkeys(problems):
             sys.stderr.write(f"- {p}\n")
+        sys.stderr.write(ASK_USER + "\n")  # once, after the bullets, whichever rules fired (#666)
         return 2
     return 0
 

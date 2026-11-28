@@ -12,6 +12,11 @@ network, no real repo, everything inside a fresh scratch directory per run), and
     whenever the hook ALLOWS a command, the marker did not reach stdout or stderr, and no shell
     run of it timed out.
 
+A corpus entry of kind "limit" (#666) is a KNOWN LIMIT: the hook must ALLOW it AND a declared shell must print,
+so the pin has teeth and the prints-nothing rule for allowed rows does not apply to it; it takes the same
+"[spec,...]" declaration as "bypass". A declared bound is only legal on a shell whose version find_shells()
+reads (bash), with a minor version of at most 9 (check_spec).
+
 A corpus entry of kind "bypass" must also PRINT under at least one shell, otherwise it proves
 nothing (a bypass that no shell executes is not a bypass). A bypass row may DECLARE the shells it
 prints under, in brackets after its kind: "bypass[zsh]", "bypass[bash,dash]", "bypass[bash<4]",
@@ -140,6 +145,14 @@ CORPUS = [
     ("heredoc operator not last on its line", f"gh issue comment 5 --body-file - {H} | sh\n{PRINT}\nEOF", "deny", "bypass"),
     ("unquoted heredoc delimiter", f"gh issue comment 5 --body-file - <<EOF\n$({PRINT})\nEOF", "deny", "bypass"),
     ("unbalanced quote", f'git commit -m "{PRINT}', "deny", "deny-only"),
+    # KNOWN LIMITS (#666, carried from #663's review; README "Known limits"): the hook ALLOWS each and the
+    # shell really runs the CLI. Kind "limit" asserts both halves (allowed, and prints under a declared
+    # shell, so the pin has teeth); a change that starts denying one is a deliberate edit of this row.
+    ("known limit: zsh (e) flag on a literal default in double quotes", 'echo "${(e):-\\$($D)}"', "allow", "limit[zsh]"),
+    ("known limit: arithmetic subscript in let", "let 'a[$($D)]'", "allow", "limit[bash<4,bash>=5]"),
+    ("known limit: arithmetic subscript in declare -i", "declare -i y='a[$($D)]'", "allow", "limit[bash<4,bash>=5]"),
+    ("known limit: arithmetic subscript in printf -v (bash 3.2 does not run it)", "printf -v 'a[$($D)]' x", "allow", "limit[bash>=5]"),
+    ("known limit: arithmetic subscript in test -v (bash 3.2 does not run it)", "test -v 'a[$($D)]'", "allow", "limit[bash>=5]"),
 ]
 
 # #649: text that merely carries an expansion character and a common word is data, but ONLY as the
@@ -433,6 +446,8 @@ def matches_any(path, specs):
 
 
 KNOWN_SHELLS = ("bash", "zsh", "dash")  # the shells find_shells() can ever return
+VERSIONED_SHELLS = ("bash",)  # only bash prints `version N.M`; VERSIONS is None for zsh and dash
+MAX_MINOR = 9  # no bash minor version here is above this; `bash>=5.33` would skip everywhere
 MAX_MAJOR = 9  # no shell here has a major version above this; `bash>=53` for `bash>=5.3` would skip everywhere
 
 
@@ -445,9 +460,14 @@ def check_spec(spec):
         raise ValueError(f"bad shell spec {spec!r}")
     if m.group(1) not in KNOWN_SHELLS:
         raise ValueError(f"shell spec {spec!r} names {m.group(1)!r}, not one of {KNOWN_SHELLS}")
+    has_bound = any(m.group(i) is not None for i in (2, 3))
+    if has_bound and m.group(1) not in VERSIONED_SHELLS:
+        raise ValueError(f"shell spec {spec!r}: find_shells() reads no version for {m.group(1)!r}, so a bound never matches")
     for bound in (m.group(2), m.group(3)):
         if bound is not None and int(bound) > MAX_MAJOR:
             raise ValueError(f"shell spec {spec!r} has major version {bound}, above {MAX_MAJOR}: a typo?")
+    if m.group(4) is not None and int(m.group(4)) > MAX_MINOR:
+        raise ValueError(f"shell spec {spec!r} has minor version {m.group(4)}, above {MAX_MINOR}: a typo?")
 
 
 def parse_kind(kind):
@@ -526,7 +546,8 @@ def self_test():
         fails += not out(not matches("/fake5/bash", "bash>=5.4") and matches("/fake5/bash", "bash>=5.3")
                          and matches("/fake5/bash", "bash>=5") and not matches("/fake/dash", "dash>=0"),
                          "self-test: version bounds compare major and minor, and an unversioned shell never meets a bound")
-        for typo in ("bypass[zhs]", "bypass[bash>=53]", "bypass[bash<40]", "bypass[bash,zhs]", "bypass[bash>=5.3,dsh]"):
+        for typo in ("bypass[zhs]", "bypass[bash>=53]", "bypass[bash<40]", "bypass[bash,zhs]", "bypass[bash>=5.3,dsh]",
+                     "bypass[bash>=5.33]", "bypass[bash>=5.99]", "bypass[zsh>=5.9]", "bypass[dash>=0]", "bypass[zsh<6]"):
             try:
                 parse_kind(typo)
                 rejected = False
@@ -594,12 +615,12 @@ def main():
         got = "allow" if rc == 0 else "deny" if rc == 2 else f"rc={rc}"
         fails += not out(got == want, f"corpus {want}: {label}" + ("" if got == want else f" (hook said {got})"))
         printed = {s: run_shell(s, bindir, scratch, cmd, glob) for s in shells}
-        if got == "allow":
+        if got == "allow" and kind != "limit":
             bad = [os.path.basename(s) for s, p in printed.items() if p is True]
             slow = [os.path.basename(s) for s, p in printed.items() if p == TIMEOUT]
             fails += not out(not bad and not slow, f"corpus allow prints nothing under any shell: {label}"
                              + (f" (printed under {bad})" if bad else "") + (f" (timed out under {slow})" if slow else ""))
-        if kind == "bypass" and shells:
+        if kind in ("bypass", "limit") and shells:
             verdict = teeth(printed, need)
             if verdict == "skip":
                 skipped += 1
@@ -607,7 +628,7 @@ def main():
                       f"{need} and none is installed here (the hook-side deny still ran)")
             else:
                 fails += not out(verdict == "ok",
-                                 f"corpus bypass really prints under a shell (the case has teeth): {label}")
+                                 f"corpus {kind} really prints under a shell (the case has teeth): {label}")
     if skipped:
         print(f"  info - {skipped} bypass row(s) had their teeth check skipped on this machine (listed above)")
     leaks, denied = 0, 0
