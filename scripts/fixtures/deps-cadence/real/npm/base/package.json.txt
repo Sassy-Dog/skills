@@ -1,0 +1,1 @@
+{"name":"real-npm","version":"1.0.0","dependencies":{"is-odd":"3.0.1"},"devDependencies":{"left-pad":"1.2.0"}}

@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "gc",
+      "dependencies": {
+        "is-number": "github:jonschlinkert/is-number#7.0.0",
+        "left-pad": "1.2.0",
+      },
+    },
+  },
+  "packages": {
+    "is-number": ["is-number@github:jonschlinkert/is-number#b095363", {}, "jonschlinkert-is-number-b095363", "sha512-kyuFiGo4dlS8s2grNjsoS42DyDuyuHuiWQtHODmvn2u91pKKX45JHlKQHk762E4tdu194ZvhziwO3YhAd2iF3w=="],
+
+    "left-pad": ["left-pad@1.2.0", "", {}, "sha512-OQadpCyFCT/VLniZQgym8d3/ofIJtuZyw2ibsVeIUOexKgW/osn8+mMFJbwGMPeDC4GnLzD8q115WPCDx4YRWg=="],
+  }
+}
