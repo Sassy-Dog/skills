@@ -195,7 +195,7 @@ Read `references/dedupe-and-file.md` before the first write of a session. The co
 
 1. The caller's qualifying gate runs first (this skill doesn't judge severity).
 2. Idempotency by body marker (`<source>-source: <STABLE_ID>`) — re-runs return the existing issue, never a duplicate. **Two stages**: the search index (unbounded in age, but *asynchronous*) and a direct recent-listing scan (read-after-write consistent, bounded to `--recent-scan` issues). A re-run seconds later is covered by the second; a marker from years ago by the first. **Both** filter on the delimited footer `<!-- <marker> -->` — GitHub phrase search matches a token *subsequence*, so a marker that is a prefix of a sibling's is not swallowed.
-3. **Preview-then-confirm**: dry-run the batch, show `would-file` results, file only on approval.
+3. **Preview-then-confirm**: dry-run the batch, show `would-file` results, file only on approval. The one standing exception is `take-it`'s and `dispatch-ready`'s ([#667](https://github.com/Sassy-Dog/skills/issues/667)): in the claimed issue's own repo only, a `DESCOPE` follow-up and a high/medium or medium/high nit, under the marker `take-it-followup-source:`, never a security finding, and on exit 2 or the burst rail below an unattended tick files nothing and reports it.
 4. **Burst rail**: > 5 would-file in one run → stop and show the list; consider one umbrella issue.
 
 ```bash

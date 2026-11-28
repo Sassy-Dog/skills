@@ -277,7 +277,9 @@ number that is a multiple of three) goes to an `S-Tier` arbitration that returns
 `ACCEPT`, `DESCOPE`, `REJECT` or `ESCALATE` and is followed without a human; only `ESCALATE` sets the
 `blocked` label. The unattended paths share one automatic recovery allowance across missing/faulty
 reports and parent fan-out recovery; another failure of those gets the `blocked` label, and an infra
-or platform failure keeps `pr-shepherd`'s retry and probe.
+or platform failure keeps `pr-shepherd`'s retry and probe and then that allowance's one redispatch.
+`DESCOPE` keeps the PR's `Closes #N`, files the descoped part as a follow-up and links it, and a
+security finding is never auto-filed publicly (`DESCOPE` on one is `ESCALATE`).
 The durable `recovery_used` value survives new heads, agents and dispatcher ticks.
 Only authenticated workflow-owned records bound to the actual attempt supply that budget.
 `send-it` checkpoints issue-less pre-PR recovery under the Git common directory and transfers

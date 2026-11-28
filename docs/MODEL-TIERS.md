@@ -138,7 +138,7 @@ takes `@task`, `@smol` and the like, or a provider id. A tier word is valid in n
 **agent files stay model-free**, and the tier is chosen where the agent is dispatched. The same
 reviewer then runs at the same tier from every caller, and one table rebinds every site.
 
-**Each dispatch site carries its binding inline.** A `standard` site, which is every site today,
+**Each dispatch site carries its binding inline.** A `standard` site, which is every site but the two arbitration sites,
 looks like this:
 
 ```text

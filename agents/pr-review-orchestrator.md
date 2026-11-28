@@ -76,6 +76,26 @@ With a valid override, `<base>` in the commands above is the override itself: di
 against it (`git diff <base>`), and list untracked files as before. Steps 2 to 5 run unchanged over that
 smaller changeset, and the report header names the override on its `Base:` line.
 
+### Optional: caller-supplied `carried_findings` (override mode)
+
+A coordinator running a fix round (`take-it` §6, **Review rounds and arbitration**) hands you, with
+`base_override`, the round's open findings as `carried_findings`: a list of file:line and claim.
+**Absent means nothing changes.** The delta alone cannot say whether a finding raised against code the
+push never touched was fixed, and Step 5 drops a finding with no causal link to a changed hunk, so
+without this step an unresolved finding comes back as a clean delta and merges with no verdict.
+
+With `carried_findings` present, run one more step between Step 4 and Step 5, in this agent and not in
+a specialist: open each cited `file:line` at `HEAD`, as it now stands, and answer `resolved` (the cited
+code no longer has the problem, or the claim no longer holds) or `unresolved` (it still does), citing
+the `file:line` you read. Never answer `resolved` on the strength of the diff alone, and a carried
+finding you did not answer counts as `unresolved`. These findings are **exempt from Step 5's
+changed-hunk drop and its confidence floor** (they were raised against code that may be untouched by
+construction); Step 5's verification of the claim against the cited line still applies. An
+`unresolved` carried finding is Blocking and is counted in the tally. Put a **Carried findings** list
+directly under the report header, one line each: `- <file:line> — <claim> → resolved|unresolved
+(<file:line read>)`. The caller clears a carried finding only on an explicit `resolved`. It is part of
+the changeset's context: a recovery call that changes it is a changed input, never a reuse.
+
 ### Changeset identity for recovery
 
 Capture `changeset` before specialist work: `repo` (absolute root), `base_ref` (the derived
