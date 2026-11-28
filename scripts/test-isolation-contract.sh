@@ -85,7 +85,11 @@
 #      2", cites the filed issues #451 and #452, and the summary lines that
 #      predate the `merge: patch` pin are corrected (the row 3 verdict's "two
 #      settings", step 3's "rests on the `apply` read", "all set"), and the
-#      sentences saying dispatch-ready does not yet implement it are gone.
+#      sentences saying dispatch-ready does not yet implement it are gone. It also
+#      keeps one #667 sentence that is not about isolation: an unresolvable
+#      arbitration role, at three tries, is an infrastructure stop (not a verdict)
+#      that demotes the issue. It is pinned here because this gate already reads
+#      the file and test-review-gate-decisions.sh does not.
 #  13. dispatch-ready §5 carries the contract per tick (#452), AHEAD of its
 #      "claim →" sentence: the check is before the claim, not merely present
 #      (a stop AFTER the claim leaves an `in-progress` claim that counts as
@@ -132,7 +136,8 @@
 #       after `-c`), M71 (never-sent-on-Claude-Code rule), M78 (foreground-only)
 #  10   M11 (override report)
 #  11   M17 (§7 isolation line)
-#  12   M12, M37 (stale design-doc claims restored)
+#  12   M12, M37 (stale design-doc claims restored), M84 (the arbitration hold's
+#       infrastructure stop reverted to a held PR)
 #  13   M20, M22 (phrase only), M23 (placement: the check moved BELOW the claim
 #       sentence), M24-M27, M30 (interim stop restored), M31, M32, M53 (a forbidden
 #       restatement injected), M54 (a multi-tick serial record restored), M56
@@ -426,6 +431,8 @@ need("the doc cites #451 (take-it)", doc, "#451", 12)
 need("the doc cites #452 (dispatch-ready)", doc, "#452", 12)
 need("the doc names the apply and merge reads", doc, "the `apply` and `merge` reads", 12)
 need("the doc says all read", doc, "are all read", 12)
+need("the doc says an unresolvable arbitration role, at three tries, is an infrastructure stop",
+     doc, "at three tries, is an infrastructure stop (not a verdict) demoting the issue to `blocked`", 12)
 need_re("the doc has the recorded #451 runs section", DOC_RAW,
         r"(?m)^### Isolation confirmation runs \(#451\)$", 12)
 
@@ -1032,6 +1039,10 @@ expect_fail "M82 dispatch-ready's token handoff removed" "$d" "dispatch-ready §
 d=$(make_copy m83)
 mutate "$d/skills/repo-cleanup/SKILL.md" 'stops all local' 'allows all local' || bad "M83: mutation did not apply"
 expect_fail "M83 repo-cleanup's stop-on-guard rule removed" "$d" "repo-cleanup: any ownership other than free stops local mutation"
+
+d=$(make_copy m84)
+mutate "$d/$DC" 'is a counted dispatch failure that, at three tries, is an infrastructure stop (not a verdict) demoting the issue to `blocked`' 'is a dispatch failure that holds the PR' || bad "M84: mutation did not apply"
+expect_fail "M84 the arbitration hold reverts to a held PR in the design doc" "$d" 'at three tries, is an infrastructure stop'
 
 if [ "$FAILED" = 0 ]; then
     echo "isolation-contract tests: all green" >&2

@@ -1362,7 +1362,7 @@ assert_in "$disc_flat" 'grants a lost or skipped review exactly ONE redispatch p
 assert_in "$disc_flat" 'a Blocking finding .or a check the PR itself caused. uncapped review rounds' \
     "the discriminator states a Blocking finding has uncapped review rounds, not a budget (#667)"
 assert_in "$disc_flat" 'a review finding reaches .blocked. only by an arbitration .ESCALATE. verdict .a spent hold is an infrastructure stop, not a verdict.' \
-    "the discriminator states ESCALATE is the only way a review finding reaches blocked (#667)"
+    "the discriminator states a review finding reaches blocked only by an ESCALATE verdict, with the infrastructure-stop carve-out (#667)"
 assert_in "$disc_flat" 'a state it can still act on is not a stall' \
     "the discriminator states an actionable state is not a stall"
 # #667 review round: row 5 once promised "an action is always available" for any red PR, which a
@@ -1736,7 +1736,7 @@ assert_has "$opening_flat" \
 assert_has "$opening_flat" \
     'One waiver, also stated here: an ownership hold or a refused acquisition' \
     "STALLED's opening states exactly one waiver, the ownership hold's (#667)"
-assert_not_in "$opening_flat" 'spent arbitration hold|Two waivers' \
+assert_absent "$opening_flat" 'spent arbitration hold|Two waivers' \
     "STALLED's opening names no waiver for a spent arbitration hold (#667)"
 assert_wline "$announce_raw" '^  PR #[0-9]+ \(#[0-9]+\) → open, issue blocked \(arbitration unavailable — .* ×3, round [0-9]+, trigger [a-z-]+\)$' \
     "the STALLED announcement shows a spent arbitration hold as a blocked issue, cause, round and trigger (#667)"

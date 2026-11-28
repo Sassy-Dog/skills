@@ -1567,6 +1567,9 @@
 #      doc's corrected claims. #484 rewrote the properties that pinned #452's
 #      stop-only text (2, 8, 9, 13, 14) and left the parallel contract (1, 3-7,
 #      10-12) untouched; the guard itself is executed by entry 54, not read here.
+#      Also pins one #667 sentence of that design doc (an unresolvable arbitration
+#      role is, at three tries, an infrastructure stop), because this gate already
+#      reads the file.
 #      Mutation-proven (header lists the mutants). Source-level, no omp, no gh,
 #      no network.
 #

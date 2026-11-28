@@ -185,13 +185,26 @@
 #          it. The positive pins of the no-cap sentences guard the sentences
 #          themselves; a cap sentence ADDED BESIDE them deletes none of those
 #          pins, so it is caught only by this best-effort ban.
-#        - THE ESCALATE-ONLY CARVE-OUT CHECK (co_check) is windowed: every spelling of
-#          "ESCALATE is the only verdict" must carry "infrastructure stop" in the
-#          500 characters after it, per statement, not merely somewhere in the file.
-#          It reads only the files this gate reads, so docs/HARNESS-PORTABILITY.md,
-#          which restates the rule, is NOT covered by it (adding a file would move
-#          the spelled read-set count). In-script mutants (README, ARCHITECTURE,
-#          take-it) and backticked controls run through co_check keep it honest.
+#        - THE ESCALATE-ONLY RULE NEVER STANDS WITHOUT ITS CARVE-OUT, and two layers hold
+#          that. (1) EXACT PINS, one per place that states the rule, each with an in-script
+#          mutant that deletes the carve-out: take-it item 4, its Blocking bullet and its
+#          Guardrails; dispatch-ready's Blocking bullet, hinge paragraph and Guardrails; the
+#          contract; README; ARCHITECTURE; AGENTS.md. Nine are pinned here and the hinge
+#          paragraph is test-drain-terminal-states.sh's (canon b042 and its discriminator
+#          assertion). In take-it item 4 and dispatch-ready's Blocking bullet the carve-out
+#          is a later sentence of the same block, so each is two pins. Rewording a pinned
+#          sentence reddens its pin whatever the new wording says. (2) A CENSUS: ESC_ONLY_RE
+#          is counted per file through count_pin, so a statement ADDED beside the pinned
+#          ones (which deletes no pin) stops the gate until it has a pin of its own. The
+#          census is best-effort over spellings, like ROUND_CAP_RE: a wording the regex does
+#          not know ("the sole verdict", "ESCALATE alone", "only after an ESCALATE verdict")
+#          is not counted; it does not itself check that an added statement carries the
+#          carve-out (the pin the count asks for does); and it reads the eleven files of
+#          its loop and no other. docs/HARNESS-PORTABILITY.md does not state the rule. It
+#          states the carve-out for an unresolvable S-Tier role, and
+#          test-isolation-contract.sh, which already reads that file, pins it (property 12).
+#          Two earlier editions were a regex co-occurrence, per file and then per
+#          500-character window; both passed a statement reworded past the regex.
 #      #581's coordinator-site NIT ROLL-IN is unchanged and still sits OUTSIDE
 #      the allowance: at most one per PR, capped by its own author-checked cap
 #      record, never counted in `recovery_used`, no reservation. Do not "tidy" it
@@ -453,6 +466,33 @@ assert_has() {
 # assert_line <file> <ERE> <label>        — line-scoped; file input, no pipe
 assert_line() {
     if grep -qE -- "$2" "$1"; then ok "$3"; else bad "$3"; fi
+}
+# mutant_pin <haystack> <ERE> <sed -E deletion> <label>: the pin must hold on the
+# real text AND go red on a copy with the pinned wording deleted. A mutation that
+# changes nothing is itself a failure, so a stale anchor cannot pass vacuously.
+mutant_pin() {
+    local hay="$1" re="$2" expr="$3" label="$4" m
+    if grep -qE -- "$re" <<<"$hay"; then ok "$label"; else bad "$label"; fi
+    m="$(sed -E "$expr" <<<"$hay")"
+    if [ "$m" = "$hay" ]; then
+        bad "$label — mutant did not apply"
+    elif grep -qE -- "$re" <<<"$m"; then
+        bad "$label — mutant survives, so the pin is vacuous"
+    else
+        ok "$label — mutant is caught"
+    fi
+}
+# mutant_forbid <haystack> <ERE> <text the mutant appends> <label>: a
+# must-not-exist pin that is green on the real text and red once the forbidden
+# wording is added.
+mutant_forbid() {
+    local hay="$1" re="$2" add="$3" label="$4"
+    if grep -qE -- "$re" <<<"$hay"; then bad "$label"; else ok "$label"; fi
+    if grep -qE -- "$re" <<<"$hay $add"; then
+        ok "$label — mutant is caught"
+    else
+        bad "$label — mutant survives, so the pin is vacuous"
+    fi
 }
 
 echo "review-gate decisions from #237/PR #243 (issue #247), #248/PR #250 (issue #255), #273 and #280"
@@ -959,7 +999,7 @@ assert_in "$contract_flat" \
     "contract states a Blocking finding has no retry cap"
 mutant_pin "$contract_flat" 'ends a finding in .blocked. only on an .ESCALATE. verdict .a spent arbitration hold is an infrastructure stop, not a verdict.' \
     's/a spent arbitration hold is an infrastructure stop, not a verdict//' \
-    "contract states ESCALATE is the only verdict that ends a finding in blocked, and a spent hold is no verdict"
+    "contract ends a finding in blocked only on an ESCALATE verdict, with the infrastructure-stop carve-out"
 assert_in "$contract_flat" \
     'never parks it back in Ready' \
     "contract states the finding is never parked back in Ready"
@@ -1015,6 +1055,9 @@ assert_in "$takeit_flat" \
 assert_in "$takeit_flat" \
     'run \*\*Review rounds and arbitration\*\* above: round after round with no cap' \
     "take-it's Blocking bullet runs the uncapped rounds"
+mutant_pin "$takeit_flat" 'an arbitration verdict when a trigger fires, and .blocked. only on an .ESCALATE. verdict .a spent arbitration hold is an infrastructure stop, not a verdict.' \
+    's/(and .blocked. only on an .ESCALATE. verdict) .a spent arbitration hold is an infrastructure stop, not a verdict./\1/' \
+    "take-it's Blocking bullet reaches blocked only on an ESCALATE verdict, with the infrastructure-stop carve-out"
 assert_in "$takeit_flat" \
     'A second failure gets the `blocked` label plus a comment naming the outcome' \
     "take-it labels blocked on a second failure of a lost or skipped review"
@@ -1022,7 +1065,7 @@ assert_in "$takeit_flat" \
     'Never merge past a Blocking review finding\*\*, on either `review_site`' \
     "take-it guardrails apply the rule on either review_site"
 mutant_pin "$takeit_flat" 'and .ESCALATE. is the only verdict that ends a finding in .blocked. .a spent arbitration hold is an infrastructure stop, not a verdict.' \
-    's/a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    's/(is the only verdict that ends a finding in .blocked.) .a spent arbitration hold is an infrastructure stop, not a verdict./\1/' \
     "take-it guardrails repeat the no-cap-then-ESCALATE rule and the infrastructure-stop carve-out"
 assert_in "$takeit_flat" \
     '\*\*Blocking findings → fix them and re-review before you commit\*\*, with no cap on rounds' \
@@ -1035,33 +1078,6 @@ assert_in "$takeit_flat" \
     "take-it's dispatched prompt has the worker return a status=dispute RESULT instead of guessing"
 
 # --- decision 5, continued: the coordinator-site NIT ROLL-IN is outside the budget (#581)
-# mutant_pin <haystack> <ERE> <sed -E deletion> <label>: the pin must hold on the
-# real text AND go red on a copy with the pinned wording deleted. A mutation that
-# changes nothing is itself a failure, so a stale anchor cannot pass vacuously.
-mutant_pin() {
-    local hay="$1" re="$2" expr="$3" label="$4" m
-    if grep -qE -- "$re" <<<"$hay"; then ok "$label"; else bad "$label"; fi
-    m="$(sed -E "$expr" <<<"$hay")"
-    if [ "$m" = "$hay" ]; then
-        bad "$label — mutant did not apply"
-    elif grep -qE -- "$re" <<<"$m"; then
-        bad "$label — mutant survives, so the pin is vacuous"
-    else
-        ok "$label — mutant is caught"
-    fi
-}
-# mutant_forbid <haystack> <ERE> <text the mutant appends> <label>: a
-# must-not-exist pin that is green on the real text and red once the forbidden
-# wording is added.
-mutant_forbid() {
-    local hay="$1" re="$2" add="$3" label="$4"
-    if grep -qE -- "$re" <<<"$hay"; then bad "$label"; else ok "$label"; fi
-    if grep -qE -- "$re" <<<"$hay $add"; then
-        ok "$label — mutant is caught"
-    else
-        bad "$label — mutant survives, so the pin is vacuous"
-    fi
-}
 
 # anchor_pin <haystack> <literal anchor> <label>: a slice anchor must be present BEFORE the document is
 # sliced with it, and deleting it must be caught. A drifted start anchor otherwise leaves the slice as
@@ -1672,7 +1688,8 @@ mutant_pin "$arch_flat" 'DESCOPE. keeps .Closes #N. .a .Part of #N. merge would 
     's/which deliberately departs from #667.s text//' \
     "ARCHITECTURE states DESCOPE keeps Closes #N and departs from #667's text"
 
-# B4: infra failures keep their terminal state; an undispatchable arbitration is a counted, held root.
+# B4: infra failures keep their terminal state; an undispatchable arbitration is counted and, at three
+# tries, an infrastructure stop that demotes the issue.
 mutant_pin "$rounds_take" 'All three are counted.{1,3}, durably: write a hold record, an issue comment whose entire body is JSON, .kind: "take-it-arbitration-hold".' \
     's/kind: "take-it-arbitration-hold"/kind: "x"/' \
     "take-it: an undispatchable, verdictless or refused-filing arbitration is counted in a durable hold record"
@@ -1926,60 +1943,37 @@ done
 # ---------------------------------------------------------------------------
 # #667 review round 3 (arbitration verdict FIX on the persisting B1).
 # ---------------------------------------------------------------------------
-# Co-occurrence: the ESCALATE-only rule is never stated without its carve-out. A file that says
-# ESCALATE is the only verdict ending a finding in blocked, and does not also say a spent hold is an
-# infrastructure stop, has restated the old unqualified rule that the waiver attempt contradicted.
-# Every spelling of the rule seen in the tree, backtick- and emphasis-tolerant: "`ESCALATE` is the only
-# verdict", "`blocked` only on an `ESCALATE` verdict", "reaches `blocked` only by an arbitration
-# `ESCALATE`", "makes `ESCALATE` the only". (A first edition of this check matched none of the
-# backticked spellings, so it printed "does not state the rule" for take-it, dispatch-ready, README and
-# ARCHITECTURE, and deleting the carve-out from README or ARCHITECTURE left every gate green.)
+# The ESCALATE-only rule never stands without its carve-out. Two layers; see the header.
+# (1) Exact pins. README and ARCHITECTURE had none (the other sites are pinned beside their own
+# sections, and dispatch-ready's hinge paragraph is the drain gate's, canon b042).
+mutant_pin "$readme_flat" '.ESCALATE. is the only verdict that ends a finding in .blocked., and a spent arbitration hold is an infrastructure stop, not a verdict' \
+    's/, and a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    "README: ESCALATE is the only verdict that ends a finding in blocked, with the infrastructure-stop carve-out"
+mutant_pin "$arch_flat" '.ESCALATE. is the only verdict that ends a review finding in .blocked., and a spent arbitration hold is an infrastructure stop, not a verdict, and the merge never goes past a finding that is merely unresolved' \
+    's/, and a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    "ARCHITECTURE: ESCALATE is the only verdict that ends a review finding in blocked, with the infrastructure-stop carve-out"
+# (2) The census. Every statement ESC_ONLY_RE can see is one of the pinned ones, so a statement added
+# beside them moves a count. Members: take-it 3 (item 4, the Blocking bullet, Guardrails);
+# dispatch-ready 3 (the Blocking bullet, the hinge paragraph, Guardrails); contract, README,
+# ARCHITECTURE and AGENTS.md 1 each; the other five 0.
 ESC_ONLY_RE='ESCALATE[^A-Za-z]{0,6}(is )?the only (verdict|way)|only (by|on) (an )?(arbitration )?[`*]?ESCALATE|only [`*]?ESCALATE[`*]? (verdict|sets)|makes [`*]?ESCALATE[`*]? the only'
-# The carve-out must sit in the SAME WINDOW as the rule (the rule and the next 500 characters), not
-# merely somewhere in the file, or one file's correct mention masks its stale one.
-# co_check returns 0 = every stated rule carries the carve-out, 1 = one does not, 2 = states no rule.
-co_check() {
-    local hay="$1" win n=0
-    while IFS= read -r win; do
-        [ -n "$win" ] || continue
-        n=$((n + 1))
-        grep -qF -- 'infrastructure stop' <<<"$win" || return 1
-    done < <(grep -oE -- "($ESC_ONLY_RE).{0,250}.{0,250}" <<<"$hay")
-    [ "$n" -gt 0 ] || return 2
-    return 0
-}
-co_occurs() {
-    local rc=0
-    co_check "$1" || rc=$?
-    case "$rc" in
-        0) ok "$2" ;;
-        2) ok "$2 (does not state the rule)" ;;
-        *) bad "$2" ;;
-    esac
-}
-for pair in "send-it:$skill_flat" "take-it:$takeit_flat" "dispatch-ready:$dispatch_flat" \
-            "work-recommendations:$workrec_flat" "isolation-confirmation:$iso_flat" \
-            "contract:$contract_flat" "README:$readme_flat" "ARCHITECTURE:$arch_flat" \
-            "orchestrator:$orch_flat" "setup-config:$setup_flat" "AGENTS.md:$(flatten "$AGENTSMD")"; do
-    co_occurs "${pair#*:}" "${pair%%:*} states the ESCALATE-only rule only with its infrastructure-stop carve-out"
+agents_flat="$(flatten "$AGENTSMD")"
+for row in "send-it:0:$skill_flat" "take-it:3:$takeit_flat" "dispatch-ready:3:$dispatch_flat" \
+           "work-recommendations:0:$workrec_flat" "isolation-confirmation:0:$iso_flat" \
+           "contract:1:$contract_flat" "README:1:$readme_flat" "ARCHITECTURE:1:$arch_flat" \
+           "orchestrator:0:$orch_flat" "setup-config:0:$setup_flat" "AGENTS.md:1:$agents_flat"; do
+    rest="${row#*:}"
+    count_pin "${rest#*:}" "$ESC_ONLY_RE" "${rest%%:*}" '`ESCALATE` is the only verdict that ends a finding in `blocked`.' \
+        "${row%%:*} states the ESCALATE-only rule ${rest%%:*} time(s), each with a pin of its own (a new statement needs one, carve-out included, before this count moves)"
 done
-# Not every file that restates the rule is read by this gate: docs/HARNESS-PORTABILITY.md states it
-# without being in the read set (adding it would move the spelled file count at three sites, and the
-# arbitration said to add no file), so it is NOT covered by this check.
-# The check is run THROUGH co_check on the real (backticked) spellings, so it can fail:
-rc=0; co_check 'Only `ESCALATE` is the only verdict that ends a finding in `blocked`.' || rc=$?
-[ "$rc" -eq 1 ] && ok "co-occurrence control: a backticked bare rule is caught" || bad "co-occurrence control: a backticked bare rule passes (rc $rc)"
-rc=0; co_check 'a finding reaches `blocked` only by an arbitration `ESCALATE` verdict, and that is all.' || rc=$?
-[ "$rc" -eq 1 ] && ok "co-occurrence control: the 'only by an arbitration' spelling is caught" || bad "co-occurrence control: the 'only by an arbitration' spelling passes (rc $rc)"
-rc=0; co_check 'and `blocked` only on an `ESCALATE` verdict (a spent arbitration hold is an infrastructure stop, not a verdict).' || rc=$?
-[ "$rc" -eq 0 ] && ok "co-occurrence control: a rule with its carve-out passes" || bad "co-occurrence control: a rule with its carve-out fails (rc $rc)"
-# In-script mutants: delete the carve-out from the real text, and the check must go red.
-rc=0; co_check "${readme_flat/, and a spent arbitration hold is an infrastructure stop, not a verdict/}" || rc=$?
-[ "$rc" -eq 1 ] && ok "README mutant: deleting the carve-out is caught" || bad "README mutant: deleting the carve-out survives (rc $rc)"
-rc=0; co_check "${arch_flat/, and a spent arbitration hold is an infrastructure stop, not a verdict,/,}" || rc=$?
-[ "$rc" -eq 1 ] && ok "ARCHITECTURE mutant: deleting the carve-out is caught" || bad "ARCHITECTURE mutant: deleting the carve-out survives (rc $rc)"
-rc=0; co_check "${takeit_flat/ (a spent arbitration hold is an infrastructure stop, not a verdict)./.}" || rc=$?
-[ "$rc" -eq 1 ] && ok "take-it guardrail mutant: deleting the carve-out is caught" || bad "take-it guardrail mutant: deleting the carve-out survives (rc $rc)"
+# Each spelling the census knows is counted, so no alternative of the regex is dead.
+for m in '`ESCALATE` is the only verdict that ends a finding in `blocked`.' \
+         'and `blocked` only on an `ESCALATE` verdict.' \
+         'reaches `blocked` only by an arbitration `ESCALATE` verdict.' \
+         'only `ESCALATE` sets the `blocked` label.' \
+         'makes `ESCALATE` the only verdict ending a finding in `blocked`.'; do
+    count_pin "$m" "$ESC_ONLY_RE" 1 "$m" "the census counts the spelling: $m"
+done
 
 # The resume check runs before the CONFLICTING bullet's demote-once predicate (round 4 roll-in).
 mutant_pin "$retry_review_dr" 'Resume rule, .{0,3}which runs first.{1,3}: a resumed issue .not .blocked., record spent, demotion comment found. gets its fresh .tries: 0. record' \
@@ -1998,7 +1992,6 @@ mutant_pin "$rollin_take" 'a security nit.s line is the same placeholder, never 
     "take-it: a security nit's Known and accepted line is the same placeholder"
 
 # The docs say what the skills now do.
-agents_flat="$(flatten "$AGENTSMD")"
 mutant_pin "$agents_flat" 'worked in numbered, durably recorded review rounds with no retry cap' \
     's/with no retry cap//' \
     "AGENTS.md states decision 5 as uncapped review rounds"
