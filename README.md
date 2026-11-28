@@ -274,8 +274,8 @@ recovery allowance below (`take-it` §6). A Blocking finding, or a failed check 
 has no retry cap: it is worked in numbered review rounds, each recorded on the issue, and a finding
 that persists, oscillates, is disputed by the worker or leaves the coordinator unsure (or a round
 number that is a multiple of three) goes to an `S-Tier` arbitration that returns one of `FIX`,
-`ACCEPT`, `DESCOPE`, `REJECT` or `ESCALATE` and is followed without a human; only `ESCALATE` sets the
-`blocked` label. The unattended paths share one automatic recovery allowance across missing/faulty
+`ACCEPT`, `DESCOPE`, `REJECT` or `ESCALATE` and is followed without a human; `ESCALATE` is the only verdict that
+ends a finding in `blocked`, and a spent arbitration hold is an infrastructure stop, not a verdict. The unattended paths share one automatic recovery allowance across missing/faulty
 reports and parent fan-out recovery; another failure of those gets the `blocked` label, and an infra
 or platform failure keeps `pr-shepherd`'s retry and probe and then that allowance's one redispatch.
 `DESCOPE` keeps the PR's `Closes #N`, files the descoped part as a follow-up and links it, and a

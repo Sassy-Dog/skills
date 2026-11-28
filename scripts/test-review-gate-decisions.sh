@@ -141,11 +141,15 @@
 #          ESCALATE. A sixth (a DEFER, a bare "continue") is a new path to
 #          `blocked` or to a merge that nobody reviewed, so the count is pinned
 #          against a mutant row, not just each name.
-#        - ESCALATE IS THE ONLY WAY A REVIEW FINDING ENDS IN `blocked`, and the
-#          merge still never goes past a Blocking finding that is merely
-#          unresolved: only a clean re-review, ACCEPT, DESCOPE or REJECT clears
-#          one. An ACCEPT of a security finding lands in the repo's docs, not
-#          only the PR body.
+#        - ESCALATE IS THE ONLY VERDICT THAT ENDS A REVIEW FINDING IN `blocked`,
+#          and no round count ever does; the merge still never goes past a
+#          Blocking finding that is merely unresolved: only a clean re-review,
+#          ACCEPT, DESCOPE or REJECT clears one. An ACCEPT of a security finding
+#          lands in the repo's docs, not only the PR body. A SPENT ARBITRATION
+#          HOLD IS AN INFRASTRUCTURE STOP, NOT A VERDICT: at three tries it
+#          demotes the issue once, like a lost review (a waiver in STALLED's
+#          first conjunct was tried and rejected: the capacity exit ends the tick
+#          before section 7). It clears nothing and spends no allowance.
 #        - THE SHARED ALLOWANCE IS A DIFFERENT BUDGET AND STAYS. #385 (parent
 #          fan-out) and #386 (report-only resume) extended it, and NO REPORT /
 #          SKIPPED keep their ONE redispatch then `blocked`. Review rounds never
@@ -169,7 +173,8 @@
 #          untouched-code finding and the push would merge as clean); DESCOPE keeps
 #          `Closes #N` (a `Part of #N` merge leaves the issue claimed for ever,
 #          which deliberately departs from #667's text); an undispatchable
-#          arbitration is a counted, held root, never an eternal tick, while an
+#          arbitration is counted and, at three tries, an infrastructure stop that
+#          demotes the issue (never an eternal tick), while an
 #          infra failure keeps the base retry-then-blocked path; and arbitration
 #          inputs are untrusted data on a PUBLIC repo. A security finding is never
 #          auto-filed publicly, and the standing filing approval is narrow. THE
@@ -177,8 +182,9 @@
 #          family of forbids that reddens on the spellings seen so far (a number
 #          or ordinal beside "rounds", "capped at", "give up / stop after N
 #          rounds", "after round N ... blocked") and a new phrasing can walk past
-#          it. The PRIMARY guard is the positive pins of the no-cap sentences
-#          above: a rewrite that reintroduces a cap has to delete one of those.
+#          it. The positive pins of the no-cap sentences guard the sentences
+#          themselves; a cap sentence ADDED BESIDE them deletes none of those
+#          pins, so it is caught only by this best-effort ban.
 #      #581's coordinator-site NIT ROLL-IN is unchanged and still sits OUTSIDE
 #      the allowance: at most one per PR, capped by its own author-checked cap
 #      record, never counted in `recovery_used`, no reservation. Do not "tidy" it
@@ -944,9 +950,9 @@ assert_in "$contract_flat" \
 assert_in "$contract_flat" \
     'runs review rounds on it with no retry cap' \
     "contract states a Blocking finding has no retry cap"
-assert_in "$contract_flat" \
-    'sets the `blocked` label only on an `ESCALATE` verdict' \
-    "contract states ESCALATE is the only way a finding sets blocked"
+mutant_pin "$contract_flat" 'ends a finding in .blocked. only on an .ESCALATE. verdict .a spent arbitration hold is an infrastructure stop, not a verdict.' \
+    's/a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    "contract states ESCALATE is the only verdict that ends a finding in blocked, and a spent hold is no verdict"
 assert_in "$contract_flat" \
     'never parks it back in Ready' \
     "contract states the finding is never parked back in Ready"
@@ -965,9 +971,9 @@ assert_in "$dispatch_flat" \
 assert_in "$dispatch_flat" \
     'A Blocking finding has no retry cap' \
     "dispatch-ready: a Blocking finding has no retry cap"
-assert_in "$dispatch_flat" \
-    'Only `ESCALATE` demotes to `blocked`' \
-    "dispatch-ready demotes to blocked only on ESCALATE"
+mutant_pin "$dispatch_flat" '.ESCALATE.[[:space:]]*is the only verdict that ends a review finding in .blocked.' \
+    's/is the only verdict that ends a review finding in .blocked.//' \
+    "dispatch-ready: ESCALATE is the only verdict that ends a review finding in blocked"
 assert_in "$dispatch_flat" \
     '\*\*Never park it back in Ready\*\*' \
     "dispatch-ready never parks a Blocking finding back in Ready"
@@ -981,13 +987,9 @@ assert_in "$dispatch_flat" \
 assert_in "$dispatch_flat" \
     'a lost or skipped review gets max one redispatch per issue without a human, and review rounds have no cap' \
     "dispatch-ready guardrails give a lost review one redispatch and review rounds no cap"
-assert_in "$dispatch_flat" \
-    'rounds have no cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in `blocked`' \
-    "dispatch-ready guardrails repeat the no-cap-then-ESCALATE rule"
-# The reported shape. A count nobody prints is a cost nobody can see.
-assert_line "$DISPATCH" \
-    '^review: #[0-9]+ BLOCKING .*— round [0-9]+$' \
-    "dispatch-ready tick report shows the review round number"
+mutant_pin "$dispatch_flat" 'and .ESCALATE. is the only verdict that ends a finding in .blocked.; a spent arbitration hold is an infrastructure stop, not a verdict' \
+    's/a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    "dispatch-ready guardrails repeat the no-cap-then-ESCALATE rule and the infrastructure-stop carve-out"
 assert_in "$dispatch_flat" \
     'never drop a Blocking finding or a `review: SKIPPED` from it' \
     "dispatch-ready never drops a Blocking finding from the tick report"
@@ -1012,11 +1014,9 @@ assert_in "$takeit_flat" \
 assert_in "$takeit_flat" \
     'Never merge past a Blocking review finding\*\*, on either `review_site`' \
     "take-it guardrails apply the rule on either review_site"
-assert_in "$takeit_flat" \
-    'Review rounds have no cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in `blocked`' \
-    "take-it guardrails repeat the no-cap-then-ESCALATE rule"
-# Inside the `>` sub-agent prompt, and wrapped — only visible to a flatten that
-# strips blockquote markers. This is the assertion that proves the flatten.
+mutant_pin "$takeit_flat" 'and .ESCALATE. is the only verdict that ends a finding in .blocked. .a spent arbitration hold is an infrastructure stop, not a verdict.' \
+    's/a spent arbitration hold is an infrastructure stop, not a verdict//' \
+    "take-it guardrails repeat the no-cap-then-ESCALATE rule and the infrastructure-stop carve-out"
 assert_in "$takeit_flat" \
     '\*\*Blocking findings → fix them and re-review before you commit\*\*, with no cap on rounds' \
     "take-it's dispatched prompt fixes Blocking findings before committing, with no cap"
@@ -1442,9 +1442,12 @@ mutant_pin "$rounds_take" 'kind: "take-it-arbitration"' \
 mutant_pin "$rounds_take" 'Then follow it without asking a human' \
     's/without asking a human/after asking a human/' \
     "take-it follows a verdict without asking a human"
-mutant_pin "$rounds_take" 'ESCALATE. is the only way a review finding ends in .blocked.{1,3}, and the merge never goes past a Blocking finding that is merely unresolved' \
-    's/the merge never goes past a Blocking finding that is merely unresolved//' \
-    "take-it: ESCALATE is the only way a review finding ends in blocked"
+mutant_pin "$rounds_take" 'ESCALATE.{1,3} is the only verdict that ends a review finding in .blocked., and no round count ever does.{1,3}; the merge never goes past a Blocking finding that is merely unresolved' \
+    's/and no round count ever does//' \
+    "take-it: ESCALATE is the only verdict that ends a review finding in blocked, and no round count ever does"
+mutant_pin "$rounds_take" 'A spent arbitration hold is an infrastructure stop, not a verdict.{1,3}: it demotes the issue the way a lost review or an infra failure does, and it clears nothing' \
+    's/and it clears nothing//' \
+    "take-it: a spent arbitration hold is an infrastructure stop that clears nothing"
 mutant_pin "$rounds_take" 'Only a clean re-review, or an .ACCEPT., .DESCOPE. or .REJECT. verdict, clears one' \
     's/Only a clean re-review, or an//' \
     "take-it: only a clean re-review or ACCEPT, DESCOPE or REJECT clears a Blocking finding"
@@ -1663,33 +1666,78 @@ mutant_pin "$arch_flat" 'DESCOPE. keeps .Closes #N. .a .Part of #N. merge would 
     "ARCHITECTURE states DESCOPE keeps Closes #N and departs from #667's text"
 
 # B4: infra failures keep their terminal state; an undispatchable arbitration is a counted, held root.
-mutant_pin "$rounds_take" 'Both are counted.{1,3}, durably: write a hold record, an issue comment whose entire body is JSON, .kind: "take-it-arbitration-hold".' \
+mutant_pin "$rounds_take" 'All three are counted.{1,3}, durably: write a hold record, an issue comment whose entire body is JSON, .kind: "take-it-arbitration-hold".' \
     's/kind: "take-it-arbitration-hold"/kind: "x"/' \
-    "take-it: an undispatchable or verdictless arbitration is counted in a durable hold record"
-mutant_pin "$rounds_take" 'cause. \(.undispatchable. or .no-verdict.\) and .tries. \(1, then each later attempt posts the higher count\)' \
-    's/then each later attempt posts the higher count//' \
-    "take-it: the hold record carries a cause and a try counter"
-mutant_pin "$rounds_take" 'At .tries. 3 the .{1,3}arbitration hold.{1,3} is a held root: the PR is held from merge, the issue is not labelled .blocked.' \
-    's/the issue is not labelled .blocked.//' \
-    "take-it: three spent tries make the arbitration hold a held root, not an ESCALATE"
+    "take-it: an undispatchable, verdictless or refused-filing arbitration is counted in a durable hold record"
+mutant_pin "$rounds_take" 'cause. \(.undispatchable., .no-verdict. or .filing-refused.\) and .tries. \(1, then each later attempt posts the higher count\)' \
+    's/ or .filing-refused.//' \
+    "take-it: the hold record carries one list of causes and a try counter"
+mutant_pin "$rounds_take" 'the latest verified hold record is THE record.{1,3}, never the highest .tries.' \
+    's/never the highest .tries.//' \
+    "take-it: the latest verified hold record is the record, never the highest tries"
+mutant_pin "$rounds_take" 'At .tries. 3 the stop is an infrastructure stop, not a verdict, and the issue is demoted once.{1,3}, keeping the worktree and branch' \
+    's/an infrastructure stop, not a verdict, and the issue is demoted once//' \
+    "take-it: three spent tries are an infrastructure stop that demotes the issue once"
+mutant_pin "$rounds_take" 'arbitration unavailable \(<cause> ×3, round <n>, trigger <trigger>, hold <id>\) — <remedy>, then resume: gh issue edit N --remove-label blocked --add-label in-progress' \
+    's/then resume: gh issue edit N --remove-label blocked --add-label in-progress//' \
+    "take-it: the demotion is one source line naming cause, round, trigger, hold id, remedy and the resume command"
+mutant_pin "$rounds_take" 'That is the one list of causes, and the comment renders it' \
+    's/That is the one list of causes, and the comment renders it//' \
+    "take-it: the causes are one list, rendered in the demotion comment"
+mutant_pin "$rounds_take" 'carries the cause, round, trigger and hold id only, never the finding.s text' \
+    's/never the finding.s text//' \
+    "take-it: the public demotion comment never carries the finding's text"
+mutant_pin "$rounds_take" 'The demotion writes no .take-it-arbitration. record, clears nothing, never reads or spends .recovery_used., and its confirmation frees the issue.s slot' \
+    's/and its confirmation frees the issue.s slot//' \
+    "take-it: the demotion writes no verdict record, clears nothing, spends no allowance and frees the slot"
+mutant_forbid "$rounds_take" 'attempt 1 failed|2 failed attempts' \
+    'comment dispatch-ready: attempt 1 failed' \
+    "take-it: the demotion does not reuse the failed-attempt templates a tick reads as spent allowance"
+mutant_pin "$rounds_take" 'look for a comment by the authenticated loop principal containing .arbitration unavailable \(. and that record.s .hold <id>.' \
+    's/and that record.s .hold <id>.//' \
+    "take-it: resume looks for the demotion comment carrying the record's hold id"
+mutant_pin "$rounds_take" '.Found.{1,3}: a human resumed, so write and confirm a fresh hold record with .tries: 0. and attempt again' \
+    's/a human resumed, so write and confirm a fresh hold record with .tries: 0. and attempt again//' \
+    "take-it: a found demotion comment means a human resumed, so a fresh tries-0 record and another attempt"
+mutant_pin "$rounds_take" '.Not found.{1,3}: the demotion is still owed, so run the block and attempt nothing' \
+    's/the demotion is still owed, so run the block and attempt nothing//' \
+    "take-it: no demotion comment means the demotion is still owed"
+mutant_pin "$rounds_take" '.Comments unreadable.{1,3}: hold this tick' \
+    's/hold this tick//' \
+    "take-it: unreadable comments hold the tick"
+mutant_pin "$rounds_take" 'if the label lands and the comment fails, the first resume is re-blocked once' \
+    's/the first resume is re-blocked once//' \
+    "take-it states the label-without-comment failure as known and accepted"
 mutant_pin "$rounds_take" 'arbitration: #1709 HELD \(undispatchable ×3\) — round 2, trigger persist' \
     's/HELD//' \
     "take-it: the arbitration hold has a named report shape"
-mutant_pin "$retry_review_dr" 'An arbitration that cannot be dispatched, or returns no verdict, is counted.{1,3} in .take-it. §6.s hold record' \
+mutant_pin "$retry_review_dr" 'whose .DESCOPE. filing is refused is counted.{1,3} in .take-it. §6.s hold record' \
     's/is counted//' \
-    "dispatch-ready: an undispatchable arbitration is counted in take-it's hold record"
+    "dispatch-ready: an undispatchable, verdictless or refused-filing arbitration is counted in take-it's hold record"
+mutant_pin "$retry_review_dr" 'At 3 it is an infrastructure stop, not a verdict, and this loop demotes the issue once with .take-it. §6.s one source line' \
+    's/an infrastructure stop, not a verdict, and this loop demotes the issue once//' \
+    "dispatch-ready: three spent tries are an infrastructure stop this loop demotes once"
+mutant_pin "$retry_review_dr" 'arbitration unavailable \(<cause> ×3, round <n>, trigger <trigger>, hold <id>\)' \
+    's/arbitration unavailable//' \
+    "dispatch-ready renders the same demotion comment as take-it"
+mutant_pin "$retry_review_dr" 'exactly as the .CONFLICTING. bullet demotes, and its confirmed demotion frees the §3 slot' \
+    's/and its confirmed demotion frees the §3 slot//' \
+    "dispatch-ready: the confirmed demotion frees the capacity slot (the capacity exit ends the tick before section 7)"
+mutant_pin "$retry_review_dr" 'It reads and spends no .recovery_used., and the issue resumes by .take-it. §6.s Resume rule' \
+    's/It reads and spends no .recovery_used.,//' \
+    "dispatch-ready: the demotion spends no allowance and resumes by take-it's Resume rule"
 mutant_pin "$dispatch_flat" 'arbitration: #1708 HELD \(undispatchable ×3\) — round 2, trigger persist' \
     's/#1708 HELD//' \
     "dispatch-ready's tick report shows the arbitration hold"
-mutant_pin "$dispatch_flat" 'or by an arbitration hold with its three tries spent \| \*\*No\*\* — never merged, and nothing left to redispatch or to attempt' \
-    's/or by an arbitration hold with its three tries spent//' \
-    "dispatch-ready §7: an arbitration hold with its tries spent is a held row"
+mutant_pin "$dispatch_flat" 'or by an arbitration hold with its three tries spent whose demotion is not yet written \| \*\*No\*\* — never merged, and nothing left to redispatch or to attempt' \
+    's/whose demotion is not yet written//' \
+    "dispatch-ready §7: a spent arbitration hold is a held row only until its demotion is written"
 mutant_pin "$dispatch_flat" 'The row says .owed., not .always available.' \
     's/The row says .owed., not .always available.//' \
     "dispatch-ready §7: the red-checks row promises an owed action, never an always-available one"
-mutant_pin "$dispatch_flat" 'the arbitration hold \(its cause and three spent tries\)' \
-    's/the arbitration hold \(its cause and three spent tries\)/the arbitration/' \
-    "dispatch-ready: the arbitration hold is a recorded hold root for the two-tick stall record"
+mutant_pin "$dispatch_flat" 'the arbitration hold \(its cause and three spent tries, until its demotion is written\)' \
+    's/, until its demotion is written//' \
+    "dispatch-ready: the arbitration hold root is recorded only until its demotion is written"
 mutant_forbid "$dispatch_flat" 'because rounds have no cap\.? \|' \
     '| Checks red | Yes — always available, because rounds have no cap |' \
     "dispatch-ready §7 does not promise an always-available action"
@@ -1770,15 +1818,16 @@ mutant_pin "$ghi_flat" 'never a security finding, filed without .ready. .and ont
 # ---------------------------------------------------------------------------
 # B1: a spent arbitration hold must be able to end the drain (the waiver itself is pinned in
 # test-drain-terminal-states.sh, where STALLED's text is read whole).
-mutant_pin "$rounds_take" 'In .dispatch-ready. a spent hold is a STALLED entry that waives in-flight zero' \
-    's/a spent hold is a STALLED entry that waives in-flight zero//' \
-    "take-it: a spent arbitration hold is a STALLED entry that waives in-flight zero"
-mutant_pin "$retry_review_dr" 'a spent hold is a STALLED entry that waives in-flight zero .§7.' \
-    's/a spent hold is a STALLED entry that waives in-flight zero//' \
-    "dispatch-ready: the Blocking bullet points at the STALLED waiver for a spent hold"
-mutant_pin "$arch_flat" 'is a held root that waives STALLED.s in-flight zero beside the ownership hold.s' \
-    's/waives STALLED.s in-flight zero//' \
-    "ARCHITECTURE: a spent arbitration hold waives STALLED's in-flight zero"
+# Round 3: the waiver is gone. It covered only STALLED's first conjunct, so the capacity exit (which ends
+# the tick before section 7) and the reset rule still ticked for ever. A spent hold demotes instead.
+for pair in "take-it:$rounds_take" "dispatch-ready:$dispatch_flat" "ARCHITECTURE:$arch_flat"; do
+    mutant_forbid "${pair#*:}" 'spent (arbitration )?hold[^.]{0,120}waives (STALLED.s )?in-flight zero|waives (STALLED.s )?in-flight zero[^.]{0,80}spent (arbitration )?hold|arbitration hold.{0,80}waives (STALLED.s )?in-flight zero' \
+        'A spent hold is a STALLED entry that waives in-flight zero.' \
+        "${pair%%:*} does not waive in-flight zero for a spent arbitration hold"
+done
+mutant_pin "$arch_flat" 'is an infrastructure stop at three tries: the issue is demoted to .blocked. once' \
+    's/is an infrastructure stop at three tries//' \
+    "ARCHITECTURE: a spent arbitration hold demotes the issue once, freeing its capacity slot"
 mutant_forbid "$arch_flat" 'so it can never be an eternal tick' \
     'so it can never be an eternal tick' \
     "ARCHITECTURE no longer claims a held root alone prevents an eternal tick"
@@ -1867,17 +1916,51 @@ for m in 'A third Blocking round blocks.' 'The worker may give up after five rou
     mutant_forbid "$takeit_flat" "$ROUND_CAP_RE" "$m" "take-it: the round-cap family catches: $m"
 done
 
+# ---------------------------------------------------------------------------
+# #667 review round 3 (arbitration verdict FIX on the persisting B1).
+# ---------------------------------------------------------------------------
+# Co-occurrence: the ESCALATE-only rule is never stated without its carve-out. A file that says
+# ESCALATE is the only verdict ending a finding in blocked, and does not also say a spent hold is an
+# infrastructure stop, has restated the old unqualified rule that the waiver attempt contradicted.
+ESC_ONLY_RE='ESCALATE.{1,3} (is|the) only (verdict|way)|only .ESCALATE. (verdict|sets)|only on an .ESCALATE.|makes .ESCALATE. the only'
+co_occurs() {
+    local hay="$1" label="$2"
+    if grep -qE -- "$ESC_ONLY_RE" <<<"$hay"; then
+        if grep -qF -- 'infrastructure stop' <<<"$hay"; then ok "$label"; else bad "$label"; fi
+    else
+        ok "$label (does not state the rule)"
+    fi
+}
+for pair in "send-it:$skill_flat" "take-it:$takeit_flat" "dispatch-ready:$dispatch_flat" \
+            "work-recommendations:$workrec_flat" "isolation-confirmation:$iso_flat" \
+            "contract:$contract_flat" "README:$readme_flat" "ARCHITECTURE:$arch_flat" \
+            "orchestrator:$orch_flat" "setup-config:$setup_flat" "AGENTS.md:$(flatten "$AGENTSMD")"; do
+    co_occurs "${pair#*:}" "${pair%%:*} states the ESCALATE-only rule only with its infrastructure-stop carve-out"
+done
+# The check must itself be able to fail: the rule alone, with no carve-out, is caught.
+if grep -qE -- "$ESC_ONLY_RE" <<<"ESCALATE is the only verdict that ends a finding in blocked." \
+   && ! grep -qF -- 'infrastructure stop' <<<"ESCALATE is the only verdict that ends a finding in blocked."; then
+    ok "co-occurrence mutant is caught: the bare rule has no carve-out"
+else
+    bad "co-occurrence mutant survives: the bare rule would pass"
+fi
+
+# Nit (c): a security nit is never described in a public PR body.
+mutant_pin "$rollin_take" 'a security nit is written there only as the placeholder .security nit — listed for the operator., never described, because the repo is public' \
+    's/never described, because the repo is public//' \
+    "take-it: a security nit appears in the Nit sort list only as a placeholder"
+mutant_pin "$rollin_take" 'a security nit.s line is the same placeholder, never its text' \
+    's/never its text//' \
+    "take-it: a security nit's Known and accepted line is the same placeholder"
+
 # The docs say what the skills now do.
 agents_flat="$(flatten "$AGENTSMD")"
 mutant_pin "$agents_flat" 'worked in numbered, durably recorded review rounds with no retry cap' \
     's/with no retry cap//' \
     "AGENTS.md states decision 5 as uncapped review rounds"
-mutant_pin "$agents_flat" 'makes .ESCALATE. the only way a finding ends in .blocked.' \
-    's/the only way a finding ends in .blocked.//' \
-    "AGENTS.md states ESCALATE is the only way a finding ends in blocked"
-mutant_forbid "$agents_flat" 'exactly one automatic recovery shared with failed checks' \
-    'with exactly one automatic recovery shared with failed checks, Blocking findings' \
-    "AGENTS.md no longer states decision 5 as exactly one recovery for review findings"
+mutant_pin "$agents_flat" 'makes .ESCALATE. the only verdict ending a finding in .blocked. .a spent arbitration hold is an infrastructure stop.' \
+    's/a spent arbitration hold is an infrastructure stop//' \
+    "AGENTS.md states ESCALATE is the only verdict ending a finding in blocked, with the infrastructure-stop carve-out"
 
 # ---------------------------------------------------------------------------
 # 6. The report is RETURNED; a lost one is its own outcome (decision 6, #273)

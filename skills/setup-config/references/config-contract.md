@@ -371,8 +371,8 @@ does, and that still prints the SKIPPED line.
 
 **A Blocking finding is never merged past.** On the `coordinator` site `dispatch-ready` surfaces one
 named and runs review rounds on it with no retry cap — a fix round, then a delta review of the new
-head — sends a stuck one to arbitration at `S-Tier`, and sets the `blocked` label only on an
-`ESCALATE` verdict. It never parks it back in Ready. The rounds and the verdicts are defined once,
+head — sends a stuck one to arbitration at `S-Tier`, and ends a finding in `blocked` only on an
+`ESCALATE` verdict (a spent arbitration hold is an infrastructure stop, not a verdict). It never parks it back in Ready. The rounds and the verdicts are defined once,
 in `take-it` §6's **Review rounds and arbitration**; the path lives in `dispatch-ready` §2; this
 key only decides whether it is the path that runs.
 

@@ -952,7 +952,7 @@ and `MODEL-TIERS.md` still lists omp's effort setting as **to verify**, so on om
 role's default effort. The contract does not depend on effort: the agent's final text opens with one
 `VERDICT:` line from a closed set of five, and a return without exactly one is asked again, never
 read as consent or as `ESCALATE`. Whether omp's `@slow` role is configured is a consumer setting
-this plugin cannot ship, so an unresolvable `@slow` is a dispatch failure that holds the PR, never a
+this plugin cannot ship, so an unresolvable `@slow` is a counted dispatch failure that, at three tries, is an infrastructure stop (not a verdict) demoting the issue to `blocked`, never a
 silent fall-back to the session model.
 
 **omp.** `task` is the dispatch tool: "Fan independent work out to specialist subagents,

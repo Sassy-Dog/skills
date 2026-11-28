@@ -769,20 +769,35 @@ refreshes it.
    **A return with no verdict, two verdicts, a name outside the set, or no file:line evidence is
    not a verdict**, and never reads as `ESCALATE` or as consent. An arbitration that cannot be
    dispatched (the `S-Tier` model or role does not resolve) is not a verdict either, and it never
-   falls back to the session model. **Both are counted**, durably: write a hold record, an issue
-   comment whose entire body is JSON, `kind: "take-it-arbitration-hold"`, `repo`, `issue`,
-   `branch`, `attempt_id`, `pr`, `round`, `trigger`, `cause` (`undispatchable` or `no-verdict`) and
-   `tries` (1, then each later attempt posts the higher count), mirrored in the PR body as
-   `arbitration_hold=<cause>/<tries>` and read back like the round record. While `tries` is below 3
-   the next attempt is the action the loop owes the PR, so it is not stalled. At `tries` 3 the
-   **arbitration hold** is a held root: the PR is held from merge, the issue is not labelled
-   `blocked` (it is no `ESCALATE`), and the report names it by shape,
-   `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist`, until the cause is
-   resolved. **In `dispatch-ready` a spent hold is a STALLED entry that waives in-flight zero** (its
-   §7 states the waiver beside the ownership hold's), because the issue stays claimed and not
-   `blocked` and would otherwise keep the drain ticking for ever; two identical ticks end the loop
-   and name the resume command. A restarted drain makes one more attempt, and a verdict that lands
-   clears the hold.
+   falls back to the session model; a refused `DESCOPE` filing is the same kind of stop. **All three
+   are counted**, durably: write a hold record, an issue comment whose entire body is JSON,
+   `kind: "take-it-arbitration-hold"`, `repo`, `issue`, `branch`, `attempt_id`, `pr`, `round`,
+   `trigger`, `cause` (`undispatchable`, `no-verdict` or `filing-refused`) and `tries` (1, then each
+   later attempt posts the higher count), mirrored in the PR body as
+   `arbitration_hold=<cause>/<tries>` and read back like the round record. **For one (round,
+   trigger) the latest verified hold record is THE record**, never the highest `tries`. While
+   `tries` is below 3 the next attempt is the action the loop owes the PR, so it is not stalled.
+   **At `tries` 3 the stop is an infrastructure stop, not a verdict, and the issue is demoted
+   once**, keeping the worktree and branch, on one source line: `issue-claim.sh block N --comment
+   "<take-it|dispatch-ready>: arbitration unavailable (<cause> ×3, round <n>, trigger <trigger>,
+   hold <id>) — <remedy>, then resume: gh issue edit N --remove-label blocked --add-label
+   in-progress"`. `<id>` is the API comment id of the hold record that reached 3, and the remedy is
+   the cause's own: `undispatchable`, fix the `S-Tier` model or role binding; `no-verdict`, read the
+   arbitration agent's last returns and repair its brief; `filing-refused`, clear the filer's
+   refusal (a `gh` failure or its burst rail). That is the one list of causes, and the comment
+   renders it. The comment carries the cause, round, trigger and hold id only, never the finding's
+   text. The demotion writes no `take-it-arbitration` record, clears nothing, never reads or spends
+   `recovery_used`, and its confirmation frees the issue's slot. The PR is reported by shape,
+   `arbitration: #1709 HELD (undispatchable ×3) — round 2, trigger persist`, until it is resumed.
+
+   **Resume.** With the latest hold record spent: an issue that carries `blocked` has nothing to do
+   (the `blocked` row of the held-PR table). An issue that does not carry `blocked`: look for a
+   comment by the authenticated loop principal containing `arbitration unavailable (` and that
+   record's `hold <id>`. **Found**: a human resumed, so write and confirm a fresh hold record with
+   `tries: 0` and attempt again (for `filing-refused`, retry the filing from the existing `DESCOPE`
+   record). **Not found**: the demotion is still owed, so run the block and attempt nothing.
+   **Comments unreadable**: hold this tick. Known and accepted: if the label lands and the comment
+   fails, the first resume is re-blocked once.
    **Write the verdict as its own durable record
    before acting on it**: an issue comment whose entire body is JSON, `kind: "take-it-arbitration"`,
    `repo`, `issue`, `branch`, `attempt_id`, `pr`, `round`, `trigger` (`persist`, `oscillate`,
@@ -804,11 +819,12 @@ refreshes it.
    docs (one more worker round and its delta review, not only the PR body), or a `REJECT` from a
    `deep` arbitration, never from the `light` check-in: a `light` verdict other than `FIX` on one
    is not acted on, and a `deep` arbitration of the same round runs instead (trigger `unsure`).
-4. **`ESCALATE` is the only way a review finding ends in `blocked`**, and the merge never goes past
-   a Blocking finding that is merely unresolved. Only a clean re-review, or an `ACCEPT`, `DESCOPE`
-   or `REJECT` verdict, clears one; until then the PR is held and the loop has an action of its
-   own (the next round, the arbitration or its next attempt), so it is never a stalled PR until
-   the arbitration hold above is spent.
+4. **`ESCALATE` is the only verdict that ends a review finding in `blocked`, and no round count
+   ever does**; the merge never goes past a Blocking finding that is merely unresolved. Only a
+   clean re-review, or an `ACCEPT`, `DESCOPE` or `REJECT` verdict, clears one; until then the PR is
+   held and the loop has an action of its own (the next round, the arbitration or its next
+   attempt). **A spent arbitration hold is an infrastructure stop, not a verdict**: it demotes the
+   issue the way a lost review or an infra failure does, and it clears nothing.
 5. **Cost is visible, not capped.** Every round record and every verdict record is a comment on the
    issue, and the §7 report and each progress line show the round count (`review round <n>`), so
    the operator can see the cost and interrupt.
@@ -880,7 +896,8 @@ review of the current head returned no Blocking finding and at least one nit, be
 runs this same step and points here for its definition.
 
 1. **Rank every nit by impact and probability, then sort it into exactly one bin**, and record each
-   nit's pair and bin in the PR body (a `Nit sort:` list). The shipped orchestrator's report gives
+   nit's pair and bin in the PR body (a `Nit sort:` list; a security nit is written there only as the
+   placeholder `security nit — listed for the operator`, never described, because the repo is public). The shipped orchestrator's report gives
    every nit an impact and a probability (each high, medium or low, with a one-line reason); a nit it
    left unranked, a custom agent's nits, or a ranking you dispute are yours to rank by the same
    definitions, and a ranking you are unsure of is the *coordinator is unsure* trigger of **Review
@@ -894,7 +911,7 @@ runs this same step and points here for its definition.
    | --- | --- |
    | high / high | **Blocking**: not a roll-in; it enters the uncapped rounds above. |
    | high / medium, medium / high | **roll in** when it is inside the issue's stated scope, small, and adds no new script, guard or test machinery; otherwise **file**. |
-   | anything else | **accept**: one "Known and accepted" line in the PR body, and no issue. |
+   | anything else | **accept**: one "Known and accepted" line in the PR body, and no issue (a security nit's line is the same placeholder, never its text). |
 
    **file** is a follow-up issue, filed through `sassy-dog:github-issues`' `file-or-link-issue.sh`
    (marker-keyed, so a re-run never duplicates it; its burst rail, more than 5 new issues in one run,
@@ -1049,7 +1066,7 @@ does not strip labels, and a stale claim label misleads the next loop's in-fligh
 
 Put each PR's review round count (`review round <n>`) and every arbitration verdict in its Notes
 cell, and name every follow-up issue filed (a `DESCOPE` or a filed nit), every refused filing, every
-high-impact security nit left for the operator and every arbitration hold, so the cost of an
+security nit left for the operator and every arbitration hold, so the cost of an
 uncapped loop is visible to the operator.
 
 State the isolation outcome in the report (confirmed, **serial and not isolated**, or stopped with
@@ -1064,8 +1081,8 @@ for unshipped issues) and a next-action one-liner per failure.
 - **Single-writer**: sub-agents never merge or enqueue; only the coordinator does, and only for
   green PRs.
 - **Never merge past a Blocking review finding**, on either `review_site`. Review rounds have no
-  cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only way a finding ends in
-  `blocked` — and a review that could not run, or that ran and never came back, is reported under
+  cap, an arbitration verdict settles a stuck one, and `ESCALATE` is the only verdict that ends a finding
+  in `blocked` (a spent arbitration hold is an infrastructure stop, not a verdict) — and a review that could not run, or that ran and never came back, is reported under
   its own name, never passed over and never waited out.
 - **One nit roll-in per PR, and it is not a recovery.** §6 defines it; it is never counted in
   `recovery_used`.
