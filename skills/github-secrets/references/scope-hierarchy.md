@@ -154,8 +154,10 @@ gh secret list --app dependabot
 ### Setting from Doppler or another secret manager
 
 ```bash
-# Pipe value from Doppler into GH secret
-doppler secrets get SECRET_NAME --plain | gh secret set SECRET_NAME
+# Hand a value from Doppler to GH secret: the plugin's wrapper subcommand reads it in memory
+# (a pipe into gh secret set is denied: a wrapper cannot tell it from a capture pipe).
+# It takes the name and optional --repo/--env/--app, and refuses on an empty value or a failure.
+doppler sassydog-gh-secret-set SECRET_NAME
 
 # Bulk sync (set multiple): the plugin's Bash guard allows a Doppler command only on its own,
 # so run each line below as its own command (no `;`, `&&` or `trap` joining them to the

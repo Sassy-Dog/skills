@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# hooks/shim/doppler — the plugin's second secret-guard layer (#670). hooks/session-path.sh puts this
+# directory first on the Bash tool's PATH at SessionStart (through CLAUDE_ENV_FILE: the agent's shell only,
+# never a user's own terminal), so a bare `doppler` the agent runs lands here. It is deliberately NOT in a
+# directory named bin/: Claude Code appends a plugin's bin/ to PATH AFTER the user's own entries (measured
+# on 2.1.332: position 32 of 32, behind /opt/homebrew/bin), so a real CLI installed there would shadow it,
+# and a machine with no real CLI would still see a `doppler` that does nothing.
+# This script finds the REAL CLI further down PATH, asks hooks/doppler-wrapper.py whether the call (argv,
+# after the shell has parsed it) is an allowed form, then either execs the real CLI or refuses. See
+# hooks/doppler-wrapper.py for what it decides and what it cannot see.
+#
+# Exit codes: the real CLI's own when the call is allowed (this script `exec`s it, so stdin, stdout and
+# stderr are the real CLI's); 126 for a refusal (the reason is on stderr); 127 when no real CLI is on PATH
+# below this one. Every way the classifier cannot give a verdict FAILS OPEN, said on stderr, exactly as
+# the text hook does: python3 missing, the classifier file missing or unreadable, a classifier crash.
+set -u
+set -f
+
+src="${BASH_SOURCE[0]}"
+while [ -L "$src" ]; do
+    d="$(cd -P "$(dirname "$src")" 2>/dev/null && pwd)" || break
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$d/$src" ;; esac
+done
+self_dir="$(cd -P "$(dirname "$src")" 2>/dev/null && pwd)" || self_dir=""
+
+find_real() {
+    local IFS=: d cand
+    for d in $PATH; do
+        [ -n "$d" ] || continue
+        cand="$d/doppler"
+        [ -f "$cand" ] && [ -x "$cand" ] || continue
+        # Skip this script, however it is reached (a symlink, a second PATH entry for the same dir).
+        [ "$cand" -ef "$src" ] && continue
+        printf '%s\n' "$cand"
+        return 0
+    done
+    return 1
+}
+
+real="$(find_real)" || {
+    echo "doppler-wrapper: no real doppler CLI found on PATH after the wrapper's own entry; nothing was run" >&2
+    exit 127
+}
+
+py="$self_dir/../doppler-wrapper.py"
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "doppler-wrapper: python3 not found on PATH; command NOT checked (fail open)" >&2
+    exec "$real" "$@"
+fi
+if [ -z "$self_dir" ] || [ ! -f "$py" ] || [ ! -r "$py" ]; then
+    echo "doppler-wrapper: classifier hooks/doppler-wrapper.py is missing or unreadable; command NOT checked (fail open)" >&2
+    exec "$real" "$@"
+fi
+
+python3 -I -X utf8 "$py" classify "$real" "$@"
+rc=$?
+case "$rc" in
+    0) exec "$real" "$@" ;;
+    3) exit 126 ;;
+    4) exec python3 -I -X utf8 "$py" gh-secret-set "$real" "$@" ;;
+    *)
+        echo "doppler-wrapper: classifier crashed (exit $rc); command NOT checked (fail open)" >&2
+        exec "$real" "$@" ;;
+esac

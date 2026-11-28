@@ -2920,6 +2920,16 @@ else
     failed "bash-secret-guard tests (scripts/test-bash-secret-guard.sh)"
 fi
 
+# --- 67. argv-wrapper tests ----------------------------------------------------
+# hooks/shim/ + hooks/doppler-wrapper.py run the secret guard's allow list on argv, after the
+# shell has parsed, with stdout classified by fstat. Real processes, a fake CLI, a fake gh,
+# scratch space only: no network, no repo mutation.
+if pg_gate scripts/test-argv-wrapper.sh; then
+    pass "argv-wrapper tests (scripts/test-argv-wrapper.sh)"
+else
+    failed "argv-wrapper tests (scripts/test-argv-wrapper.sh)"
+fi
+
 # ------------------------------------------------------------------------------
 if [ "$fail" -eq 0 ]; then
     echo "preflight: all gates green" >&2

@@ -34,6 +34,15 @@ hook command, and has `python3` on `PATH`. That is Claude Code. No other harness
 to load it, so on omp (or anything else) the guard enforces nothing and says nothing. Nothing
 gates this statement; it is a design fact, not a measured result.
 
+The argv wrapper (`hooks/shim/`, #670) is the second layer and has a harness precondition of its
+own. Claude Code gets it from a SessionStart hook that appends `hooks/shim` to `CLAUDE_ENV_FILE`,
+so the shim is first on the agent's Bash PATH (a plugin `bin/` is not used: it lands last on the
+PATH). Another harness must put `hooks/shim` first on its agent shell's PATH itself. The wrapper
+also assumes stdout is observable by `fstat`: on Claude Code 2.1.332 the capture is one append-mode
+file shared as fd 1 and fd 2. A harness whose capture is a separate non-append file or two pipes
+would let a printing form pass, which is a named limit. `scripts/test-argv-wrapper.sh` pins the
+classifier, not any harness's wiring.
+
 ## Inventory
 
 | # | Mechanism | Files | Reproducing command |

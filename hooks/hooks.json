@@ -1,6 +1,16 @@
 {
-  "description": "Sassy Dog guard: blocks Doppler invocations that print secret values and commands that embed credentialed URLs. See README.md, 'Bash guard hook'.",
+  "description": "Sassy Dog guard: blocks Doppler invocations that print secret values and commands that embed credentialed URLs, and puts the argv wrapper hooks/shim/doppler first on the agent's Bash PATH. See README.md, 'Bash guard hook'.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-path.sh\""
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
