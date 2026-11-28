@@ -1,0 +1,7 @@
+{
+  "name": "@wb/b",
+  "version": "0.0.1",
+  "dependencies": {
+    "ms": "^2.0.0"
+  }
+}

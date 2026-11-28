@@ -1,0 +1,9 @@
+{
+  "name": "@wb/a",
+  "version": "0.0.1",
+  "dependencies": {
+    "debug": "^4.1.0",
+    "@wb/b": "workspace:*",
+    "glob": "^10.0.0"
+  }
+}

@@ -116,33 +116,49 @@
 #     copy of a repeated key, bun the first); a pubspec.yaml only version
 #     constraints under dependencies, dev_dependencies and
 #     dependency_overrides (line level, no YAML parser); no changed lane file
-#     may hold a NUL byte (it turns diff's output into "Binary files differ"
-#     and hides every added line from the line checks); and a lockfile may
-#     not name a host, registry or source its base version does not use, and
-#     what it adds is checked against an ALLOW-LIST of what a refresh writes,
-#     so a spelling no scan foresaw is refused: package-lock.json: every
-#     `resolved` value must be an https URL of the shape
-#     <prefix>/[@scope/]name/-/file whose scheme, host and registry path
-#     prefix some base `resolved` already has, or a value the base holds
-#     verbatim; an entry may not lose its `resolved`; any `version` or `from`
-#     holding `:` or `/` counts as a source; lockfileVersion must be one to
-#     four digits and not below the base's or below 2; bun.lock: each added
-#     line must be one the base holds verbatim or a closer, opener, config
-#     number, workspace name or version, a plain (or alias) version range, or
-#     a package tuple with an empty registry field whose resolution is a plain
-#     version, an alias to one, or the source (minus its git fragment) the
-#     base already holds for that package, with no backslash on any added
-#     line (bun decodes JSON escapes); pubspec.lock and Cargo.lock: an
-#     allow-list of the line shapes pub and cargo write, plus URL hosts and
-#     source kinds (a Cargo.lock source keeps its `?` query: only the `#`
-#     revision may move). NOT checked, and the gate does not claim to: a
-#     lockfile package or git source swapped within an allowed host or
-#     registry path, integrity hashes, a Cargo.lock path package, the inline
-#     dependency metadata of a bun.lock tuple, a workspace glob using more
-#     than `*`/`**` (that member is simply refused), and bun `catalog`
-#     entries (outside the four maps, so refused, and named in the message).
-#     A refresh that rewrites a bun.lock line holding a workspace, file or
-#     trustedDependencies value is refused, not trusted.
+#     may hold a NUL byte; and a lockfile may not name a host, registry or
+#     source its base version does not use, and what it writes is checked
+#     against an ALLOW-LIST of what a refresh writes, so a spelling no scan
+#     foresaw is refused. package-lock.json: every `resolved` must be an
+#     https URL of the shape <prefix>/[@scope/]name/-/file (the prefix group
+#     lazy, so a new scope is not swallowed into it; no % or whitespace in a
+#     segment, no leading dot in a name or scope) whose scheme, host and
+#     registry path prefix some base `resolved` already has, or a value the
+#     base holds verbatim; an entry may not lose its `resolved`; every value
+#     of an entry's four dependency maps must be unchanged from the base or a
+#     plain or alias range (a clean install fetches what they name); the new
+#     file must hold a `packages` object; any `version` or `from` holding `:`
+#     or `/` counts as a source; lockfileVersion must be one to four digits
+#     and not below the base's or below 2. bun.lock is PARSED, not read line
+#     by line: one awk pass turns base and head into strict JSON and refuses
+#     what it cannot read exactly (a backslash anywhere, a line with an odd
+#     number of quotes, any character outside a string other than []{}:, a
+#     space, a digit, a letter or .+-, so no comment can start); each must be
+#     one document with no repeated key; then the head may differ from the
+#     base only in: lockfileVersion and configVersion (small whole numbers);
+#     a workspace's name, version or four dependency maps (each value
+#     unchanged or a plain or alias range), over the SAME set of workspaces,
+#     any other workspace field being unchanged; and `packages` entries that
+#     are unchanged, a registry tuple of exactly [name@semver, "", {metadata},
+#     integrity], or the base's own entry at that key with only its git
+#     fragment moved (same arity and element types, a fragment of
+#     [0-9A-Za-z._-], later strings an integrity hash or a plain id). Any
+#     other top-level key (trustedDependencies, overrides, ...) must equal the
+#     base's, presence included. pubspec.lock and Cargo.lock: an allow-list of
+#     the added line shapes pub and cargo write, plus URL hosts and source
+#     kinds (a Cargo.lock source keeps its `?` query: only the `#` revision
+#     may move). NOT checked, and the gate does not claim to: the metadata
+#     object inside a bun.lock registry tuple, integrity hashes, a package
+#     swapped for another on the same registry, a git commit moving to any
+#     commit its source serves (a bun.lock git fragment, and a package-lock
+#     git `resolved`, which is refused rather than trusted), a Cargo.lock
+#     path package, a workspace glob using more than `*`/`**` (that member is
+#     simply refused), and bun `catalog` entries (outside the four maps, so
+#     refused, and named in the message). Refused rather than trusted: a base
+#     bun.lock holding a backslash or a comment; a workspace added or removed;
+#     any other top-level key changing; a changing registry tuple with a
+#     non-empty registry field; a git tuple whose arity changes; a workspace
+#     field other than name, version and the four maps (a `bin`, say) changing.
 #     Pinned by scripts/test-deps-cadence-policy.sh, decision 10.
 #   - The token never reaches argv or a git config file: the push reads it
 #     from the environment through a one-shot credential helper, with system
@@ -1214,62 +1230,125 @@ jobs:
             case "$out" in "Binary files "*) return 1 ;; esac
             printf '%s\n' "$out" | sed -n 's/^> //p'
           }
-          # bun_violation <old> <new> — the first ADDED bun.lock line that is
-          # not a shape bun writes, printed; returns 1 when there is one. A
-          # line the base already holds verbatim passes. Otherwise it must be
-          # a closer, an opener, a config number, a workspace name or version,
-          # a plain version range, or a package tuple whose registry field is
-          # empty and whose resolution after the name is a plain version, an
-          # alias to one, or the same source (minus its git fragment) the
-          # base already holds for that package. Path-like, scp-like, git,
-          # github, file, link and workspace resolutions are otherwise refused.
-          semver_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
-          alias_re='^npm:(@[^@/]+/)?[^@:/]+@[0-9][0-9A-Za-z.+-]*$'
+          # bun_json <file> — a bun.lock (JSON with trailing commas) as strict
+          # JSON on stdout, in one POSIX awk pass, or a non-zero exit when the
+          # file cannot be read EXACTLY: a backslash anywhere (3), a line with
+          # an odd number of quotes (4), or any character outside a string
+          # other than []{}:, space, tab, a digit, a letter or .+- (5), so no
+          # comment can start and shift the pairing of the quotes. A comma
+          # whose next token is ] or } is dropped.
+          bun_json() {
+            awk '
+              {
+                if (index($0, "\\")) { rc = 3; exit }
+                n = split($0, f, "\"")
+                if (n > 0 && n % 2 == 0) { rc = 4; exit }
+                for (i = 1; i <= n; i++) {
+                  if (i % 2 == 0) { if (hold) { printf ","; hold = 0 } printf "%s\"%s\"", ws, f[i]; ws = ""; continue }
+                  s = f[i]
+                  if (s ~ /[^][{}:,0-9A-Za-z.+ \t-]/) { rc = 5; exit }
+                  m = length(s)
+                  for (j = 1; j <= m; j++) {
+                    c = substr(s, j, 1)
+                    if (c == " " || c == "\t") ws = ws c
+                    else if (c == ",") { if (hold) printf ","; hold = 1 }
+                    else if (c == "]" || c == "}") { hold = 0; printf "%s%s", ws, c; ws = "" }
+                    else { if (hold) { printf ","; hold = 0 } printf "%s%s", ws, c; ws = "" }
+                  }
+                }
+                ws = ws "\n"
+              }
+              END { if (rc) exit rc; if (hold) printf ","; printf "%s", ws }' "$1"
+          }
+          # bun_violation <old> <new> — both bun.lock files are parsed, never
+          # validated line by line. Each is normalised by bun_json, must be one
+          # JSON document with no repeated key, and then the NEW one may differ
+          # from the OLD one only by: lockfileVersion/configVersion (small whole
+          # numbers); a workspace's name, version or four dependency maps (each
+          # value unchanged or a plain or alias version range) with the SAME
+          # set of workspaces; and packages entries that are unchanged, a
+          # registry tuple of exactly [name@semver, "", {metadata}, integrity],
+          # or the base's own entry at that key with only its git fragment
+          # moved (same arity and element types, a fragment of [0-9A-Za-z._-],
+          # later strings an integrity hash or a plain id). Any other top-level
+          # key (trustedDependencies, overrides, patchedDependencies, catalog)
+          # must be identical to the base's, presence included. Prints the first
+          # reason; returns 1 when there is one.
+          # shellcheck disable=SC2016  # a jq program: deliberately not expanded
           bun_violation() {
-            local added line res key vv base_set
-            local closer_re='^[[:space:]]*[]}],?$'
-            local opener_re='^[[:space:]]*("[^"]*": )?[{[]$'
-            local cfg_re='^[[:space:]]*"(lockfileVersion|configVersion)": [0-9]+,?$'
-            local meta_re='^[[:space:]]*"(name|version)": "[0-9A-Za-z@/._+-]*",?$'
-            local range_re='^[[:space:]]*"[^"]+": "([0-9A-Za-z.*^~<>=| _+-]*)",?$'
-            local aliasrange_re='^[[:space:]]*"[^"]+": "npm:(@[^@/]+/)?[^@:/]+@([0-9A-Za-z.*^~<>=| _+-]*)",?$'
-            local tuple_re='^[[:space:]]*"[^"]+": \["((@[^"@/]+/)?[^"@]+)@([^"]*)", "([^"]*)", (.*), "[A-Za-z0-9+/=_-]+"\],?$'
-            added="$(added_lines "$1" "$2")" || { echo "(cannot diff the two files)"; return 1; }
-            base_set="$(grep -oE '"(@[^"@/]+/)?[^"@]+@[^"]*"' "$1" | sed -E 's/^"//; s/#[^"]*"$//; s/"$//' | sort -u || true)"
-            while IFS= read -r line; do
-              [ -n "${line//[[:space:]]/}" ] || continue
-              if grep -Fxq -- "$line" "$1"; then continue; fi
-              if [[ $line =~ $closer_re || $line =~ $opener_re || $line =~ $cfg_re || $line =~ $meta_re ]]; then continue; fi
-              if [[ $line =~ $aliasrange_re ]]; then
-                vv="$(printf '%s' "${BASH_REMATCH[2]}" | tr '[:upper:]' '[:lower:]')"
-                case "$vv" in .*|*.tgz|*.tar|*.tar.gz) printf '%s' "$line"; return 1 ;; esac
-                continue
-              fi
-              if [[ $line =~ $range_re ]]; then
-                vv="$(printf '%s' "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')"
-                case "$vv" in .*|*.tgz|*.tar|*.tar.gz) printf '%s' "$line"; return 1 ;; esac
-                continue
-              fi
-              if [[ $line =~ $tuple_re ]]; then
-                res="${BASH_REMATCH[3]}"; key="${BASH_REMATCH[1]}@${res%%#*}"
-                if [ -n "${BASH_REMATCH[4]}" ] || [[ ${BASH_REMATCH[5]} != \{*\} ]]; then printf '%s' "$line"; return 1; fi
-                if [[ $res =~ $semver_re || $res =~ $alias_re ]] || grep -Fxq -- "$key" <<<"$base_set"; then continue; fi
-              fi
-              printf '%s' "$line"; return 1
-            done <<<"$added"
+            local f lbl out
+            for lbl in old new; do
+              f="$1"; [ "$lbl" = new ] && f="$2"
+              bun_json "$f" > "$f.json" \
+                || { echo "the $lbl file cannot be read exactly (a backslash, an odd number of quotes, or text outside a string such as a comment)"; return 1; }
+              dup_keys "$f.json" || { echo "the $lbl file is not JSON, or repeats a key"; return 1; }
+            done
+            out="$(jq -n -r --slurpfile o "$1.json" --slurpfile n "$2.json" '
+              def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not);
+              def spec: type == "string" and (isrange or (test("^npm:(@[^@/]+/)?[^@:/]+@[^@]*$") and (sub("^.*@"; "") | isrange)));
+              def depmaps: ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+              def reg_tuple: type == "array" and length == 4
+                and (.[0] | type == "string" and test("^(@[^@/:#?%\\s]+/)?[^@/:#?%\\s]+@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"))
+                and .[1] == "" and (.[2] | type) == "object" and (.[3] | type == "string" and test("^[A-Za-z0-9+/=_-]+$"));
+              def moved($was): type == "array" and ($was | type) == "array" and length == ($was | length) and length >= 2
+                and ([., $was] | transpose | all(.[]; (.[0] | type) == (.[1] | type)))
+                and (.[0] | type) == "string" and (.[0] | test("^[^#]+#[0-9A-Za-z._-]+$")) and ($was[0] | test("^[^#]+#[^#]+$"))
+                and (.[0] | sub("#.*$"; "")) == ($was[0] | sub("#.*$"; ""))
+                and ([.[1:][] | strings] | all(test("^sha[0-9]+-[A-Za-z0-9+/=]+$") or test("^[A-Za-z0-9][A-Za-z0-9._-]*$")));
+              if ($o | length) != 1 or ($n | length) != 1 then "not exactly one JSON document"
+              else $o[0] as $a | $n[0] as $b
+              | if ($a | type) != "object" or ($b | type) != "object" then "not a JSON object"
+                else [
+                  ([($a | keys_unsorted), ($b | keys_unsorted)] | add | unique
+                   | map(select(. as $k | (["lockfileVersion", "configVersion", "workspaces", "packages"] | index($k)) == null
+                                and ((($a | has($k)) != ($b | has($k))) or $a[$k] != $b[$k])))
+                   | if length > 0 then "top-level keys other than workspaces and packages changed: \(join(", "))" else empty end),
+                  (("lockfileVersion", "configVersion") as $k | select($b | has($k))
+                   | select((($b[$k] | type) == "number" and ($b[$k] | tostring | test("^[0-9]{1,4}$"))) | not) | "\($k) is not a small whole number"),
+                  (($a.workspaces // {}) as $aw | ($b.workspaces // {}) as $bw
+                   | if ($aw | type) != "object" or ($bw | type) != "object" then "workspaces is not an object"
+                     elif ($aw | keys) != ($bw | keys) then "a workspace was added or removed"
+                     else ($bw | to_entries[] | .key as $w | .value as $y | $aw[$w] as $x
+                           | if ($y | type) != "object" or ($x | type) != "object" then "workspace \($w | tojson) is not an object"
+                             else ($y | to_entries[] | .key as $f | .value as $v
+                                   | if ($x | has($f)) and $x[$f] == $v then empty
+                                     elif $f == "name" then (if ($v | type) == "string" and ($v | test("^(@[0-9A-Za-z._-]+/)?[0-9A-Za-z._-]+$")) then empty else "workspace \($w | tojson) name" end)
+                                     elif $f == "version" then (if ($v | type) == "string" and ($v | test("^[0-9A-Za-z.+-]*$")) then empty else "workspace \($w | tojson) version" end)
+                                     elif (depmaps | index($f)) != null then
+                                       (if ($v | type) != "object" then "workspace \($w | tojson) \($f) is not an object"
+                                        else ($x[$f] | if type == "object" then . else {} end) as $xm
+                                          | ($v | to_entries[] | .key as $d | .value as $s
+                                             | select((($xm | has($d)) and $xm[$d] == $s) or ($s | spec) | not)
+                                             | "workspace \($w | tojson) \($f) entry \($d) is not a version range: \($s | tojson | .[0:120])") end)
+                                     else "workspace \($w | tojson) field \($f) changed" end)
+                             end)
+                     end),
+                  (if ($b.packages | type) != "object" then "packages is not an object"
+                   else ($a.packages | if type == "object" then . else {} end) as $ap
+                     | ($b.packages | to_entries[] | .key as $k | .value as $t
+                        | select((($ap | has($k)) and $ap[$k] == $t) or ($t | reg_tuple) or ($t | moved($ap[$k])) | not)
+                        | "packages entry \($k | tojson) is not one a refresh writes: \($t | tojson | .[0:160])")
+                   end)
+                ] | .[0] // empty
+                end
+              end')" || { echo "(jq failed)"; return 1; }
+            [ -z "$out" ] || { printf '%s' "$out"; return 1; }
           }
           # npm_resolved_violation <old> <new> — every resolved value in the
           # new package-lock.json must be an https URL of the shape
           # <prefix>/[@scope/]name/-/file, whose <prefix> (scheme, host and
           # registry path) some base resolved value already has, or a value the
           # base already holds verbatim (a workspace link's relative path
-          # among them). An entry that had a resolved value may not lose it.
-          # Prints the first offender; returns 1 when there is one.
+          # among them). The prefix group is LAZY so a scoped name is not
+          # swallowed into it, and the name, scope and file segments take no %
+          # or whitespace and the name and scope no leading dot. An entry that
+          # had a resolved value may not lose it. Prints the first offender;
+          # returns 1 when there is one.
           # shellcheck disable=SC2016  # a jq program: deliberately not expanded
           npm_resolved_violation() {
             local out
             out="$(jq -n -r --slurpfile o "$1" --slurpfile n "$2" '
-              def pre: [capture("^(?<p>https://[^/?#]+(?:/[^?#]*?)?)/(?:@[^/?#]+/)?[^/?#]+/-/[^/?#]+$").p][0];
+              def pre: [capture("^(?<p>https://[^/?#]+(?:/[^?#]*?)??)/(?:@[^/?#%\\s.][^/?#%\\s]*/)?[^/?#%\\s.@][^/?#%\\s]*/-/[^/?#%\\s]+$").p][0];
               def resolveds: [.. | objects | select(has("resolved")) | .resolved];
               ($o[0] | resolveds | map(select(type == "string"))) as $oset
               | ($oset | map(pre) | map(select(. != null))) as $opre
@@ -1284,6 +1363,34 @@ jobs:
                   | select((($o[0].packages // {})[$k] | type) == "object" and (($o[0].packages // {})[$k] | has("resolved")))
                   | "an entry lost its resolved value: " + $k][0])
               | select(. != null)')" || { echo "(cannot read the lockfile)"; return 1; }
+            [ -z "$out" ] || { printf '%s' "$out" | head -n1; return 1; }
+          }
+          # npm_depmap_violation <old> <new> — npm ci fetches whatever a
+          # dependency map in the lockfile names, so in every entry of the new
+          # lockfile's packages object each value of the four dependency maps
+          # must be identical to the base's value at the same entry, map and
+          # key, or a plain or alias version range. The new file must hold a
+          # packages object at all.
+          # shellcheck disable=SC2016  # a jq program: deliberately not expanded
+          npm_depmap_violation() {
+            local out
+            out="$(jq -n -r --slurpfile o "$1" --slurpfile n "$2" '
+              def isrange: test("^[0-9A-Za-z.*^~<>=| _+-]*$") and (test("^\\.") | not) and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not);
+              def spec: type == "string" and (isrange or (test("^npm:(@[^@/]+/)?[^@:/]+@[^@]*$") and (sub("^.*@"; "") | isrange)));
+              def depmaps: ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
+              ($o[0].packages | if type == "object" then . else {} end) as $op
+              | if ($n[0].packages | type) != "object" then "it has no packages object"
+                else [ $n[0].packages | to_entries[] | .key as $k | .value as $e
+                       | if ($e | type) != "object" then "entry \($k) is not an object"
+                         else (depmaps[] as $m | select($e | has($m)) | $e[$m] as $dm
+                               | if ($dm | type) != "object" then "entry \($k) \($m) is not an object"
+                                 else ($op[$k] | if type == "object" then .[$m] else null end | if type == "object" then . else {} end) as $bm
+                                   | ($dm | to_entries[] | .key as $d | .value as $s
+                                      | select((($bm | has($d)) and $bm[$d] == $s) or ($s | spec) | not)
+                                      | "entry \($k) \($m) names a source for \($d): \($s | tojson | .[0:120])")
+                                 end)
+                         end ][0] // empty
+                end')" || { echo "(cannot read the lockfile)"; return 1; }
             [ -z "$out" ] || { printf '%s' "$out" | head -n1; return 1; }
           }
           # shape_violation <old> <new> <ERE> — the first added line that is
@@ -1368,13 +1475,6 @@ jobs:
                 ;;
               package-lock.json|bun.lock|pubspec.lock|Cargo.lock)
                 case "$name" in
-                  bun.lock)
-                    # bun decodes JSON escapes in a registry or source; the
-                    # scan below reads raw text. No escape may be ADDED.
-                    added="$(added_lines "$tmp/old" "$tmp/new")" || reject "$path cannot be compared with its base"
-                    why="$(printf '%s\n' "$added" | grep -F -e "\\" | head -n1 || true)"
-                    [ -z "$why" ] || reject "$path adds a line with a backslash escape, which the source scan cannot read: $why"
-                    ;;
                   package-lock.json)
                     old_v="$(lock_version "$tmp/old")" || reject "$path (base) has no usable lockfileVersion"
                     new_v="$(lock_version "$tmp/new")" || reject "$path has no usable lockfileVersion"
@@ -1400,10 +1500,11 @@ jobs:
                 # refresh writes, so a spelling no scan foresaw is refused.
                 case "$name" in
                   bun.lock)
-                    why="$(bun_violation "$tmp/old" "$tmp/new")" || reject "$path adds a line a refresh does not write to a bun.lock: $why"
+                    why="$(bun_violation "$tmp/old" "$tmp/new")" || reject "$path has a change a refresh does not write to a bun.lock: $why"
                     ;;
                   package-lock.json)
                     why="$(npm_resolved_violation "$tmp/old" "$tmp/new")" || reject "$path has a resolved value outside the base lockfile's registries: $why"
+                    why="$(npm_depmap_violation "$tmp/old" "$tmp/new")" || reject "$path names a source inside a dependency map, which a clean install would fetch: $why"
                     ;;
                 esac
                 ;;

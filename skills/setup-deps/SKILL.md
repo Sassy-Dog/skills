@@ -732,14 +732,20 @@ rejects it, before anything is applied, when:
   because bun and npm disagree about which copy wins); a bun `workspaces.catalog` rewrite, which
   `bun update --recursive` can make, is refused and named as such; a `pubspec.yaml` only
   version constraints under its dependency sections; and a lockfile may not name a host, registry
-  or source its base version does not already use, and may only add what a real refresh writes,
-  as an allow-list rather than a scan for bad spellings: a `package-lock.json` `resolved` must be an
-  `https` URL under a registry prefix the base already uses; a `bun.lock` added line must be a
-  shape bun writes, with a plain version (or the base's own source) as each package resolution and
-  no backslash escape; a `package-lock.json` below the base's `lockfileVersion` or below 2 is
-  refused; so is any other spelling in a `pubspec.lock` or `Cargo.lock`. A changed lane file holding
-  a NUL byte is refused outright. `scripts/test-deps-cadence-policy.sh` (decision 10)
-  lists what each of these catches and what it does not.
+  or source its base version does not already use, and may only change what a real refresh
+  writes, as an allow-list rather than a scan for bad spellings: a `package-lock.json` `resolved`
+  must be an `https` URL under a registry prefix the base already uses (or be unchanged from the
+  base), an entry may not lose its `resolved`, and every dependency-map value in it must be
+  unchanged or a plain version range; a `bun.lock` is parsed, not read line by line, and may differ
+  from its base only in version numbers, a workspace's name, version and dependency maps (the same
+  set of workspaces), and `packages` entries that are unchanged, a registry tuple holding a plain
+  version, or the base's own git tuple with only its commit moved, and any other top-level key must
+  be unchanged from the base; a `package-lock.json` below the base's `lockfileVersion` or below 2 is
+  refused; so is any other spelling in a `pubspec.lock` or `Cargo.lock`. A changed lane file
+  holding a NUL byte is refused outright. Refused rather than trusted: a base `bun.lock` holding a
+  backslash or a comment, a workspace added or removed, a git commit moving in a `package-lock.json`.
+  `scripts/test-deps-cadence-policy.sh` (decision 10) lists what each of these catches and what it
+  does not.
 
 Those content rejections happen before the tree is touched. It then runs `git apply --index` with
 hooks and fsmonitor off, and re-checks that only allowed paths are staged and nothing else

@@ -74,32 +74,43 @@
 #      may repeat no key at all: jq keeps the LAST copy of a repeated key, bun
 #      the FIRST, so the two read different manifests (the jq --stream leaf
 #      count must equal the parsed document's). A pubspec.yaml may change only
-#      version constraints in its dependency sections. A lockfile may not name
-#      a host, registry or source its base lockfile lacks, and what it ADDS
-#      (by position, from diff) must be a line shape the tool writes:
+#      version constraints in its dependency sections. No changed lane file
+#      may hold a NUL byte (a text patch left as .handpatch by its script is
+#      how the case is built, since git would write a binary hunk). A lockfile
+#      may not name a host, registry or source its base lockfile lacks, and
+#      what it writes is checked against an ALLOW-LIST, so a spelling no scan
+#      foresaw is refused:
 #        package-lock.json  `resolved` hosts (funding URLs are ignored) plus
-#                           any `version`/`from` holding `:` or `/`; then an
-#                           ALLOW-LIST: every `resolved` must be an https URL
-#                           <prefix>/[@scope/]name/-/file whose prefix (scheme,
-#                           host, registry path) the base already has, or a
-#                           value the base holds verbatim, and an entry may not
-#                           lose its `resolved`. lockfileVersion must be one to
-#                           four digits, not below the base's, not below 2
-#                           (v1 keeps sources outside `resolved`).
-#        bun.lock           any URL or github/git/file shorthand; a backslash
-#                           on an added line is refused, because bun decodes
-#                           JSON escapes and the raw scan would not (the file
-#                           is JSONC with trailing commas, so it is not parsed);
-#                           then an ALLOW-LIST of added lines: verbatim in the
-#                           base, a closer/opener/config/name/version line, a
-#                           plain or alias range, or a tuple with an empty
-#                           registry whose resolution is a plain version, an
-#                           alias to one, or the base's own source for that
-#                           package (git fragment aside).
-#                           No changed lane file may hold a NUL byte (diff
-#                           would call it binary and show no added lines); the
-#                           NUL case is a text patch left as .handpatch by its
-#                           script, since git would write a binary hunk.
+#                           any `version`/`from` holding `:` or `/`; then
+#                           every `resolved` must be an https URL
+#                           <prefix>/[@scope/]name/-/file (prefix group lazy,
+#                           no % or whitespace in a segment, no leading dot in
+#                           a name or scope) whose prefix (scheme, host,
+#                           registry path) the base already has, or a value
+#                           the base holds verbatim; an entry may not lose its
+#                           `resolved`; each value of an entry's four
+#                           dependency maps is unchanged or a plain or alias
+#                           range (a clean install fetches what they name);
+#                           the new file holds a `packages` object.
+#                           lockfileVersion must be one to four digits, not
+#                           below the base's, not below 2.
+#        bun.lock           any URL or github/git/file shorthand (the raw
+#                           scan, kept), then the file is PARSED: one awk pass
+#                           makes base and head strict JSON and refuses a
+#                           backslash, an odd quote count and any character
+#                           outside a string that could start a comment (bun
+#                           accepts comments, and one shifts the quote
+#                           pairing); no repeated key; then the head differs
+#                           from the base only in version numbers, a
+#                           workspace's name, version and four dependency
+#                           maps (same set of workspaces), and `packages`
+#                           entries that are unchanged, a registry tuple of
+#                           exactly [name@semver, "", {}, integrity], or the
+#                           base's own git tuple at that key with only its
+#                           fragment moved. Any other top-level key must equal
+#                           the base's. Cases use bun's REAL git tuple shape
+#                           [id, {}, resolved-id, integrity], captured from
+#                           bun 1.4.4.
 #        pubspec.lock       an allow-list of pub's line shapes (so no YAML
 #                           escape, re-indent or flow mapping), URL hosts and
 #                           `source:` kinds. The allow-list was run over every
@@ -109,11 +120,12 @@
 #                           values minus their `#` revision (the `?` query is
 #                           kept, so a changed branch or rev is refused), and
 #                           URL hosts; also run over real Cargo.lock files.
-#      The bun.lock and package-lock.json allow-lists were also run read-only
-#      over the org's current bun.lock and package-lock.json files. Every line
-#      passed except lines a refresh does not rewrite (workspace, file and
-#      trustedDependencies values, and package tuples with a workspace
-#      resolution), which are refused only if a patch changes them.
+#      The real captures: bun 1.4.4 (single package, a workspace refresh with
+#      workspace:* members and trustedDependencies, and a git tuple; the
+#      moved-commit pair swaps in the tuple a real install of an older tag of
+#      the same public repository wrote, with the manifest string held
+#      constant, since a remote cannot be made to move on demand) and npm 11.20
+#      (including a refresh that adds scopes the base lacks).
 #      The gate prints its own counts (rejected, benign, mutants), derived from
 #      this file, and this header states none, so none can drift.
 #      Hostile cases are built in the third clone as above: rejected cases
@@ -128,19 +140,21 @@
 #      so a generic mutation re-runs only the path-level cases and a
 #      content mutant only the cases its needle names; shard 0 alone runs the
 #      unmutated content cases. Not caught, by design and stated in the
-#      template: a lockfile package swapped within an allowed host or registry
-#      path, a git source repointed within an allowed host, integrity hashes,
-#      a Cargo.lock path package, a package-lock dependency map value naming a
-#      source, the inline dependency metadata of a bun.lock tuple, glob syntax
-#      beyond `*`/`**` (refused), bun `catalog` entries (refused, and named in
-#      the message), a base manifest that itself repeats a key (every refresh
-#      of it is refused), and branches with no committed case because they
-#      need a tool or the machine to fail: diff exiting above 1 and the
-#      "Binary files" guard in added_lines (both sit behind the NUL check, so
-#      no patch reaches them), awk failing in pub_shape, read-tree failing, and
-#      the post-apply re-check (a second copy of rules the path loop already
-#      enforces, which cannot fire when that loop works, and runs only before
-#      the App token exists).
+#      template: a lockfile package swapped for another on the same registry,
+#      a git commit moving to any commit its source serves (a package-lock git
+#      `resolved` whose commit moves is refused, not trusted), integrity
+#      hashes, the metadata object inside a bun.lock registry tuple, a
+#      Cargo.lock path package, glob syntax beyond `*`/`**` (refused), bun
+#      `catalog` entries (refused, and named in the message), a base manifest
+#      that itself repeats a key, and a base bun.lock that holds a backslash
+#      or a comment (every refresh of either is refused); one guard is
+#      redundant with another and so has no mutant of its own (a git tuple's
+#      arity, which its element-type check also catches); and branches with no
+#      committed case because they need a tool or the machine to fail: diff
+#      exiting above 1 (now serving only pub and Cargo), awk failing in
+#      pub_shape, read-tree failing, and the post-apply re-check (a second
+#      copy of rules the path loop already enforces, which cannot fire when
+#      that loop works, and runs only before the App token exists).
 #      The unreachable "no content check exists" arm is killed only through the
 #      Cargo.toml mutant.
 #  11. A WORKSPACE-ROOT bun lane runs `bun update --recursive` (plain
@@ -438,7 +452,7 @@ printf '%s\n' "$*" >> "${FAKE_BUN_LOG:-/dev/null}"
 case "$1" in
     update)
         [ "${FAKE_BUN_MODE:-ok}" = "fail" ] && { echo "error: registry unreachable" >&2; exit 1; }
-        echo "    \"p\": [\"p@1.0.$RANDOM\", \"\", {}, \"sha512-AA\"]," >> bun.lock
+        printf '{\n  "lockfileVersion": 1,\n  "packages": {\n    "p": ["p@1.0.%s", "", {}, "sha512-AA"],\n  }\n}\n' "$RANDOM" > bun.lock
         [ -f pkg/package.json ] && echo ' ' >> pkg/package.json
         [ -f README.md ] && echo 'touched' >> README.md
         echo 'stray' > new.txt
@@ -519,7 +533,7 @@ new_repo() {
         git init -q -b main
         git config user.name t; git config user.email t@example.com
         echo '{"name":"web","workspaces":["pkg"],"dependencies":{"is-number":"6.0.0","left-pad":"^1.1.0"},"devDependencies":{"kind-of":"=6.0.3"}}' > web/package.json
-        echo 'lock' > web/bun.lock
+        printf '{\n  "lockfileVersion": 1,\n  "packages": {\n  }\n}\n' > web/bun.lock
         echo '{"name":"pkg"}' > web/pkg/package.json
         echo 'readme' > web/README.md
         echo '[package]' > Cargo.toml
@@ -1525,6 +1539,8 @@ content_repo() {
     "is-number": ["is-number@6.0.0", "", {}, "sha512-AAAA"],
 
     "kind-of": ["kind-of@6.0.3", "", {}, "sha512-BBBB"],
+
+    "gitdep": ["gitdep@gitlab:example/gitdep#abc1234", {}, "example-gitdep-abc1234", "sha512-GGGG"],
   }
 }
 LOCK
@@ -1612,6 +1628,15 @@ legacy_repo() {
     )
 }
 
+# real_ws_files <base|after> <dir> — the real bun 1.4.4 workspace capture
+# (bunws) laid out as a root lane with two members under packages/.
+real_ws_files() {
+    local w="$2/rbunws" f="$FIX/real/bunws/$1"
+    mkdir -p "$w/packages/a" "$w/packages/b"
+    cp "$f/bun.lock.txt" "$w/bun.lock"; cp "$f/package.json.txt" "$w/package.json"
+    cp "$f/a.package.json.txt" "$w/packages/a/package.json"; cp "$f/b.package.json.txt" "$w/packages/b/package.json"
+}
+
 # real_repo <dir> — a lane per ecosystem holding what the REAL tools wrote
 # (scripts/fixtures/deps-cadence/real/: bun 1.4.4, npm 11.20 and cargo 1.96
 # captures on public packages, before and after a refresh; the pub files are
@@ -1620,10 +1645,11 @@ legacy_repo() {
 real_repo() {
     local d="$1" t f
     mkdir -p "$d"
-    for t in bun npm cargo pub; do
+    for t in bun npm cargo pub bunsrc npmscopes; do
         mkdir -p "$d/r$t"
         for f in "$FIX/real/$t/base"/*.txt; do cp "$f" "$d/r$t/$(basename "${f%.txt}")"; done
     done
+    real_ws_files base "$d"
     (
         cd "$d" || exit 1
         git init -q -b main
@@ -1769,10 +1795,10 @@ hostile_checks() {
         'a pubspec.lock gaining a path source@@names a host, registry or source@@sed "s|source: hosted|source: path|" app/pubspec.lock > app/p.tmp && mv app/p.tmp app/pubspec.lock'
         'a Cargo.lock with a new registry@@names a host, registry or source@@sed "s|registry+https://github.com/rust-lang/crates.io-index|registry+https://evil.example/index|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
         'a Cargo.lock repointing a git source@@names a host, registry or source@@sed "s|github.com/example/gitdep|evil.example/gitdep|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
-        'a bun.lock registry written with escaped slashes@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https:\x5c/\x5c/evil.example\x5c/\"|" web/bun.lock'
-        'a bun.lock registry written with an escaped colon@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https\x5cu003a//evil.example/\"|" web/bun.lock'
-        'a bun.lock github source written with an escaped colon@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@github\x5cu003aevil/kind-of#abc\"|" web/bun.lock'
-        'a bun.lock git source written with escaped slashes@@adds a line with a backslash escape@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@git+https:\x5c/\x5c/evil.example\x5c/k.git\"|" web/bun.lock'
+        'a bun.lock registry written with escaped slashes@@a refresh does not write@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https:\x5c/\x5c/evil.example\x5c/\"|" web/bun.lock'
+        'a bun.lock registry written with an escaped colon@@a refresh does not write@@perl -pi -e "s|kind-of\@6.0.3\", \"\"|kind-of\@6.0.3\", \"https\x5cu003a//evil.example/\"|" web/bun.lock'
+        'a bun.lock github source written with an escaped colon@@a refresh does not write@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@github\x5cu003aevil/kind-of#abc\"|" web/bun.lock'
+        'a bun.lock git source written with escaped slashes@@a refresh does not write@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@git+https:\x5c/\x5c/evil.example\x5c/k.git\"|" web/bun.lock'
         'a package-lock.json downgraded to lockfileVersion 1 with a URL as a version@@lockfileVersion@@jq ".lockfileVersion=1 | del(.packages) | .dependencies={\"chalk\":{\"version\":\"https://evil.example/c.tgz\"}}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
         'a package-lock.json version holding a URL@@names a host, registry or source@@jq "del(.packages[\"node_modules/chalk\"].resolved) | .packages[\"node_modules/chalk\"].version=\"https://evil.example/c.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
         'a package-lock.json from value holding a github source@@names a host, registry or source@@jq ".packages[\"node_modules/chalk\"].from=\"github:evil/chalk\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
@@ -1804,6 +1830,35 @@ hostile_checks() {
         'a Cargo.lock git source whose query changed@@names a host, registry or source@@sed "s|?rev=abc#|?rev=evil#|" Cargo.lock > p.tmp && mv p.tmp Cargo.lock'
         'a bun.lock workspace range that is an archive name@@a refresh does not write@@sed "s|\"is-number\": \"6.0.0\"|\"is-number\": \"x.TGZ\"|" web/bun.lock > web/p.tmp && mv web/p.tmp web/bun.lock'
         'a package-lock.json resolved under a registry path the base lacks@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/evil-prefix/chalk/-/chalk-4.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a bun.lock second member riding on a tuple line@@a refresh does not write@@perl -pi -e "s|^(    \"kind-of\": \[).*|    \"kind-of\": [\"kind-of\@6.0.2\", \"\", {}, \"sha512-CCCC\"], \"left-pad\": [\"left-pad\@evil/left-pad#abc\", {}, \"evil-left-pad-abc\"],|" web/bun.lock'
+        'a bun.lock second member in scp-like form@@a refresh does not write@@perl -pi -e "s|^(    \"kind-of\": \[).*|    \"kind-of\": [\"kind-of\@6.0.2\", \"\", {}, \"sha512-CCCC\"], \"left-pad\": [\"left-pad\@git\@github.com:evil/left-pad.git#abc\", {}, \"abc\"],|" web/bun.lock'
+        'a bun.lock second member wrapped in comments@@a refresh does not write@@perl -pi -e "s|^(    \"kind-of\": \[).*|    \"kind-of\": [\"kind-of\@6.0.2\", \"\", { /* \" */ }, \"sha512-CCCC\"], \"left-pad\": [\"left-pad\@evil/left-pad#abc\", { /* \" */ }, \"evil-left-pad-abc\"],|" web/bun.lock'
+        'a bun.lock line comment@@cannot be read exactly@@echo "    // a line comment" >> web/bun.lock'
+        'a bun.lock string written with a JSON escape that decodes to the base value@@cannot be read exactly@@perl -pi -e "s|\"is-number\": \"6.0.0\"|\"is-number\": \"6\x5cu002e0.0\"|" web/bun.lock'
+        'a bun.lock line with an odd number of quotes@@cannot be read exactly@@echo "    \"" >> web/bun.lock'
+        'a bun.lock repeating a key@@repeats a key@@perl -pi -e "s|^(    \"kind-of\": \[.*)|\$1\n\$1|" web/bun.lock'
+        'a bun.lock tuple naming a registry word@@a refresh does not write@@perl -pi -e "s|\"kind-of\@6.0.3\", \"\"|\"kind-of\@6.0.3\", \"x\"|" web/bun.lock'
+        'a bun.lock registry tuple with three elements@@a refresh does not write@@perl -pi -e "s|^(    \"kind-of\": \[).*|    \"kind-of\": [\"kind-of\@6.0.3\", \"\", {}],|" web/bun.lock'
+        'a bun.lock registry tuple with five elements@@a refresh does not write@@perl -pi -e "s|sha512-BBBB\"\]|sha512-BBBB\", \"x\"]|" web/bun.lock'
+        'a bun.lock registry tuple whose last element is not a hash@@a refresh does not write@@perl -pi -e "s|sha512-BBBB|a b|" web/bun.lock'
+        'a bun.lock gaining trustedDependencies@@top-level keys other than@@perl -pi -e "s|^(  \"lockfileVersion\": 1,)|\$1\n  \"trustedDependencies\": [\"evil\"],|" web/bun.lock'
+        'a bun.lock gaining overrides@@top-level keys other than@@perl -pi -e "s|^(  \"lockfileVersion\": 1,)|\$1\n  \"overrides\": { \"kind-of\": \"1.0.0\" },|" web/bun.lock'
+        'a bun.lock gaining a workspace@@a workspace was added or removed@@perl -pi -e "s|^(  \"workspaces\": \{)|\$1\n    \"evil\": { \"name\": \"evil\" },|" web/bun.lock'
+        'a bun.lock workspace gaining a bin field@@field bin changed@@perl -pi -e "s|^(      \"name\": \"web\",)|\$1\n      \"bin\": \"x\",|" web/bun.lock'
+        'a bun.lock workspace name that is a path@@workspace "" name@@perl -pi -e "s|\"name\": \"web\"|\"name\": \"evil/x/y\"|" web/bun.lock'
+        'a bun.lock lockfileVersion that is huge@@is not a small whole number@@perl -pi -e "s|\"lockfileVersion\": 1,|\"lockfileVersion\": 99999,|" web/bun.lock'
+        'a bun.lock git source repointed@@a refresh does not write@@perl -pi -e "s|gitlab:example/gitdep|gitlab:evil/gitdep|" web/bun.lock'
+        'a bun.lock key taking the base git source@@a refresh does not write@@perl -pi -e "s|kind-of\@6.0.3\"|kind-of\@gitlab:example/gitdep#abc1234\"|" web/bun.lock'
+        'a bun.lock git tuple changing arity@@a refresh does not write@@perl -pi -e "s|, \"sha512-GGGG\"\]|]|" web/bun.lock'
+        'a bun.lock git tuple changing an element type@@a refresh does not write@@perl -pi -e "s|\"example-gitdep-abc1234\"|{}|" web/bun.lock'
+        'a bun.lock git tuple with a slash in the id@@a refresh does not write@@perl -pi -e "s|\"example-gitdep-abc1234\"|\"evil/x\"|" web/bun.lock'
+        'a bun.lock git fragment with a slash@@a refresh does not write@@perl -pi -e "s|gitdep#abc1234|gitdep#abc/x|" web/bun.lock'
+        'a package-lock.json dependency map naming owner/repo@@names a source inside a dependency map@@jq ".packages[\"node_modules/chalk\"].dependencies={\"y\":\"evil/y\"}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json dependency map naming a github source@@names a source inside a dependency map@@jq ".packages[\"node_modules/chalk\"].dependencies={\"y\":\"github:evil/y\"}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json dependency map naming a tarball URL@@names a source inside a dependency map@@jq ".packages[\"node_modules/chalk\"].dependencies={\"y\":\"https://evil.example/y.tgz\"}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json dependency map naming a git+ssh source@@names a source inside a dependency map@@jq ".packages[\"node_modules/chalk\"].dependencies={\"y\":\"git+ssh://git@evil.example/y.git\"}" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json with its packages object deleted@@no packages object@@jq "del(.packages)" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
+        'a package-lock.json resolved with a dot-dot name@@outside the base lockfile@@jq ".packages[\"node_modules/chalk\"].resolved=\"https://registry.npmjs.org/../-/evil-1.0.0.tgz\"" tools/package-lock.json > tools/p.tmp && mv tools/p.tmp tools/package-lock.json'
     )
     # The counts the header refers to are printed, derived from this file, so
     # they cannot drift: the arrays, the invocations below, the mutant lines.
@@ -1864,9 +1919,12 @@ hostile_checks() {
     local realb="$WORK/h-real"
     if cc_want "versions bumped as real bun, npm, cargo and pub files" content; then
         rm -rf "$realb"; real_repo "$realb"
-        vaccept "$validate" "$realb" "bun:/rbun npm:/rnpm cargo:/rcargo pub:/rpub" "versions bumped as real bun, npm, cargo and pub files" \
-            "rbun/bun.lock rbun/package.json rnpm/package-lock.json rnpm/package.json rcargo/Cargo.lock rpub/pubspec.lock rpub/pubspec.yaml" \
-            "for t in bun npm cargo pub; do for f in \"$FIX/real/\$t/after\"/*.txt; do cp \"\$f\" \"r\$t/\$(basename \"\${f%.txt}\")\"; done; done" || rc=1
+        vaccept "$validate" "$realb" "bun:/rbun npm:/rnpm cargo:/rcargo pub:/rpub bun:/rbunws bun:/rbunsrc npm:/rnpmscopes" "versions bumped as real bun, npm, cargo and pub files" \
+            "rbun/bun.lock rbun/package.json rbunsrc/bun.lock rbunws/bun.lock rbunws/package.json rbunws/packages/a/package.json rbunws/packages/b/package.json rnpm/package-lock.json rnpm/package.json rnpmscopes/package-lock.json rcargo/Cargo.lock rpub/pubspec.lock rpub/pubspec.yaml" \
+            "for t in bun npm cargo pub bunsrc npmscopes; do for f in \"$FIX/real/\$t/after\"/*.txt; do cp \"\$f\" \"r\$t/\$(basename \"\${f%.txt}\")\"; done; done
+             w=rbunws; f=\"$FIX/real/bunws/after\"
+             cp \"\$f/bun.lock.txt\" \$w/bun.lock; cp \"\$f/package.json.txt\" \$w/package.json
+             cp \"\$f/a.package.json.txt\" \$w/packages/a/package.json; cp \"\$f/b.package.json.txt\" \$w/packages/b/package.json" || rc=1
     fi
     # jq is the one tool the content checks cannot do without: with none on
     # PATH the step must reject, not guess.
@@ -2027,6 +2085,28 @@ mutate_content "Cargo.lock sources unchecked" impl $'{ source_tokens < "$2"; gre
 mutate_content "Cargo.lock revision kept in the source" impl $'sed -E \'s/#.*$//; s/"$//\'' $'sed -E \'s/"$//\'' 'rejected the benign patch'
 mutate_content "lockfile scheme ignored" impl $'grep -oE \'[A-Za-z][A-Za-z0-9+.-]*://[^]"/[:space:],)}]*\' || true' $'grep -oE \'://[^]"/[:space:],)}]*\' || true' 'a package-lock.json resolving over http'
 mutate_content "gained lockfile sources not rejected" impl '[ -z "$gained" ] || reject "' 'true || reject "' 'a Cargo.lock with a new registry'
+mutate_content "bun.lock backslash not refused" impl 'if (index($0, "\\")) { rc = 3; exit }' 'if (0) { rc = 3; exit }' 'a bun.lock string written with a JSON escape'
+mutate_content "bun.lock odd number of quotes accepted" impl 'if (n > 0 && n % 2 == 0) { rc = 4; exit }' 'if (0) { rc = 4; exit }' 'a bun.lock line with an odd number of quotes'
+mutate_content "bun.lock text outside a string accepted" impl 'if (s ~ /[^][{}:,0-9A-Za-z.+ \t-]/) { rc = 5; exit }' 'if (0) { rc = 5; exit }' 'a bun.lock line comment'
+mutate_content "bun.lock repeated keys accepted" impl 'dup_keys "$f.json" || { echo "the $lbl file is not JSON, or repeats a key"; return 1; }' 'true' 'a bun.lock repeating a key'
+mutate_content "bun.lock other top-level keys unchecked" impl '| if length > 0 then "top-level keys other than workspaces and packages changed: \(join(", "))" else empty end),' '| empty),' 'a bun.lock gaining'
+mutate_content "bun.lock lockfileVersion shape unchecked" impl '| select((($b[$k] | type) == "number" and ($b[$k] | tostring | test("^[0-9]{1,4}$"))) | not) | "\($k) is not a small whole number"),' '| empty),' 'a bun.lock lockfileVersion that is huge'
+mutate_content "bun.lock workspace set unchecked" impl 'elif ($aw | keys) != ($bw | keys) then "a workspace was added or removed"' 'elif false then "a workspace was added or removed"' 'a bun.lock gaining a workspace'
+mutate_content "bun.lock workspace fields unchecked" impl 'else "workspace \($w | tojson) field \($f) changed" end)' 'else empty end)' 'a bun.lock workspace gaining a bin field'
+mutate_content "bun.lock workspace name pattern off" impl '$v | test("^(@[0-9A-Za-z._-]+/)?[0-9A-Za-z._-]+$")' '$v | test(".")' 'a bun.lock workspace name that is a path'
+mutate_content "bun.lock workspace ranges unchecked" impl 'select((($xm | has($d)) and $xm[$d] == $s) or ($s | spec) | not)' 'select(false)' 'a bun.lock workspace range that is an archive name'
+mutate_content "bun.lock registry field not required empty" impl 'and .[1] == "" and (.[2] | type) == "object"' 'and (.[2] | type) == "object"' 'a bun.lock tuple naming a registry word'
+mutate_content "bun.lock registry tuple arity unchecked" impl 'type == "array" and length == 4' 'type == "array" and length >= 4' 'a bun.lock registry tuple with five elements'
+mutate_content "bun.lock integrity shape unchecked" impl '.[3] | type == "string" and test("^[A-Za-z0-9+/=_-]+$")' '.[3] | type == "string"' 'a bun.lock registry tuple whose last element is not a hash'
+mutate_content "bun.lock resolution not required to be a plain version" impl '@[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"))' '@[^@]+$"))' 'a bun.lock resolution in owner/repo#ref form'
+mutate_content "bun.lock git fragment shape unchecked" impl 'test("^[^#]+#[0-9A-Za-z._-]+$"))' 'test("^[^#]+#.+$"))' 'a bun.lock git fragment with a slash'
+mutate_content "bun.lock git source may be repointed" impl 'and (.[0] | sub("#.*$"; "")) == ($was[0] | sub("#.*$"; ""))' '' 'a bun.lock git source repointed'
+mutate_content "bun.lock git tuple element types unchecked" impl 'and ([., $was] | transpose | all(.[]; (.[0] | type) == (.[1] | type)))' '' 'a bun.lock git tuple changing an element type'
+mutate_content "bun.lock git tuple ids unchecked" impl 'or test("^[A-Za-z0-9][A-Za-z0-9._-]*$")))' 'or test(".")))' 'a bun.lock git tuple with a slash in the id'
+mutate_content "package-lock.json dependency maps unchecked" impl 'select((($bm | has($d)) and $bm[$d] == $s) or ($s | spec) | not)' 'select(false)' 'a package-lock.json dependency map naming owner/repo'
+mutate_content "package-lock.json packages object not required" impl 'if ($n[0].packages | type) != "object" then "it has no packages object"' 'if false then "it has no packages object"' 'a package-lock.json with its packages object deleted'
+mutate_content "package-lock.json registry prefix group greedy" impl '(?:/[^?#]*?)??)/(?:@' '(?:/[^?#]*?)?)/(?:@' 'rejected the benign patch'
+mutate_content "package-lock.json resolved name segment loose" impl '[^/?#%\\s.@][^/?#%\\s]*/-/[^/?#%\\s]+$")' '[^/?#]+/-/[^/?#]+$")' 'a package-lock.json resolved with a dot-dot name'
 mutate_content "archive suffixes not refused" impl ' and (test("\\.(tgz|tar|tar\\.gz)$"; "i") | not)' '' 'a package.json range ending'
 mutate_content "archive suffix test case sensitive" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz|tar|tar\\.gz)$")' 'a package.json range ending .TGZ'
 mutate_content "only the .tgz suffix refused" impl '(tgz|tar|tar\\.gz)$"; "i")' '(tgz)$"; "i")' 'a package.json range ending .tar'
@@ -2039,12 +2119,9 @@ mutate_content "package-lock.json lockfileVersion shape not enforced" impl '[[ $
 mutate_content "package-lock.json pre-2 lockfile allowed" impl ' || [ "$new_v" -lt 2 ]' '' 'a version 1 lockfile staying at version 1'
 mutate_content "package-lock.json slash-only version values unchecked" impl 'select(test("[:/]"))' 'select(test("[:]"))' 'a package-lock.json version holding a slash and no colon'
 mutate_content "NUL byte not refused" impl $'[ "$(tr -d \'\\000\' < "$tmp/new" | wc -c)" -eq "$(wc -c < "$tmp/new")" ] || reject "$path contains a NUL byte"' 'true' 'a bun.lock with a NUL byte hiding an escaped registry'
-mutate_content "bun.lock resolutions unchecked" impl $'if [[ $res =~ $semver_re || $res =~ $alias_re ]] || grep -Fxq -- "$key" <<<"$base_set"; then continue; fi' 'if true; then continue; fi' 'a bun.lock resolution'
-mutate_content "bun.lock range lines not checked for archive names" impl $'case "$vv" in .*|*.tgz|*.tar|*.tar.gz) printf \'%s\' "$line"; return 1 ;; esac' ':' 'a bun.lock workspace range that is an archive name'
 mutate_content "duplicate manifest keys not refused" impl 'dup_keys "$tmp/new" || reject "$path repeats a key (or cannot be read), and JSON readers disagree about which copy wins"' 'true' 'a duplicate scripts key placed before the base one'
 mutate_content "a leading dot read as a version range" impl ' and (test("^\\.") | not)' '' 'a dependency set to a parent link'
 mutate_content "workspaces catalog not named in the rejection" impl '(a workspaces.catalog rewrite is refused here)' '(workspaces changed)' 'a workspaces catalog change'
-mutate_content "bun.lock escapes not refused" impl '[ -z "$why" ] || reject "$path adds a line with a backslash escape, which the source scan cannot read: $why"' 'true' 'a bun.lock registry written with escaped slashes'
 mutate_content "package-lock.json older lockfileVersion allowed" impl 'if [ "$new_v" -lt "$old_v" ] || [ "$new_v" -lt 2 ]; then' 'if false; then' 'a package-lock.json downgraded to lockfileVersion 1 with a URL as a version'
 mutate_content "package-lock.json version and from values unchecked" impl $'jq -r \'[.. | objects | (.version?, .from?) | strings | select(test("[:/]")) | "value:" + .] | .[]\' "$2"' 'true' 'a package-lock.json version holding a URL'
 mutate_content "package-lock.json from values unchecked" impl '(.version?, .from?)' '(.version?)' 'a package-lock.json from value holding a github source'
