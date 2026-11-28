@@ -44,7 +44,7 @@ disagree with itself about quoting.
         `| wc -l`, `| head -n N`, `| grep [-cqxFiwv] LITERAL` (names only, so nothing to leak)
      2. `doppler [global flags] run [flags] -- <rest>` or `run --command '<string>'`, where
         <rest> is a single simple command line that does not itself trigger and has no
-        `$(`, backtick, `<(`, `>(`. (#655: `--no-fallback` and `--only-secrets A,B` or
+        `$(`, backtick, `<(`, `>(`, `$'`, `$"` or `$[`, and nothing else the override scan refuses (#659). (#655: `--no-fallback` and `--only-secrets A,B` or
         `--only-secrets=A,B` are accepted on `run` only, and run flags (these two and `--no-cache`, `--format`,
         ...) only AFTER the `run` word; before it only global flags and -p/-c. The value is a comma list of upper-case
         names, `[A-Z_][A-Z0-9_]*(?:,[A-Z_][A-Z0-9_]*)*`, checked by ONLY_SECRETS_RE; VALUE_RE is
@@ -88,7 +88,15 @@ Per-command bypass: LEADING, unquoted `SASSYDOG_ALLOW_DOPPLER_PRINT=1` /
 `SASSYDOG_ALLOW_CREDENTIAL_URL=1` assignments (the first thing in the command: a `cd x &&` before
 it makes it an ordinary argument), honoured only when the rest of the command is a single simple
 command (no ; & | newline, backtick, $(, <(, >(, << outside quotes; a plain redirect such as
-`>/dev/null 2>&1` or `< file` is fine). Never by substring, never from the hook's own environment.
+`>/dev/null 2>&1` or `< file` is fine; and, #659, no `$'`, `$"`, `$[` or backslash-newline (the shell deletes the pair before it parses, so it can hide an opener from this scan) anywhere, no `${` followed by a blank, tab, newline or `|` (bash 5.3 runs that text as a command), no quote
+character inside `${...}`, and no `#` except mid-word or as a certain comment (after an unescaped blank, outside
+`${...}` and `[...]`, its text free of `; & | < > ( )`, a backtick and a CR): single_simple() did not
+model ANSI-C quoting, nested quotes in `${...}`, or a `#` that a shell reads as text, and the shells
+read those as a second command where the scan saw one. Locale quoting is refused too, though no shell
+here reads it differently. The refusal is wider than that text: `'$'` in single quotes and a comment
+such as `# see (x)` lose the override too, and the same scan decides the child of `doppler run --
+<child>`).
+Never by substring, never from the hook's own environment.
 
 Inert text (#647): before the trigger runs, `sanitize()` blanks the text a command only CARRIES, so
 the word in it does not deny. It is ONE left-to-right tokenizer over a tiny allow-listed grammar and
@@ -150,7 +158,9 @@ forms the gate pins: a following get/download word can still deny some of them, 
 or locale quoting, brace expansion, an expansion glued before or after the word (quoted or not: `${x}secrets`,
 `"$x"secrets`, `secrets$x`), glob forms (only when the working directory holds a match), a subcommand held in a
 variable or a default, indirect invocation (xargs, or env with a $(cat) argument, fed by echo or printf), a
-subcommand assembled by printf, and any of these run through eval. A bare quote or backslash inside the word is
+subcommand assembled by printf, and any of these run through eval. Not modelled either (the override scan
+does not look for them): an expansion that evaluates a variable's text as code, `${x@P}` in bash and
+`${(e)x}` in zsh. A bare quote or backslash inside the word is
 removed before matching and still denies. Deliberately NOT matched: a text matcher cannot model the shell's
 expansion and each matcher tried lost to a new spelling; the gate pins each class as an allow. Out of scope too:
 on-disk scripts and Makefiles, an encoded payload piped to a shell, a name split inside an interpreter string
@@ -666,10 +676,38 @@ def single_simple(s, redirects=False):
     substitution (`<(`, `>(`) and heredocs / here-strings (`<<`) still are. Only an UNESCAPED,
     unquoted `<` or `>` makes the `&` after it a redirect: a backslash-escaped `>` is a literal
     character, and the `&` after it is a background operator.
+
+    Fails closed (#659) on what this scan does not model:
+    - `$'` (ANSI-C) and `$"` (locale) anywhere in the text: bash and zsh read `$'\\''` as one quoted
+      quote where this scan reads three quote characters and so sees the wrong word boundaries.
+    - `$[` (arithmetic expansion) anywhere: a `}` or a quote inside it is read by the shell as part of
+      the expression, so this scan closes `${` early or opens a quote the shell never saw, and two
+      quoted copies rebalance around a second command (also unquoted, on zsh).
+    - a quote character inside `${...}`, in or out of double quotes: the shells nest quotes there and
+      this scan swaps its quote state, so two quoted copies can rebalance around a second command.
+      (`${...}` is tracked only by counting `${` and `}`; `$[` is refused so that count cannot be
+      fooled, and `$(` and `((` are refused as operators.)
+    - `${` followed by a blank, tab, newline or `|`, in or out of quotes: bash 5.3 runs the text inside
+      as a command (`${ cmd; }`, `${| cmd; }`), so a `;` there, inside double quotes, would run a
+      second command while this scan sees a quoted string. No other shell accepts `${ `.
+    - a backslash-newline pair anywhere: the shell deletes it before it parses, so it can split `$` from
+      the quote, bracket, brace or parenthesis it opens and hide that opener from the checks above.
+    - a comment is modelled only when it is certain: an unquoted `#` right after a real (unescaped)
+      blank, outside any `${...}` and `[...]`, runs to the newline and is not scanned (a quote inside
+      it opens nothing). Its text must not hold `; & | < > ( )`, a backtick or a CR. Every other
+      `#` that is not mid-word (after an escaped blank, an operator, a quote, inside `${...}` or
+      `[...]`) is refused, because a shell may read it as text and run what follows on the line.
     """
+    if "$'" in s or '$"' in s or "$[" in s or "\\\n" in s:
+        return False
+    if any("${" + c in s for c in " \t\n|"):
+        return False
     quote = None
     i = 0
     last_op = -2  # index of the last unescaped, unquoted `<` or `>` taken as a redirect
+    esc = -2  # index of the character a backslash just escaped
+    brace = 0  # open `${` count
+    bracket = 0  # open `[` count (unquoted)
     while i < len(s):
         c = s[i]
         nxt = s[i + 1] if i + 1 < len(s) else ""
@@ -679,15 +717,45 @@ def single_simple(s, redirects=False):
         elif quote == '"':
             if c == "\\":
                 i += 1
+            elif brace and c in "'\"":
+                return False
             elif c == '"':
                 quote = None
             elif c == "`" or (c == "$" and nxt == "("):
                 return False
+            elif c == "$" and nxt == "{":
+                brace += 1
+            elif c == "}" and brace:
+                brace -= 1
         else:
             if c == "\\":
+                esc = i + 1
                 i += 1
             elif c in "'\"":
+                if brace:
+                    return False
                 quote = c
+            elif c == "#" and (brace or bracket):
+                return False
+            elif c == "#" and i and s[i - 1] in " \t" and esc != i - 1:
+                # a certain comment: its text is not scanned (a quote in it opens nothing); the
+                # newline that ends it is an operator below, so a second command is refused
+                end = s.find("\n", i)
+                end = len(s) if end < 0 else end
+                if any(ch in s[i:end] for ch in ";&|<>()`\r"):
+                    return False
+                i = end
+                continue
+            elif c == "#" and (i == 0 or not (s[i - 1].isalnum() or s[i - 1] in "_./:=,+@%-")):
+                return False  # a `#` a shell may read as text (escaped blank, operator, quote, start)
+            elif c == "$" and nxt == "{":
+                brace += 1
+            elif c == "}" and brace:
+                brace -= 1
+            elif c == "[":
+                bracket += 1
+            elif c == "]" and bracket:
+                bracket -= 1
             elif redirects and c in "<>" and nxt != "(" and not (c == "<" and nxt == "<"):
                 last_op = i
             elif redirects and c == "&" and last_op == i - 1:
