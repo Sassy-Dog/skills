@@ -267,10 +267,19 @@ reviewing each PR after it opens and before it merges. An absent key selects `co
 `coordinator`) and writes the resolved value explicitly rather than re-deriving it, so a later
 visibility change cannot silently rewrite a repo's review architecture. It chooses only the site —
 `review_agent:` still chooses the agent — and a Blocking finding is never merged past. On
-`coordinator`, nits from a clean review are sorted (roll in, file, accept) and the roll-in set goes
-back to the same worker once per PR, outside the recovery allowance below (`take-it` §6). The
-unattended paths share one automatic recovery allowance across failed checks, Blocking findings,
-missing/faulty reports and parent fan-out recovery; another failure gets the `blocked` label.
+`coordinator`, nits are ranked by impact and probability (a high/high nit is treated as Blocking,
+high/medium and medium/high roll in once or become a follow-up issue, the rest are accepted with one
+line and no issue) and the roll-in set goes back to the same worker once per PR, outside the
+recovery allowance below (`take-it` §6). A Blocking finding, or a failed check the PR itself caused,
+has no retry cap: it is worked in numbered review rounds, each recorded on the issue, and a finding
+that persists, oscillates, is disputed by the worker or leaves the coordinator unsure (or a round
+number that is a multiple of three) goes to an `S-Tier` arbitration that returns one of `FIX`,
+`ACCEPT`, `DESCOPE`, `REJECT` or `ESCALATE` and is followed without a human; `ESCALATE` is the only verdict that
+ends a finding in `blocked`, and a spent arbitration hold is an infrastructure stop, not a verdict. The unattended paths share one automatic recovery allowance across missing/faulty
+reports and parent fan-out recovery; another failure of those gets the `blocked` label, and an infra
+or platform failure keeps `pr-shepherd`'s retry and probe and then that allowance's one redispatch.
+`DESCOPE` keeps the PR's `Closes #N`, files the descoped part as a follow-up and links it, and a
+security finding is never auto-filed publicly (`DESCOPE` on one is `ESCALATE`).
 The durable `recovery_used` value survives new heads, agents and dispatcher ticks.
 Only authenticated workflow-owned records bound to the actual attempt supply that budget.
 `send-it` checkpoints issue-less pre-PR recovery under the Git common directory and transfers
@@ -312,7 +321,8 @@ specialists during aggregation. This does not change audit mode, custom reviewer
 That batch plus aggregation consumes the same single recovery allowance, not one per surface.
 A control object alone, failed aggregation or still-missing required surface is **NO REPORT**,
 with causes and any partial report retained — never SKIPPED or clean. `take-it` and
-`dispatch-ready` hold the PR and use their existing second-failure path once recovery is spent.
+`dispatch-ready` hold the PR and use their existing second-failure path once recovery is spent
+(review findings do not draw on this allowance).
 `send-it` records the degraded outcome and continues its operator-facing flow; its one automatic
 recovery does not limit an explicit operator-directed repair.
 

@@ -509,10 +509,12 @@
 #      the Phase 4 carve-out exempting it from update mode's re-verify-every-
 #      fact rule — the half that survives a REFRESH, and the half that lives in
 #      another file — is pinned scoped to that phase. (e) A Blocking finding
-#      blocks the merge with exactly ONE redispatch, then `blocked`; never
-#      merged past, never parked back in Ready. The rationale for the number is
-#      pinned with it, since "one" alone reads as an arbitrary retry count.
-#      #385 extends that SAME automatic allowance to parent fallback; #386
+#      blocks the merge and its review rounds have no cap (#667 reversed the
+#      original exactly-ONE-redispatch rule); `blocked` only on an arbitration
+#      ESCALATE, never merged past, never parked back in Ready. The arbitration
+#      triggers and the closed five-verdict set are pinned in place of the
+#      number. The shared automatic allowance is a separate budget:
+#      #385 extends it to parent fallback; #386
 #      spends it on at most one same-agent report-only request when returned
 #      text is incomplete, with durable recovery_used accounting across
 #      agents/heads/ticks.
@@ -622,7 +624,7 @@
 #      scripts/test-sentry-verification.sh. Its count-re-derivation section
 #      carries its own mutation battery in the PR that added it. Every decision here is
 #      mutation-proved, each battery living in the PR that added it rather than
-#      as a total transcribed here to go stale. Twenty-two tracked files plus a
+#      as a total transcribed here to go stale. Twenty-six tracked files plus a
 #      tracked-source sweep for a fourth site, no gh, no network.
 #  30. pipefail-grep guard (scripts/test-pipefail-grep.sh) — no script under
 #      `pipefail` may pipe ANY writer into `grep -q` (issue #571, reversing
@@ -1565,6 +1567,9 @@
 #      doc's corrected claims. #484 rewrote the properties that pinned #452's
 #      stop-only text (2, 8, 9, 13, 14) and left the parallel contract (1, 3-7,
 #      10-12) untouched; the guard itself is executed by entry 54, not read here.
+#      Also pins one #667 sentence of that design doc (an unresolvable arbitration
+#      role is, at three tries, an infrastructure stop), because this gate already
+#      reads the file.
 #      Mutation-proven (header lists the mutants). Source-level, no omp, no gh,
 #      no network.
 #
@@ -2429,7 +2434,9 @@ fi
 # the gate is unconditional (and the SKIPPED line survives the default),
 # `review_agent` is deliberately not presence-is-the-toggle, the opt-out is
 # `skip` and not `none`, `review_site` is configured rather than derived, a
-# Blocking finding blocks the merge with exactly one redispatch, a review report
+# Blocking finding blocks the merge and its review rounds have no cap (#667
+# reversed the old exactly-one-redispatch rule; arbitration at S-Tier and the
+# closed five-verdict set replace the cap), a review report
 # is RETURNED as the agent's final text — with a lost one held as its own
 # outcome rather than merged past or folded into the SKIPPED line — and the
 # reviewer -> orchestrator hop is bound the same way, with the fan-out brief

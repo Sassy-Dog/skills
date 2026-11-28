@@ -171,7 +171,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/pr-shepherd/scripts/pr-failure-log.sh "$PR" --
 3. **Same SHA → the fix has not landed yet.** Report "fix pending / in flight" and keep waiting — do NOT increment the attempt count, escalate, or park the PR.
 4. **New SHA and still red → the fix pushed and failed.** Only now count the attempt and apply the caller's escalation policy.
 
-Callers doing redispatch bookkeeping (e.g. a generated dispatch-ready's "ONE redispatch with the failure context") must key attempt counts to head SHAs, never to bare "PR is red" reads.
+Callers doing redispatch or round bookkeeping (e.g. the numbered review rounds of `take-it` §6, or a lost review's ONE redispatch in `dispatch-ready`) must key their counts to head SHAs, never to bare "PR is red" reads.
 
 ### 4. Teardown and reconcile
 

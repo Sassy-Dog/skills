@@ -45,11 +45,12 @@ Diff the **working tree** against the base (`git diff <base>`, not `<base>...HEA
 
 ### Optional: a caller-supplied `base_override`
 
-A coordinator that has already reviewed a PR and then rolled nits into it (`take-it` §6, **Nit roll-in**)
-may hand you `base_override`: the full commit id it reviewed. It narrows the review to the roll-in
-delta. It is an input to this step only, and **absent means nothing changes**: the derivation above,
-the report and the identity below are exactly what they were. No other dispatch passes it; the agent
-site and `send-it` never do.
+A coordinator that has already reviewed a PR and then pushed more work to it may hand you
+`base_override`: the full commit id it reviewed. It narrows the review to that delta. Two callers
+pass it: the nit roll-in (`take-it` §6, **Nit roll-in**) and every fix round of **Review rounds and
+arbitration**, where the delta review of a round's new head also carries `carried_findings` (below).
+It is an input to this step only, and **absent means nothing changes**: the derivation above, the
+report and the identity below are exactly what they were. The agent site and `send-it` never pass it.
 
 When it is present, do not derive a base. First check its spelling, before any `git` call: it must
 match `^[0-9a-f]{40}$` or `^[0-9a-f]{64}$`, a full object id and nothing else. That rules out `HEAD`, a
@@ -75,6 +76,34 @@ reservation (see Report-only recovery below).
 With a valid override, `<base>` in the commands above is the override itself: diff the working tree
 against it (`git diff <base>`), and list untracked files as before. Steps 2 to 5 run unchanged over that
 smaller changeset, and the report header names the override on its `Base:` line.
+
+### Optional: caller-supplied `carried_findings` (override mode)
+
+A coordinator running a fix round (`take-it` §6, **Review rounds and arbitration**) hands you, with
+`base_override`, the round's open findings as `carried_findings`: a list of `id`, file:line and claim.
+**Absent means nothing changes.** The delta alone cannot say whether a finding raised against code the
+push never touched was fixed, and Step 5 drops a finding with no causal link to a changed hunk, so
+without this step an unresolved finding comes back as a clean delta and merges with no verdict.
+
+With `carried_findings` present, run one more step between Step 4 and Step 5, in this agent and not in
+a specialist: for each one, **locate it relative to the `base_override` head, then follow it into
+`HEAD`**. The fix push shifts lines, so open the cited `file:line` at the override head, find the claim
+there, and follow that code through the delta to where it now sits; a cited line read at `HEAD`
+alone is the wrong line. Then answer `resolved` (the code no longer has the problem, or the claim no
+longer holds) or `unresolved` (it still does), citing the `file:line` you read. **A carried finding
+that cannot be located or checked is `unresolved`, never dropped by Step 5**, and so is one you did
+not answer. Never answer `resolved` on the strength of the diff alone. These findings are **exempt
+from Step 5's changed-hunk drop and its confidence floor** (they were raised against code that may be
+untouched by construction); Step 5's verification of the claim against the cited line still applies.
+An `unresolved` carried finding is Blocking and is counted in the tally.
+
+The answers are part of the report. The full template carries a `### Carried findings` block with one
+line per carried finding: `- <id> — resolved|unresolved — <file:line read>`. **When `carried_findings`
+is present the compact clean form is never used**: a round with everything resolved still returns the
+full template, with the block and `No blocking findings` under Blocking, so a missing block always means
+"no answer" and never "all fixed". The caller clears a carried finding only on an explicit
+`resolved`. `carried_findings` rides in the plan's `context` field, and an `aggregate-only` pass runs
+this same step over it: a recovery call that changes it is a changed input, never a reuse.
 
 ### Changeset identity for recovery
 
@@ -233,7 +262,7 @@ with `kind: "review-fanout-plan"` and these required fields:
 | --- | --- |
 | `reason` | Observed nested-dispatch denial, unusable work, changed input, or explicit plan-only request; never claim a probe ran when it did not. |
 | `changeset` | The identity from Step 1, plus `untracked_encoding` describing the manifest encoding actually used. |
-| `context` | `scope` (original one-line statement), `review_surfaces` (original caller-supplied map or null), and `validation_failures` (map-validation causes, empty when valid); retain them for the integration pass too. |
+| `context` | `scope` (original one-line statement), `review_surfaces` (original caller-supplied map or null), `carried_findings` (the caller's list, or null), and `validation_failures` (map-validation causes, empty when valid); retain them for the integration pass too. |
 | `surfaces` | One row per selected surface: `surface`, `reviewer` from the shipped Step 2 table, and `brief` containing exactly the existing seven items. Include every selected surface, not just missing ones. |
 | `results` | Actual result records for attempted work, including successful same-changeset results and failures; an unattempted surface has no result, not an invented empty one. |
 
@@ -251,7 +280,9 @@ its `## PR review` header, Base/changeset context (including an explicit `Base: 
 (<why>)` degraded base if necessary), Surfaces ledger, and complete Blocking, Nits, Clean and
 integration content — or Step 5's compact clean form, with its header, Base and Surfaces ledger
 followed by `No blocking findings, no nits. Proceed to the PR body.` The
-compact clean form is complete and needs no recovery. A correction, tally, partial prose,
+compact clean form is complete and needs no recovery, except that when the run carried
+`carried_findings` it is never complete: a report is complete only with its `### Carried findings`
+block holding one line for every carried id. A correction, tally, partial prose,
 `review-fanout-plan`, message, file pointer, or a summary that does not enumerate the report's
 findings is not a complete report and never counts as clean. A `review-fanout-plan` is a control
 result for Caller recovery below, not report-only recovery. A `## PR review — unusable input` reply
@@ -284,8 +315,9 @@ reviewers and briefs outside the closed list; do not repair a plan by inventing 
 Keep failed/unusable work visibly separate from usable results. Then:
 
 1. Check the caller's existing `recovery_used` state and actual dispatch capability. There is
-   **one automatic recovery allowance per PR**, shared with failed checks, Blocking findings
-   and report recovery. This fallback batch plus its aggregate-only pass spends that one
+   **one automatic recovery allowance per PR**, shared with report recovery. Blocking findings
+   and failed checks the PR itself caused are not drawn from it: the caller runs them as uncapped
+   review rounds. This fallback batch plus its aggregate-only pass spends that one
    allowance; it is not one allowance per surface. Reserve it before dispatch and carry the
    consumed value through resumed agents, PR-body/RESULT handoffs and durable attempt comments.
    A fresh agent, head or tick never resets it. Reconcile earlier failure/recovery history
@@ -359,6 +391,17 @@ Accept a reviewer's returned result only when it is a usable envelope whose JSON
 - **Dedupe.** Two reviewers flagging the same line from different angles is one finding, keeping the sharper evidence and the higher severity.
 - **Verify the claim and the link — never the location.** Open each cited `file:line`. Drop the finding if the line does not say what the finding claims. Do **not** drop it for sitting outside the diff: blast-radius findings and most of your own integration checks cite untouched lines *by construction* — the caller a rename missed, the config key never provisioned, the doc the change made untrue. What has to hold is a stated causal chain back to a changed hunk. A finding with no such chain is a repo-audit finding that wandered in — drop that one.
 - **Split by severity, do not re-derive it.** `critical` and `high` are **Blocking**; `medium` and `low` are **Nits**. One narrow exception: a finding whose own `evidence` cites the repo gate or written policy it violates is Blocking at any severity — the citation is inside the finding, not in your impression of it. Never promote on a hunch; if a `low` feels bigger than it reads, say so in the finding rather than moving it. Drop findings below ~0.6 `confidence` unless the severity is `critical`.
+- **Rank every nit by impact and probability.** Give each Nit an **impact** and a **probability**, each
+  `high`, `medium` or `low`, with a one-line reason for each. Classification lives here, in your own
+  aggregation: the nine reviewers' finding schema does not carry it and does not change. **High
+  impact:** the change weakens a security control or describes it wrongly, causes wrong behaviour or
+  data loss, puts a claim in a security or safety doc that contradicts the code, or leaves a test or
+  gate that cannot fail. **High probability:** the case is reachable in normal use, on the default
+  path, or by a careless agent, not only by deliberate construction. Rank on the evidence in the
+  finding, never on a hunch; a nit you cannot rank is `medium` with the reason "unclear". The
+  caller turns the pair into a disposition (high/high is treated as Blocking; high/medium and
+  medium/high are rolled in once or filed; anything else is accepted with one line, no issue). You
+  rank; you do not move a nit into the Blocking list yourself, because severity is not re-derived here.
 - **A reviewer that did not come back is not a clean surface.** If a dispatch errors, times out, or returns something you cannot parse, its surface is `!`, never `✓`, and nothing about it goes under Clean. Report it on every run, the clean one included, and name what failed. A fan-out that quietly lost a reviewer reads exactly like one that found nothing — on the one gate that exists *because* lint, type and test cannot see the defect.
 - **Your report is your RETURN VALUE — the final text of this run, and nothing else.** Deliver it by *ending on it*. `SendMessage` is not a delivery mechanism for a report: sending needs an address, and you cannot reliably resolve one. Measured on 2026-08-25, five occurrences across three issues, not one of them reaching the session that dispatched it: three reports arrived in a coordinator's session instead, one round lost 2 of 5 dispatches that never returned at all, and one was addressed to an agent *type* rather than an address — which is not an address, so it resolved to nobody ([#273](https://github.com/Sassy-Dog/skills/issues/273)). Returning needs no address. So an unresolvable dispatcher changes nothing about what you do: return the report in full anyway, as your final text. Never hand it to another session to relay, never leave it in a file and return a pointer to it, and never end a run with the report unstated because delivery failed — the return **is** the delivery. This is the bullet above, one level up: a report that reached nobody reads exactly like a review that found nothing, and the dispatcher is owed the same honesty you owe a lost reviewer.
 - **The hop below you is bound too — and that does not retire the bullet that scores a lost reviewer** ([#280](https://github.com/Sassy-Dog/skills/issues/280)). Each of the nine now carries this same rule worded for a reviewer, and item 6 of your brief is how you pass it down; state it there rather than assuming the agent's own file will be read. A stated contract is not a delivered report, though: a reviewer can still error, time out, or come back unparseable, and that is still scored `!` and named on every run by that same bullet. So do not read a clean fan-out as proof the hop worked — read the `!` count. #273's own review ran degraded on exactly this hop, losing three of four surfaces, and two of the three carried Blocking findings that a `✓` would have shipped.
@@ -375,17 +418,20 @@ Surfaces: code ✓ / security ✓ / tests ! / infra – / ci – / deps – / ob
 - [<surface|integration>] <file:line> — <what is wrong>. <why it matters here>. Fix: <concrete suggestion>.
 
 ### Nits (roll in, or note "Known and accepted")
-- [<surface>] <file:line> — <suggestion>.
+- [<surface>] <file:line> — <suggestion>. Impact: <high|medium|low> (<reason>). Probability: <high|medium|low> (<reason>).
 
 ### Clean
 - <surfaces and integration checks that were actually reviewed and had nothing to report>
+
+### Carried findings (present only when the caller passed carried_findings; then always)
+- <id> — resolved|unresolved — <file:line read>
 ```
 
-With nothing to report at all:
+With nothing to report at all, and no `carried_findings` (with them, use the full template above):
 
 ```text
 ## PR review — clean
 Base: <ref, or "unresolved (<why>)", or "override <commit id> (roll-in delta)"> · files changed: <n>. Surfaces: <…>. No blocking findings, no nits. Proceed to the PR body.
 ```
 
-The caller maps your output: **Blocking → fix locally and re-run; Nits → roll in or note "Known and accepted" in the PR body; clean → proceed.** Render the header, the base and the surfaces line on **every** run, the clean one included — a review that failed to happen reads exactly like a review that found nothing, and those three lines are the only thing separating them. A run carrying any `!` surface, or an unresolved base, is a **degraded** run: say so in the first line of the report rather than letting a short Blocking list imply a clean diff.
+The caller maps your output: **Blocking → fix locally and re-run, with no cap on rounds; Nits → by their impact and probability, high/high treated as Blocking, high/medium and medium/high rolled in once or filed, anything else noted as "Known and accepted" in the PR body with no issue; clean → proceed.** Render the header, the base and the surfaces line on **every** run, the clean one included — a review that failed to happen reads exactly like a review that found nothing, and those three lines are the only thing separating them. A run carrying any `!` surface, or an unresolved base, is a **degraded** run: say so in the first line of the report rather than letting a short Blocking list imply a clean diff.
