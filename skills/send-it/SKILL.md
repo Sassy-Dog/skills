@@ -180,7 +180,7 @@ this plugin and nothing else, so a repo can no longer ship unreviewed merely by 
 configured a reviewer; opting out is now an explicit act, visible in the config diff. The cost is
 real and accepted: one extra review pass of latency and tokens on every `send-it` run.
 
-**Dispatch the resolved agent at tier `sol` (Claude Code: `model: "opus"` · omp:
+**Dispatch the resolved agent at `A-Tier` (Claude Code: `model: "opus"` · omp:
 `model: "@default"`)** — lint, type, and test cannot catch design regressions. Before
 drafting the PR body, run it against the **changeset** — working tree, staged and untracked
 included — versus the derived default branch, with a one-line scope statement. Not "the staged

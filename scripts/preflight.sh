@@ -1514,7 +1514,7 @@
 #      no network.
 #
 #  47. model-tier tests (scripts/test-model-tiers.sh) — every dispatched agent
-#      runs at a harness-neutral tier (astra/sol/terra/luna) bound inline at its
+#      runs at a harness-neutral tier (S-Tier/A-Tier/B-Tier/C-Tier) and effort bound inline at its
 #      dispatch site, and every binding agrees with docs/MODEL-TIERS.md. Model
 #      choice used to be implicit — inherited, or pinned to Opus on a premise
 #      that stopped holding — and a removed binding breaks nothing visible, so

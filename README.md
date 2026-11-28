@@ -325,11 +325,12 @@ to: a reviewer that errors, times out, or comes back unparseable is still scored
 every run, never rolled into Clean. **Audit mode scores a lost reviewer too, in its own idiom** — the sibling of that rule rather than a copy of it: `assess-it` keeps a per-domain outcome ledger and prints it in the Phase 4 preview *before* the approval prompt, so a domain whose reviewer never came back is named dark rather than filed as clean. The consequence differs because audit mode **writes**: a diff-scoped hole costs a re-run, while a filed Epic missing a domain becomes the durable record and reads complete. It is surfaced, not a veto — filing still proceeds on approval.
 
 Each dispatch site names a **model tier** rather than letting its agent inherit the session's
-model. Implementation workers and the nine reviewers run at `terra` (Sonnet on
-Claude Code), and the orchestrator runs at `sol` (Opus). On the coordinator site a worker is told
-outright not to review, and reports `review=deferred`. Tiers are harness-neutral words so the
+model. Implementation workers and the nine reviewers run at `B-Tier` (Sonnet on
+Claude Code), and the orchestrator runs at `A-Tier` (Opus). A site may also name an effort
+(`light`, `standard` or `deep`); none means `standard`, and every site names none today. On the
+coordinator site a worker is told outright not to review, and reports `review=deferred`. Tiers are harness-neutral words so the
 skills port beyond Claude Code. The bindings live in [`docs/MODEL-TIERS.md`](docs/MODEL-TIERS.md),
-and `scripts/test-model-tiers.sh` enumerates the sites and holds each one to that table.
+and `scripts/test-model-tiers.sh` enumerates the sites and holds each one to those tables.
 
 ## Installation
 

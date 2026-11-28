@@ -266,7 +266,7 @@ the id the Agent call returned for that issue's worker, null where the harness r
 a serial worker; §6's **Nit roll-in** resumes the worker by it) — somewhere durable such
 as `.git/take-it-batch.json`, so a crashed coordinator's worktrees stay reclaimable.
 
-**Dispatch every implementation sub-agent at tier `terra` (Claude Code: `model: "sonnet"` · omp:
+**Dispatch every implementation sub-agent at `B-Tier` (Claude Code: `model: "sonnet"` · omp:
 `model: "@task"`)** — the normal template, the stacked variant, and every §6 redispatch alike. The
 coordinator stays on the session model; only what it dispatches is tiered. Never let a worker
 inherit the session model by omitting the parameter: that is how implementation silently ran on
@@ -406,7 +406,7 @@ behind in coordinator-only context.
 > 4. Follow the repo-specific implementation rules from the config's `## subagent-rules` section.
 > 5. Run the pre-flight locally and fix anything red: {preflight_commands from config}
 > 6. **Run the review gate before you commit** — lint, type and test cannot catch a design
->    regression. Dispatch **{resolved review agent}** at tier `sol` (Claude Code: `model: "opus"` ·
+>    regression. Dispatch **{resolved review agent}** at `A-Tier` (Claude Code: `model: "opus"` ·
 >    omp: `model: "@default"`) against your **changeset** — working tree,
 >    staged and untracked included — versus `{default_branch}`, with a one-line scope statement.
 >    Not "the staged diff": you have not committed yet, and an untracked file is invisible to
@@ -643,7 +643,7 @@ one home of that rule.
 **With `review_site: agent` this section does not run**: every sub-agent already reviewed its own diff at step 6, before its PR existed.
 
 When the site is `coordinator`, review each PR as its RESULT line arrives and **before handing it
-to `sassy-dog:pr-shepherd` below**, dispatching the agent resolved in §1 at tier `sol` (Claude Code:
+to `sassy-dog:pr-shepherd` below**, dispatching the agent resolved in §1 at `A-Tier` (Claude Code:
 `model: "opus"` · omp: `model: "@default"`) against that PR's diff
 versus the derived default branch, with the original scope statement and reconciled `recovery_used`.
 For the shipped orchestrator only, load §5's resolved **Parent recovery protocol** path and pass it
@@ -720,7 +720,7 @@ runs this same step and points here for its definition.
    it. The message carries the coordinator-site step 6 prohibition: fix only the listed nits, run
    the pre-flight, push to the same branch, run no review, write no recovery record. It resumes at the
    tier the worker was dispatched at; read its returned final text and never wait on a notification.
-3. **Review only the roll-in delta.** Dispatch the same agent at tier `sol` (Claude Code: `model:
+3. **Review only the roll-in delta.** Dispatch the same agent at `A-Tier` (Claude Code: `model:
    "opus"` · omp: `model: "@default"`) with `base_override` set to that `reviewed_head`, an input only
    the shipped orchestrator defines (Step 1 of `pr-review-orchestrator.md`; it validates the commit as
    an ancestor of `HEAD` and never falls back to the default branch). Do not forward the main review's
@@ -775,7 +775,7 @@ and hold the PR; do not demote and do not count it as a re-review.
 **Cap on head-moved re-reviews (the one definition; `dispatch-ready` points here).** At most **two**
 re-reviews per attempt are spent on exit `25`: a busy default branch can otherwise keep a `--direct`
 PR behind forever (each pass updates the branch, the update is a merge commit so the Delta base rule
-sends it to a full `sol`-tier review, and the base moves again). Count each exit `25` that sends a PR
+sends it to a full `A-Tier` review, and the base moves again). Count each exit `25` that sends a PR
 back to review as `head_moved_reviews`, kept beside that PR's reviewed head; where that record is
 durable (`dispatch-ready`'s verified per-attempt record) it is read back author-checked and bound to
 the active `attempt_id`. A third exit `25` holds the PR with **no further review**, and the report names the

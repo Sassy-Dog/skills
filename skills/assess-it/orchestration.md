@@ -18,7 +18,7 @@ Dispatch only the agents with signal for the detected stack. All ship with this 
 | `sassy-dog:dx-docs-reviewer` | 6 DX, 11 docs | always |
 | `sassy-dog:dependency-supply-chain-reviewer` | 5 supply-chain slice, 12 dep debt | a lockfile/manifest is present |
 
-**Dispatch rule:** issue all selected agents in **one message, multiple Agent calls** (concurrent), each at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`). Give each: the absolute repo path, the detected stack summary, the dedupe index is *not* needed by agents (you dedupe centrally), and an instruction to return **only** the JSON object `{"findings": [...]}` in the schema below as its final text, with no Markdown fences or surrounding prose. Tell each agent it is in **audit mode**: find what's wrong, cite evidence, do not propose to write code.
+**Dispatch rule:** issue all selected agents in **one message, multiple Agent calls** (concurrent), each at `B-Tier` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`). Give each: the absolute repo path, the detected stack summary, the dedupe index is *not* needed by agents (you dedupe centrally), and an instruction to return **only** the JSON object `{"findings": [...]}` in the schema below as its final text, with no Markdown fences or surrounding prose. Tell each agent it is in **audit mode**: find what's wrong, cite evidence, do not propose to write code.
 
 ## Dispatch outcomes (Phase 1)
 
@@ -69,7 +69,7 @@ For each finding, in order of severity:
 3. **Recalibrate** — adjust severity/likelihood to reality; downgrade theoretical threats.
 4. **Dedupe vs. existing issues** — compare against the Phase-0 GitHub index (title + body similarity, same file/area). If already tracked → mark `duplicate-of #N` (comment later, don't refile).
 5. **Dedupe vs. siblings** — merge near-identical findings from different agents.
-6. **Refute pass (high-impact only)** — for `critical`/`high`, optionally dispatch 1–3 skeptic subagents at tier `terra` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), each told to *try to prove the finding wrong* (distinct lenses: exploitability, does-it-reproduce, is-it-already-mitigated). Keep the finding only if it survives a majority.
+6. **Refute pass (high-impact only)** — for `critical`/`high`, optionally dispatch 1–3 skeptic subagents at `B-Tier` (Claude Code: `model: "sonnet"` · omp: `model: "@task"`), each told to *try to prove the finding wrong* (distinct lenses: exploitability, does-it-reproduce, is-it-already-mitigated). Keep the finding only if it survives a majority.
 
 Survivors carry a final `confidence`. Drop anything below ~0.6 unless severity is `critical`.
 

@@ -295,7 +295,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
   bullets down, never a fresh full review; any other moved head is reviewed in full). A worker's
   pre-PR review line does not count: it comes from a different site, possibly under an older
   plugin. A PR opened before the site changed is reviewed once more here, which costs a review but
-  never merges on none. Dispatch the agent resolved by `send-it`'s order at tier `sol` (Claude Code:
+  never merges on none. Dispatch the agent resolved by `send-it`'s order at `A-Tier` (Claude Code:
   `model: "opus"` · omp: `model: "@default"`) against the PR's diff versus the derived
   default branch with the original scope statement and reconciled `recovery_used`. For the shipped
   `sassy-dog:pr-review-orchestrator` only, load the **Parent recovery protocol** under Step 3 of
@@ -345,7 +345,7 @@ Never create a PR, redispatch or reset recovery to make this handoff visible.
 - **Reviewed PRs with no Blocking finding and at least one nit, when `review_site: coordinator`** →
   the **Nit roll-in**, defined once in `take-it` §6 (read it there; this bullet only records what is
   specific to a tick): the same three-bin sort recorded in the PR body, one send to the same worker,
-  a delta review through `base_override` at tier `sol` (Claude Code: `model: "opus"` · omp: `model:
+  a delta review through `base_override` at `A-Tier` (Claude Code: `model: "opus"` · omp: `model:
   "@default"`), the same cap and the same sort-only fallback. The worker's `agent_id` is read from
   this loop's batch manifest entry (§5). The roll-in is outside the recovery budget: never counted in
   `recovery_used`, no reservation. A tick does not wait for the resumed worker, so the cap record
@@ -843,7 +843,7 @@ cold worktree and never see an interactive session's instructions: a gate that l
 than a rule stated once in `send-it`, and why replacing it in the prompt under
 `review_site: coordinator` obliges §2 to run it — never to skip it.
 
-**Model policy: dispatch every implementation sub-agent at tier `terra` (Claude Code:
+**Model policy: dispatch every implementation sub-agent at `B-Tier` (Claude Code:
 `model: "sonnet"` · omp: `model: "@task"`)** — first dispatch, stack chains and every §2 redispatch
 alike. Only this coordinator tick stays on the session model. This replaced a pin to Opus, justified
 as "the cheaper tier relative to the coordinator's session model". That premise stopped holding once
